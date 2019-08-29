@@ -1,16 +1,157 @@
-Tracer Interactive
+Task Force
 =============
 
-*  [Web UI](http://tracerinteractive.com/plugins/webui) - Create a web-based user interface using the Chromium Embedded Framework
-	*  Downloads: [4.21](https://github.com/tracerinteractive/UnrealEngine/releases/download/4.21.0/WebUI-4.21.zip), [4.20](https://github.com/tracerinteractive/UnrealEngine/releases/download/4.20.0/WebUI-4.20.zip), [4.19](https://github.com/tracerinteractive/UnrealEngine/releases/download/4.19.0/WebUI-4.19.zip)
-	*  [Source](https://github.com/tracerinteractive/UnrealEngine/tree/4.21/Engine/Plugins/Runtime/WebUI)
-	*  [Documentation](http://cdn.tracerinteractive.com/webui/documentation.pdf)
-*  [JSON Library](http://tracerinteractive.com/plugins/jsonlibrary) - Manage objects, arrays, and primitive data types using JSON
-	*  Downloads: [4.21](https://github.com/tracerinteractive/UnrealEngine/releases/download/4.21.0/JsonLibrary-4.21.zip), [4.20](https://github.com/tracerinteractive/UnrealEngine/releases/download/4.20.0/JsonLibrary-4.20.zip), [4.19](https://github.com/tracerinteractive/UnrealEngine/releases/download/4.19.0/JsonLibrary-4.19.zip)
-	*  [Source](https://github.com/tracerinteractive/UnrealEngine/tree/4.21/Engine/Plugins/Messaging/JsonLibrary)
-	*  [Documentation](http://cdn.tracerinteractive.com/jsonlibrary/documentation.pdf)
-*  [HTTP Library](http://tracerinteractive.com/plugins/httplibrary) - Send HTTP requests using blueprints
-	*  Downloads: [4.21](https://github.com/tracerinteractive/UnrealEngine/releases/download/4.21.0/HttpLibrary-4.21.zip), [4.20](https://github.com/tracerinteractive/UnrealEngine/releases/download/4.20.0/HttpLibrary-4.20.zip), [4.19](https://github.com/tracerinteractive/UnrealEngine/releases/download/4.19.0/HttpLibrary-4.19.zip)
-	*  [Source](https://github.com/tracerinteractive/UnrealEngine/tree/4.21/Engine/Plugins/Messaging/HttpLibrary)
-	*  [Documentation](http://cdn.tracerinteractive.com/httplibrary/documentation.pdf)
+From this branch you can download the Task Force workshop project which is required to modify the game...
+
+Documentation
+---------------------------
+
+### TEXTURES
+...
+
+### MATERIALS
+...
+
+##### LANDSCAPE
+...
+
+##### PHYSICS
+...
+
+### MESHES
+...
+
+##### COLLISION
+...
+
+##### LEVEL OF DETAIL
+...
+
+### BLUEPRINTS
+...
+
+##### SKY
+...
+
+##### PROPS
+...
+
+##### LIGHTS
+...
+
+##### SOUNDS
+...
+
+##### DECALS
+...
+
+##### PARTICLES
+...
+
+#### EVENTS
+...
+
+##### CLIENT
+...
+
+##### SERVER
+...
+
+#### GAME MODES
+...
+
+##### MULTIPLAYER
+...
+
+##### COOP
+...
+
+Reference
+---------------------------
+
+#### TaskForceAmmo
+...
+
+#### TaskForceButton
+...
+
+#### TaskForceCamera
+...
+
+#### TaskForceDecal
+...
+
+#### TaskForceDoor
+...
+
+#### TaskForceEmitter
+...
+
+#### TaskForceExplosion
+...
+
+#### TaskForceLight
+...
+
+#### TaskForceGlass
+...
+
+#### TaskForceLadder
+...
+
+#### TaskForceLedge
+...
+
+#### TaskForceProp
+...
+
+#### TaskForceRotor
+...
+
+#### TaskForceSky
+...
+
+#### TaskForceSound
+...
+
+#### TaskForceSpawn
+...
+
+#### TaskForceStairs
+...
+
+#### TaskForceTrigger
+...
+
+#### TaskForceTurret
+...
+
+#### TaskForceVehicle
+...
+
+#### TaskForceWater
+...
+
+#### TaskForceWeapon
+...
+
+
+Licensing and Terms of Service
+---------------------------
+
+Your access to and use of Unreal Engine is governed by the [Unreal Engine End User License Agreement](https://www.unrealengine.com/eula). If you don't agree to those terms, as amended from time to time, you are not permitted to access or use Unreal Engine.
+
+PLEASE READ THESE TERMS OF SERVICE AND OUR PRIVACY POLICY BEFORE USING TRACER INTERACTIVE SERVICES:
+
+*  [Terms of Service](http://tracerinteractive.com/terms)
+*  [Privacy Policy](http://tracerinteractive.com/privacy)
+
+By using our Services, whether as a guest, as a registered user, or otherwise, you agree that these Terms of Service will govern your relationship with Tracer Interactive. If you do not completely agree to these Terms of Service then you must not use any of our Services.
+
+
+Additional Notes
+----------------
+
+The first time you start the editor from a fresh source build, you may experience long load times. 
+The engine is optimizing content for your platform to the _derived data cache_, and it should only happen once.
 
