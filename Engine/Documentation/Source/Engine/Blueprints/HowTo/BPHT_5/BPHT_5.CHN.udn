@@ -1,0 +1,79 @@
+﻿Availability: Public
+Title:5. 销毁岩石 
+Crumbs: %ROOT%, Engine, Engine/Blueprints, Engine/Blueprints/HowTo
+Description:在这个章节，我们会使用绑定到OnHit的绑定事件在岩石被击中时进行销毁。 
+
+
+[VAR:Steps]
+[OBJECT:Navigation]
+	[PARAM:previous]
+	[Previous Step](Engine\Blueprints\HowTo\BPHT_4 "%Engine\Blueprints\HowTo\BPHT_4:title%") 
+	[/PARAM]
+	[PARAM:current]
+	[/PARAM]
+	[PARAM:home]
+		[How-To Home](Engine\Blueprints\HowTo "%Engine\Blueprints\HowTo:Title%")
+	[/PARAM]
+	[PARAM:next]
+	[Next Step](Engine\Blueprints\HowTo\BPHT_6 "%Engine\Blueprints\HowTo\BPHT_6:title%") 
+	[/PARAM]
+[/OBJECT]
+[/VAR]
+
+
+
+在这个步骤中，我们会让岩石在被玩家发射的射弹击中时进行销毁。 为了完成这项目标，我们会使用另一个 **Bind Event** （绑定事件），但我们不会将其绑定到事件调度器。 我们会转而使用一个名称为 **OnHit** 的碰撞事件，它会在岩石被射中时触发。 
+
+让我们开始射击吧！
+
+1.	在 **FirstPersonCharacter** 蓝图中，在我们生成岩石的位置处搜索 **Spawn Actor** （生成Actor）节点。 
+
+1.	在 **Spawn Actor** （生成Actor）节点的 **Return Value** （返回值）处拉根线，然后选择 **Assign On Actor Hit** （在Actor碰撞时分配）。 
+
+	![](OnActorHit.png)
+
+1.	连接 **Spawn Actor** （生成Actor）和 **Bind Event** （绑定事件）。 
+
+1.	在 **Spawn Actor** （生成Actor）节点的 **Return Value** （返回值）处拉根线，然后选择 **Apply Radius Damage (Destructible)* （应用半径伤害（可破坏物体））。 
+
+	![](ApplyDamage.png)
+
+	我们可以使用 **应用伤害** ，但还需要输入一些额外的参数。 为了简单起见，我们会使用 Radius Damage（半径损伤）。 
+
+1.	在 **Apply Radius Damage** （应用半径损伤）节点，对下方显示的每个域我们都输入 **50000** ，然后连接 **Get Actor Location** （获取Actor位置）节点。 
+
+	![](EnterDamage.png)
+
+	这样我们就可以对岩石做出足够大的伤害，从而让岩石碎成一块一块。 
+
+1.	在 **Apply Radius Damage** （应用半径伤害）节点之后，添加一个 **Set Score** （设置分数）节点。 
+
+1.	在按住 **Control** 不放的情况下，再次拉入 **Score** 变量，并将其连接到 **Int - Int** 节点（设置为 1）并连接节点 。 
+
+	![](IncreaseScore.png)
+
+	这样我们就可以获得当前的分数，并在岩石每次被撞击时增加1的值。 
+
+1.	连接 **Bind Event** （绑定事件）和 **Set Score** （设置分数）节点到 **Delay** （延迟）节点并设置其为 **3** 秒。
+
+	![](DelayNode.png)
+
+	在3秒后，当岩石生成后（无论其是否被击中），我们都会销毁它。 
+
+1. 给 **Delay** （延迟）节点添加 **Destroy Actor** （销毁Actor）节点。 
+
+	![](DestroyActor.png)
+
+	在 **Spawn Actor** （生成Actor）节点的 **Return Value** （返回值）处拉根线，然后连接到 **Destroy Actor** （销毁Actor）节点的 **Target** （目标）位置。 
+
+1. 在 **Destroy Actor** （销毁Actor）节点之后，添加 **Set isActive** 变量节点并保持其为未勾选的状态。 
+
+	![](SetIsActive.png)
+
+	也就是说，生成的岩石不再处于激活状态，这样玩家可以生成另一块岩石（如果他们有足够的扳机扣动次数残留的话） 
+
+这样核心游戏就设置完成了，如果我们现在要在编辑器中进行播放，您可以看到，您可以显示生成、射击和销毁在关卡中的随机生成点生成的岩石。 在下一步，我们将会与HUD进行通信，并基于来自于角色蓝图的值来更新显示的值。 
+
+
+
+

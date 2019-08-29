@@ -1,0 +1,161 @@
+// Copyright 1998-2018 Epic Games, Inc. All Rights Reserved.
+
+
+#include "Common.ush"
+#include "PostProcessCommon.ush"
+
+
+#define IS_MOBILE_COMPOSITING (MSAA_SAMPLE_COUNT == 0)
+
+#if MSAA_SAMPLE_COUNT > 1
+Texture2DMS<float4, MSAA_SAMPLE_COUNT> EditorPrimitivesColor;
+Texture2DMS<float, MSAA_SAMPLE_COUNT> EditorPrimitivesDepth;
+
+#else
+Texture2D EditorPrimitivesColor;
+Texture2D<float> EditorPrimitivesDepth;
+
+#endif
+
+// depth in the red channel in DeviceZ
+Texture2D		FilteredSceneDepthTexture;
+SamplerState	FilteredSceneDepthTextureSampler;
+
+// r. value of r.Editor.OpaqueGizmo .g:r.Editor.MovingPattern ba: unused
+float4 EditorRenderParams;
+
+#if !IS_MOBILE_COMPOSITING
+
+void MainPopulateSceneDepthPS(
+	#if MSAA_SAMPLE_COUNT > 1 && !COMPILER_HLSLCC
+		sample noperspective float4 UVAndScreenPos : TEXCOORD0,
+	#else
+		noperspective float4 UVAndScreenPos : TEXCOORD0,
+	#endif
+	out float4 OutColor : SV_Target0,
+	out float OutDepth : SV_DEPTH)
+{
+	float2 SceneDepthUV = clamp(UVAndScreenPos.xy - View.TemporalAAParams.zw * View.BufferSizeAndInvSize.zw,
+		View.BufferBilinearUVMinMax.xy, View.BufferBilinearUVMinMax.zw);
+
+	OutDepth = Texture2DSampleLevel(FilteredSceneDepthTexture, FilteredSceneDepthTextureSampler, SceneDepthUV, 0).r;
+	OutColor = 0;
+}
+
+#endif // !IS_MOBILE_COMPOSITING
+
+
+void ResolveEditorPrimitiveColor(int2 PixelPos, out float4 OutColor, out float OutDeviceZ)
+{
+	// furthest device Z or 0 if there is no
+	OutDeviceZ = 0;
+
+	float4 Ret = 0;
+	
+	const float bComposeAnyNonNullDepth = EditorRenderParams.z;
+
+	#if MSAA_SAMPLE_COUNT > 1
+	{
+		float SumWeight = 0.00001f;
+
+		for( uint SampleIndex = 0; SampleIndex < MSAA_SAMPLE_COUNT; ++SampleIndex )
+		{
+			float4 Sample = EditorPrimitivesColor.Load( PixelPos, SampleIndex );
+			float SampleDeviceZ = EditorPrimitivesDepth.Load( PixelPos, SampleIndex ).r;
+
+			// Check if any color was applied to this pixel.  Note  this prevents actual black pixels from being visible
+			float Weight = Sample.a;
+
+			if (SampleDeviceZ > 0.0 && bComposeAnyNonNullDepth)
+			{
+				Weight = 1;
+			}
+
+			FLATTEN if(Weight)
+			{
+				OutDeviceZ = max(OutDeviceZ, SampleDeviceZ);
+				
+				Ret += float4(Sample.rgb, Weight);
+
+				SumWeight += Weight;
+			}
+		}
+
+		Ret.rgb /= MSAA_SAMPLE_COUNT;
+		Ret.a /= MSAA_SAMPLE_COUNT;
+	}
+	#else
+	{
+		Ret = EditorPrimitivesColor.Load(int3(PixelPos, 0));
+		OutDeviceZ = EditorPrimitivesDepth.Load(int3(PixelPos, 0)).r;
+		
+		if (OutDeviceZ > 0.0 && bComposeAnyNonNullDepth)
+		{
+			Ret.a = 1;
+		}
+	}
+	#endif
+
+	// bring out of premultiplied
+	Ret.rgb /= max(Ret.a, 0.0001f);		
+	// fix gamma
+	Ret.rgb = pow( Ret.rgb, 1.0f / 2.2f );
+	// bring back to premultiplied
+	Ret.rgb *= Ret.a;
+
+	OutColor = Ret;
+}
+
+void MainComposeEditorPrimitivesPS(
+	noperspective float4 UVAndScreenPos : TEXCOORD0,
+	float4 SvPosition : SV_POSITION,
+	out float4 OutColor : SV_Target0)
+{
+	float2 ViewportUV = (SvPosition.xy - float2(ViewportRect.xy)) * ViewportSize.zw;
+	float2 SceneBufferUV = ViewportUVToBufferUV(ViewportUV);
+
+	float2 PixelPosF = UVAndScreenPos.zw * ScreenPosToPixel.xy + ScreenPosToPixel.zw + 0.5f;
+	int2 PixelPos = int2(SvPosition.xy);
+	
+	// Fetch scene color.
+	float2 SceneColorUV = ViewportUVToPostProcessingSceneColorBufferUV(ViewportUV);
+	float4 SceneColor = Texture2DSample(PostprocessInput0, PostprocessInput0Sampler, SceneColorUV);
+
+	// Resolve editor primitive scene color and depth.
+	float4 EditorPrimitiveColor;
+	float EditorMaxDeviceZ;
+	ResolveEditorPrimitiveColor(PixelPos, /* out = */ EditorPrimitiveColor, /* out = */ EditorMaxDeviceZ);
+
+	// dejitter the sample position and make a filtered lookup - for planes this allows to reconstruct a much less jittery depth comparison function, it however doesn't fix silhuetes
+	float2 SceneDepthBufferUV = clamp(
+		(SceneBufferUV * View.BufferSizeAndInvSize.xy - View.TemporalAAParams.zw) * View.BufferSizeAndInvSize.zw,
+		View.BufferBilinearUVMinMax.xy,
+		View.BufferBilinearUVMinMax.zw);
+	float SceneDeviceZ = Texture2DSampleLevel(FilteredSceneDepthTexture, FilteredSceneDepthTextureSampler, SceneDepthBufferUV, 0).r;
+
+	// Soft Bias with SceneDeviceZ for best quality
+	const float DeviceDepthFade = 0.00005f;
+	float DepthMask = saturate(1.0f - (SceneDeviceZ - EditorMaxDeviceZ) / DeviceDepthFade);
+
+	// Generate 2x2 square tiling pattern for foreground primitive that end up behind scene opaque primitives.
+	float PatternMask = ((PixelPos.x/2 + PixelPos.y/2) % 2) * 0.7f;
+
+	// the contants express the two opacity values we see when the primitive is hidden
+	float LowContrastPatternMask = lerp(0.2, 1, PatternMask);
+
+	// temporary
+	LowContrastPatternMask = saturate(lerp(LowContrastPatternMask, 1, EditorRenderParams.r));
+
+	//
+	float HiddenMask = lerp(0.7f, 1.0f, DepthMask);
+	float DarkenMask = lerp(LowContrastPatternMask, 1.0f, DepthMask);
+	
+	// Blend editor ptimitives with scene color.
+	OutColor.rgb = SceneColor.rgb * (1 - EditorPrimitiveColor.a) + EditorPrimitiveColor.rgb * (DarkenMask * HiddenMask);
+
+	#if POST_PROCESS_ALPHA
+		OutColor.a = lerp(SceneColor.a, 1, EditorPrimitiveColor.a * DarkenMask * HiddenMask);
+	#else
+		OutColor.a = 0;
+	#endif
+}

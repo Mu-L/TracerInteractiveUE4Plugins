@@ -1,0 +1,52 @@
+Availability:Public
+Title:Unreal Game Projects
+Crumbs: %ROOT%, Engine
+Description:Overview of game projects and instructions for working with them.
+version: 4.9
+parent:Engine/Editor
+order:8
+topic-image:project_topic.png
+related:Engine/Basics/Projects/CreatingTemplates
+related:Programming/Development/CompilingProjects
+related:Programming/Development/ManagingGameCode
+
+[EXCERPT:Main]
+[EXCERPT:Intro]
+
+[INCLUDE:Shared/Glossary/P/#Glossary_project]
+
+[/EXCERPT:Intro]
+
+%Engine/Basics/Projects/Browser:topic%
+[OBJECT:Topic]
+	[PARAM:image]
+		![](Engine/Basics/Projects/Packaging/packaging_topic.png)(quality:100)
+	[/PARAM]
+	[PARAM:title]
+		%Engine/Basics/Projects/Packaging:title%
+	[/PARAM]
+	[PARAM:description]
+	%Engine/Basics/Projects/Packaging:description%
+	[/PARAM]
+	[PARAM:path]
+		[RELATIVE:Engine/Basics/Projects/Packaging]
+	[/PARAM]
+[/OBJECT]
+
+
+[COMMENT:none]
+
+Projects can be one of two types:
+
+* **Content-Only** - These are projects where all development is done through the editor using content assets such as maps, art assets, _Blueprints_, etc.
+* **Code** - These projects allow programmer development in addition to regular content development available in _content-only_ projects. 
+
+[REGION:tip]
+Content projects can be converted to code projects using the [](Programming/Development/ManagingGameCode/CppClassWizard).
+[/REGION]
+
+
+
+[/COMMENT]
+
+[/EXCERPT:Main]

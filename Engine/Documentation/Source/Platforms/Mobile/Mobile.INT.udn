@@ -1,0 +1,33 @@
+Availability:Public
+Title:Mobile Game Development
+Crumbs:%ROOT%, Platforms
+Description:Information for developers creating mobile games.
+Platform:Mobile
+Navigation:platform
+version: 4.9
+parent:Platforms
+tags:Mobile
+order:0
+type:landing
+topic-image:MobileGameDevelopment_topic.png
+
+[REGION:banner]
+![](mobile_banner.png)
+[/REGION]
+
+## Starting Out
+
+[DIR(output:"topiccompact" type:"quick start" tags:"mobile")]
+
+## Mobile Platforms
+
+[DIR(output:"listbutton" type:"landing" parent:"Platforms/Mobile")]
+
+## Mobile Services
+
+[DIR(end:"1" output:"listbutton" type:"how-to" parent:"Platforms/Mobile")]
+
+## General Mobile Development
+
+[DIR(end:"1" output:"listbutton" type:"overview" parent:"Platforms/Mobile")]
+

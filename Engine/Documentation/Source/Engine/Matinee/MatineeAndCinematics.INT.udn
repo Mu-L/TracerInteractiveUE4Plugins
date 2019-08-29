@@ -1,0 +1,34 @@
+Availability: Public
+Title:Matinee and Cinematics
+Crumbs: %ROOT%, Engine
+Description:Animation tool that provides the ability to animate the properties of Actors over time, either to create dynamic gameplay or cinematic in-game sequences.
+Version: 4.9
+parent:Engine
+order:15
+topic-image:matinee_topic.png
+
+
+[REGION:banner]
+![matinee.jpg](matinee_landing_banner.png)
+[/REGION]
+
+[EXCERPt:Intro]
+[INCLUDE:Shared/Glossary/M/#Glossary_Matinee]
+[/EXCERPT:Intro]
+
+## Essentials
+
+[REGION:buttonlist]
+* [Using the Matinee Tool](Engine/Matinee/UserGuide "%Engine/Matinee/UserGuide:description%")
+* [](Engine/Matinee/UserGuide/BlueprintComponents "%Engine/Matinee/UserGuide/BlueprintComponents:description%")
+* [](Engine/Matinee/UI "%Engine/Matinee/UI:description%")
+* [](Engine/Matinee/TrackReference "%Engine/Matinee/TrackReference:description%")
+* [](Engine/Matinee/HowTo/ "%Engine/Matinee/HowTo:description%")
+[/REGION]
+
+## Related Links
+
+[REGION:buttonlist]
+* [](Engine/UI/CurveEditor "%Engine/UI/CurveEditor:description%")	
+[/REGION]
+

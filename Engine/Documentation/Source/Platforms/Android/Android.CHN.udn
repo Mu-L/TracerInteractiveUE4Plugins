@@ -1,0 +1,38 @@
+﻿INTSourceChangelist:3013199
+Availability: Public
+Title: 安卓游戏开发
+Crumbs:%ROOT%, Platforms
+Description:Developing games for the Android platform.
+Platform:Android
+Navigation:platform
+version: 4.9
+tags:Android
+tags:Mobile
+parent:Platforms/Mobile
+type:landing
+
+## 开始
+
+[REGION:buttonlist]
+
+		[DIR(output:"topiccompact" parent:"Platforms/Android" type:"quickstart")]
+	
+[/REGION]
+
+## 安卓 开发指南
+
+[REGION:buttonlist]
+
+		[DIR(end:"1" output:"listbutton" type:"howto" parent:"Platforms/Android")]
+	
+[/REGION]
+
+## 安卓概要
+
+[REGION:buttonlist]
+
+		[DIR(end:"1" output:"listbutton" type:"overview" parent:"Platforms/Android")]
+		[DIR(end:"1" output:"listbutton" type:"reference" parent:"Platforms/Android")]
+	
+[/REGION]
+

@@ -1,0 +1,16 @@
+﻿INTSourceChangelist:2691803
+Availability:Public
+Title:マテリアル シェーディング モデル
+Crumbs: %ROOT%, Engine, Engine/Rendering/Materials
+Description:サーフェスがライトとどのように相互作用するかを判断するためにマテリアルが使用する計算モデル
+Version:4.9
+
+
+## 既存のモデル
+
+[REGION:buttonlist]
+
+		* [](Engine/Rendering/Materials/LightingModels/SubSurface "%Engine/Rendering/Materials/LightingModels/SubSurface:description%")
+		* [](Engine/Rendering/Materials/LightingModels/SubSurfaceProfile "%Engine/Rendering/Materials/LightingModels/SubSurfaceProfile:description%")
+	
+[/REGION]

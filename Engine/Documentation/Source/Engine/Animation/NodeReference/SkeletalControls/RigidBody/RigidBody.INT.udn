@@ -1,0 +1,82 @@
+Availability:Public
+Crumbs: %ROOT%
+Title:Rigid Body
+Description:Describes the Rigid Body node and how it can be used as a lightweight physics simulation inside Animation Blueprints. 
+Type:reference
+Version: 4.18
+Parent:Engine/Animation/NodeReference/SkeletalControls
+Order:1
+tags:Animation
+tags:Animation Blueprint
+tags:Skeletal Controls
+topic-image:RigidBodyNode.png
+Related: Engine/Physics/PhAT
+Related: Engine/Physics/PhAT/Reference
+Related: Engine/Animation/AnimBlueprints/AnimGraph
+Related: Engine/Animation/NodeReference/Blend
+
+The **Rigid Body** Skeletal Control node (pictured below) can be used for light-weight physics simulation on characters using the high-performance [Immediate Mode PhysX API.](https://www.geforce.com/hardware/technology/physx)
+The Rigid Body node can be added to the **AnimGraph** of your [](Engine/Animation/AnimBlueprints) and can even be used with any [](Engine/Animation/NodeReference/Blend) enabling you to switch from a pose into a simulated physics state.
+Characters using this simulation can also generate collision with static geometry in the world. 
+
+![](RigidBodyNode.png)
+
+A typical use case for the Rigid Body node is on characters that have ponytails, chains, or other bones that "dangle" that you want to apply physics to. 
+
+[OBJECT:EmbeddedVideo]
+	[PARAMLITERAL:videoid]
+	RGTegdhUXWc
+	[/PARAMLITERAL]
+	[PARAMLITERAL:width]
+	100
+	[/PARAMLITERAL]
+	[PARAMLITERAL:height]
+	56.25
+	[/PARAMLITERAL]
+	[PARAMLITERAL:units]
+	%
+	[/PARAMLITERAL]
+	[PARAMLITERAL:type]
+	simple
+	[/PARAMLITERAL]
+[/OBJECT]
+
+[REGION:caption]
+Above, the hoses coming out of the character's head have a Physics Asset that is used with the Rigid Body node inside an Animation Blueprint. 
+[/REGION]
+
+## Setup
+
+Before using this node, inside your [Physics Asset](Engine/Physics/PhAT) select and set the [](Engine/Physics/PhysicsBodies) you want to simulate to **Simulated**. 
+
+![](RigidBody_02.png)
+
+[REGION:caption]
+Above, we have set each of the bones associated with the hoses that come from the character's head to simulate physics. 
+[/REGION]
+
+With your **Physics Asset** set up, inside the **AnimGraph** of your **Animation Blueprint**, add the **Rigid Body** node and the necessary logic to define when to use it. 
+
+![](RigidBody_11.png)
+
+[REGION:caption]
+Above, we are taking in data from another Animation Blueprint and feeding it through the Rigid Body node before ending in our Final Animation Pose. 
+[/REGION]
+
+With the Rigid Body node selected in your AnimGraph, you can change properties that define how the node is used inside the **Details** panel. 
+
+![](RigidBody_12.png)
+
+| Property | Description |
+| -------- | ----------- |
+| **Override Physics Asset** | Physics asset to use. If empty, the Skeletal Mesh's default Physics Asset will be used. |
+| **Override World Gravity** | Enables specification of a vector value to override gravity for this body. |
+| **External Force** | Applies a uniform external force in world space. For example, this allows for easily faking inertia of movement while still simulating in component space. |
+| **Overlap Channel** | The channel used to find static geometry to collide with. |
+| **Component Space Simulation** | When true, simulation is done in component space. This means velocity is only inherited by animated bodies.|
+| **Cached Bounds Scale** | Scale of cached bounds (versus actual bounds). Increasing this may improve performance, but overlaps may not work as well. A value of 1.0 effectively disables cached bounds. |
+| **(As Pin) Alpha** | Shows the Alpha property as a pin on the node or in the Details panel. |
+| **Alpha Scale Bias** | Set the Minimal and Maximal Influence values for the Alpha property. |
+
+[INCLUDE:Engine/Animation/NodeReference/SkeletalControls#lodthresh]
+

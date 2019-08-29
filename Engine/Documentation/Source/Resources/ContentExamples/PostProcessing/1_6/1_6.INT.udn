@@ -1,0 +1,17 @@
+Availability: Public
+Title:1.6 - Eye Adaptation
+Crumbs:%ROOT%, Resources, Resources/ContentExamples, Resources/ContentExamples/PostProcessing
+Description:An overview of the Post Processing example level, example 1.6: Eye Adaptation
+Related: Engine/Rendering/PostProcessEffects/AutomaticExposure
+Related: Engine/Rendering/Overview
+Related: Engine/Rendering/PostProcessEffects
+Related: Engine/Rendering/PostProcessEffects/PostProcessMaterials
+Version: 4.9
+topic-image:Resources/ContentExamples/PostProcessing/PP_6.png
+
+
+[REGION:lightbox]
+[![](1_6_01.png)(w:302)](1_6_01.png) [![](1_6_02.png)(w:302)](1_6_02.png) [![](1_6_03.png)(w:302)](1_6_03.png)
+[/REGION:lightbox]
+
+[INCLUDE:Engine/Rendering\PostProcessEffects\AutomaticExposure#EyeAdaptation_Desc]

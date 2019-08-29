@@ -1,0 +1,15 @@
+Availability: Public
+Title:Physical Materials
+Crumbs: %ROOT%, Engine, Engine/Physics
+Description:Assets applied to physically simulated primitives directly or via materials used to configure and control physical properties used by the simulation.
+Version: 4.9
+
+[INCLUDE:Shared/Glossary/P/#Glossary_Physical_Material]
+
+## Physical Materials Topics
+
+[REGION:buttonlist]
+* [](Engine/Physics/PhysicalMaterials/HowTo "%Engine/Physics/PhysicalMaterials/HowTo:description%")
+* [](Engine/Physics/PhysicalMaterials/Reference "%Engine/Physics/PhysicalMaterials/Reference:description%")
+[/REGION]
+

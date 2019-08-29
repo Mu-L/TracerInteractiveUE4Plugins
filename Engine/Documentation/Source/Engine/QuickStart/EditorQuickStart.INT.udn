@@ -1,0 +1,38 @@
+Availability:Public
+Title:Level Designer Quick Start
+Crumbs: %ROOT%, GettingStarted
+Description: Getting up and running with the basics of the Unreal Editor.
+prereq:GettingStarted/Installation
+prereq:Engine/Basics/Projects/Browser
+SkillLevel: Beginner
+Version: 4.9
+parent:Engine/Editor
+order:1
+checkpoint: editorqs
+type:quick start
+topic-image:engine_qs_topic.png
+
+![](Finished.png)
+
+_At the end of this guide, you'll have a room similar to the one pictured above._
+
+## Goals
+
+The focus of the Unreal Editor Quick Start Guide is to walk you through the basics of working with Unreal Engine 4.
+
+## Objectives
+
+After going through this tutorial, developers will know the following:
+
+*	How to navigate viewports.
+*	How to create a new level.
+*	How to place and edit actors in levels.
+*	How to build and run levels.
+
+## Steps
+
+[DIR(output:"checkpoint" parent:"Engine/QuickStart" org:"hierarchy")]
+
+[REGION:call_to_action]
+	[Click to Start](Engine/QuickStart/1 "%Engine/QuickStart/1:title%")
+[/REGION]

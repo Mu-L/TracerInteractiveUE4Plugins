@@ -1,0 +1,53 @@
+﻿INTSourceChangelist:3782314
+Availability:Public
+Title:アンリアル ゲーム プロジェクト
+Crumbs: %ROOT%, Engine
+Description:ゲーム プロジェクトおよび作業の説明の概要
+version:4.9
+parent:Engine/Editor
+order:8
+topic-image:project_topic.png
+related:Engine/Basics/Projects/CreatingTemplates
+related:Programming/Development/CompilingProjects
+related:Programming/Development/ManagingGameCode
+
+[EXCERPT:Main]
+[EXCERPT:Intro]
+
+[INCLUDE:Shared/Glossary/P/#Glossary_project]
+
+[/EXCERPT:Intro]
+
+%Engine/Basics/Projects/Browser:topic%
+[OBJECT:Topic]
+	[PARAM:image]
+		![](Engine/Basics/Projects/Packaging/packaging_topic.png)(quality:100)
+	[/PARAM]
+	[PARAM:title]
+		%Engine/Basics/Projects/Packaging:title%
+	[/PARAM]
+	[PARAM:description]
+	%Engine/Basics/Projects/Packaging:description%
+	[/PARAM]
+	[PARAM:path]
+		[RELATIVE:Engine/Basics/Projects/Packaging]
+	[/PARAM]
+[/OBJECT]
+
+
+[COMMENT:none]
+
+プロジェクトは以下の 2 種類のどちらかになります。
+
+* **Content-Only (コンテンツ専用)** - マップ、アートアセット、 _ブループリント_ などのコンテンツ アセットを用いて、エディタで全ての開発を行うプロジェクトです。
+* **Code** - _コンテンツ専用_ プロジェクトで可能な通常のコンテンツ開発に加え、コード開発を行うことができるプロジェクトです 
+
+[REGION:tip]
+[](Programming/Development/ManagingGameCode/CppClassWizard) を用いてコンテンツ プロジェクトをコード プロジェクトへ変換することができます。
+[/REGION]
+
+
+
+[/COMMENT]
+
+[/EXCERPT:Main]

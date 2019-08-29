@@ -1,0 +1,37 @@
+Availability:Public
+Title: Skeletal Mesh Animation System
+Crumbs: %ROOT%, Engine
+Description:System for deforming skeletal meshes based on keyframed animation data and morph targets.
+Navigation:topic
+parent:Engine
+order:3
+topic-image:animation_topic.png
+
+
+[REGION:banner]
+![Animation System](animation_banner.png)(convert:false)
+[/REGION]
+
+[INCLUDE:Engine/Animation/Overview#Intro]
+
+## Starting Out
+
+[DIR(output:"topic" parent:"Engine/Animation" org:"flat" tags:"Getting Started" type:"landing,overview,reference,quick start")]
+
+## Asset Types
+
+[DIR(output:"topic" parent:"Engine/Animation" org:"flat" tags:"Animation Assets" type:"landing,overview,reference,quick start")]
+
+## Tools
+
+[DIR(output:"topic" parent:"Engine/Animation" end:"3" org:"hierarchy" tags:"Animation Tools" type:"landing,overview,reference,quick start")]
+
+## Features
+
+[DIR(output:"topic" parent:"Engine/Animation" end:"1" org:"hierarchy" tags:"Animation Features" type:"landing,overview,reference,quick start")]
+
+## Guides
+
+[DIR(output:"fancy" parent:"Engine/Animation/AnimHowTo" end:"1" org:"hierarchy" type:"how-to" skilllevel:"Beginner")]
+[DIR(output:"fancy" parent:"Engine/Animation/AnimHowTo" end:"1" org:"hierarchy" type:"how-to" skilllevel:"Intermediate")]
+[DIR(output:"fancy" parent:"Engine/Animation/AnimHowTo" end:"1" org:"hierarchy" type:"how-to" skilllevel:"Advanced")]

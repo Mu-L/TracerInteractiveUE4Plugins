@@ -1,0 +1,20 @@
+INTSourceChangelist:3151855
+Availability: Public
+Title:雾特效
+Crumbs: %ROOT%, Engine
+Description:使用雾来渲染世界的气氛和设置环境的氛围。
+parent:Engine/Rendering
+order:6
+type:landing
+topic-image:fog_topic.png
+
+[REGION:banner]
+![Fog Effects](fog_landing_banner.png)
+[/REGION]
+
+雾特效可以用于渲染世界的气氛和设置环境的氛围。比如，地面雾可以用于呈现出恐怖的效果。
+
+[REGION:topics half]
+%Engine/Actors/FogEffects/AtmosphericFog:topic%
+%Engine/Actors/FogEffects/HeightFog:topic%
+[/REGION]

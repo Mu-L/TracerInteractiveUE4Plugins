@@ -1,0 +1,188 @@
+﻿INTSourceChangelist:3151855
+Availability:Public
+Title:UE4 をはじめよう
+Crumbs: %ROOT%
+Description:アンリアル エンジン入門編です。
+Navigation:start
+version:4.9
+parent:%ROOT%
+order:1
+tags:Getting Started
+type:landing
+
+[VAR:Params]
+[PARAM:image]
+	![](gettingstarted_topic.png)
+[/PARAM]
+[PARAM:icon]
+	![](%ROOT%/start_icon.png)(convert:false)
+[/PARAM]
+[PARAM:title]
+	%GettingStarted:title%
+[/PARAM]
+[PARAM:description]
+	%GettingStarted:description%
+[/PARAM]
+[PARAM:path]
+	[RELATIVE:GettingStarted]
+[/PARAM]
+[/VAR]
+
+[VAR:Topic]
+[OBJECT:Topic]
+%params%
+[/OBJECT]
+[/VAR]
+
+[VAR:TopicCompact]
+[OBJECT:TopicCompact]
+%params%
+[/OBJECT]
+[/VAR]
+
+[VAR:Role]
+[OBJECT:Role]
+%params%
+[PARAMLITERAL:id]
+gettingstarted
+[/PARAMLITERAL]
+[/OBJECT]
+[/VAR]
+
+
+## はじめよう
+
+[REGION:buttonlist]
+
+	
+[/REGION]
+
+## エディタの基本原理
+
+[REGION:buttonlist]
+
+		* [](Engine/QuickStart "%Engine/QuickStart:description%")
+		* [レベルエディタのウォークスルー](Engine/UI/LevelEditor "%Engine/UI/LevelEditor:description%")
+		* [](Engine/UI/LevelEditor/Toolbar "%Engine/UI/LevelEditor/Toolbar:description%")
+
+		[REGION:gallery]
+		[REGION:normaltitle]
+		関連ビデオ
+		[/REGION]
+		[VideoLink(videoid:"w4XlBKeE46E" playlistid:"PLZlv_N0_O1gasd4IcOe9Cx9wHoBB7rxFl" width:"180")]
+		[/REGION]
+	
+[/REGION]
+
+## エディタのビューポート
+
+[REGION:buttonlist]
+
+		* [](Engine/UI/LevelEditor/Viewports/Basics "%Engine/UI/LevelEditor/Viewports/Basics:description%")
+		* [](Engine/UI/LevelEditor/Viewports/ViewportControls "%Engine/UI/LevelEditor/Viewports/ViewportControls:description%")
+	
+[/REGION]
+
+## エディタのモード
+
+[REGION:buttonlist]
+
+		* [](Engine/UI/LevelEditor/Modes "%Engine/UI/LevelEditor/Modes:description%")
+	
+[/REGION]
+
+## アクタとジオメトリー
+
+[REGION:buttonlist]
+
+	* [配置](Engine/Actors/Placement "%Engine/Actors/Placement:description%")
+	* [ジオメトリー ブラシ](Engine/Actors/Brushes "%Engine/Actors/Brushes:description%")
+	* [トランスフォーム](Engine/Actors/Transform "%Engine/Actors/Transform:description%")
+
+	[REGION:gallery]
+	[REGION:normaltitle]
+	関連ビデオ
+	[/REGION]
+	[VideoLink(videoid:"cl_eoVfNDKU" playlistid:"PLZlv_N0_O1gak1_FoAJVrEGiLIploeF3F" width:"180")]
+	[/REGION]
+	
+[/REGION]
+
+## コンテンツ ブラウザ
+
+[REGION:buttonlist]
+
+		* [](Engine/Content/QuickStart "%Engine/Content/QuickStart:description%")
+		* [](Engine/Basics/AssetsAndPackages "%Engine/Basics/AssetsAndPackages:description%")
+		* [](Engine/Content/Browser "%Engine/Content/Browser:description%")	
+	
+[/REGION]
+
+## ライティング
+
+[REGION:buttonlist]
+
+		* [](Engine/Rendering/LightingAndShadows/QuickStart "%Engine/Rendering/LightingAndShadows/QuickStart:description%")
+		* [](Engine/Rendering/LightingAndShadows/Basics "%Engine/Rendering/LightingAndShadows/Basics:description%")
+	
+[/REGION]
+
+## マテリアルとシェーディング
+
+[REGION:buttonlist]
+
+		* [](Engine/Rendering/Materials/IntroductionToMaterials "%Engine/Rendering/Materials/IntroductionToMaterials:description%")
+
+		[REGION:gallery]
+		[REGION:normaltitle]
+		関連ビデオ
+		[/REGION]
+		[VideoLink(videoid:"lngF4VVNER4" playlistid:"PLZlv_N0_O1gbQjgY0nDwZNYe_N8IcYWS-" width:"180" image:"https://img.youtube.com/vi/lngF4VVNER4/hqdefault.jpg")]
+		[/REGION]
+	
+[/REGION]
+
+
+## ブループリント ビジュアル スクリプティング
+
+[REGION:buttonlist]
+
+		* [ブループリント入門](Engine/Blueprints/GettingStarted "%Engine/Blueprints/GettingStarted:description%")
+
+		[REGION:gallery]
+		[REGION:normaltitle]
+		関連ビデオ
+		[/REGION]
+		[VideoLink(videoid:"EFXMW_UEDco" playlistid:"PLZlv_N0_O1gY35ezlSQn1sWOGfh4C7ewO" width:"180")]
+		[/REGION]
+	
+[/REGION]
+
+## プログラミング
+
+[REGION:buttonlist]
+
+		* [](Programming/QuickStart "%Programming/QuickStart:description%")
+		* [](Programming/Basics "%Programming/Basics:description%")
+		* [クイック リファレンス](Gameplay/Framework/QuickReference "%Gameplay/Framework/QuickReference:description%")
+
+		[REGION:gallery]
+		[REGION:normaltitle]
+		関連ビデオ
+		[/REGION]
+		[VideoLink(videoid:"mSRov77hNR4" playlistid:"PLZlv_N0_O1gYup-gvJtMsgJqnEB_dGiM4" width:"180")]
+		[/REGION]
+	
+[/REGION]
+
+## 自分のゲームをプレイテストする
+
+[REGION:buttonlist]
+
+		* [](Engine/UI/LevelEditor/InEditorTesting "%Engine/UI/LevelEditor/InEditorTesting:description%")
+		* **プラットフォーム**
+			* [](Platforms/iOS/QuickStart "%Platforms/iOS/QuickStart:description%")	
+			* [](Platforms/Android/GettingStarted "%Platforms/Android/GettingStarted:description%")
+			* [](Platforms/Oculus/QuickStart "%Platforms/Oculus/QuickStart:description%")	
+	
+[/REGION]

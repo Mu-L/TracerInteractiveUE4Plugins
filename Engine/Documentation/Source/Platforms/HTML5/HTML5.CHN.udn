@@ -1,0 +1,49 @@
+﻿INTSourceChangelist:2463144
+Availability: Public
+Title: HTML5 游戏开发
+Crumbs:%ROOT%, Platforms
+Description: 为 HTML5 平台开发游戏。
+Platform:HTML5
+Navigation:platform
+Version: 4.9
+
+
+## HTML5必备知识
+
+[REGION:buttonlist]
+
+	* [](Platforms/HTML5/GettingStarted "%Platforms/HTML5/GettingStarted:description%")
+[COMMENT:none]
+
+	[PUBLISH:Docs]
+	* [](Platforms/HTML5/BuildingEmscripten "%Platforms/HTML5/BuildingEmscripten:description%")
+	[/PUBLISH:Docs]
+
+[/COMMENT]
+	
+[/REGION]
+
+	
+
+		
+
+	      
+
+	       
+
+	   
+
+	   
+
+	  
+
+		
+
+		
+
+		
+
+		
+
+		
+

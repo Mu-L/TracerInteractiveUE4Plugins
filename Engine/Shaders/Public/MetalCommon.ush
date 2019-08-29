@@ -1,0 +1,20 @@
+// Copyright 1998-2018 Epic Games, Inc. All Rights Reserved.
+
+/*=============================================================================
+	MetalCommon.usf: Common Metal shader code
+=============================================================================*/
+
+// Update this GUID to improve shader recompilation for Metal only shaders
+// GUID = {0C91821D-7081-477F-A434-945D00DABC73}
+  
+#pragma once
+
+#if VERTEXSHADER && HULLSHADER
+#ifndef TESSELLATIONSHADER
+#define TESSELLATIONSHADER 1
+#endif
+#endif
+
+// Abuse the GLSL-style "invariant" keyword that hlslcc exposes to modify Buffer<>/RWBuffer<> declarations to assume that they input type is always the same as that declared in the shader
+// The MetalRHI runtime will then assert when it isn't. For Metal 1.1 and below all Buffer<>/RWBuffer<> objects will *assume* this type matches as there is no way to gracefully handle it there.
+#define STRONG_TYPE invariant

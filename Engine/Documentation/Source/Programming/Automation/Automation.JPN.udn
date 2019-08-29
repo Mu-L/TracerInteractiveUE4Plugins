@@ -1,0 +1,109 @@
+﻿INTSourceChangelist:3682737
+Availability:Public
+Title:自動化システムの概要
+Crumbs: %ROOT%
+type:overview
+Description:ユニットテスト、機能テスト、コンテンツ負荷テストのために使用する自動化システムの概要
+skilllevel:Intermediate
+parent:Programming
+Navigation:topic
+version:4.17
+order:0
+tags:Automation
+tags:Testing
+
+[VAR:Topic]
+[OBJECT:Topic]
+	[PARAM:image]
+		![%Programming/Automation:title%](automation_ui.png)
+	[/PARAM]
+	[PARAM:icon]
+		![](%ROOT%/gear_icon.png)(convert:false)
+	[/PARAM]
+	[PARAM:title]
+		%Programming/Automation:title%
+	[/PARAM]
+	[PARAM:description]
+		%Programming/Automation:description%
+	[/PARAM]
+	[PARAM:path]
+		[RELATIVE:Programming/Automation]
+	[/PARAM]
+[/OBJECT]
+[/VAR]
+
+[VAR:TopicCompact]
+[OBJECT:TopicCompact]
+	[PARAM:image]
+		![%Programming/Automation:title%](automation_ui.png)
+	[/PARAM]
+	[PARAM:icon]
+		![](%ROOT%/gear_icon.png)(convert:false)
+	[/PARAM]
+	[PARAM:title]
+		%Programming/Automation:title%
+	[/PARAM]
+	[PARAM:description]
+		%Programming/Automation:description%
+	[/PARAM]
+	[PARAM:path]
+		[RELATIVE:Programming/Automation]
+	[/PARAM]
+[/OBJECT]
+[/VAR]
+
+[EXCERPT:Intro]
+自動化システムには、 **Unreal Message Bus** の威力を活かしたユニット テスト、機能テスト、およびコンテンツ負荷テストを行うための機能があります。
+
+自動化システムは、**自動化テスト** を一回以上行うことで機能します。目的または機能に応じて様々なカテゴリに分けられます。
+[/EXCERPT:Intro]
+
+$ ユニット テスト :API レベルの検証テスト。たとえば、`TimespanTest.cpp` または `DateTimeTest.cpp`を参照してください。
+$ 機能テスト :システム レベルの検証テスト。インゲームの統計情報が正確に報告されているか、解像度の変更が機能しているかなど、Play-In-Editor の機能が期待どおりであるかの検証も含みます。たとえば、`EditorAutomationTests.cpp` または `EngineAutomationTests.cpp`を参照してください。
+$ スモークテスト :エディタ、ゲーム、またはコマンドレットが開始すると _毎回_ 実行されるように十分な速さにすることを意図しています。[UI](Programming/Automation/UserGuide#ユーザーインターフェース) でもデフォルトで選択されます。
+
+	[REGION:warning]
+		全てのスモーク テストは、1 秒以内に終了することを意図しています。ユニット テストもしくは迅速な機能テストのみをスモーク テストとしてマークしてください。
+	[/REGION]
+
+$ コンテンツ負荷テスト :すべてのマップのロード、またはすべてのブループリントのロードとコンパイルなど、クラッシュを避けるために特定のシステムを徹底的にテストします。たとえば、`EditorAutomationTests.cpp` または `EngineAutomationTests.cpp`を参照してください。
+
+$ スクリーンショットの比較ツール :スクリーンショットの比較ツールは、迅速にスクリーンショットを比較し、レンダリングに関する問題を特定します。詳細は、 [スクリーン ショット ツールのリファレンス](Programming/Automation/ScreenShotComparison) をご覧ください。
+
+[REGION:topics half]
+[OBJECT:Topic]
+	[PARAM:image]
+		![%Programming/Automation/TechnicalGuide:title%](automation_tech.png)
+	[/PARAM]
+	[PARAM:icon]
+		![](%ROOT%/gear_icon.png)(convert:false)
+	[/PARAM]
+	[PARAM:title]
+		%Programming/Automation/TechnicalGuide:title%
+	[/PARAM]
+	[PARAM:description]
+		%Programming/Automation/TechnicalGuide:description%
+	[/PARAM]
+	[PARAM:path]
+		[RELATIVE:Programming/Automation/TechnicalGuide]
+	[/PARAM]
+[/OBJECT]
+
+[OBJECT:Topic]
+	[PARAM:image]
+		![%Programming/Automation/UserGuide:title%](automation_ui.png)
+	[/PARAM]
+	[PARAM:icon]
+		![](%ROOT%/gear_icon.png)(convert:false)
+	[/PARAM]
+	[PARAM:title]
+		%Programming/Automation/UserGuide:title%
+	[/PARAM]
+	[PARAM:description]
+		%Programming/Automation/UserGuide:description%
+	[/PARAM]
+	[PARAM:path]
+		[RELATIVE:Programming/Automation/UserGuide]
+	[/PARAM]
+[/OBJECT]
+[/REGION]

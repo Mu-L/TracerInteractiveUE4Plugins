@@ -1,0 +1,19 @@
+Availability:Public
+Title:Packaging and Cooking Games
+Crumbs:%ROOT%, Engine
+Description:Generating platform-specific content for assets used in the game.
+Version: 4.9
+parent:Engine
+order:18
+topic-image:Engine/Basics/Projects/Packaging/packaging_topic.png
+
+## Packaging & Cooking
+
+[REGION:buttonlist]
+* [](Engine/Basics/Projects/Packaging "%Engine/Basics/Projects/Packaging:description%")
+* [](Engine/Deployment/Launching "%Engine/Deployment/Launching:description%")
+* [](Engine/Deployment/Cooking "%Engine/Deployment/Cooking:description%")
+* [](Engine/Deployment/Releasing "/Engine/Deployment/Releasing:description%")
+* [](Engine/Deployment/Patching "Engine/Deployment/Patching:description%")
+* [](Engine/Deployment/UnrealFrontend "%Engine/Deployment/UnrealFrontend:description%")
+[/REGION]
