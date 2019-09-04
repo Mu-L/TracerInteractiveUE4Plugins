@@ -24,8 +24,7 @@ public:
 		: _Image( FCoreStyle::Get().GetDefaultBrush() )
 		, _ColorAndOpacity( FLinearColor::White )
 		, _FlipForRightToLeftFlowDirection( false )
-		, _OnMouseButtonDown()
-		{}
+		{ }
 
 		/** Image resource */
 		SLATE_ATTRIBUTE( const FSlateBrush*, Image )
@@ -37,8 +36,7 @@ public:
 		SLATE_ARGUMENT( bool, FlipForRightToLeftFlowDirection )
 
 		/** Invoked when the mouse is pressed in the widget. */
-		SLATE_EVENT( FPointerEventHandler, OnMouseButtonDown )
-
+		SLATE_EVENT(FPointerEventHandler, OnMouseButtonDown)
 	SLATE_END_ARGS()
 
 	/** Constructor */
@@ -65,15 +63,14 @@ public:
 
 	/** See the Image attribute */
 	void SetImage(TAttribute<const FSlateBrush*> InImage);
-	
-	/** See OnMouseButtonDown event */
-	void SetOnMouseButtonDown(FPointerEventHandler EventHandler);
 
 public:
 
 	// SWidget overrides
 	virtual int32 OnPaint( const FPaintArgs& Args, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled ) const override;
-	virtual FReply OnMouseButtonDown( const FGeometry& MyGeometry, const FPointerEvent& MouseEvent ) override;
+#if WITH_ACCESSIBILITY
+	virtual TSharedRef<FSlateAccessibleWidget> CreateAccessibleWidget() override;
+#endif
 
 protected:
 	// Begin SWidget overrides.

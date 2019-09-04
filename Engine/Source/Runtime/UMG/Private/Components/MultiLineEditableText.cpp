@@ -11,21 +11,32 @@
 /////////////////////////////////////////////////////
 // UMultiLineEditableText
 
+static FTextBlockStyle* DefaultMultiLineEditableTextStyle = nullptr;
+
 UMultiLineEditableText::UMultiLineEditableText(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
-	SMultiLineEditableText::FArguments Defaults;
-	WidgetStyle = *Defaults._TextStyle;
-	bIsReadOnly = Defaults._IsReadOnly.Get();
-	SelectAllTextWhenFocused = Defaults._SelectAllTextWhenFocused.Get();
-	ClearTextSelectionOnFocusLoss = Defaults._ClearTextSelectionOnFocusLoss.Get();
-	RevertTextOnEscape = Defaults._RevertTextOnEscape.Get();
-	ClearKeyboardFocusOnCommit = Defaults._ClearKeyboardFocusOnCommit.Get();
-	AllowContextMenu = Defaults._AllowContextMenu.Get();
-	Clipping = Defaults._Clipping;
-	VirtualKeyboardDismissAction = Defaults._VirtualKeyboardDismissAction.Get();
-	AutoWrapText = true;
+	if (DefaultMultiLineEditableTextStyle == nullptr)
+	{
+		// HACK: THIS SHOULD NOT COME FROM CORESTYLE AND SHOULD INSTEAD BE DEFINED BY ENGINE TEXTURES/PROJECT SETTINGS
+		DefaultMultiLineEditableTextStyle = new FTextBlockStyle(FCoreStyle::Get().GetWidgetStyle<FTextBlockStyle>("NormalText"));
+
+		// Unlink UMG default colors from the editor settings colors.
+		DefaultMultiLineEditableTextStyle->UnlinkColors();
+	}
+
+	WidgetStyle = *DefaultMultiLineEditableTextStyle;
 	
+	bIsReadOnly = false;
+	SelectAllTextWhenFocused = false;
+	ClearTextSelectionOnFocusLoss = true;
+	RevertTextOnEscape = false;
+	ClearKeyboardFocusOnCommit = true;
+	AllowContextMenu = true;
+	Clipping = EWidgetClipping::ClipToBounds;
+	VirtualKeyboardDismissAction = EVirtualKeyboardDismissAction::TextChangeOnDismiss;
+	AutoWrapText = true;
+
 	if (!IsRunningDedicatedServer())
 	{
 		static ConstructorHelpers::FObjectFinder<UFont> RobotoFontObj(*UWidget::GetDefaultFontName());
@@ -111,6 +122,27 @@ void UMultiLineEditableText::SetText(FText InText)
 	}
 }
 
+FText UMultiLineEditableText::GetHintText() const
+{
+	if (MyMultiLineEditableText.IsValid())
+	{
+		return MyMultiLineEditableText->GetHintText();
+	}
+
+	return HintText;
+}
+
+void UMultiLineEditableText::SetHintText(FText InHintText)
+{
+	HintText = InHintText;
+	HintTextDelegate.Clear();
+	if (MyMultiLineEditableText.IsValid())
+	{
+		TAttribute<FText> HintTextBinding = PROPERTY_BINDING(FText, HintText);
+		MyMultiLineEditableText->SetHintText(HintTextBinding);
+	}
+}
+
 void UMultiLineEditableText::SetIsReadOnly(bool bReadOnly)
 {
 	bIsReadOnly = bReadOnly;
@@ -118,6 +150,16 @@ void UMultiLineEditableText::SetIsReadOnly(bool bReadOnly)
 	if ( MyMultiLineEditableText.IsValid() )
 	{
 		MyMultiLineEditableText->SetIsReadOnly(bIsReadOnly);
+	}
+}
+
+void UMultiLineEditableText::SetWidgetStyle(const FTextBlockStyle& InWidgetStyle)
+{
+	WidgetStyle = InWidgetStyle;
+
+	if (MyMultiLineEditableText.IsValid())
+	{
+		MyMultiLineEditableText->SetTextStyle(&WidgetStyle);
 	}
 }
 

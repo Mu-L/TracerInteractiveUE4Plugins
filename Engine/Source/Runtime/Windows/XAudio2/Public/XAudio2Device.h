@@ -17,6 +17,7 @@
 #include "AudioDecompress.h"
 #include "AudioEffect.h"
 #include "AudioDevice.h"
+#include "VorbisAudioInfo.h"
 
 DECLARE_LOG_CATEGORY_EXTERN(LogXAudio2, Log, All);
 
@@ -118,21 +119,31 @@ private:
 
 	virtual FName GetRuntimeFormat(USoundWave* SoundWave) override
 	{
-		static FName NAME_OPUS(TEXT("OPUS"));
-		static FName NAME_OGG(TEXT("OGG"));
-
-#if WITH_OGGVORBIS
+		static const FName NAME_ADPCM(TEXT("ADPCM"));
+		static const FName NAME_OGG(TEXT("OGG"));
+		static const FName NAME_OPUS(TEXT("OPUS"));
+		static const FName NAME_XMA(TEXT("XMA"));
 
 		if (SoundWave->IsStreaming())
 		{
+			if (SoundWave->IsSeekableStreaming())
+			{
+				return NAME_ADPCM;
+			}
+
+#if WITH_XMA2 && USE_XMA2_FOR_STREAMING
+			else if (SoundWave->NumChannels <= 2)
+			{
+				return NAME_XMA;
+			}
+#endif // WITH_XMA2 && USE_XMA2_FOR_STREAMING
+
 #if USE_VORBIS_FOR_STREAMING
 			return NAME_OGG;
 #else
 			return NAME_OPUS;
-#endif
+#endif // else USE_VORBIS_FOR_STREAMING
 		}
-
-		static FName NAME_XMA(TEXT("XMA"));
 
 #if WITH_XMA2
 		if (SoundWave->NumChannels > 2)
@@ -144,14 +155,9 @@ private:
 		{
 			return NAME_XMA;
 		}
-#else
-		return NAME_OGG;
-#endif
+#endif // WITH_XMA2
 
-#else //WITH_OGGVORBIS
-		static FName NAME_XMA(TEXT("XMA"));
-		return NAME_XMA;
-#endif //WITH_OGGVORBIS
+		return NAME_OGG;
 	}
 
 	virtual bool HasCompressedAudioInfoClass(USoundWave* SoundWave) override;
@@ -192,6 +198,8 @@ protected:
 	 */
 	void* AllocatePermanentMemory( int32 Size, /*OUT*/ bool& AllocatedInPool );
 
+	/** Retrieves the platform settings */
+	virtual FAudioPlatformSettings GetPlatformSettings() const override;
 
 	/** 
      * Derives the output matrix to use based on the channel mask and the number of channels
@@ -216,11 +224,11 @@ private:
 	/** Cached audio clock time for when devices are removed/swapped. */
 	double CachedAudioClockStartTime;
 
-#if PLATFORM_WINDOWS
+#if PLATFORM_WINDOWS || PLATFORM_HOLOLENS
 	// We need to keep track whether com was successfully initialized so we can clean 
 	// it up during shutdown
 	bool bComInitialized;
-#endif // PLATFORM_WINDOWS
+#endif // PLATFORM_WINDOWS || PLATFORM_HOLOLENS
 };
 
 class FXMPHelper

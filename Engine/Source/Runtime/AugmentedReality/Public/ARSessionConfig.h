@@ -44,7 +44,10 @@ enum class EARSessionType : uint8
     Image,
 
 	/** A session used to scan objects for object detection in a world tracking session */
-	ObjectScanning
+	ObjectScanning,
+	
+	/** A session used to track human pose in 3D */
+	PoseTracking
 };
 
 UENUM(BlueprintType, Category = "AR AugmentedReality", meta = (Experimental, Bitflags))
@@ -107,6 +110,25 @@ enum class EARFaceTrackingUpdate : uint8
 	CurvesAndGeo,
 	/** Only the curve data is updated */
 	CurvesOnly
+};
+
+/**
+ * Tells the AR system how much of the face work to perform
+ */
+UENUM(BlueprintType)
+enum class EARSessionTrackingFeature : uint8
+{
+	/** None of the session feature is enabled */
+	None,
+	
+	/** 2D pose detection is enabled */
+	PoseDetection2D,
+	
+	/** Person segmentation is enabled */
+	PersonSegmentation,
+	
+	/** Person segmentation with depth info is enabled */
+	PersonSegmentationWithDepth,
 };
 
 UCLASS(BlueprintType, Category="AR Settings")
@@ -225,11 +247,48 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "AR Settings")
 	void SetFaceTrackingUpdate(EARFaceTrackingUpdate InUpdate);
 
+	/** @see EnabledSessionTrackingFeatures */
+	UFUNCTION(BlueprintCallable, Category = "AR Settings")
+	EARSessionTrackingFeature GetEnabledSessionTrackingFeature() const;
+	
+	/** @see EnabledSessionTrackingFeatures */
+	UFUNCTION(BlueprintCallable, Category = "AR Settings")
+	void SetSessionTrackingFeatureToEnable(EARSessionTrackingFeature InSessionTrackingFeature);
 
 	bool ShouldDoHorizontalPlaneDetection() const { return bHorizontalPlaneDetection; }
 	bool ShouldDoVerticalPlaneDetection() const { return bVerticalPlaneDetection; }
 	
 	const TArray<uint8>& GetSerializedARCandidateImageDatabase() const;	
+
+
+	/** Whether the AR system should generate mesh data that can be rendered, collided against, nav mesh generated on, etc. */
+	UPROPERTY(EditAnywhere, Category = "AR Settings | World Mapping")
+	bool bGenerateMeshDataFromTrackedGeometry;
+
+	/** Whether the AR system should generate collision data from the mesh data or not */
+	UPROPERTY(EditAnywhere, Category = "AR Settings | World Mapping")
+	bool bGenerateCollisionForMeshData;
+
+	/** Whether the AR system should generate navigation mesh data from the mesh data or not */
+	UPROPERTY(EditAnywhere, Category = "AR Settings | World Mapping")
+	bool bGenerateNavMeshForMeshData;
+
+	/** Whether the AR system render the mesh data as occlusion meshes or not */
+	UPROPERTY(EditAnywhere, Category = "AR Settings | World Mapping")
+	bool bUseMeshDataForOcclusion;
+
+	/** Whether the AR system should render the mesh data in wireframe or not */
+	UPROPERTY(EditAnywhere, Category = "AR Settings | World Mapping")
+	bool bRenderMeshDataInWireframe;
+
+	/** Whether the AR system should report scene objects (@see EARObjectClassification::SceneObject) */
+	UPROPERTY(EditAnywhere, Category = "AR Settings | World Mapping")
+	bool bTrackSceneObjects;
+	
+	/** Whether to occlude the virtual content with the result from person segmentation */
+	UPROPERTY(EditAnywhere, Category = "AR Settings | Occlusion")
+	bool bUsePersonSegmentationForOcclusion = true;
+
 private:
 	//~ UObject interface
 	virtual void Serialize(FArchive& Ar) override;
@@ -297,7 +356,7 @@ protected:
 	EAREnvironmentCaptureProbeType EnvironmentCaptureProbeType;
 
 	/** A previously saved world that is to be loaded when the session starts */
-	UPROPERTY(VisibleAnywhere, Category="AR Settings")
+	UPROPERTY(VisibleAnywhere, Category="AR Settings | World Mapping")
 	TArray<uint8> WorldMapData;
 
 	/** A list of candidate objects to search for in the scene */
@@ -321,5 +380,9 @@ protected:
 	
 	/** Data array for storing the cooked image database */
 	UPROPERTY()
-	TArray<uint8> SerializedARCandidateImageDatabase;	
+	TArray<uint8> SerializedARCandidateImageDatabase;
+	
+	/** A list of session features  to enable */
+	UPROPERTY(EditAnywhere, Category="AR Settings")
+	EARSessionTrackingFeature EnabledSessionTrackingFeature = EARSessionTrackingFeature::None;
 };

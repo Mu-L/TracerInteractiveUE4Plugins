@@ -13,6 +13,8 @@
 #include "ISequencer.h"
 #include "ISequencerTrackEditor.h"
 
+#include "NiagaraScript.h"
+
 class FNiagaraSystemInstance;
 class FNiagaraSystemViewModel;
 class SNiagaraSystemEditorViewport;
@@ -25,6 +27,7 @@ class UNiagaraSequence;
 struct FAssetData;
 class FMenuBuilder;
 class ISequencer;
+class FNiagaraMessageLogViewModel;
 
 /** Viewer/editor for a NiagaraSystem
 */
@@ -82,7 +85,7 @@ protected:
 	virtual bool OnRequestClose() override;
 	
 private:
-	void InitializeInternal(const EToolkitMode::Type Mode, const TSharedPtr<class IToolkitHost>& InitToolkitHost);
+	void InitializeInternal(const EToolkitMode::Type Mode, const TSharedPtr<class IToolkitHost>& InitToolkitHost, const FGuid& MessageLogGuid);
 
 	void UpdateOriginalEmitter();
 	void UpdateExistingEmitters();
@@ -98,6 +101,7 @@ private:
 	TSharedRef<SDockTab> SpawnTab_DebugSpreadsheet(const FSpawnTabArgs& Args);
 	TSharedRef<SDockTab> SpawnTab_PreviewSettings(const FSpawnTabArgs& Args);
 	TSharedRef<SDockTab> SpawnTab_GeneratedCode(const FSpawnTabArgs& Args);
+	TSharedRef<SDockTab> SpawnTab_MessageLog(const FSpawnTabArgs& Args);
 
 	/** Builds the toolbar widget */
 	void ExtendToolbar();	
@@ -122,6 +126,7 @@ private:
 
 private:
 	TSharedRef<SWidget> GenerateBoundsMenuContent(TSharedRef<FUICommandList> InCommandList);
+	const FName GetNiagaraSystemMessageLogName(UNiagaraSystem* InSystem) const;
 	void OnSaveThumbnailImage();
 	void OnThumbnailCaptured(UTexture2D* Thumbnail);
 
@@ -147,6 +152,10 @@ private:
 	/* The view model for the System being edited */
 	TSharedPtr<FNiagaraSystemViewModel> SystemViewModel;
 
+	/** Message log, with the log listing that it reflects */
+	TSharedPtr<FNiagaraMessageLogViewModel> NiagaraMessageLogViewModel;
+	TSharedPtr<class SWidget> NiagaraMessageLog;
+
 	/** The command list for this editor */
 	TSharedPtr<FUICommandList> EditorCommands;
 
@@ -165,4 +174,5 @@ private:
 	static const FName DebugSpreadsheetTabID;
 	static const FName PreviewSettingsTabId;
 	static const FName GeneratedCodeTabID;
+	static const FName MessageLogTabID;
 };

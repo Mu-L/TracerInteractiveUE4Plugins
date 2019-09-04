@@ -365,6 +365,29 @@ TArray<FColor>* FScreenshotRequest::GetHighresScreenshotMaskColorArray()
 }
 
 
+// @param bAutoType true: automatically choose GB/MB/KB/... false: always use MB for easier comparisons
+FString GetMemoryString( const double Value, const bool bAutoType )
+{
+	if (bAutoType)
+	{
+		if (Value > 1024.0 * 1024.0 * 1024.0)
+		{
+			return FString::Printf( TEXT( "%.2f GB" ), float( Value / (1024.0 * 1024.0 * 1024.0) ) );
+		}
+		if (Value > 1024.0 * 1024.0)
+		{
+			return FString::Printf( TEXT( "%.2f MB" ), float( Value / (1024.0 * 1024.0) ) );
+		}
+		if (Value > 1024.0)
+		{
+			return FString::Printf( TEXT( "%.2f KB" ), float( Value / (1024.0) ) );
+		}
+		return FString::Printf( TEXT( "%.2f B" ), float( Value ) );
+	}
+	
+	return FString::Printf( TEXT( "%.2f MB" ), float( Value / (1024.0 * 1024.0) ) );
+}
+
 FOnScreenshotRequestProcessed FScreenshotRequest::ScreenshotProcessedDelegate;
 bool FScreenshotRequest::bIsScreenshotRequested = false;
 FString FScreenshotRequest::Filename;
@@ -412,6 +435,9 @@ int32 FStatUnitData::DrawStat(FViewport* InViewport, FCanvas* InCanvas, int32 In
 	RawRHITTime = FPlatformTime::ToMilliseconds(GRHIThreadTime);
 	RHITTime = 0.9 * RHITTime + 0.1 * RawRHITTime;
 
+	RawInputLatencyTime = FPlatformTime::ToMilliseconds64(GInputLatencyTime);
+	InputLatencyTime = 0.9 * InputLatencyTime + 0.1 * RawInputLatencyTime;
+
 	FDynamicResolutionStateInfos DynamicResolutionStateInfos;
 	GEngine->GetDynamicResolutionCurrentStateInfos(/* out */ DynamicResolutionStateInfos);
 
@@ -425,6 +451,7 @@ int32 FStatUnitData::DrawStat(FViewport* InViewport, FCanvas* InCanvas, int32 In
 	SET_FLOAT_STAT(STAT_UnitRHIT, RHITTime);
 	SET_FLOAT_STAT(STAT_UnitGame, GameThreadTime);
 	SET_FLOAT_STAT(STAT_UnitGPU, GPUFrameTime);
+	SET_FLOAT_STAT(STAT_InputLatencyTime, InputLatencyTime);
 
 	GEngine->SetAverageUnitTimes(FrameTime, RenderThreadTime, GameThreadTime, GPUFrameTime, RHITTime);
 
@@ -433,6 +460,7 @@ int32 FStatUnitData::DrawStat(FViewport* InViewport, FCanvas* InCanvas, int32 In
 	float Max_GPUFrameTime = 0.0f;
 	float Max_FrameTime = 0.0f;
 	float Max_RHITTime = 0.0f;
+	float Max_InputLatencyTime = 0.0f;
 
 	const bool bShowUnitMaxTimes = InViewport->GetClient() ? InViewport->GetClient()->IsStatEnabled(TEXT("UnitMax")) : false;
 #if !UE_BUILD_SHIPPING
@@ -442,6 +470,7 @@ int32 FStatUnitData::DrawStat(FViewport* InViewport, FCanvas* InCanvas, int32 In
 	GPUFrameTimes[CurrentIndex] = bShowRawUnitTimes ? RawGPUFrameTime : GPUFrameTime;
 	FrameTimes[CurrentIndex] = bShowRawUnitTimes ? RawFrameTime : FrameTime;
 	RHITTimes[CurrentIndex] = bShowRawUnitTimes ? RawRHITTime : RHITTime;
+	InputLatencyTimes[CurrentIndex] = bShowRawUnitTimes ? RawInputLatencyTime : InputLatencyTime;
 	ResolutionFractions[CurrentIndex] = DynamicResolutionStateInfos.ResolutionFractionApproximation;
 	CurrentIndex++;
 	if (CurrentIndex == NumberOfSamples)
@@ -474,6 +503,10 @@ int32 FStatUnitData::DrawStat(FViewport* InViewport, FCanvas* InCanvas, int32 In
 			{
 				Max_RHITTime = RHITTimes[MaxIndex];
 			}
+			if (Max_InputLatencyTime < InputLatencyTimes[MaxIndex])
+			{
+				Max_InputLatencyTime = InputLatencyTimes[MaxIndex];
+			}
 		}
 	}
 #endif // #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
@@ -485,6 +518,7 @@ int32 FStatUnitData::DrawStat(FViewport* InViewport, FCanvas* InCanvas, int32 In
 
 	const bool bShowUnitTimeGraph = InViewport->GetClient() ? InViewport->GetClient()->IsStatEnabled(TEXT("UnitGraph")) : false;
 	const bool bHaveGPUData = GPUCycles > 0;
+	const bool bHaveInputLatencyData = InputLatencyTime > 0;
 
 	const float AlertResolutionFraction = 0.70f; // Truncation of sqrt(0.5) for easier remembering.
 
@@ -578,6 +612,7 @@ int32 FStatUnitData::DrawStat(FViewport* InViewport, FCanvas* InCanvas, int32 In
 			}
 			InY += RowHeight;
 		}
+		if (IsRunningRHIInSeparateThread())
 		{
 			const FColor RenderThreadAverageColor = GEngine->GetFrameTimeDisplayColor(RHITTime);
 			InCanvas->DrawShadowedString(X1, InY, TEXT("RHIT:"), Font, bShowUnitTimeGraph ? FColor(255, 100, 255) : FColor::White);
@@ -589,16 +624,44 @@ int32 FStatUnitData::DrawStat(FViewport* InViewport, FCanvas* InCanvas, int32 In
 			}
 			InY += RowHeight;
 		}
+		if (bHaveInputLatencyData)
 		{
-			uint64 MemoryUsed = FPlatformMemory::GetMemoryUsedFast();
-			if (MemoryUsed > 0)
+			const float ReasonableInputLatencyFactor = 2.5f;
+			const FColor InputLatencyAverageColor = GEngine->GetFrameTimeDisplayColor(InputLatencyTime / ReasonableInputLatencyFactor);
+			InCanvas->DrawShadowedString(X1, InY, TEXT("Input:"), Font, bShowUnitTimeGraph ? FColor(255, 255, 100) : FColor::White);
+			InCanvas->DrawShadowedString(X2, InY, *FString::Printf(TEXT("%3.2f ms"), InputLatencyTime), Font, InputLatencyAverageColor);
+			if (bShowUnitMaxTimes)
 			{
-				// print out currently used memory
+				const FColor InputLatencyMaxColor = GEngine->GetFrameTimeDisplayColor(Max_InputLatencyTime / ReasonableInputLatencyFactor);
+				InCanvas->DrawShadowedString(X3, InY, *FString::Printf(TEXT("%4.2f ms"), Max_InputLatencyTime), Font, InputLatencyMaxColor);
+			}
+			InY += RowHeight;
+		}
+		{
+			if (bShowUnitMaxTimes)
+			{
+				FPlatformMemoryStats Stats = FPlatformMemory::GetStats();
+
 				InCanvas->DrawShadowedString(X1, InY, TEXT("Mem:"), Font, bShowUnitTimeGraph ? FColor(100, 100, 255) : FColor::White);
-				double MemInGb = MemoryUsed / (1024.0 * 1024.0 * 1024.0);
-				double MemInMb = MemoryUsed / (1024.0 * 1024.0);
-				InCanvas->DrawShadowedString(X2, InY, *FString::Printf(TEXT("%3.2f%s"), MemInGb > 1.0 ? MemInGb : MemInMb, MemInGb > 1.0 ? TEXT("GB") : TEXT("MB")), Font, FColor::Green);
+				InCanvas->DrawShadowedString(X2, InY, *GetMemoryString(Stats.UsedPhysical), Font, FColor::Green);
+				InCanvas->DrawShadowedString(X3, InY, *GetMemoryString(Stats.PeakUsedPhysical), Font, FColor::Green);
 				InY += RowHeight;
+				
+				InCanvas->DrawShadowedString(X1, InY, TEXT("VMem:"), Font, bShowUnitTimeGraph ? FColor(100, 100, 255) : FColor::White);
+				InCanvas->DrawShadowedString(X2, InY, *GetMemoryString(Stats.UsedVirtual), Font, FColor::Green);
+				InCanvas->DrawShadowedString(X3, InY, *GetMemoryString(Stats.PeakUsedVirtual), Font, FColor::Green);
+				InY += RowHeight;
+			}
+			else
+			{
+				uint64 MemoryUsed = FPlatformMemory::GetMemoryUsedFast();
+				if (MemoryUsed > 0)
+				{
+					// print out currently used memory
+					InCanvas->DrawShadowedString(X1, InY, TEXT("Mem:"), Font, bShowUnitTimeGraph ? FColor(100, 100, 255) : FColor::White);
+					InCanvas->DrawShadowedString(X2, InY, *GetMemoryString(MemoryUsed), Font, FColor::Green);
+					InY += RowHeight;
+				}
 			}
 		}
 
@@ -878,7 +941,8 @@ int32 FStatUnitData::DrawStat(FViewport* InViewport, FCanvas* InCanvas, int32 In
 
 			// If we don't have GPU data to display, then skip this line
 			if ((StatIndex == EGS_GPU && !bHaveGPUData)
-				|| (StatIndex == EGS_Frame && bShowFrameTimeInUnitGraph == false && bHaveGPUData))
+				|| (StatIndex == EGS_Frame && bShowFrameTimeInUnitGraph == false && bHaveGPUData)
+				|| (StatIndex == EGS_RHIT && !IsRunningRHIInSeparateThread()))
 			{
 				continue;
 			}
@@ -1235,7 +1299,7 @@ void FViewport::HighResScreenshot()
 
 	ViewportClient->GetEngineShowFlags()->SetHighResScreenshotMask(MaskShowFlagBackup);
 	ViewportClient->GetEngineShowFlags()->MotionBlur = MotionBlurShowFlagBackup;
-	ViewportClient->ProcessScreenShots(DummyViewport);
+	bool bIsScreenshotSaved = ViewportClient->ProcessScreenShots(DummyViewport);
 
 	SceneColorFormatVar->Set(OldSceneColorFormat, ECVF_SetByCode);
 	PostColorFormatVar->Set(OldPostColorFormat, ECVF_SetByCode);
@@ -1260,7 +1324,7 @@ void FViewport::HighResScreenshot()
 	bTakeHighResScreenShot = false;
 
 	// Notification of a successful screenshot
-	if ((GIsEditor || !IsFullscreen()) && !GIsAutomationTesting )
+	if ((GIsEditor || !IsFullscreen()) && !GIsAutomationTesting && bIsScreenshotSaved)
 	{
 		auto Message = NSLOCTEXT("UnrealClient", "HighResScreenshotSavedAs", "High resolution screenshot saved as");
 		FNotificationInfo Info(Message);
@@ -1513,6 +1577,9 @@ void FViewport::Draw( bool bShouldPresent /*= true */)
 					ViewportClient->Draw(this, &Canvas);
 				}
 				Canvas.Flush_GameThread();
+				
+				UGameViewportClient::OnViewportRendered().Broadcast(this);
+				
 				ViewportClient->ProcessScreenShots(this);
 	
 				// Slate doesn't present immediately. Tag the viewport as requiring vsync so that it happens.
@@ -1794,9 +1861,6 @@ void FViewport::GetActorsAndModelsInHitProxy(FIntRect InRect, TSet<AActor*>& Out
 
 void FViewport::UpdateViewportRHI(bool bDestroyed, uint32 NewSizeX, uint32 NewSizeY, EWindowMode::Type NewWindowMode, EPixelFormat PreferredPixelFormat)
 {
-	// Make sure we're not in the middle of streaming textures.
-	(*GFlushStreamingFunc)();
-
 	{
 		// Temporarily stop rendering thread.
 		SCOPED_SUSPEND_RENDERING_THREAD(true);
@@ -2013,6 +2077,11 @@ void FViewport::FHitProxyMap::AddReferencedObjects( FReferenceCollector& Collect
 			CurProxy->AddReferencedObjects( Collector );
 		}
 	}
+}
+
+FString FViewport::FHitProxyMap::GetReferencerName() const
+{
+	return TEXT("FViewport::FHitProxyMap");
 }
 
 /**

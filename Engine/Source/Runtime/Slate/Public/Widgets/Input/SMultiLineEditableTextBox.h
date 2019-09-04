@@ -156,7 +156,7 @@ public:
 		 */
 		SLATE_EVENT( FOnIsTypedCharValid, OnIsTypedCharValid )
 
-		/** Called whenever the text is changed interactively by the user */
+		/** Called whenever the text is changed programmatically or interactively by the user */
 		SLATE_EVENT( FOnTextChanged, OnTextChanged )
 
 		/** Called whenever the text is committed.  This happens when the user presses enter or the text box loses focus. */
@@ -260,12 +260,25 @@ public:
 	/** See attribute Style */
 	void SetStyle(const FEditableTextBoxStyle* InStyle);
 
+	/** See attribute TextStyle */
+	void SetTextStyle(const FTextBlockStyle* InTextStyle);	
+
 	/**
 	 * Sets the text string currently being edited 
 	 *
 	 * @param  InNewText  The new text string
 	 */
 	void SetText( const TAttribute< FText >& InNewText );
+
+	/**
+	 * Returns the hint text string
+	 *
+	 * @return  Hint text string
+	 */
+	FText GetHintText() const
+	{
+		return EditableText->GetHintText();
+	}
 
 	/**
 	 * Sets the text that appears when there is no text in the text box

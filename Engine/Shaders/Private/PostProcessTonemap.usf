@@ -1,14 +1,14 @@
 // Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
-	PostProcessTonemap.usf: PostProcessing tone mapping
+	PostProcessTonemap.usf: PostProcessing tone mapping  
 =============================================================================*/
 
 #include "Common.ush"
 #include "PostProcessCommon.ush"
 #include "TonemapCommon.ush"
 #include "EyeAdaptationCommon.ush"
-
+#include "PixelQuadMessagePassing.ush"
 
 
 
@@ -21,6 +21,7 @@
 	#define TONEMAPPER_OUTOUT_ACES1000nitScRGB 5
 	#define TONEMAPPER_OUTOUT_ACES2000nitScRGB 6
 	#define TONEMAPPER_OUTOUT_LinearEXR 7
+	#define TONEMAPPER_OUTOUT_NoToneCurve 8
 
 
 #ifndef DIM_OUTPUT_DEVICE
@@ -76,9 +77,10 @@ half3 ColorLookupTable( half3 LinearColor )
 {
 	float3 LUTEncodedColor;
 	// Encode as ST-2084 (Dolby PQ) values
-	#if (DIM_OUTPUT_DEVICE == TONEMAPPER_OUTOUT_ACES1000nitST2084 || DIM_OUTPUT_DEVICE == TONEMAPPER_OUTOUT_ACES2000nitST2084 || DIM_OUTPUT_DEVICE == TONEMAPPER_OUTOUT_ACES1000nitScRGB || DIM_OUTPUT_DEVICE == TONEMAPPER_OUTOUT_ACES2000nitScRGB || DIM_OUTPUT_DEVICE == TONEMAPPER_OUTOUT_LinearEXR)
-		LUTEncodedColor = LinearToST2084( LinearColor );
-
+	#if (DIM_OUTPUT_DEVICE == TONEMAPPER_OUTOUT_ACES1000nitST2084 || DIM_OUTPUT_DEVICE == TONEMAPPER_OUTOUT_ACES2000nitST2084 || DIM_OUTPUT_DEVICE == TONEMAPPER_OUTOUT_ACES1000nitScRGB || DIM_OUTPUT_DEVICE == TONEMAPPER_OUTOUT_ACES2000nitScRGB || DIM_OUTPUT_DEVICE == TONEMAPPER_OUTOUT_LinearEXR || DIM_OUTPUT_DEVICE == TONEMAPPER_OUTOUT_NoToneCurve)
+		// ST2084 expects to receive linear values 0-10000 in nits.
+		// So the linear value must be multiplied by a scale factor to convert to nits.
+		LUTEncodedColor = LinearToST2084(LinearColor * LinearToNitsScale);
 	#else
 		LUTEncodedColor = LinToLog( LinearColor + LogToLin( 0 ) );
 
@@ -105,7 +107,9 @@ float PseudoRandomTex(float2 xy)
 
 float SwitchVerticalAxis;
 
-#define NEEDTOSWITCHVERTICLEAXIS (ES2_PROFILE && COMPILER_GLSL_ES2) || (ES3_1_PROFILE && COMPILER_GLSL_ES3_1)
+#ifndef NEEDTOSWITCHVERTICLEAXIS
+#define NEEDTOSWITCHVERTICLEAXIS 0
+#endif
 
 // can be optimized
 float2 ScreenPosToUV(float2 ScreenPos)
@@ -400,28 +404,36 @@ float4 TonemapCommonPS(
 
 #if USE_SHARPEN
 	{
+
+		half A0 = Luminance(SceneColor.rgb);
+
+	#if HAS_PIXEL_QUAD_MESSAGE_PASSING_SUPPORT 
+		// Use Wave Intrinsics to reduce texture taps
+		FPQMPContext PQMP = PQMPInit(ScreenPos);
+		half4 LuminanceNeighbors;
+
+		half3 C1 = Texture2DSample(PostprocessInput0, PostprocessInput0Sampler, SceneUV + float2(PQMP.QuadVector.x, 0) * PostprocessInput0Size.zw).rgb * OneOverPreExposure;
+		half3 C3 = Texture2DSample(PostprocessInput0, PostprocessInput0Sampler, SceneUV + float2(0, PQMP.QuadVector.y) * PostprocessInput0Size.zw).rgb * OneOverPreExposure;
+		LuminanceNeighbors.x = Luminance(C1);
+		LuminanceNeighbors.y = Luminance(C3);
+		
+		half3 C2 = PQMPReadX(PQMP, SceneColor.rgb);
+		half3 C4 = PQMPReadY(PQMP, SceneColor.rgb);
+		LuminanceNeighbors.z =  PQMPReadX(PQMP,A0);
+		LuminanceNeighbors.w =  PQMPReadY(PQMP,A0);
+	#else
 		half3 C1 = LookupSceneColor(SceneUV, int2(-1,  0)) * OneOverPreExposure;
 		half3 C2 = LookupSceneColor(SceneUV, int2( 1,  0)) * OneOverPreExposure;
-		half3 C3 = LookupSceneColor(SceneUV, int2(-1, -1)) * OneOverPreExposure;
-		half3 C4 = LookupSceneColor(SceneUV, int2(-1,  1)) * OneOverPreExposure;
-
-		// reference solution
-//		half A0 = max3(SceneColor);
-//		half4 LuminanceNeightbors = half4(max3(C1), max3(C2), max3(C3), max3(C4));
-		// 5 instructiopns less than reference
-		half A0 = Luminance(SceneColor.rgb);
-		half4 LuminanceNeightbors = half4(Luminance(C1), Luminance(C2), Luminance(C3), Luminance(C4));
-		// 9 instructions less than reference (green is often a good approximation for the luminance)
-		//half A0 = SceneColor.g;
-		//half4 LuminanceNeightbors = half4(C1.g, C2.g, C3.g, C4.g);
+		half3 C3 = LookupSceneColor(SceneUV, int2( 0, -1)) * OneOverPreExposure;
+		half3 C4 = LookupSceneColor(SceneUV, int2( 0,  1)) * OneOverPreExposure;
+		half4 LuminanceNeighbors = half4(Luminance(C1), Luminance(C2), Luminance(C3), Luminance(C4));
+	#endif
 
 		// compute mask to not sharpen near very bright HDR content
 		// Note: using max instead of summming up saves 1 instruction
 		// Note: We could multiply this to tweak the edge weight but it might instroduce a cost
-		half HDREdge = ExposureScale * max4(abs(A0 - LuminanceNeightbors));
-		// 3 instructions less but less accurate (faint black dots near bright edges)
-		//half HDREdge = ExposureScale * max(abs(A0 * 2 - (LuminanceNeightbors.r + LuminanceNeightbors.g)), abs(A0 * 2 - (LuminanceNeightbors.b + LuminanceNeightbors.a)));
-
+		half HDREdge = ExposureScale * max4(abs(A0 - LuminanceNeighbors));
+	
 		// 0..1
 		half EdgeMask = saturate(1.0f - HDREdge);
 
@@ -429,17 +441,14 @@ float4 TonemapCommonPS(
 		if (all(DebugTile == int2(1, 0)))
 		{
 			// right to the center is: Sharpen EdgeMask
-			OutColor = EdgeMask; return;
+			OutColor = EdgeMask; 
+			return OutColor;
 		}
 #endif //DEBUG_TONEMAPPER
 
 		// -1:sharpen, 0:no effect, 1:blur
 		float LerpFactor = -EdgeMask * SharpenMultiplierDiv6;
 
-		// reference
-		// same instruction count as if the center weight is 1.0
-//		half3 BlurredSceneColor = ((C1 + C2 + C3 + C4) + SceneColor * 2) / 6;
-//		SceneColor = lerp(SceneColor, BlurredSceneColor, LerpFactor);
 		// optimized, Div6 went into the C++ code
 		half3 DeltaColor = (C1 + C2 + C3 + C4) - SceneColor.rgb * 4;
 		SceneColor.rgb += DeltaColor * LerpFactor;
@@ -455,6 +464,13 @@ float4 TonemapCommonPS(
 
 	#else 
 
+		#if USE_MSAA
+			// look for PreTonemapMSAA 
+			SceneColor.rgb *= rcp(SceneColor.r*(-0.299) + SceneColor.g*(-0.587) + SceneColor.b*(-0.114) + 1.0);
+			// Try to kill negatives and NaNs here
+			SceneColor.rgb = max(SceneColor.rgb, 0); 
+		#endif
+	
 		half3 LinearColor = SceneColor.rgb * ColorScale0.rgb;
 
 		#if USE_BLOOM
@@ -463,6 +479,8 @@ float4 TonemapCommonPS(
 				BloomUV = FullViewUV.xy;
 			#endif
 			float4 CombinedBloom = Texture2DSample(PostprocessInput1, PostprocessInput1Sampler, BloomUV);
+			CombinedBloom.rgb *= OneOverPreExposure; // Standard bloom path, convolution path has bloom already in scene color.
+
 			float2 DirtViewportUV = (SvPosition.xy - float2(ViewportRect.xy)) * ViewportSize.zw;
 			float3 BloomDirtMaskColor = Texture2DSample(BloomDirtMask.Mask, BloomDirtMask.MaskSampler, DirtViewportUV).rgb * BloomDirtMask.Tint.rgb;
 
@@ -507,7 +525,10 @@ float4 TonemapCommonPS(
 		half LuminanceForPostProcessAA  = dot(OutDeviceColor, half3(0.299f, 0.587f, 0.114f));
 
 		#if USE_GRAIN_QUANTIZATION
-			// Needs to go after tonemapping.
+			#if DIM_OUTPUT_DEVICE == TONEMAPPER_OUTOUT_NoToneCurve
+				#error LinearNoToneCurve device requires no Grain Quantization
+			#endif
+			// Needs to go after tonemapping. 
 			#if USE_LINEAR_FLOAT_RT
 				half GrainQuantization = 1.0/1024.0;
 			#else
@@ -530,12 +551,13 @@ float4 TonemapCommonPS(
 
 		#elif DIM_OUTPUT_DEVICE == TONEMAPPER_OUTOUT_LinearEXR
 			OutColor.xyz = ST2084ToLinear(OutColor.xyz);
-
+		#elif DIM_OUTPUT_DEVICE == TONEMAPPER_OUTOUT_NoToneCurve
+			OutColor.xyz = OutDeviceColor;
 		#endif
 
 	#endif
 	
-	#if POST_PROCESS_ALPHA == 2
+	#if POST_PROCESS_ALPHA == 2 || (POST_PROCESS_ALPHA == 1 && DIM_OUTPUT_DEVICE == TONEMAPPER_OUTOUT_NoToneCurve)
 		OutColor.a = SceneColor.a;
 	#endif
 
@@ -743,10 +765,7 @@ void MainPS_ES2(
 	}
 
 	#if USE_GAMMA_ONLY
-		#if USE_MSAA
-			SceneColor.rgb *= rcp(SceneColor.r*(-0.299) + SceneColor.g*(-0.587) + SceneColor.b*(-0.114) + 1.0);
-		#endif
-
+		
 		#if FEATURE_LEVEL == FEATURE_LEVEL_ES3_1
 			OutColor.rgb = pow(SceneColor.rgb, InverseGamma.x);
 		#else

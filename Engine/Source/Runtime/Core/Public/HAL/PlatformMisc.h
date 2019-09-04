@@ -4,29 +4,8 @@
 #include "CoreTypes.h"
 #include "GenericPlatform/GenericPlatformMisc.h"
 
-#if PLATFORM_WINDOWS
-#include "Windows/WindowsPlatformMisc.h"
-#elif PLATFORM_PS4
-#include "PS4/PS4Misc.h"
-#elif PLATFORM_XBOXONE
-#include "XboxOne/XboxOneMisc.h"
-#elif PLATFORM_MAC
-#include "Mac/MacPlatformMisc.h"
-#elif PLATFORM_IOS
-#include "IOS/IOSPlatformMisc.h"
-#elif PLATFORM_LUMIN
-#include "Lumin/LuminPlatformMisc.h"
-#elif PLATFORM_ANDROID
-#include "Android/AndroidMisc.h"
-#elif PLATFORM_HTML5
-#include "HTML5/HTML5PlatformMisc.h"
-#elif PLATFORM_QUAIL
-#include "Quail/QuailPlatformMisc.h"
-#elif PLATFORM_LINUX
-#include "Linux/LinuxPlatformMisc.h"
-#elif PLATFORM_SWITCH
-#include "Switch/SwitchPlatformMisc.h"
-#endif
+#include COMPILED_PLATFORM_HEADER(PlatformMisc.h)
+
 
 #ifndef UE_DEBUG_BREAK
 #error UE_DEBUG_BREAK is not defined for this platform
@@ -50,6 +29,8 @@
 #define ENABLE_NAMED_EVENTS (!UE_BUILD_SHIPPING && 1)
 
 #if ENABLE_NAMED_EVENTS
+
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 class CORE_API FScopedNamedEvent
 {
@@ -131,9 +112,16 @@ public:
 #define NAMED_EVENT_STR(x) L##x
 #endif
 
-#define SCOPED_NAMED_EVENT(Name, Color)          FScopedNamedEventStatic ANONYMOUS_VARIABLE(NamedEvent_##Name##_)(Color, NAMED_EVENT_STR(#Name));
+#define SCOPED_NAMED_EVENT(Name, Color) \
+	TRACE_CPUPROFILER_EVENT_SCOPE(Name) \
+	FScopedNamedEventStatic ANONYMOUS_VARIABLE(NamedEvent_##Name##_)(Color, NAMED_EVENT_STR(#Name));
+
 #define SCOPED_NAMED_EVENT_FSTRING(Text, Color)  FScopedNamedEvent       ANONYMOUS_VARIABLE(NamedEvent_)         (Color, *Text);
-#define SCOPED_NAMED_EVENT_TEXT(Text, Color)     FScopedNamedEventStatic ANONYMOUS_VARIABLE(NamedEvent_)         (Color, NAMED_EVENT_STR(Text));
+
+#define SCOPED_NAMED_EVENT_TEXT(Text, Color) \
+	TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(TEXT(Text)) \
+	FScopedNamedEventStatic ANONYMOUS_VARIABLE(NamedEvent_)         (Color, NAMED_EVENT_STR(Text));
+
 #define SCOPED_NAMED_EVENT_F(Format, Color, ...) FScopedNamedEvent       ANONYMOUS_VARIABLE(NamedEvent_)         (Color, *FString::Printf(Format, __VA_ARGS__));
 #define SCOPED_PROFILER_COLOR(Color)			 FScopedProfilerColor    ANONYMOUS_VARIABLE(ProfilerColor_##Name##_)(Color);
 

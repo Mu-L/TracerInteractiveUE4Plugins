@@ -71,6 +71,12 @@ namespace UnrealBuildTool
 		public bool bXGEExport = false;
 
 		/// <summary>
+		/// Whether we should just export the outdated actions list
+		/// </summary>
+		[CommandLine("-WriteOutdatedActions=")]
+		public FileReference WriteOutdatedActionsFile = null;
+
+		/// <summary>
 		/// Main entry point
 		/// </summary>
 		/// <param name="Arguments">Command-line arguments</param>
@@ -137,7 +143,7 @@ namespace UnrealBuildTool
 				// Hack for single file compile; don't build the ShaderCompileWorker target that's added to the command line for generated project files
 				if(TargetDescriptors.Count >= 2)
 				{
-					TargetDescriptors.RemoveAll(x => x.Name == "ShaderCompileWorker" && x.SingleFileToCompile != null);
+					TargetDescriptors.RemoveAll(x => (x.Name == "ShaderCompileWorker" || x.Name == "LiveCodingConsole") && x.SingleFileToCompile != null);
 				}
 
 				// Handle remote builds
@@ -188,7 +194,7 @@ namespace UnrealBuildTool
 					// Create the working set provider
 					using (ISourceFileWorkingSet WorkingSet = SourceFileWorkingSet.Create(UnrealBuildTool.RootDirectory, ProjectDirs))
 					{
-						Build(TargetDescriptors, BuildConfiguration, WorkingSet, Options);
+						Build(TargetDescriptors, BuildConfiguration, WorkingSet, Options, WriteOutdatedActionsFile);
 					}
 				}
 			}
@@ -208,8 +214,9 @@ namespace UnrealBuildTool
 		/// <param name="BuildConfiguration">Current build configuration</param>
 		/// <param name="WorkingSet">The source file working set</param>
 		/// <param name="Options">Additional options for the build</param>
+		/// <param name="WriteOutdatedActionsFile">Files to write the list of outdated actions to (rather than building them)</param>
 		/// <returns>Result from the compilation</returns>
-		public static void Build(List<TargetDescriptor> TargetDescriptors, BuildConfiguration BuildConfiguration, ISourceFileWorkingSet WorkingSet, BuildOptions Options)
+		public static void Build(List<TargetDescriptor> TargetDescriptors, BuildConfiguration BuildConfiguration, ISourceFileWorkingSet WorkingSet, BuildOptions Options, FileReference WriteOutdatedActionsFile)
 		{
 			// Create a makefile for each target
 			TargetMakefile[] Makefiles = new TargetMakefile[TargetDescriptors.Count];
@@ -218,19 +225,19 @@ namespace UnrealBuildTool
 				Makefiles[TargetIdx] = CreateMakefile(BuildConfiguration, TargetDescriptors[TargetIdx], WorkingSet);
 			}
 
-			// Output the manifest
-			for(int TargetIdx = 0; TargetIdx < TargetDescriptors.Count; TargetIdx++)
+			// Export the actions for each target
+			for (int TargetIdx = 0; TargetIdx < TargetDescriptors.Count; TargetIdx++)
 			{
 				TargetDescriptor TargetDescriptor = TargetDescriptors[TargetIdx];
-				if(TargetDescriptor.LiveCodingManifest != null)
+				foreach(FileReference WriteActionFile in TargetDescriptor.WriteActionFiles)
 				{
-					TargetMakefile Makefile = Makefiles[TargetIdx];
-					HotReload.WriteLiveCodingManifest(TargetDescriptor.LiveCodingManifest, Makefile.Actions);
+					Log.TraceInformation("Writing actions to {0}", WriteActionFile);
+					ActionGraph.ExportJson(Makefiles[TargetIdx].Actions, WriteActionFile);
 				}
 			}
 
 			// Execute the build
-			if((Options & BuildOptions.SkipBuild) == 0)
+			if ((Options & BuildOptions.SkipBuild) == 0)
 			{
 				// Make sure that none of the actions conflict with any other (producing output files differently, etc...)
 				ActionGraph.CheckForConflicts(Makefiles.SelectMany(x => x.Actions));
@@ -284,6 +291,14 @@ namespace UnrealBuildTool
 						XGE.ExportActions(MergedActionsToExecute);
 					}
 				}
+				else if(WriteOutdatedActionsFile != null)
+				{
+					// Write actions to an output file
+					using(Timeline.ScopeEvent("ActionGraph.WriteActions"))
+					{
+						ActionGraph.ExportJson(MergedActionsToExecute, WriteOutdatedActionsFile);
+					}
+				}
 				else
 				{
 					// Execute the actions
@@ -316,6 +331,7 @@ namespace UnrealBuildTool
 						{
 							TargetReceipt Receipt = TargetReceipt.Read(Makefile.ReceiptFile);
 							Log.TraceInformation("Deploying {0} {1} {2}...", Receipt.TargetName, Receipt.Platform, Receipt.Configuration);
+
 							UEBuildPlatform.GetBuildPlatform(Receipt.Platform).Deploy(Receipt);
 						}
 					}
@@ -394,7 +410,7 @@ namespace UnrealBuildTool
 
 				// Check that the makefile is still valid
 				string Reason;
-				if(!TargetMakefile.IsValidForSourceFiles(Makefile, TargetDescriptor.ProjectFile, WorkingSet, out Reason))
+				if(!TargetMakefile.IsValidForSourceFiles(Makefile, TargetDescriptor.ProjectFile, TargetDescriptor.Platform, WorkingSet, out Reason))
 				{
 					Log.TraceInformation("Invalidating makefile for {0} ({1})", TargetDescriptor.Name, Reason);
 					Makefile = null;
@@ -425,7 +441,7 @@ namespace UnrealBuildTool
 				using(Timeline.ScopeEvent("UEBuildTarget.Build()"))
 				{
 					const bool bIsAssemblingBuild = true;
-					Makefile = Target.Build(BuildConfiguration, WorkingSet, bIsAssemblingBuild);
+					Makefile = Target.Build(BuildConfiguration, WorkingSet, bIsAssemblingBuild, TargetDescriptor.SingleFileToCompile);
 				}
 
 				// Save the pre-build scripts onto the makefile
@@ -500,6 +516,12 @@ namespace UnrealBuildTool
 				}
 			}
 
+			// Guard against a live coding session for this target being active
+			if(HotReloadMode != HotReloadMode.LiveCoding && TargetDescriptor.ForeignPlugin == null && HotReload.IsLiveCodingSessionActive(Makefile))
+			{
+				throw new BuildException("Unable to start regular build while Live Coding is active. Press Ctrl+Alt+F11 to trigger a Live Coding compile.");
+			}
+
 			// Get the root prerequisite actions
 			List<Action> PrerequisiteActions = GatherPrerequisiteActions(TargetDescriptor, Makefile);
 
@@ -510,8 +532,12 @@ namespace UnrealBuildTool
 			HotReloadState HotReloadState = null;
 			if(HotReloadMode == HotReloadMode.Disabled)
 			{
-				// Delete the previous state file
-				HotReload.DeleteTemporaryFiles(HotReloadStateFile);
+				// Make sure we're not doing a partial build from the editor (eg. compiling a new plugin)
+				if(TargetDescriptor.ForeignPlugin == null && TargetDescriptor.SingleFileToCompile == null)
+				{
+					// Delete the previous state file
+					HotReload.DeleteTemporaryFiles(HotReloadStateFile);
+				}
 			}
 			else
 			{
@@ -539,14 +565,14 @@ namespace UnrealBuildTool
 			CppDependencyCache CppDependencies;
 			using(Timeline.ScopeEvent("Reading dependency cache"))
 			{
-				CppDependencies = CppDependencyCache.CreateHierarchy(TargetDescriptor.ProjectFile, TargetDescriptor.Name, TargetDescriptor.Platform, TargetDescriptor.Configuration, Makefile.TargetType);
+				CppDependencies = CppDependencyCache.CreateHierarchy(TargetDescriptor.ProjectFile, TargetDescriptor.Name, TargetDescriptor.Platform, TargetDescriptor.Configuration, Makefile.TargetType, TargetDescriptor.Architecture);
 			}
 
 			// Create the action history
 			ActionHistory History;
 			using(Timeline.ScopeEvent("Reading action history"))
 			{
-				History = ActionHistory.CreateHierarchy(TargetDescriptor.ProjectFile, TargetDescriptor.Name, TargetDescriptor.Platform, Makefile.TargetType);
+				History = ActionHistory.CreateHierarchy(TargetDescriptor.ProjectFile, TargetDescriptor.Name, TargetDescriptor.Platform, Makefile.TargetType, TargetDescriptor.Architecture);
 			}
 
 			// Plan the actions to execute for the build. For single file compiles, always rebuild the source file regardless of whether it's out of date.
@@ -563,9 +589,62 @@ namespace UnrealBuildTool
 			// Additional processing for hot reload
 			if (HotReloadMode == HotReloadMode.LiveCoding)
 			{
+				// Make sure we're not overwriting any lazy-loaded modules
+				if(TargetDescriptor.LiveCodingModules != null)
+				{
+					// Read the list of modules that we're allowed to build
+					string[] Lines = FileReference.ReadAllLines(TargetDescriptor.LiveCodingModules);
+
+					// Parse it out into a set of filenames
+					HashSet<string> AllowedOutputFileNames = new HashSet<string>(FileReference.Comparer);
+					foreach (string Line in Lines)
+					{
+						string TrimLine = Line.Trim();
+						if (TrimLine.Length > 0)
+						{
+							AllowedOutputFileNames.Add(Path.GetFileName(TrimLine));
+						}
+					}
+
+					// Find all the binaries that we're actually going to build
+					HashSet<FileReference> OutputFiles = new HashSet<FileReference>();
+					foreach (Action Action in TargetActionsToExecute)
+					{
+						if (Action.ActionType == ActionType.Link)
+						{
+							OutputFiles.UnionWith(Action.ProducedItems.Where(x => x.HasExtension(".exe") || x.HasExtension(".dll")).Select(x => x.Location));
+						}
+					}
+
+					// Find all the files that will be built that aren't allowed
+					List<FileReference> ProtectedOutputFiles = OutputFiles.Where(x => !AllowedOutputFileNames.Contains(x.GetFileName())).ToList();
+					if (ProtectedOutputFiles.Count > 0)
+					{
+						FileReference.WriteAllLines(new FileReference(TargetDescriptor.LiveCodingModules.FullName + ".out"), ProtectedOutputFiles.Select(x => x.ToString()));
+						foreach(FileReference ProtectedOutputFile in ProtectedOutputFiles)
+						{
+							Log.TraceInformation("Module {0} is not currently enabled for Live Coding", ProtectedOutputFile);
+						}
+						throw new CompilationResultException(CompilationResult.Canceled);
+					}
+				}
+
 				// Filter the prerequisite actions down to just the compile actions, then recompute all the actions to execute
 				PrerequisiteActions = new List<Action>(TargetActionsToExecute.Where(x => x.ActionType == ActionType.Compile));
 				TargetActionsToExecute = ActionGraph.GetActionsToExecute(Makefile.Actions, PrerequisiteActions, CppDependencies, History, BuildConfiguration.bIgnoreOutdatedImportLibraries);
+
+				// Update the action graph with these new paths
+				Dictionary<FileReference, FileReference> OriginalFileToPatchedFile = new Dictionary<FileReference, FileReference>();
+				HotReload.PatchActionGraphForLiveCoding(PrerequisiteActions, OriginalFileToPatchedFile);
+
+				// Get a new list of actions to execute now that the graph has been modified
+				TargetActionsToExecute = ActionGraph.GetActionsToExecute(Makefile.Actions, PrerequisiteActions, CppDependencies, History, BuildConfiguration.bIgnoreOutdatedImportLibraries);
+
+				// Output the Live Coding manifest
+				if(TargetDescriptor.LiveCodingManifest != null)
+				{
+					HotReload.WriteLiveCodingManifest(TargetDescriptor.LiveCodingManifest, Makefile.Actions, OriginalFileToPatchedFile);
+				}
 			}
 			else if (HotReloadMode == HotReloadMode.FromEditor || HotReloadMode == HotReloadMode.FromIDE)
 			{

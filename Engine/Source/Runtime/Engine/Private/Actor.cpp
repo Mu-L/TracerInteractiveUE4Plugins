@@ -373,7 +373,8 @@ UWorld* AActor::GetWorld() const
 {
 	// CDO objects do not belong to a world
 	// If the actors outer is destroyed or unreachable we are shutting down and the world should be nullptr
-	if (!HasAnyFlags(RF_ClassDefaultObject) && !GetOuter()->HasAnyFlags(RF_BeginDestroyed) && !GetOuter()->IsUnreachable())
+	if (!HasAnyFlags(RF_ClassDefaultObject) && ensureMsgf(GetOuter(), TEXT("Actor: %s has a null OuterPrivate in AActor::GetWorld()"), *GetFullName())
+		&& !GetOuter()->HasAnyFlags(RF_BeginDestroyed) && !GetOuter()->IsUnreachable())
 	{
 		if (ULevel* Level = GetLevel())
 		{
@@ -988,7 +989,10 @@ void AActor::Tick( float DeltaSeconds )
 		// DeltaSeconds to make up the frames that they missed (because they wouldn't have missed any).
 		// So pass in the world's DeltaSeconds value rather than our specific DeltaSeconds value.
 		UWorld* MyWorld = GetWorld();
-		MyWorld->GetLatentActionManager().ProcessLatentActions(this, MyWorld->GetDeltaSeconds());
+		if (MyWorld)
+		{
+			MyWorld->GetLatentActionManager().ProcessLatentActions(this, MyWorld->GetDeltaSeconds());
+		}
 	}
 
 	if (bAutoDestroyWhenFinished)
@@ -1532,31 +1536,14 @@ bool AActor::WasRecentlyRendered(float Tolerance) const
 		const float RenderTimeThreshold = FMath::Max(Tolerance, World->DeltaTimeSeconds + KINDA_SMALL_NUMBER);
 
 		// If the current cached value is less than the tolerance then we don't need to go look at the components
-		if (World->TimeSince(CachedLastRenderTime) <= RenderTimeThreshold)
-		{
-			return true;
-		}
-
-		CachedLastRenderTime = GetLastRenderTime(); // Store this off as an overriden version of GetLastRenderTime will not have set it directly internally
-
-		return (World->TimeSince(CachedLastRenderTime) <= RenderTimeThreshold);
+		return World->TimeSince(GetLastRenderTime()) <= RenderTimeThreshold;
 	}
 	return false;
 }
 
 float AActor::GetLastRenderTime() const
 {
-	// return most recent of Components' LastRenderTime
-	for (const UActorComponent* ActorComponent : GetComponents())
-	{
-		const UPrimitiveComponent* PrimComp = Cast<const UPrimitiveComponent>(ActorComponent);
-		if (PrimComp && PrimComp->IsRegistered())
-		{
-			CachedLastRenderTime = FMath::Max(CachedLastRenderTime, PrimComp->LastRenderTime);
-		}
-	}
-
-	return CachedLastRenderTime;
+	return LastRenderTime;
 }
 
 void AActor::SetOwner(AActor* NewOwner)
@@ -1807,9 +1794,8 @@ FName AActor::GetAttachParentSocketName() const
 	return NAME_None;
 }
 
-void AActor::GetAttachedActors(TArray<class AActor*>& OutActors) const
+void AActor::ForEachAttachedActors(TFunctionRef<bool(class AActor*)> Functor) const
 {
-	OutActors.Reset();
 	if (RootComponent != nullptr)
 	{
 		// Current set of components to check
@@ -1821,41 +1807,48 @@ void AActor::GetAttachedActors(TArray<class AActor*>& OutActors) const
 		CompsToCheck.Push(RootComponent);
 
 		// While still work left to do
-		while(CompsToCheck.Num() > 0)
+		while (CompsToCheck.Num() > 0)
 		{
 			// Get the next off the queue
 			const bool bAllowShrinking = false;
 			USceneComponent* SceneComp = CompsToCheck.Pop(bAllowShrinking);
 
 			// Add it to the 'checked' set, should not already be there!
-			if (!CheckedComps.Contains(SceneComp))
-			{
-				CheckedComps.Add(SceneComp);
+			CheckedComps.Add(SceneComp);
 
-				AActor* CompOwner = SceneComp->GetOwner();
-				if (CompOwner != nullptr)
+			AActor* CompOwner = SceneComp->GetOwner();
+			if (CompOwner != nullptr)
+			{
+				if (CompOwner != this)
 				{
-					if (CompOwner != this)
+					// If this component has a different owner, call the callback and stop if told.
+					if (!Functor(CompOwner))
 					{
-						// If this component has a different owner, add that owner to our output set and do nothing more
-						OutActors.AddUnique(CompOwner);
+						// The functor wants us to abort
+						return;
 					}
-					else
+				}
+				else
+				{
+					// This component is owned by us, we need to add its children
+					for (USceneComponent* ChildComp : SceneComp->GetAttachChildren())
 					{
-						// This component is owned by us, we need to add its children
-						for (USceneComponent* ChildComp : SceneComp->GetAttachChildren())
+						// Add any we have not explored yet to the set to check
+						if (ChildComp != nullptr && !CheckedComps.Contains(ChildComp))
 						{
-							// Add any we have not explored yet to the set to check
-							if ((ChildComp != nullptr) && !CheckedComps.Contains(ChildComp))
-							{
-								CompsToCheck.Push(ChildComp);
-							}
+							CompsToCheck.Push(ChildComp);
 						}
 					}
 				}
 			}
 		}
 	}
+}
+
+void AActor::GetAttachedActors(TArray<class AActor*>& OutActors) const
+{
+	OutActors.Reset();
+	ForEachAttachedActors([&OutActors](AActor * Actor) { OutActors.AddUnique(Actor); return true; });
 }
 
 bool AActor::ActorHasTag(FName Tag) const
@@ -3226,24 +3219,25 @@ void AActor::SetReplicates(bool bInReplicates)
 { 
 	if (Role == ROLE_Authority)
 	{
-		// Only call into net driver if we actually changed
-		if (bReplicates != bInReplicates)
-		{
-			// Update our settings before calling into net driver
-			RemoteRole = bInReplicates ? ROLE_SimulatedProxy : ROLE_None;
-			bReplicates = bInReplicates;
+		const bool bNewlyReplicates = (bReplicates == false && bInReplicates == true);
+	
+		// Due to SetRemoteRoleForBackwardsCompat, it's possible that bReplicates is false, but RemoteRole is something
+		// other than ROLE_None.
+		// So, we'll always set RemoteRole here regardless of whether or not bReplicates would change, to fix up that
+		// case.
+		RemoteRole = bInReplicates ? ROLE_SimulatedProxy : ROLE_None;
+		bReplicates = bInReplicates;
 
-			// This actor should already be in the Network Actors List if it was already replicating.
-			if (bReplicates)
+		// Only call into net driver if we just started replicating changed
+		// This actor should already be in the Network Actors List if it was already replicating.
+		if (bNewlyReplicates)
+		{
+			// GetWorld will return nullptr on CDO, FYI
+			if (UWorld* MyWorld = GetWorld())		
 			{
-				// GetWorld will return nullptr on CDO, FYI
-				if (UWorld* MyWorld = GetWorld())		
-				{
-					MyWorld->AddNetworkActor(this);
-					ForcePropertyCompare();
-				}
+				MyWorld->AddNetworkActor(this);
+				ForcePropertyCompare();
 			}
-			
 		}
 	}
 	else
@@ -3395,10 +3389,7 @@ void AActor::EnableInput(APlayerController* PlayerController)
 			InputComponent->bBlockInput = bBlockInput;
 			InputComponent->Priority = InputPriority;
 
-			if (UInputDelegateBinding::SupportsInputDelegate(GetClass()))
-			{
-				UInputDelegateBinding::BindInputDelegates(GetClass(), InputComponent);
-			}
+			UInputDelegateBinding::BindInputDelegates(GetClass(), InputComponent);
 		}
 		else
 		{
@@ -3915,7 +3906,7 @@ void AActor::SetNetDriverName(FName NewNetDriverName)
 //
 // Return whether a function should be executed remotely.
 //
-int32 AActor::GetFunctionCallspace( UFunction* Function, void* Parameters, FFrame* Stack )
+int32 AActor::GetFunctionCallspace( UFunction* Function, FFrame* Stack )
 {
 	// Quick reject 1.
 	if ((Function->FunctionFlags & FUNC_Static))
@@ -4432,6 +4423,8 @@ void AActor::MarkComponentsRenderStateDirty()
 
 void AActor::InitializeComponents()
 {
+	QUICK_SCOPE_CYCLE_COUNTER(STAT_Actor_InitializeComponents);
+
 	TInlineComponentArray<UActorComponent*> Components;
 	GetComponents(Components);
 
@@ -4512,7 +4505,7 @@ void AActor::InvalidateLightingCacheDetailed(bool bTranslationOnly)
 
  // COLLISION
 
-bool AActor::ActorLineTraceSingle(struct FHitResult& OutHit, const FVector& Start, const FVector& End, ECollisionChannel TraceChannel, const struct FCollisionQueryParams& Params)
+bool AActor::ActorLineTraceSingle(struct FHitResult& OutHit, const FVector& Start, const FVector& End, ECollisionChannel TraceChannel, const struct FCollisionQueryParams& Params) const
 {
 	OutHit = FHitResult(1.f);
 	OutHit.TraceStart = Start;
@@ -4621,6 +4614,8 @@ float AActor::GetLifeSpan() const
 
 void AActor::PostInitializeComponents()
 {
+	QUICK_SCOPE_CYCLE_COUNTER(STAT_Actor_PostInitComponents);
+
 	if( !IsPendingKill() )
 	{
 		bActorInitialized = true;
@@ -4799,7 +4794,7 @@ void AActor::K2_SetActorRelativeTransform(const FTransform& NewRelativeTransform
 	SetActorRelativeTransform(NewRelativeTransform, bSweep, (bSweep ? &SweepHitResult : nullptr), TeleportFlagToEnum(bTeleport));
 }
 
-float AActor::GetGameTimeSinceCreation()
+float AActor::GetGameTimeSinceCreation() const
 {
 	if (UWorld* MyWorld = GetWorld())
 	{

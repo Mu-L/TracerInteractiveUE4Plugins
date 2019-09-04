@@ -113,11 +113,11 @@ void UNiagaraNodeWriteDataSet::PostLoad()
 	}
 }
 
-void UNiagaraNodeWriteDataSet::BuildParameterMapHistory(FNiagaraParameterMapHistoryBuilder& OutHistory, bool bRecursive)
+void UNiagaraNodeWriteDataSet::BuildParameterMapHistory(FNiagaraParameterMapHistoryBuilder& OutHistory, bool bRecursive /*= true*/, bool bFilterForCompilation /*= true*/) const
 {
 	if (bRecursive)
 	{
-		OutHistory.VisitInputPins(this);
+		OutHistory.VisitInputPins(this, bFilterForCompilation);
 	}
 
 	if (!IsNodeEnabled() && OutHistory.GetIgnoreDisabled())

@@ -597,8 +597,15 @@ void FAnimationViewportClient::ShowBoneNames( FCanvas* Canvas, FSceneView* View 
 	const int32 LODIndex = FMath::Clamp(PreviewMeshComponent->PredictedLODLevel, 0, SkelMeshRenderData->LODRenderData.Num()-1);
 	FSkeletalMeshLODRenderData& LODData = SkelMeshRenderData->LODRenderData[ LODIndex ];
 
-	const int32 HalfX = Viewport->GetSizeXY().X/2;
-	const int32 HalfY = Viewport->GetSizeXY().Y/2;
+	// Check if our reference skeleton is out of synch with the one on the loddata
+	const FReferenceSkeleton& ReferenceSkeleton = PreviewMeshComponent->GetReferenceSkeleton();
+	if (ReferenceSkeleton.GetNum() < LODData.RequiredBones.Num())
+	{
+		return;
+	}
+
+	const int32 HalfX = Viewport->GetSizeXY().X/2 / GetDPIScale();
+	const int32 HalfY = Viewport->GetSizeXY().Y/2 / GetDPIScale();
 
 	for (int32 i=0; i< LODData.RequiredBones.Num(); i++)
 	{
@@ -649,7 +656,7 @@ void FAnimationViewportClient::ShowBoneNames( FCanvas* Canvas, FSceneView* View 
 				const int32 XPos = HalfX + ( HalfX * proj.X );
 				const int32 YPos = HalfY + ( HalfY * (proj.Y * -1) );
 
-				const FName BoneName = PreviewMeshComponent->GetReferenceSkeleton().GetBoneName(BoneIndex);
+				const FName BoneName = ReferenceSkeleton.GetBoneName(BoneIndex);
 				const FString BoneString = FString::Printf( TEXT("%d: %s"), BoneIndex, *BoneName.ToString() );
 				FCanvasTextItem TextItem( FVector2D( XPos, YPos), FText::FromString( BoneString ), GEngine->GetSmallFont(), BoneColor );
 				TextItem.EnableShadow(FLinearColor::Black);
@@ -862,11 +869,12 @@ FText FAnimationViewportClient::GetDisplayInfo(bool bDisplayAllInfo) const
 				NumSectionsInUse
 				));
 
+			TArray<FTransform> LocalBoneTransforms = PreviewMeshComponent->GetBoneSpaceTransforms();
 			if (PreviewMeshComponent->BonesOfInterest.Num() > 0)
 			{
 				int32 BoneIndex = PreviewMeshComponent->BonesOfInterest[0];
 				FTransform ReferenceTransform = PreviewMeshComponent->GetReferenceSkeleton().GetRefBonePose()[BoneIndex];
-				FTransform LocalTransform = PreviewMeshComponent->BoneSpaceTransforms[BoneIndex];
+				FTransform LocalTransform = LocalBoneTransforms[BoneIndex];
 				FTransform ComponentTransform = PreviewMeshComponent->GetDrawTransform(BoneIndex);
 
 				TextValue = ConcatenateLine(TextValue, FText::Format(LOCTEXT("LocalTransform", "Local: {0}"), FText::FromString(LocalTransform.ToHumanReadableString())));
@@ -925,6 +933,20 @@ FText FAnimationViewportClient::GetDisplayInfo(bool bDisplayAllInfo) const
 				FText::AsNumber(FMath::RoundToInt(PreviewMeshComponent->Bounds.BoxExtent.X * 2.0f)),
 				FText::AsNumber(FMath::RoundToInt(PreviewMeshComponent->Bounds.BoxExtent.Y * 2.0f)),
 				FText::AsNumber(FMath::RoundToInt(PreviewMeshComponent->Bounds.BoxExtent.Z * 2.0f))));
+		}
+
+		// In case a skin weight profile is currently being previewed show the number of override skin weights it stores
+		if (PreviewMeshComponent->IsUsingSkinWeightProfile())
+		{
+			const FSkeletalMeshRenderData* SkelMeshResource = PreviewMeshComponent->GetSkeletalMeshRenderData();
+			check(SkelMeshResource);
+			
+			const int32 LODIndex = FMath::Clamp(PreviewMeshComponent->PredictedLODLevel, 0, SkelMeshResource->LODRenderData.Num() - 1);
+			const FSkeletalMeshLODRenderData& LODData = SkelMeshResource->LODRenderData[LODIndex];
+			
+			const FName ProfileName = PreviewMeshComponent->GetCurrentSkinWeightProfileName();
+			const FRuntimeSkinWeightProfileData* OverrideData = LODData.SkinWeightProfilesData.GetOverrideData(ProfileName);
+			TextValue = ConcatenateLine(TextValue, FText::Format(LOCTEXT("NumSkinWeightOverrides", "Skin Weight Profile Weights: {0}"),	OverrideData ? FText::AsNumber(OverrideData->OverridesInfo.Num()) : LOCTEXT("NoSkinWeightsOverridesForLOD", "no data for LOD")));
 		}
 	}
 

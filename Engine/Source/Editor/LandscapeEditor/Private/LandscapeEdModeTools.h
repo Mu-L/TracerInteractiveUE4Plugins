@@ -15,6 +15,7 @@
 #include "InstancedFoliageActor.h"
 #include "VREditorInteractor.h"
 #include "AI/NavigationSystemBase.h"
+#include "Landscape.h"
 
 // VR Editor
 
@@ -291,7 +292,7 @@ public:
 	}
 
 	// X2/Y2 Coordinates are "inclusive" max values
-	void CacheData(int32 X1, int32 Y1, int32 X2, int32 Y2)
+	void CacheData(int32 X1, int32 Y1, int32 X2, int32 Y2, bool bCacheOriginalData = false)
 	{
 		if (!Valid)
 		{
@@ -319,8 +320,10 @@ public:
 				DataAccess.GetDataFast(CachedX1, CachedY1, CachedX2, CachedY2, CachedData);
 			}
 
-			OriginalData = CachedData;
-
+			if (bCacheOriginalData)
+			{
+				OriginalData = CachedData;
+			}
 			Valid = true;
 		}
 		else
@@ -343,7 +346,10 @@ public:
 					DataAccess.GetDataFast(X1, CachedY1, CachedX1 - 1, CachedY2, CachedData);
 				}
 
-				CacheOriginalData(X1, CachedY1, CachedX1 - 1, CachedY2);
+				if (bCacheOriginalData)
+				{
+					CacheOriginalData(X1, CachedY1, CachedX1 - 1, CachedY2);
+				}
 				CachedX1 = X1;
 			}
 
@@ -363,7 +369,10 @@ public:
 				{
 					DataAccess.GetDataFast(CachedX2 + 1, CachedY1, X2, CachedY2, CachedData);
 				}
-				CacheOriginalData(CachedX2 + 1, CachedY1, X2, CachedY2);
+				if (bCacheOriginalData)
+				{
+					CacheOriginalData(CachedX2 + 1, CachedY1, X2, CachedY2);
+				}
 				CachedX2 = X2;
 			}
 
@@ -383,7 +392,10 @@ public:
 				{
 					DataAccess.GetDataFast(CachedX1, Y1, CachedX2, CachedY1 - 1, CachedData);
 				}
-				CacheOriginalData(CachedX1, Y1, CachedX2, CachedY1 - 1);
+				if (bCacheOriginalData)
+				{
+					CacheOriginalData(CachedX1, Y1, CachedX2, CachedY1 - 1);
+				}
 				CachedY1 = Y1;
 			}
 
@@ -403,8 +415,10 @@ public:
 				{
 					DataAccess.GetDataFast(CachedX1, CachedY2 + 1, CachedX2, Y2, CachedData);
 				}
-
-				CacheOriginalData(CachedX1, CachedY2 + 1, CachedX2, Y2);
+				if (bCacheOriginalData)
+				{
+					CacheOriginalData(CachedX1, CachedY2 + 1, CachedX2, Y2);
+				}
 				CachedY2 = Y2;
 			}
 		}
@@ -484,6 +498,24 @@ public:
 		return Value == 0;
 	}
 
+	bool HasCachedData(int32 X1, int32 Y1, int32 X2, int32 Y2) const
+	{
+		return (Valid && X1 >= CachedX1 && Y1 >= CachedY1 && X2 <= CachedX2 && Y2 <= CachedY2);
+	}
+
+	template<typename TGetCacheRegionFunction>
+	bool GetDataAndCache(int32 X1, int32 Y1, int32 X2, int32 Y2, TArray<AccessorType>& OutData, TGetCacheRegionFunction GetCacheRegion)
+	{
+		if (!HasCachedData(X1, Y1, X2, Y2))
+		{
+			FIntRect Bounds = GetCacheRegion();
+			check((Bounds.Min.X <= X1) && (Bounds.Min.Y <= Y1) && (Bounds.Max.X >= X2) && (Bounds.Max.Y >= Y2));
+			CacheData(Bounds.Min.X, Bounds.Min.Y, Bounds.Max.X, Bounds.Max.Y);
+		}
+		ensure(HasCachedData(X1, Y1, X2, Y2));
+		return GetCachedData(X1, Y1, X2, Y2, OutData);
+	}
+
 	// X2/Y2 Coordinates are "inclusive" max values
 	bool GetCachedData(int32 X1, int32 Y1, int32 X2, int32 Y2, TArray<AccessorType>& OutData)
 	{
@@ -520,7 +552,7 @@ public:
 	}
 
 	// X2/Y2 Coordinates are "inclusive" max values
-	void SetCachedData(int32 X1, int32 Y1, int32 X2, int32 Y2, TArray<AccessorType>& Data, ELandscapeLayerPaintingRestriction PaintingRestriction = ELandscapeLayerPaintingRestriction::None)
+	void SetCachedData(int32 X1, int32 Y1, int32 X2, int32 Y2, TArray<AccessorType>& Data, ELandscapeLayerPaintingRestriction PaintingRestriction = ELandscapeLayerPaintingRestriction::None, bool bUpdateData = true)
 	{
 		checkSlow(Data.Num() == (1 + Y2 - Y1) * (1 + X2 - X1));
 
@@ -533,8 +565,11 @@ public:
 			}
 		}
 
-		// Update real data
-		DataAccess.SetData(X1, Y1, X2, Y2, Data.GetData(), PaintingRestriction);
+		if (bUpdateData)
+		{
+			// Update real data
+			DataAccess.SetData(X1, Y1, X2, Y2, Data.GetData(), PaintingRestriction);
+		}
 	}
 
 	// Get the original data before we made any changes with the SetCachedData interface.
@@ -690,19 +725,24 @@ struct FXYOffsetmapAccessor
 					NewHeights[X - X1 + (Y - Y1) * (X2 - X1 + 1)] = FMath::Clamp<uint16>(Data[(X - X1 + (Y - Y1) * (X2 - X1 + 1))].Z * LANDSCAPE_INV_ZSCALE + 32768.0f, 0, 65535);
 				}
 			}
-
-			// Flush dynamic foliage (grass)
-			ALandscapeProxy::InvalidateGeneratedComponentData(Components);
-
+						
 			// Notify foliage to move any attached instances
 			bool bUpdateFoliage = false;
-			for (ULandscapeComponent* Component : Components)
+			bool bUpdateNormals = false;
+			
+			ALandscapeProxy::InvalidateGeneratedComponentData(Components);
+
+			if (!LandscapeEdit->HasLandscapeLayersContent())
 			{
-				ULandscapeHeightfieldCollisionComponent* CollisionComponent = Component->CollisionComponent.Get();
-				if (CollisionComponent && AInstancedFoliageActor::HasFoliageAttached(CollisionComponent))
+				bUpdateNormals = true;
+				for (ULandscapeComponent* Component : Components)
 				{
-					bUpdateFoliage = true;
-					break;
+					ULandscapeHeightfieldCollisionComponent* CollisionComponent = Component->CollisionComponent.Get();
+					if (CollisionComponent && AInstancedFoliageActor::HasFoliageAttached(CollisionComponent))
+					{
+						bUpdateFoliage = true;
+						break;
+					}
 				}
 			}
 
@@ -722,7 +762,7 @@ struct FXYOffsetmapAccessor
 
 				// Update landscape.
 				LandscapeEdit->SetXYOffsetData(X1, Y1, X2, Y2, Data, 0); // XY Offset always need to be update before the height update
-				LandscapeEdit->SetHeightData(X1, Y1, X2, Y2, NewHeights.GetData(), 0, true);
+				LandscapeEdit->SetHeightData(X1, Y1, X2, Y2, NewHeights.GetData(), 0, bUpdateNormals);
 
 				// Snap foliage for each component.
 				for (int32 Index = 0; Index < CollisionComponents.Num(); ++Index)
@@ -735,7 +775,7 @@ struct FXYOffsetmapAccessor
 			{
 				// No foliage, just update landscape.
 				LandscapeEdit->SetXYOffsetData(X1, Y1, X2, Y2, Data, 0); // XY Offset always need to be update before the height update
-				LandscapeEdit->SetHeightData(X1, Y1, X2, Y2, NewHeights.GetData(), 0, true);
+				LandscapeEdit->SetHeightData(X1, Y1, X2, Y2, NewHeights.GetData(), 0, bUpdateNormals);
 			}
 		}
 	}
@@ -814,6 +854,189 @@ struct FLandscapeVisCache : public TLandscapeEditCache<FAlphamapAccessorTool<fal
 	}
 };
 
+
+template<class ToolTarget>
+class FLandscapeLayerDataCache
+{
+public:
+	FLandscapeLayerDataCache(const FLandscapeToolTarget& InTarget, typename ToolTarget::CacheClass& Cache)
+		: LandscapeInfo(nullptr)
+		, Landscape(nullptr)
+		, EditingLayerIndex(MAX_uint8)
+		, bIsInitialized(false)
+		, bCombinedLayerOperation(false)
+		, bVisibilityChanged(false)
+		, bTargetIsHeightmap(InTarget.TargetType == ELandscapeToolTargetType::Heightmap)
+		, CacheUpToEditingLayer(Cache)
+		, CacheBottomLayers(InTarget)
+	{
+	}
+
+	void Initialize(ULandscapeInfo* InLandscapeInfo, bool InCombinedLayerOperation)
+	{
+		if (!bIsInitialized)
+		{
+			LandscapeInfo = InLandscapeInfo;
+			Landscape = LandscapeInfo ? LandscapeInfo->LandscapeActor.Get() : nullptr;
+			bCombinedLayerOperation = Landscape && Landscape->HasLayersContent() && InCombinedLayerOperation && bTargetIsHeightmap;
+			if (bCombinedLayerOperation)
+			{
+				EditingLayerGuid = Landscape->GetEditingLayer();
+				for (int i = 0; i < Landscape->GetLayerCount(); ++i)
+				{
+					FLandscapeLayer* CurrentLayer = Landscape->GetLayer(i);
+					BackupLayerVisibility.Add(CurrentLayer->bVisible);
+					if (CurrentLayer->Guid == EditingLayerGuid)
+					{
+						EditingLayerIndex = i;
+					}
+				}
+				check(EditingLayerIndex < Landscape->GetLayerCount());
+			}
+			bIsInitialized = true;
+		}
+	}
+
+	void Read(int32 X1, int32 Y1, int32 X2, int32 Y2, TArray<typename ToolTarget::CacheClass::DataType>& Data)
+	{
+		check(bIsInitialized);
+		if (bCombinedLayerOperation)
+		{
+			TArray<bool> NewLayerVisibility;
+			for (int i = 0; i < Landscape->GetLayerCount(); ++i)
+			{
+				FLandscapeLayer* CurrentLayer = Landscape->GetLayer(i);
+				NewLayerVisibility.Add((i > EditingLayerIndex) ? false : CurrentLayer->bVisible);
+			}
+
+			FIntRect Bounds;
+			const float BoundStep = LandscapeInfo->ComponentSizeQuads / 4;
+			Bounds.Min.X = (FMath::FloorToInt((float)X1 / BoundStep) - 1) * BoundStep;
+			Bounds.Min.Y = (FMath::FloorToInt((float)Y1 / BoundStep) - 1) * BoundStep;
+			Bounds.Max.X = (FMath::CeilToInt((float)X2 / BoundStep) + 1) * BoundStep;
+			Bounds.Max.Y = (FMath::CeilToInt((float)Y2 / BoundStep) + 1) * BoundStep;
+
+			FScopedSetLandscapeEditingLayer Scope(Landscape, FGuid());
+			CacheUpToEditingLayer.GetDataAndCache(X1, Y1, X2, Y2, Data, [&]() -> FIntRect
+			{
+				TSet<ULandscapeComponent*> AffectedComponents;
+				LandscapeInfo->GetComponentsInRegion(X1, Y1, X2, Y2, AffectedComponents);
+				SynchronousUpdateComponentVisibilityForHeight(AffectedComponents, NewLayerVisibility);
+				return Bounds;
+			});
+            // Release Texture Mips that will be Locked by the next SynchronousUpdateComponentVisibilityForHeight
+			CacheUpToEditingLayer.DataAccess.Flush();
+
+			CacheBottomLayers.GetDataAndCache(X1, Y1, X2, Y2, BottomLayersData, [&]() -> FIntRect
+			{
+				NewLayerVisibility[EditingLayerIndex] = false;
+				TSet<ULandscapeComponent*> AffectedComponents;
+				LandscapeInfo->GetComponentsInRegion(X1, Y1, X2, Y2, AffectedComponents);
+				SynchronousUpdateComponentVisibilityForHeight(AffectedComponents, NewLayerVisibility);
+				return Bounds;
+			});
+            // Do the same here for consistency
+			CacheBottomLayers.DataAccess.Flush();
+		}
+		else
+		{
+			CacheUpToEditingLayer.CacheData(X1, Y1, X2, Y2);
+			CacheUpToEditingLayer.GetCachedData(X1, Y1, X2, Y2, Data);
+		}
+	}
+
+	void Write(int32 X1, int32 Y1, int32 X2, int32 Y2, TArray<typename ToolTarget::CacheClass::DataType>& Data, ELandscapeLayerPaintingRestriction PaintingRestriction = ELandscapeLayerPaintingRestriction::None)
+	{
+		check(bIsInitialized);
+		if (bCombinedLayerOperation)
+		{
+			const float Alpha = Landscape->GetLayerAlpha(EditingLayerIndex, bTargetIsHeightmap);
+			const float InverseAlpha = (Alpha != 0.f) ? 1.f / Alpha : 1.f;
+			TArray<typename ToolTarget::CacheClass::DataType> DataContribution;
+			DataContribution.Empty(Data.Num());
+			DataContribution.AddUninitialized(Data.Num());
+			check(Data.Num() == BottomLayersData.Num());
+			for (int i = 0; i < Data.Num(); ++i)
+			{
+				float Contribution = (LandscapeDataAccess::GetLocalHeight(Data[i]) - LandscapeDataAccess::GetLocalHeight(BottomLayersData[i])) * InverseAlpha;
+				DataContribution[i] = LandscapeDataAccess::GetTexHeight(Contribution);
+			}
+			check(EditingLayerGuid == Landscape->GetEditingLayer());
+
+			// Restore layers visibility
+			SetLayersVisibility(BackupLayerVisibility);
+			// Only store data in cache
+			CacheUpToEditingLayer.SetCachedData(X1, Y1, X2, Y2, Data, PaintingRestriction, false);
+			// Effectively write the contribution
+			CacheUpToEditingLayer.DataAccess.SetData(X1, Y1, X2, Y2, DataContribution.GetData(), PaintingRestriction);
+			CacheUpToEditingLayer.DataAccess.Flush();
+			if (bVisibilityChanged)
+			{
+				TSet<ULandscapeComponent*> AffectedComponents;
+				LandscapeInfo->GetComponentsInRegion(X1, Y1, X2, Y2, AffectedComponents);
+                const bool bUpdateCollision = true;
+				SynchronousUpdateHeightmapForComponents(AffectedComponents, bUpdateCollision);
+				bVisibilityChanged = false;
+			}
+		}
+		else
+		{
+			CacheUpToEditingLayer.SetCachedData(X1, Y1, X2, Y2, Data, PaintingRestriction);
+			CacheUpToEditingLayer.Flush();
+		}
+	}
+
+private:
+
+	void SynchronousUpdateHeightmapForComponents(const TSet<ULandscapeComponent*>& InComponents, bool bUpdateCollision)
+	{
+		for (ULandscapeComponent* Component : InComponents)
+		{
+			const bool bUpdateAll = false; // default value
+			Component->RequestHeightmapUpdate(bUpdateAll, bUpdateCollision);
+		}
+		Landscape->ForceUpdateLayersContent();
+	};
+
+	void SetLayersVisibility(const TArray<bool>& InLayerVisibility)
+	{
+		check(InLayerVisibility.Num() == Landscape->GetLayerCount());
+		for (int i = 0; i < InLayerVisibility.Num(); ++i)
+		{
+			if (FLandscapeLayer* Layer = Landscape->GetLayer(i))
+			{
+				if (Layer->bVisible != InLayerVisibility[i])
+				{
+					Layer->bVisible = InLayerVisibility[i];
+					bVisibilityChanged = true;
+				}
+			}
+		}
+	};
+
+	void SynchronousUpdateComponentVisibilityForHeight(const TSet<ULandscapeComponent*>& InComponents, const TArray<bool>& InLayerVisibility)
+	{
+		SetLayersVisibility(InLayerVisibility);
+        // No need to update collision here as we are only doing a intermediate render to gather heightdata
+        const bool bUpdateCollision = false;
+		SynchronousUpdateHeightmapForComponents(InComponents, bUpdateCollision);
+	};
+
+	ULandscapeInfo* LandscapeInfo;
+	ALandscape* Landscape;
+	FGuid EditingLayerGuid;
+	uint8 EditingLayerIndex;
+	TArray<bool> BackupLayerVisibility;
+	TArray<typename ToolTarget::CacheClass::DataType> BottomLayersData;
+	bool bIsInitialized;
+	bool bCombinedLayerOperation;
+	bool bVisibilityChanged;
+	bool bTargetIsHeightmap;
+
+	typename ToolTarget::CacheClass& CacheUpToEditingLayer;
+	typename ToolTarget::CacheClass CacheBottomLayers;
+};
+
 //
 // FFullWeightmapAccessor
 //
@@ -834,18 +1057,21 @@ struct FFullWeightmapAccessor
 
 	~FFullWeightmapAccessor()
 	{
-		// Recreate collision for modified components to update the physical materials
-		for (ULandscapeComponent* Component : ModifiedComponents)
+		if (!LandscapeEdit.HasLandscapeLayersContent())
 		{
-			ULandscapeHeightfieldCollisionComponent* CollisionComponent = Component->CollisionComponent.Get();
-			if (CollisionComponent)
+			// Recreate collision for modified components to update the physical materials
+			for (ULandscapeComponent* Component : ModifiedComponents)
 			{
-				CollisionComponent->RecreateCollision();
-
-				// We need to trigger navigation mesh build, in case user have painted holes on a landscape
-				if (LandscapeInfo->GetLayerInfoIndex(ALandscapeProxy::VisibilityLayer) != INDEX_NONE)
+				ULandscapeHeightfieldCollisionComponent* CollisionComponent = Component->CollisionComponent.Get();
+				if (CollisionComponent)
 				{
-					FNavigationSystem::UpdateComponentData(*CollisionComponent);
+					CollisionComponent->RecreateCollision();
+
+					// We need to trigger navigation mesh build, in case user have painted holes on a landscape
+					if (LandscapeInfo->GetLayerInfoIndex(ALandscapeProxy::VisibilityLayer) != INDEX_NONE)
+					{
+						FNavigationSystem::UpdateComponentData(*CollisionComponent);
+					}
 				}
 			}
 		}
@@ -868,11 +1094,13 @@ struct FFullWeightmapAccessor
 		TSet<ULandscapeComponent*> Components;
 		if (LandscapeEdit.GetComponentsInRegion(X1, Y1, X2, Y2, &Components))
 		{
-			// Flush dynamic foliage (grass)
 			ALandscapeProxy::InvalidateGeneratedComponentData(Components);
 
+			if (!LandscapeEdit.HasLandscapeLayersContent())
+			{
+				ModifiedComponents.Append(Components);
+			}
 			LandscapeEdit.SetAlphaData(DirtyLayerInfos, X1, Y1, X2, Y2, Data, 0, PaintingRestriction);
-			ModifiedComponents.Append(Components);
 		}
 		DirtyLayerInfos.Empty();
 	}
@@ -1119,8 +1347,38 @@ public:
 	{
 	}
 
+	virtual bool ShouldUpdateEditingLayer() const { return EdMode->CanHaveLandscapeLayersContent(); }
+
+	virtual ELandscapeLayerUpdateMode GetBeginToolContentUpdateFlag() const
+	{
+		bool bUpdateHeightmap = this->EdMode->CurrentToolTarget.TargetType == ELandscapeToolTargetType::Type::Heightmap; 
+		return bUpdateHeightmap ? ELandscapeLayerUpdateMode::Update_Heightmap_Editing : ELandscapeLayerUpdateMode::Update_Weightmap_Editing;
+	}
+
+	virtual ELandscapeLayerUpdateMode GetTickToolContentUpdateFlag() const
+	{
+		return GetBeginToolContentUpdateFlag();
+	}
+
+	virtual ELandscapeLayerUpdateMode GetEndToolContentUpdateFlag() const
+	{
+		bool bUpdateHeightmap = this->EdMode->CurrentToolTarget.TargetType == ELandscapeToolTargetType::Type::Heightmap;
+		return bUpdateHeightmap ? ELandscapeLayerUpdateMode::Update_Heightmap_All : ELandscapeLayerUpdateMode::Update_Weightmap_All;
+	}
+
 	virtual bool BeginTool(FEditorViewportClient* ViewportClient, const FLandscapeToolTarget& InTarget, const FVector& InHitLocation) override
 	{
+		if (ShouldUpdateEditingLayer())
+		{
+			ALandscape* Landscape = this->EdMode->GetLandscape();
+			if (Landscape)
+			{
+				Landscape->RequestLayersContentUpdate(GetBeginToolContentUpdateFlag());
+				Landscape->SetEditingLayer(this->EdMode->GetCurrentLayerGuid());
+				Landscape->SetGrassUpdateEnabled(false);
+			}
+		}
+
 		if (!ensure(InteractorPositions.Num() == 0))
 		{
 			InteractorPositions.Empty(1);
@@ -1164,6 +1422,15 @@ public:
 
 			// Prevent landscape from baking textures while tool stroke is active
 			EdMode->CurrentToolTarget.LandscapeInfo->PostponeTextureBaking();
+
+			if (ShouldUpdateEditingLayer())
+			{
+				ALandscape* Landscape = this->EdMode->CurrentToolTarget.LandscapeInfo->LandscapeActor.Get();
+				if (Landscape != nullptr)
+				{
+					Landscape->RequestLayersContentUpdate(GetTickToolContentUpdateFlag());
+				}
+			}
 		}
 	}
 
@@ -1179,6 +1446,17 @@ public:
 		EdMode->CurrentBrush->EndStroke();
 		EdMode->UpdateLayerUsageInformation(&EdMode->CurrentToolTarget.LayerInfo);
 		bExternalModifierPressed = false;
+
+		if (ShouldUpdateEditingLayer())
+		{
+			ALandscape* Landscape = this->EdMode->GetLandscape();
+			if (Landscape)
+			{
+				Landscape->RequestLayersContentUpdate(GetEndToolContentUpdateFlag());
+				Landscape->SetEditingLayer();
+				Landscape->SetGrassUpdateEnabled(true);
+			}
+		}
 	}
 
 	virtual bool MouseMove(FEditorViewportClient* ViewportClient, FViewport* Viewport, int32 x, int32 y) override

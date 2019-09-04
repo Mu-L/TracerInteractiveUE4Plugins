@@ -13,19 +13,28 @@ namespace UnrealBuildTool.Rules
 					"Media",
 				});
 
-			PrivateDependencyModuleNames.AddRange(
+            PublicDependencyModuleNames.AddRange(
+                new string[] {
+                    "WmfMediaFactory"
+                    });
+
+            PrivateDependencyModuleNames.AddRange(
 				new string[] {
 					"Core",
 					"CoreUObject",
-					"D3D11RHI",
                     "Engine",
                     "MediaUtils",
-					"Projects",
-					"RenderCore",
+                    "Projects",
+                    "RenderCore",
                     "RHI",
-					"UtilityShaders",
+                    "UtilityShaders",
                     "WmfMediaFactory",
                 });
+
+            if (Target.Platform != UnrealTargetPlatform.XboxOne)
+            {
+                PrivateDependencyModuleNames.Add("D3D11RHI");
+            }
 
 			PrivateIncludePathModuleNames.AddRange(
 				new string[] {
@@ -37,6 +46,7 @@ namespace UnrealBuildTool.Rules
 					"WmfMedia/Private",
 					"WmfMedia/Private/Player",
 					"WmfMedia/Private/Wmf",
+                    "WmfMedia/Private/WmfMediaCodec",
                     "../../../../Source/Runtime/Windows/D3D11RHI/Private",
                     "../../../../Source/Runtime/Windows/D3D11RHI/Private/Windows",
                 });
@@ -50,18 +60,14 @@ namespace UnrealBuildTool.Rules
 				PrivateDependencyModuleNames.Add("HeadMountedDisplay");
 			}
 
-			if (Target.Type != TargetType.Server)
+			if ((Target.Platform == UnrealTargetPlatform.Win64) ||
+				(Target.Platform == UnrealTargetPlatform.Win32))
 			{
-				if ((Target.Platform == UnrealTargetPlatform.Win64) ||
-					(Target.Platform == UnrealTargetPlatform.Win32))
-				{
-					PublicDelayLoadDLLs.Add("mf.dll");
-					PublicDelayLoadDLLs.Add("mfplat.dll");
-					PublicDelayLoadDLLs.Add("mfplay.dll");
-					PublicDelayLoadDLLs.Add("mfuuid.dll");
-					PublicDelayLoadDLLs.Add("shlwapi.dll");
-				}
-			}
+				PublicDelayLoadDLLs.Add("mf.dll");
+				PublicDelayLoadDLLs.Add("mfplat.dll");
+				PublicDelayLoadDLLs.Add("mfplay.dll");
+				PublicDelayLoadDLLs.Add("shlwapi.dll");
+            }
 		}
 	}
 }

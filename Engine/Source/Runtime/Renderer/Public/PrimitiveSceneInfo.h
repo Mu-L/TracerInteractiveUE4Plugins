@@ -11,13 +11,14 @@
 #include "RenderingThread.h"
 #include "SceneTypes.h"
 #include "HitProxies.h"
-#include "GenericOctreePublic.h"
+#include "Math/GenericOctreePublic.h"
 #include "Engine/Scene.h"
 #include "RendererInterface.h"
 
 class FPrimitiveSceneInfo;
 class FPrimitiveSceneProxy;
 class FReflectionCaptureProxy;
+class FPlanarReflectionSceneProxy;
 class FScene;
 class FViewInfo;
 class UPrimitiveComponent;
@@ -144,11 +145,11 @@ public:
 struct FPrimitiveFlagsCompact
 {
 	/** True if the primitive casts dynamic shadows. */
-	uint32 bCastDynamicShadow : 1;
+	uint8 bCastDynamicShadow : 1;
 	/** True if the primitive will cache static lighting. */
-	uint32 bStaticLighting : 1;
+	uint8 bStaticLighting : 1;
 	/** True if the primitive casts static shadows. */
-	uint32 bCastStaticShadow : 1;
+	uint8 bCastStaticShadow : 1;
 
 	FPrimitiveFlagsCompact(const FPrimitiveSceneProxy* Proxy);
 };
@@ -168,6 +169,37 @@ public:
 
 	/** Initialization constructor. */
 	FPrimitiveSceneInfoCompact(FPrimitiveSceneInfo* InPrimitiveSceneInfo);
+};
+
+/** Flags needed for broad phase culling of runtime virtual texture page rendering. */
+struct FPrimitiveVirtualTextureFlags
+{
+	/** True if the primitive can render to virtual texture */
+	uint8 bRenderToVirtualTexture : 1;
+
+	/** Number of bits to reserve for the RuntimeVirtualTextureMask. If we use more than this number of runtime virtual textures in a scene we will trigger a slower path in rendering the VT pages. */
+	enum { RuntimeVirtualTexture_BitCount = 7 };
+	/** Mask of the allocated runtime virtual textures in the scene to render to. */
+	uint8 RuntimeVirtualTextureMask : RuntimeVirtualTexture_BitCount;
+};
+
+/** Lod data used for runtime virtual texture page rendering. Packed to reduce memory overhead since one of these is allocated per primitive. */
+struct FPrimitiveVirtualTextureLodInfo
+{
+	/** Minimum Lod for primitive in the runtime virtual texture. */
+	uint16 MinLod : 4;
+	/** Maximum Lod for primitive in the runtime virtual texture. */
+	uint16 MaxLod : 4;
+	/** Bias to use for Lod calculation in the runtime virtual texture. */
+	uint16 LodBias : 3;
+	/** 
+	 * Culling method used to remove the primitive from low mips of the runtime virtual texture.
+	 * 0: CullValue is the number of low mips for which we cull the primitive from the runtime virtual texture.
+	 * 1: CullValue is the pixel coverage threshold at which we cull the primitive from the runtime virtual texture. 
+	 */
+	uint16 CullMethod : 1;
+	/** Value used according to the CullMethod. */
+	uint16 CullValue : 4;
 };
 
 /** The type of the octree used by FScene to find primitives. */
@@ -190,15 +222,12 @@ public:
 	FPrimitiveComponentId PrimitiveComponentId;
 
 	/** 
-	 * Pointer to the primitive's last render time variable, which is written to by the RT and read by the GT.
+	 * Pointer to the last render time variable on the primitive's owning actor (if owned), which is written to by the RT and read by the GT.
 	 * The value of LastRenderTime will therefore not be deterministic due to race conditions, but the GT uses it in a way that allows this.
-	 * Storing a pointer to the UObject member variable only works because UPrimitiveComponent has a mechanism to ensure it does not get deleted before the proxy (DetachFence).
+	 * Storing a pointer to the UObject member variable only works because UPrimitiveComponent and AActor has a mechanism to ensure it does not get deleted before the proxy (DetachFence).
 	 * In general feedback from the renderer to the game thread like this should be avoided.
 	 */
-	float* ComponentLastRenderTime;
-
-	/** Same as ComponentLastRenderTime but only updated if the component is on screen. Used by the texture streamer. */
-	float* ComponentLastRenderTimeOnScreen;
+	float* OwnerLastRenderTime;
 
 	/** 
 	 * The root attachment component id for use with lighting, if valid.
@@ -239,7 +268,7 @@ public:
 	/** 
 	 * Planar reflection that was closest to this primitive, used for forward reflections.
 	 */
-	const class FPlanarReflectionSceneProxy* CachedPlanarReflectionProxy;
+	const FPlanarReflectionSceneProxy* CachedPlanarReflectionProxy;
 
 	/** 
 	 * Reflection capture proxy that was closest to this primitive, used for the forward shading rendering path. 
@@ -312,10 +341,7 @@ public:
 	void RemoveFromScene(bool bUpdateStaticDrawLists);
 
 	/** return true if we need to call ConditionalUpdateStaticMeshes */
-	FORCEINLINE bool NeedsUpdateStaticMeshes()
-	{
-		return bNeedsStaticMeshUpdate;
-	}
+	bool NeedsUpdateStaticMeshes();
 
 	/** return true if we need to call LazyUpdateForRendering */
 	FORCEINLINE bool NeedsUniformBufferUpdate() const
@@ -437,9 +463,20 @@ public:
 	int32 GetLightmapDataOffset() const { return LightmapDataOffset; }
 	int32 GetNumLightmapDataEntries() const { return NumLightmapDataEntries; }
 
+	/** Returns whether the primitive needs to call CacheReflectionCaptures. */
 	bool NeedsReflectionCaptureUpdate() const;
-	/** Cache per-primitive reflection captures used for mobile/forward rendering */
+
+	/** Cache per-primitive reflection captures used for mobile/forward rendering. */
 	void CacheReflectionCaptures();
+
+	/** Nulls out the cached per-primitive reflection captures. */
+	void RemoveCachedReflectionCaptures();
+
+	/** Helper function for writing out to the last render times to the game thread */
+	void UpdateComponentLastRenderTime(float CurrentWorldTime, bool bUpdateLastRenderTimeOnScreen) const;
+
+	/** Updates static lighting uniform buffer, returns the number of entries needed for GPUScene */
+	int32 UpdateStaticLightingBuffer();
 
 #if RHI_RAYTRACING
 	RENDERER_API FRayTracingGeometryRHIRef GetStaticRayTracingGeometryInstance(int LodLevel);
@@ -463,9 +500,6 @@ private:
 	 */
 	const UPrimitiveComponent* ComponentForDebuggingOnly;
 
-	/** If this is TRUE, this primitive's static meshes needs to be updated before it can be rendered. */
-	bool bNeedsStaticMeshUpdate : 1;
-
 	/** If this is TRUE, this primitive's static meshes will be update even if it's not visible. */
 	bool bNeedsStaticMeshUpdateWithoutVisibilityCheck : 1;
 
@@ -474,6 +508,8 @@ private:
 
 	/** If this is TRUE, this primitive's indirect lighting cache buffer needs to be updated before it can be rendered. */
 	bool bIndirectLightingCacheBufferDirty : 1;
+
+	bool bRegisteredVirtualTextureProducerCallback : 1;
 
 	/** Offset into the scene's lightmap data buffer, when GPUScene is enabled. */
 	int32 LightmapDataOffset;
@@ -494,7 +530,7 @@ private:
 	void RemoveCachedMeshDrawCommands();
 
 #if RHI_RAYTRACING
-	TArray<FRayTracingGeometryRHIRef> RayTracingGeometries;
+	TArray<FRayTracingGeometry*> RayTracingGeometries;
 #endif
 };
 

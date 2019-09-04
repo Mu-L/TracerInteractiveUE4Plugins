@@ -7,18 +7,19 @@
 #include "NiagaraCommon.h"
 #include "PrimitiveViewRelevance.h"
 #include "PrimitiveSceneProxy.h"
-#include "Components/PrimitiveComponent.h"
+#include "Particles/ParticleSystemComponent.h"
 #include "NiagaraUserRedirectionParameterStore.h"
 #include "NiagaraSystemInstance.h"
 
 #include "NiagaraComponent.generated.h"
 
 class FMeshElementCollector;
-class NiagaraRenderer;
+class FNiagaraRenderer;
 class UNiagaraSystem;
 class UNiagaraParameterCollection;
 class UNiagaraParameterCollectionInstance;
 class FNiagaraSystemSimulation;
+class NiagaraEmitterInstanceBatcher;
 
 // Called when the particle system is done
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnNiagaraSystemFinished, class UNiagaraComponent*, PSystem);
@@ -30,7 +31,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnNiagaraSystemFinished, class UNia
 * @see UNiagaraSystem
 */
 UCLASS(ClassGroup = (Rendering, Common), hidecategories = Object, hidecategories = Physics, hidecategories = Collision, showcategories = Trigger, editinlinenew, meta = (BlueprintSpawnableComponent, DisplayName = "Niagara Particle System"))
-class NIAGARA_API UNiagaraComponent : public UPrimitiveComponent
+class NIAGARA_API UNiagaraComponent : public UFXSystemComponent
 {
 	GENERATED_UCLASS_BODY()
 
@@ -38,6 +39,16 @@ class NIAGARA_API UNiagaraComponent : public UPrimitiveComponent
 	DECLARE_MULTICAST_DELEGATE(FOnSystemInstanceChanged);
 	DECLARE_MULTICAST_DELEGATE(FOnSynchronizedWithAssetParameters);
 #endif
+
+public:
+
+	/********* UFXSystemComponent *********/
+	void SetFloatParameter(FName ParameterName, float Param) override;
+	void SetVectorParameter(FName ParameterName, FVector Param) override;
+	void SetColorParameter(FName ParameterName, FLinearColor Param) override;
+	void SetActorParameter(FName ParameterName, class AActor* Param) override;
+	virtual UFXSystemAsset* GetFXSystemAsset() const override { return Asset; };
+	/********* UFXSystemComponent *********/
 
 private:
 	UPROPERTY(EditAnywhere, Category="Niagara", meta = (DisplayName = "Niagara System Asset"))
@@ -277,9 +288,18 @@ public:
 	virtual void PostLoad();
 #if WITH_EDITOR
 	virtual void PreEditChange(UProperty* PropertyAboutToChange) override;
-
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+#endif
+	//~ End UObject Interface
 
+
+	UFUNCTION(BlueprintCallable, Category = Preview, meta = (Keywords = "preview detail level scalability"))
+	void SetPreviewDetailLevel(bool bEnablePreviewDetailLevel, int32 PreviewDetailLevel);
+
+	UFUNCTION(BlueprintCallable, Category = Preview, meta = (Keywords = "preview LOD Distance scalability"))
+	void SetPreviewLODDistance(bool bEnablePreviewLODDistance, float PreviewLODDistance);
+
+#if WITH_EDITOR
 	void PostLoadNormalizeOverrideNames();
 	bool IsParameterValueOverriddenLocally(const FName& InParamName);
 	void SetParameterValueOverriddenLocally(const FNiagaraVariable& InParam, bool bInOverridden, bool bRequiresSystemInstanceReset);
@@ -292,6 +312,8 @@ public:
 	FNiagaraUserRedirectionParameterStore& GetOverrideParameters() { return OverrideParameters; }
 
 	const FNiagaraParameterStore& GetOverrideParameters() const { return OverrideParameters; }
+
+	bool IsWorldReadyToRun() const;
 
 	//~ End UObject Interface.
 
@@ -355,6 +377,18 @@ public:
 	UFUNCTION(BlueprintCallable, Category = Niagara)
 	void SetAutoAttachmentParameters(USceneComponent* Parent, FName SocketName, EAttachmentRule LocationRule, EAttachmentRule RotationRule, EAttachmentRule ScaleRule);
 
+	UPROPERTY(EditAnywhere, Category = Preview, Transient, meta=(EditCondition=bEnablePreviewDetailLevel))
+	int32 PreviewDetailLevel;
+
+	UPROPERTY(EditAnywhere, Category = Preview, Transient, meta=(EditCondition= bEnablePreviewLODDistance))
+	float PreviewLODDistance;
+
+	UPROPERTY(EditAnywhere, Category = Preview, Transient)
+	uint32 bEnablePreviewDetailLevel : 1;
+
+	UPROPERTY(EditAnywhere, Category = Preview, Transient)
+	uint32 bEnablePreviewLODDistance : 1;
+
 #if WITH_EDITORONLY_DATA
 	UPROPERTY(EditAnywhere, Category = Compilation)
 	uint32 bWaitForCompilationOnActivate : 1;
@@ -401,15 +435,18 @@ public:
 	~FNiagaraSceneProxy();
 
 	/** Called on render thread to assign new dynamic data */
-	void SetDynamicData_RenderThread(struct FNiagaraDynamicDataBase* NewDynamicData);
-	TArray<class NiagaraRenderer*>& GetEmitterRenderers() { return EmitterRenderers; }
-	void UpdateEmitterRenderers(const TArray<NiagaraRenderer*>& InRenderers);
+	const TArray<class FNiagaraRenderer*>& GetEmitterRenderers() { return EmitterRenderers; }
+
+	void CreateRenderers(const UNiagaraComponent* InComponent);
+	void ReleaseRenderers();
 
 	/** Gets whether or not this scene proxy should be rendered. */
 	bool GetRenderingEnabled() const;
 
 	/** Sets whether or not this scene proxy should be rendered. */
 	void SetRenderingEnabled(bool bInRenderingEnabled);
+
+	NiagaraEmitterInstanceBatcher* GetBatcher() const { return Batcher; }
 
 #if RHI_RAYTRACING
 	virtual void GetDynamicRayTracingInstances(FRayTracingMaterialGatheringContext& Context, TArray<FRayTracingInstance>& OutRayTracingInstances) override;
@@ -445,8 +482,16 @@ private:
 	uint32 GetAllocatedSize() const;
 
 private:
-	//class NiagaraRenderer* EmitterRenderer;
-	TArray<class NiagaraRenderer*>EmitterRenderers;
+	/** Emitter Renderers in the order they appear in the emitters. */
+	TArray<FNiagaraRenderer*> EmitterRenderers;
+	
+	/** Indices of renderers in the order they should be rendered. */
+	TArray<int32> RendererDrawOrder;
 
 	bool bRenderingEnabled;
+	NiagaraEmitterInstanceBatcher* Batcher = nullptr;
+
+#if STATS
+	TStatId SystemStatID;
+#endif
 };

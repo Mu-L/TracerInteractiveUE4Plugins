@@ -82,6 +82,12 @@ namespace UnrealBuildTool
 		bool bEditorDependsOnShaderCompileWorker = true;
 
 		/// <summary>
+		/// Whether to include a dependency on LiveCodingConsole when building targets that support live coding.
+		/// </summary>
+		[XmlConfigFile]
+		bool bBuildLiveCodingConsole = false;
+
+		/// <summary>
 		/// Override for the build tool to use in generated projects. If the compiler version is specified on the command line, we use the same argument on the 
 		/// command line for generated projects.
 		/// </summary>
@@ -179,7 +185,7 @@ namespace UnrealBuildTool
 		/// <returns>The newly allocated project file object</returns>
 		protected override ProjectFile AllocateProjectFile(FileReference InitFilePath)
 		{
-			return new VCProjectFile(InitFilePath, OnlyGameProject, ProjectFileFormat, bAddFastPDBToProjects, bUsePerFileIntellisense, bUsePrecompiled, bEditorDependsOnShaderCompileWorker, BuildToolOverride);
+			return new VCProjectFile(InitFilePath, OnlyGameProject, ProjectFileFormat, bAddFastPDBToProjects, bUsePerFileIntellisense, bUsePrecompiled, bEditorDependsOnShaderCompileWorker, bBuildLiveCodingConsole, BuildToolOverride);
 		}
 
 
@@ -771,7 +777,7 @@ namespace UnrealBuildTool
 						SolutionOptionsFileName = FileReference.Combine(MasterProjectPath, ".vs", Path.GetFileNameWithoutExtension(SolutionFileName), "v15", ".suo");
 						break;
 					case VCProjectFileFormat.VisualStudio2019:
-						SolutionOptionsFileName = FileReference.Combine(MasterProjectPath, ".vs", Path.GetFileNameWithoutExtension(SolutionFileName), "v16", ".suo");
+						SolutionOptionsFileName = FileReference.Combine(MasterProjectPath, ".vs", Path.GetFileNameWithoutExtension(SolutionFileName), "v15", ".suo"); // Still uses v15
 						break;
 					default:
 						throw new BuildException("Unsupported Visual Studio version");

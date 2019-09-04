@@ -1828,47 +1828,44 @@ static void MakeShaderModelPreviewMenu( FMenuBuilder& MenuBuilder )
 
 	MenuBuilder.BeginSection("EditorPreviewMode", LOCTEXT("EditorPreviewModeDevices", "Preview Devices"));
 
-	for (int32 i = GMaxRHIFeatureLevel; i >= 0; --i)
+	// SM5
+	MenuBuilder.AddMenuEntry(FLevelEditorCommands::Get().FeatureLevelPreview[ERHIFeatureLevel::SM5]);
+
+	// SM4
+	MenuBuilder.AddMenuEntry(FLevelEditorCommands::Get().FeatureLevelPreview[ERHIFeatureLevel::SM4]);
+
+	// Android
+	bool bAndroidBuildForES31 = false;
+	GConfig->GetBool(TEXT("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings"), TEXT("bBuildForES31"), bAndroidBuildForES31, GEngineIni);
+	if (bAndroidBuildForES31)
 	{
-		switch (i)
-		{
-			case ERHIFeatureLevel::ES2:
-				MenuBuilder.AddMenuEntry(FLevelEditorCommands::Get().PreviewPlatformOverride_AndroidGLES2);
-				MenuBuilder.AddMenuEntry(FLevelEditorCommands::Get().PreviewPlatformOverride_DefaultES2);
-				break;
-
-			case ERHIFeatureLevel::ES3_1:
-			{
-				//MenuBuilder.AddMenuEntry(FLevelEditorCommands::Get().PreviewPlatformOverride_DefaultES31);
-
-				bool bAndroidBuildForES31 = false;
-				GConfig->GetBool(TEXT("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings"), TEXT("bBuildForES31"), bAndroidBuildForES31, GEngineIni);
-				if(bAndroidBuildForES31)
-				{
-					MenuBuilder.AddMenuEntry(FLevelEditorCommands::Get().PreviewPlatformOverride_AndroidGLES31);
-				}
-
-				bool bAndroidSupportsVulkan = false;
-				GConfig->GetBool(TEXT("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings"), TEXT("bSupportsVulkan"), bAndroidSupportsVulkan, GEngineIni);
-				if(bAndroidSupportsVulkan)
-				{
-					MenuBuilder.AddMenuEntry(FLevelEditorCommands::Get().PreviewPlatformOverride_AndroidVulkanES31);
-				}
-
-				bool bIOSSupportsMetal = false;
-				GConfig->GetBool(TEXT("/Script/IOSRuntimeSettings.IOSRuntimeSettings"), TEXT("bSupportsMetal"), bIOSSupportsMetal, GEngineIni);
-				if(bIOSSupportsMetal)
-				{
-					MenuBuilder.AddMenuEntry(FLevelEditorCommands::Get().PreviewPlatformOverride_IOSMetalES31);
-				}
-
-				break;
-			}
-
-			default:
-				MenuBuilder.AddMenuEntry(FLevelEditorCommands::Get().FeatureLevelPreview[i]);
-		}
+		MenuBuilder.AddMenuEntry(FLevelEditorCommands::Get().PreviewPlatformOverride_AndroidGLES31);
 	}
+
+	bool bAndroidSupportsVulkan = false;
+	GConfig->GetBool(TEXT("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings"), TEXT("bSupportsVulkan"), bAndroidSupportsVulkan, GEngineIni);
+	if (bAndroidSupportsVulkan)
+	{
+		MenuBuilder.AddMenuEntry(FLevelEditorCommands::Get().PreviewPlatformOverride_AndroidVulkanES31);
+	}
+
+	bool bAndroidBuildForES2 = false;
+	GConfig->GetBool(TEXT("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings"), TEXT("bBuildForES2"), bAndroidBuildForES2, GEngineIni);
+	if (bAndroidBuildForES2)
+	{
+    	MenuBuilder.AddMenuEntry(FLevelEditorCommands::Get().PreviewPlatformOverride_AndroidGLES2);
+	}
+
+	// iOS
+	bool bIOSSupportsMetal = false;
+	GConfig->GetBool(TEXT("/Script/IOSRuntimeSettings.IOSRuntimeSettings"), TEXT("bSupportsMetal"), bIOSSupportsMetal, GEngineIni);
+	if (bIOSSupportsMetal)
+	{
+		MenuBuilder.AddMenuEntry(FLevelEditorCommands::Get().PreviewPlatformOverride_IOSMetalES31);
+	}
+
+	// HTML5
+	MenuBuilder.AddMenuEntry(FLevelEditorCommands::Get().PreviewPlatformOverride_DefaultES2);
 
     MenuBuilder.EndSection();
 
@@ -2209,11 +2206,13 @@ TSharedRef< SWidget > FLevelEditorToolBar::GenerateOpenBlueprintMenuContent( TSh
 		}
 	};
 
+	FLevelEditorModule& LevelEditorModule = FModuleManager::LoadModuleChecked<FLevelEditorModule>("LevelEditor");
+	TSharedPtr<FExtender> Extender = FExtender::Combine(LevelEditorModule.GetAllLevelEditorToolbarBlueprintsMenuExtenders());
 
 	const bool bShouldCloseWindowAfterMenuSelection = true;
-	FMenuBuilder MenuBuilder( bShouldCloseWindowAfterMenuSelection, InCommandList );
+	FMenuBuilder MenuBuilder( bShouldCloseWindowAfterMenuSelection, InCommandList, Extender);
 
-	MenuBuilder.BeginSection(NAME_None, LOCTEXT("BlueprintClass", "Blueprint Class"));
+	MenuBuilder.BeginSection("BlueprintClass", LOCTEXT("BlueprintClass", "Blueprint Class"));
 	{
 		// Create a blank BP
 		MenuBuilder.AddMenuEntry(FLevelEditorCommands::Get().CreateBlankBlueprintClass);
@@ -2233,7 +2232,7 @@ TSharedRef< SWidget > FLevelEditorToolBar::GenerateOpenBlueprintMenuContent( TSh
 	}
 	MenuBuilder.EndSection();
 
-	MenuBuilder.BeginSection(NAME_None, LOCTEXT("LevelScriptBlueprints", "Level Blueprints"));
+	MenuBuilder.BeginSection("LevelScriptBlueprints", LOCTEXT("LevelScriptBlueprints", "Level Blueprints"));
 	{
 		MenuBuilder.AddMenuEntry( FLevelEditorCommands::Get().OpenLevelBlueprint );
 
@@ -2250,7 +2249,7 @@ TSharedRef< SWidget > FLevelEditorToolBar::GenerateOpenBlueprintMenuContent( TSh
 	}
 	MenuBuilder.EndSection();
 
-	MenuBuilder.BeginSection(NAME_None, LOCTEXT("ProjectSettingsClasses", "Project Settings"));
+	MenuBuilder.BeginSection("ProjectSettingsClasses", LOCTEXT("ProjectSettingsClasses", "Project Settings"));
 	{
 		// If source control is enabled, queue up a query to the status of the config file so it is (hopefully) ready before we get to the sub-menu
 		if(ISourceControlModule::Get().IsEnabled())
@@ -2264,7 +2263,7 @@ TSharedRef< SWidget > FLevelEditorToolBar::GenerateOpenBlueprintMenuContent( TSh
 	}
 	MenuBuilder.EndSection();
 
-	MenuBuilder.BeginSection(NAME_None, LOCTEXT("WorldSettingsClasses", "World Override"));
+	MenuBuilder.BeginSection("WorldSettingsClasses", LOCTEXT("WorldSettingsClasses", "World Override"));
 	{
 		LevelEditorActionHelpers::CreateGameModeSubMenu(MenuBuilder, InCommandList, InLevelEditor, false);
 	}

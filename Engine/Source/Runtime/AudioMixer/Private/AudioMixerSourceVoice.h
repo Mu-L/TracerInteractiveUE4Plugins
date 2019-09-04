@@ -65,6 +65,9 @@ namespace Audio
 		// Does a faded stop (to avoid discontinuity)
 		void StopFade(int32 NumFrames);
 
+		// Get the source's Id
+		int32 GetSourceId() const { return SourceId; }
+
 		// Queries if the voice is playing
 		bool IsPlaying() const;
 
@@ -91,6 +94,9 @@ namespace Audio
 
 		// Sets the submix send levels
 		void SetSubmixSendInfo(FMixerSubmixWeakPtr Submix, const float SendLevel);
+
+		// Set the source bus send levels
+		void SetBusSendInfo(EBusSendType InBusSendType, FMixerBusSend& BusSend);
 
 		// Called when the source is a bus and needs to mix other sources together to generate output
 		void OnMixBus(FMixerSourceVoiceBuffer* OutMixerSourceBuffer);

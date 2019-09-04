@@ -113,6 +113,10 @@ public:
 
 	/** Update Simulated Positions & Normals from APEX Clothing actor */
 	bool UpdateClothSimulationData(USkinnedMeshComponent* InMeshComponent);
+
+#if RHI_RAYTRACING
+	bool bAnySegmentUsesWorldPositionOffset;
+#endif
 };
 
 /** morph target mesh data for a single vertex delta */
@@ -222,7 +226,7 @@ public:
 	bool bNeedsInitialClear;
 
 	// @param guaranteed only to be valid if the vertex buffer is valid
-	FShaderResourceViewRHIParamRef GetSRV() const
+	FRHIShaderResourceView* GetSRV() const
 	{
 		return SRVValue;
 	}
@@ -278,8 +282,11 @@ public:
 #if RHI_RAYTRACING
 	/** Geometry for ray tracing. */
 	FRayTracingGeometry RayTracingGeometry;
+	FRWBuffer RayTracingDynamicVertexBuffer;
 
+	virtual FRayTracingGeometry* GetRayTracingGeometry() { return &RayTracingGeometry; }
 	virtual const FRayTracingGeometry* GetRayTracingGeometry() const { return &RayTracingGeometry; }
+	virtual FRWBuffer* GetRayTracingDynamicVertexBuffer() { return &RayTracingDynamicVertexBuffer; }
 #endif // RHI_RAYTRACING
 
 	virtual int32 GetLOD() const override
@@ -334,7 +341,7 @@ public:
 	};
 
 	virtual void RefreshClothingTransforms(const FMatrix& InNewLocalToWorld, uint32 FrameNumber) override;
-
+	virtual void UpdateSkinWeightBuffer(USkinnedMeshComponent* InMeshComponent) override;
 private:
 
 	/**
@@ -390,6 +397,9 @@ private:
 		 * Release morph vertex factory resources for this LOD 
 		 */
 		void ReleaseAPEXClothVertexFactories();
+		
+		/** Refreshes the VertexFactor::FDataType to rebind any vertex buffers */
+		void UpdateVertexFactoryData(const FVertexFactoryBuffers& VertexBuffers);
 
 		/**
 		 * Clear factory arrays
@@ -490,6 +500,8 @@ private:
 		 */
 		void UpdateMorphVertexBufferCPU(const TArray<FActiveMorphTarget>& ActiveMorphTargets, const TArray<float>& MorphTargetWeights);
 		void UpdateMorphVertexBufferGPU(FRHICommandListImmediate& RHICmdList, const TArray<float>& MorphTargetWeights, const FMorphTargetVertexInfoBuffers& MorphTargetVertexInfoBuffers, const TArray<int32>& SectionIdsUseByActiveMorphTargets);
+
+		void UpdateSkinWeights(FSkelMeshComponentLODInfo* CompLODInfo);
 
 		/**
 		 * Determine the current vertex buffers valid for this LOD

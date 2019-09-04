@@ -31,6 +31,7 @@
 #include "Engine/BlueprintGeneratedClass.h"
 #include "Engine/SimpleConstructionScript.h"
 #include "Engine/SCS_Node.h"
+#include "Engine/TextureRenderTarget2D.h"
 
 #define LOCTEXT_NAMESPACE "SceneCaptureComponent"
 
@@ -53,29 +54,29 @@ void ASceneCapture::PostLoad()
 		if (IsTemplate())
 		{
 			if (UBlueprintGeneratedClass* BPClass = Cast<UBlueprintGeneratedClass>(GetClass()))
-			{
+{
 				for (USCS_Node* RootNode : BPClass->SimpleConstructionScript->GetRootNodes())
-				{
+{
 					static const FName OldMeshName(TEXT("CamMesh0"));
 					static const FName OldFrustumName(TEXT("DrawFrust0"));
 					static const FName NewRootName(TEXT("SceneComponent"));
 					if (RootNode->ParentComponentOrVariableName == OldMeshName || RootNode->ParentComponentOrVariableName == OldFrustumName)
-					{
+	{
 						RootNode->ParentComponentOrVariableName = NewRootName;
 					}
 				}
-			}
-		}
+	}
+}
 
 		PRAGMA_DISABLE_DEPRECATION_WARNINGS
 		if (MeshComp_DEPRECATED)
 		{
 			MeshComp_DEPRECATED->SetStaticMesh(nullptr);
-		}
+			}
 		PRAGMA_ENABLE_DEPRECATION_WARNINGS
-	}
+		}
 #endif
-}
+	}
 
 void ASceneCapture::Serialize(FArchive& Ar)
 {
@@ -96,6 +97,18 @@ void ASceneCapture2D::OnInterpToggle(bool bEnable)
 {
 	CaptureComponent2D->SetVisibility(bEnable);
 }
+
+void ASceneCapture2D::CalcCamera(float DeltaTime, FMinimalViewInfo& OutMinimalViewInfo)
+{
+	if (USceneCaptureComponent2D* SceneCaptureComponent = GetCaptureComponent2D())
+	{
+		SceneCaptureComponent->GetCameraView(DeltaTime, OutMinimalViewInfo);
+	}
+	else
+	{
+		Super::CalcCamera(DeltaTime, OutMinimalViewInfo);
+	}
+}
 // -----------------------------------------------
 
 ASceneCaptureCube::ASceneCaptureCube(const FObjectInitializer& ObjectInitializer)
@@ -114,6 +127,7 @@ void ASceneCaptureCube::OnInterpToggle(bool bEnable)
 USceneCaptureComponent::USceneCaptureComponent(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer), ShowFlags(FEngineShowFlags(ESFIM_Game))
 {
+	CaptureSource = SCS_SceneColorHDR;
 	bCaptureEveryFrame = true;
 	bCaptureOnMovement = true;
 	bAlwaysPersistRenderingState = false;
@@ -143,7 +157,6 @@ void USceneCaptureComponent::OnRegister()
 			ProxyMeshComponent->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
 			ProxyMeshComponent->bHiddenInGame = true;
 			ProxyMeshComponent->CastShadow = false;
-			ProxyMeshComponent->PostPhysicsComponentTick.bCanEverTick = false;
 			ProxyMeshComponent->CreationMethod = CreationMethod;
 			ProxyMeshComponent->RegisterComponentWithWorld(GetWorld());
 		}
@@ -425,10 +438,10 @@ USceneCaptureComponent2D::USceneCaptureComponent2D(const FObjectInitializer& Obj
 	PrimaryComponentTick.bCanEverTick = true;
 	PrimaryComponentTick.TickGroup = TG_DuringPhysics;
 	PrimaryComponentTick.bAllowTickOnDedicatedServer = false;
+
 	// Tick in the editor so that bCaptureEveryFrame preview works
 	bTickInEditor = true;
-	// previous behavior was to capture from raw scene color 
-	CaptureSource = SCS_SceneColorHDR;
+
 	// default to full blend weight..
 	PostProcessBlendWeight = 1.0f;
 	CaptureStereoPass = EStereoscopicPass::eSSP_FULL;
@@ -502,6 +515,28 @@ void USceneCaptureComponent2D::TickComponent(float DeltaTime, enum ELevelTick Ti
 	}
 }
 
+void USceneCaptureComponent2D::SetCameraView(const FMinimalViewInfo& DesiredView)
+{
+	SetWorldLocation(DesiredView.Location);
+	SetWorldRotation(DesiredView.Rotation);
+
+	FOVAngle = DesiredView.FOV;
+	ProjectionType = DesiredView.ProjectionMode;
+	OrthoWidth = DesiredView.OrthoWidth;
+}
+
+void USceneCaptureComponent2D::GetCameraView(float DeltaTime, FMinimalViewInfo& OutMinimalViewInfo)
+{
+	OutMinimalViewInfo.Location = GetComponentLocation();
+	OutMinimalViewInfo.Rotation = GetComponentRotation();
+	
+	OutMinimalViewInfo.FOV = FOVAngle;
+	OutMinimalViewInfo.AspectRatio = TextureTarget ? (float(TextureTarget->SizeX) / TextureTarget->SizeY) : 1.f;
+	OutMinimalViewInfo.bConstrainAspectRatio = false;
+	OutMinimalViewInfo.ProjectionMode = ProjectionType;
+	OutMinimalViewInfo.OrthoWidth = OrthoWidth;
+}
+
 void USceneCaptureComponent2D::CaptureSceneDeferred()
 {
 	UWorld* World = GetWorld();
@@ -568,10 +603,9 @@ void USceneCaptureComponent2D::UpdateDrawFrustum()
 			DrawFrustum->FrustumAngle = -OrthoWidth;
 		}
 
-		DrawFrustum->FrustumStartDist = GNearClippingPlane;
+		DrawFrustum->FrustumStartDist = (bOverride_CustomNearClippingPlane) ? CustomNearClippingPlane : GNearClippingPlane;
 		// 1000 is the default frustum distance, ideally this would be infinite but that might cause rendering issues
-		DrawFrustum->FrustumEndDist = (MaxViewDistanceOverride > DrawFrustum->FrustumStartDist)
-			? MaxViewDistanceOverride : 1000.0f;
+		DrawFrustum->FrustumEndDist = (MaxViewDistanceOverride > DrawFrustum->FrustumStartDist) ? MaxViewDistanceOverride : 1000.0f;
 		DrawFrustum->MarkRenderStateDirty();
 	}
 }
@@ -712,15 +746,15 @@ void APlanarReflection::PostLoad()
 	Super::PostLoad();
 
 	if (GetLinkerCustomVersion(FEditorObjectVersion::GUID) < FEditorObjectVersion::ChangeSceneCaptureRootComponent)
-	{
+{
 		if (PlanarReflectionComponent)
-		{
+	{
 			PRAGMA_DISABLE_DEPRECATION_WARNINGS
 			PlanarReflectionComponent->bShowPreviewPlane = bShowPreviewPlane_DEPRECATED;
 			PRAGMA_ENABLE_DEPRECATION_WARNINGS
 		}
-	}
-}
+			}
+		}
 
 void APlanarReflection::OnInterpToggle(bool bEnable)
 {
@@ -854,9 +888,9 @@ void UPlanarReflectionComponent::DestroyRenderState_Concurrent()
 		FPlanarReflectionSceneProxy* InSceneProxy = SceneProxy;
 		ENQUEUE_RENDER_COMMAND(FDestroyPlanarReflectionCommand)(
 			[InSceneProxy](FRHICommandList& RHICmdList)
-			{
+		{
 				delete InSceneProxy;
-			});
+		});
 
 		SceneProxy = nullptr;
 	}
@@ -931,6 +965,7 @@ USceneCaptureComponentCube::USceneCaptureComponentCube(const FObjectInitializer&
 	PrimaryComponentTick.bAllowTickOnDedicatedServer = false;
 	bTickInEditor = true;
 	IPD = 6.2f;
+	bCaptureRotation = false;
 
 #if WITH_EDITORONLY_DATA
 	if (!IsRunningCommandlet())
@@ -938,6 +973,8 @@ USceneCaptureComponentCube::USceneCaptureComponentCube(const FObjectInitializer&
 		static ConstructorHelpers::FObjectFinder<UStaticMesh> EditorMesh(TEXT("/Engine/EditorMeshes/MatineeCam_SM"));
 		CaptureMesh = EditorMesh.Object;
 	}
+
+	DrawFrustum = nullptr;
 #endif
 }
 

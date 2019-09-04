@@ -16,6 +16,7 @@
 #include "Components.h"
 #include "Interfaces/Interface_CollisionDataProvider.h"
 #include "Engine/MeshMerging.h"
+#include "Engine/StreamableRenderAsset.h"
 #include "Templates/UniquePtr.h"
 #include "StaticMeshResources.h"
 #include "PerPlatformProperties.h"
@@ -23,6 +24,7 @@
 #include "MeshDescription.h"
 #include "MeshAttributes.h"
 #include "MeshAttributeArray.h"
+#include "RenderAssetUpdate.h"
 
 #include "StaticMesh.generated.h"
 
@@ -30,6 +32,7 @@ class FSpeedTreeWind;
 class UAssetUserData;
 class UMaterialInterface;
 class UNavCollisionBase;
+class FStaticMeshUpdate;
 struct FMeshDescriptionBulkData;
 struct FStaticMeshLODResources;
 
@@ -447,8 +450,8 @@ enum EImportStaticMeshVersion
 	BeforeImportStaticMeshVersionWasAdded,
 	// Remove the material re-order workflow
 	RemoveStaticMeshSkinxxWorkflow,
-	VersionPlusOne,
-	LastVersion = VersionPlusOne - 1
+	StaticMeshVersionPlusOne,
+	LastVersion = StaticMeshVersionPlusOne - 1
 };
 
 USTRUCT()
@@ -547,7 +550,7 @@ struct FStaticMeshDescriptionAttributeGetter
  * @see AStaticMeshActor, UStaticMeshComponent
  */
 UCLASS(hidecategories=Object, customconstructor, MinimalAPI, BlueprintType, config=Engine)
-class UStaticMesh : public UObject, public IInterface_CollisionDataProvider, public IInterface_AssetUserData
+class UStaticMesh : public UStreamableRenderAsset, public IInterface_CollisionDataProvider, public IInterface_AssetUserData
 {
 	GENERATED_UCLASS_BODY()
 
@@ -569,10 +572,12 @@ class UStaticMesh : public UObject, public IInterface_CollisionDataProvider, pub
 	static const float MinimumAutoLODPixelError;
 
 	/** Imported raw mesh bulk data. */
+	UE_DEPRECATED(4.24, "Please do not access this member directly; use UStaticMesh::GetSourceModel(LOD) or UStaticMesh::GetSourceModels().")
 	UPROPERTY()
 	TArray<FStaticMeshSourceModel> SourceModels;
 
 	/** Map of LOD+Section index to per-section info. */
+	UE_DEPRECATED(4.24, "Please do not access this member directly; use UStaticMesh::GetSectionInfoMap().")
 	UPROPERTY()
 	FMeshSectionInfoMap SectionInfoMap;
 
@@ -584,12 +589,20 @@ class UStaticMesh : public UObject, public IInterface_CollisionDataProvider, pub
 	 *
 	 * We do not update it when the user shuffle section in the staticmesh editor because the OriginalSectionInfoMap must always be in sync with the saved rawMesh bulk data.
 	 */
+	UE_DEPRECATED(4.24, "Please do not access this member directly; use UStaticMesh::GetOriginalSectionInfoMap().")
 	UPROPERTY()
 	FMeshSectionInfoMap OriginalSectionInfoMap;
 
 	/** The LOD group to which this mesh belongs. */
 	UPROPERTY(EditAnywhere, AssetRegistrySearchable, Category=LodSettings)
 	FName LODGroup;
+
+	/**
+	 * If non-negative, specify the maximum number of streamed LODs. Only has effect if
+	 * mesh LOD streaming is enabled for the target platform.
+	 */
+	UPROPERTY()
+	FPerPlatformInt NumStreamedLODs;
 
 	/* The last import version */
 	UPROPERTY()
@@ -698,6 +711,13 @@ public:
 	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = StaticMesh)
 	uint8 bAllowCPUAccess:1;
 
+	/**
+	 * If true, a GPU buffer containing required data for uniform mesh surface sampling will be created at load time.
+	 * It is created from the cpu data so bSupportUniformlyDistributedSampling is also required to be true.
+	 */
+	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = StaticMesh)
+	uint8 bSupportGpuUniformlyDistributedSampling : 1;
+
 	/** A fence which is used to keep track of the rendering thread releasing the static mesh resources. */
 	FRenderCommandFence ReleaseResourcesFence;
 
@@ -778,12 +798,19 @@ protected:
 	UPROPERTY(EditAnywhere, AdvancedDisplay, Instanced, Category = StaticMesh)
 	TArray<UAssetUserData*> AssetUserData;
 
+	TRefCountPtr<FRenderAssetUpdate> PendingUpdate;
+
+	friend struct FStaticMeshUpdateContext;
+	friend class FStaticMeshUpdate;
+
 public:
 	/** The editable mesh representation of this static mesh */
 	// @todo: Maybe we don't want this visible in the details panel in the end; for now, this might aid debugging.
 	UPROPERTY(Instanced, VisibleAnywhere, Category = EditableMesh)
 	class UObject* EditableMesh;
 
+	UPROPERTY(EditAnywhere, Category = Collision)
+	class UStaticMesh* ComplexCollisionMesh;
 	/**
 	 * Registers the mesh attributes required by the mesh description for a static mesh.
 	 */
@@ -800,6 +827,7 @@ public:
 	ENGINE_API FMeshDescription* CreateMeshDescription(int32 LodIndex, FMeshDescription MeshDescription);
 	ENGINE_API void CommitMeshDescription(int32 LodIndex);
 	ENGINE_API void ClearMeshDescription(int32 LodIndex);
+	ENGINE_API void ClearMeshDescriptions();
 
 	UE_DEPRECATED(4.22, "Please use GetMeshDescription().")
 	FMeshDescription* GetOriginalMeshDescription(int32 LodIndex) const { return GetMeshDescription(LodIndex); }
@@ -848,7 +876,7 @@ public:
 	 * @param	TexCoords			The texture coordinates to set on the UV channel.
 	 * @return true if the UV channel could be set.
 	 */
-	ENGINE_API bool SetUVChannel(int32 LODIndex, int32 UVChannelIndex, const TArray<FVector2D>& TexCoords);
+	ENGINE_API bool SetUVChannel(int32 LODIndex, int32 UVChannelIndex, const TMap<FVertexInstanceID, FVector2D>& TexCoords);
 
 #endif
 
@@ -884,6 +912,21 @@ public:
 	ENGINE_API FStaticMeshSourceModel& AddSourceModel();
 	ENGINE_API void SetNumSourceModels(int32 Num);
 	ENGINE_API void RemoveSourceModel(int32 Index);
+	PRAGMA_DISABLE_DEPRECATION_WARNINGS
+	ENGINE_API TArray<FStaticMeshSourceModel>& GetSourceModels() { return SourceModels; }
+	ENGINE_API const TArray<FStaticMeshSourceModel>& GetSourceModels() const { return SourceModels; }
+	ENGINE_API FStaticMeshSourceModel& GetSourceModel(int32 Index) { return SourceModels[Index]; }
+	ENGINE_API const FStaticMeshSourceModel& GetSourceModel(int32 Index) const { return SourceModels[Index]; }
+	ENGINE_API int32 GetNumSourceModels() const { return SourceModels.Num(); }
+	ENGINE_API bool IsSourceModelValid(int32 Index) const { return SourceModels.IsValidIndex(Index); }
+	PRAGMA_ENABLE_DEPRECATION_WARNINGS
+
+	PRAGMA_DISABLE_DEPRECATION_WARNINGS
+	ENGINE_API FMeshSectionInfoMap& GetSectionInfoMap() { return SectionInfoMap; }
+	ENGINE_API const FMeshSectionInfoMap& GetSectionInfoMap() const { return SectionInfoMap; }
+	ENGINE_API FMeshSectionInfoMap& GetOriginalSectionInfoMap() { return OriginalSectionInfoMap; }
+	ENGINE_API const FMeshSectionInfoMap& GetOriginalSectionInfoMap() const { return OriginalSectionInfoMap; }
+	PRAGMA_ENABLE_DEPRECATION_WARNINGS
 
 	/*
 	 * Verify that a specific LOD using a material needing the adjacency buffer have the build option set to create the adjacency buffer.
@@ -910,6 +953,33 @@ public:
 	ENGINE_API virtual void GetResourceSizeEx(FResourceSizeEx& CumulativeResourceSize) override;
 	ENGINE_API virtual bool CanBeClusterRoot() const override;
 	//~ End UObject Interface.
+
+	//~ Begin UStreamableRenderAsset Interface
+	virtual int32 GetLODGroupForStreaming() const final override;
+	virtual int32 GetNumMipsForStreaming() const final override;
+	virtual int32 GetNumNonStreamingMips() const final override;
+	virtual int32 CalcNumOptionalMips() const final override;
+	virtual int32 CalcCumulativeLODSize(int32 NumLODs) const final override;
+	virtual bool GetMipDataFilename(const int32 MipIndex, FString& BulkDataFilename) const final override;
+	virtual bool IsReadyForStreaming() const final override;
+	virtual int32 GetNumResidentMips() const final override;
+	virtual int32 GetNumRequestedMips() const final override;
+	virtual bool CancelPendingMipChangeRequest() final override;
+	virtual bool HasPendingUpdate() const final override;
+	virtual bool IsPendingUpdateLocked() const final override;
+	virtual bool StreamOut(int32 NewMipCount) final override;
+	virtual bool StreamIn(int32 NewMipCount, bool bHighPrio) final override;
+	virtual bool UpdateStreamingStatus(bool bWaitForMipFading = false) final override;
+	//~ End UStreamableRenderAsset Interface
+
+	void LinkStreaming();
+	void UnlinkStreaming();
+
+	/**
+	* Cancels any pending static mesh streaming actions if possible.
+	* Returns when no more async loading requests are in flight.
+	*/
+	ENGINE_API static void CancelAllPendingStreamingActions();
 
 	/**
 	 * Rebuilds renderable data for this static mesh.
@@ -1074,11 +1144,23 @@ public:
 	}
 
 	/**
+	 *	Add a socket object in this StaticMesh.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StaticMesh")
+	ENGINE_API void AddSocket(UStaticMeshSocket* Socket);
+
+	/**
 	 *	Find a socket object in this StaticMesh by name.
 	 *	Entering NAME_None will return NULL. If there are multiple sockets with the same name, will return the first one.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "StaticMesh")
 	ENGINE_API class UStaticMeshSocket* FindSocket(FName InSocketName) const;
+
+	/**
+	 *	Remove a socket object in this StaticMesh by providing it's pointer. Use FindSocket() if needed.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StaticMesh")
+	ENGINE_API void RemoveSocket(UStaticMeshSocket* Socket);
 
 	/**
 	 * Returns vertex color data by position.

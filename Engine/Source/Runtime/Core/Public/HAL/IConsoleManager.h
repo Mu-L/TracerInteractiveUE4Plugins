@@ -48,6 +48,9 @@ template <class T> class TConsoleVariableData;
  */
 enum EConsoleVariableFlags
 {
+	/* Mask for flags. Use this instead of ~ECVF_SetByMask */
+	ECVF_FlagMask = 0x0000ffff,
+
 	/**
 	 * Default, no flags are set, the value is set by the constructor 
 	 */
@@ -88,9 +91,17 @@ enum EConsoleVariableFlags
 
 	// ------------------------------------------------
 
+	/* Set flags */
+	ECVF_SetFlagMask =				0x00ff0000,
+
+	// Use to set a cvar without calling all cvar sinks. Much faster, but potentially unsafe. Use only if you know the particular cvar/setting does not require a sink call
+	ECVF_Set_NoSinkCall_Unsafe =	0x00010000,
+
+	// ------------------------------------------------
+
 	/* to get some history of where the last value was set by ( useful for track down why a cvar is in a specific state */
 	ECVF_SetByMask =				0xff000000,
-	
+
 	// the ECVF_SetBy are sorted in override order (weak to strong), the value is not serialized, it only affects it's override behavior when calling Set()
 
 	// lowest priority (default after console variable creation)
@@ -203,6 +214,8 @@ public:
 	}
 
 	virtual bool IsVariableInt() const { return false; }
+	virtual bool IsVariableFloat() const { return false; }
+	virtual bool IsVariableString() const { return false; }
 
 	virtual class TConsoleVariableData<int32>* AsVariableInt()
 	{
@@ -385,6 +398,8 @@ private:
 class IConsoleCommandExecutor : public IModularFeature
 {
 public:
+	virtual ~IConsoleCommandExecutor() = default;
+
 	/**
 	 * Get the name identifying this modular feature set.
 	 */
@@ -496,6 +511,13 @@ struct CORE_API IConsoleManager
 	*/
 	virtual IConsoleVariable* RegisterConsoleVariableRef(const TCHAR* Name, bool& RefValue, const TCHAR* Help, uint32 Flags = ECVF_Default) = 0;
 	/**
+	* Create a reference to a string console variable
+	* @param Name must not be 0
+	* @param Help must not be 0
+	* @param Flags bitmask combined from EConsoleVariableFlags
+	*/
+	virtual IConsoleVariable* RegisterConsoleVariableRef(const TCHAR* Name, FString& RefValue, const TCHAR* Help, uint32 Flags = ECVF_Default) = 0;
+	/**
 	 * Create a reference to a show flag variable
 	 * @param CVarName must not be 0, e.g. "Show.PostProcessing"
 	 * @param FlagName must not be 0, e.g. "PostProcessing"
@@ -606,23 +628,31 @@ struct CORE_API IConsoleManager
 	 * Unregisters a console object, if that object was registered. O(n), n is the console object count
 	 *
 	 * @param ConsoleObject - object to remove
-	 * @param bool bKeepState if the current state is kept in memory until a cvar with the same name is registered
+	 * @param bKeepState if the current state is kept in memory until a cvar with the same name is registered
 	 */
 	virtual void UnregisterConsoleObject( IConsoleObject* ConsoleObject, bool bKeepState = true) = 0;
+
+	/**
+	 * Unregisters a console variable or command by name, if an object of that name was registered.
+	 *
+	 * @param Name - name of object to remove
+	 * @param bKeepState if the current state is kept in memory until a cvar with the same name is registered
+	 */
+	virtual void UnregisterConsoleObject(const TCHAR* Name, bool bKeepState = true) = 0;
 
 	/**
 	 * Find a console variable
 	 * @param Name must not be 0
 	 * @return 0 if the object wasn't found
 	 */
-	virtual IConsoleVariable* FindConsoleVariable(const TCHAR* Name) const = 0;
+	virtual IConsoleVariable* FindConsoleVariable(const TCHAR* Name, bool bTrackFrequentCalls = true) const = 0;
 
 	/**
 	* Find a console variable or command
 	* @param Name must not be 0
 	* @return 0 if the object wasn't found
 	*/
-	virtual IConsoleObject* FindConsoleObject(const TCHAR* Name) const = 0;
+	virtual IConsoleObject* FindConsoleObject(const TCHAR* Name, bool bTrackFrequentCalls = true) const = 0;
 
 	/**
 	 * Find a typed console variable (faster access to the value, no virtual function call)
@@ -835,7 +865,7 @@ public:
 };
 
 /**
- * Autoregistering float, int REF variable class...this changes that value when the console variable is changed. 
+ * Autoregistering float, int, bool, FString REF variable class...this changes that value when the console variable is changed. 
  */
 class CORE_API FAutoConsoleVariableRef : private FAutoConsoleObject
 {
@@ -857,6 +887,26 @@ public:
 	 * @param Flags bitmask combined from EConsoleVariableFlags
 	 */
 	FAutoConsoleVariableRef(const TCHAR* Name, float& RefValue, const TCHAR* Help, uint32 Flags = ECVF_Default)
+		: FAutoConsoleObject(IConsoleManager::Get().RegisterConsoleVariableRef(Name, RefValue, Help, Flags))
+	{
+	}
+	/**
+	 * Create a reference to a bool console variable
+	 * @param Name must not be 0
+	 * @param Help must not be 0
+	 * @param Flags bitmask combined from EConsoleVariableFlags
+	 */
+	FAutoConsoleVariableRef(const TCHAR* Name, bool& RefValue, const TCHAR* Help, uint32 Flags = ECVF_Default)
+		: FAutoConsoleObject(IConsoleManager::Get().RegisterConsoleVariableRef(Name, RefValue, Help, Flags))
+	{
+	}
+	/**
+	 * Create a reference to a FString console variable
+	 * @param Name must not be 0
+	 * @param Help must not be 0
+	 * @param Flags bitmask combined from EConsoleVariableFlags
+	 */
+	FAutoConsoleVariableRef(const TCHAR* Name, FString& RefValue, const TCHAR* Help, uint32 Flags = ECVF_Default)
 		: FAutoConsoleObject(IConsoleManager::Get().RegisterConsoleVariableRef(Name, RefValue, Help, Flags))
 	{
 	}
@@ -882,6 +932,32 @@ public:
 	 * @param Flags bitmask combined from EConsoleVariableFlags
 	 */
 	FAutoConsoleVariableRef(const TCHAR* Name, float& RefValue, const TCHAR* Help, const FConsoleVariableDelegate& Callback, uint32 Flags = ECVF_Default)
+		: FAutoConsoleObject(IConsoleManager::Get().RegisterConsoleVariableRef(Name, RefValue, Help, Flags))
+	{
+		AsVariable()->SetOnChangedCallback(Callback);
+	}
+
+	/**
+	 * Create a reference to a bool console variable
+	 * @param Name must not be 0
+	 * @param Help must not be 0
+	 * @param Callback Delegate called when the variable changes. @see IConsoleVariable::SetOnChangedCallback
+	 * @param Flags bitmask combined from EConsoleVariableFlags
+	 */
+	FAutoConsoleVariableRef(const TCHAR* Name, bool& RefValue, const TCHAR* Help, const FConsoleVariableDelegate& Callback, uint32 Flags = ECVF_Default)
+		: FAutoConsoleObject(IConsoleManager::Get().RegisterConsoleVariableRef(Name, RefValue, Help, Flags))
+	{
+		AsVariable()->SetOnChangedCallback(Callback);
+	}
+
+	/**
+	 * Create a reference to a FString console variable
+	 * @param Name must not be 0
+	 * @param Help must not be 0
+	 * @param Callback Delegate called when the variable changes. @see IConsoleVariable::SetOnChangedCallback
+	 * @param Flags bitmask combined from EConsoleVariableFlags
+	 */
+	FAutoConsoleVariableRef(const TCHAR* Name, FString& RefValue, const TCHAR* Help, const FConsoleVariableDelegate& Callback, uint32 Flags = ECVF_Default)
 		: FAutoConsoleObject(IConsoleManager::Get().RegisterConsoleVariableRef(Name, RefValue, Help, Flags))
 	{
 		AsVariable()->SetOnChangedCallback(Callback);
@@ -1160,6 +1236,26 @@ public:
 	}
 
 	
+};
+
+/**
+ * Autoregistering console command with a world, arguments, and output device
+ */
+class CORE_API FAutoConsoleCommandWithWorldArgsAndOutputDevice : private FAutoConsoleObject
+{
+public:
+	/**
+	* Register a console command that takes arguments, a world argument and an output device
+	*
+	* @param	Name		The name of this command (must not be nullptr)
+	* @param	Help		Help text for this command
+	* @param	Command		The user function to call when this command is executed
+	* @param	Flags		Optional flags bitmask
+	*/
+	FAutoConsoleCommandWithWorldArgsAndOutputDevice(const TCHAR* Name, const TCHAR* Help, const FConsoleCommandWithWorldArgsAndOutputDeviceDelegate& Command, uint32 Flags = ECVF_Default)
+		: FAutoConsoleObject(IConsoleManager::Get().RegisterConsoleCommand(Name, Help, Command, Flags))
+	{
+	}
 };
 
 CORE_API DECLARE_LOG_CATEGORY_EXTERN(LogConsoleResponse, Log, All);

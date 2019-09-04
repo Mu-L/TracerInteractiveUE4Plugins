@@ -14,17 +14,30 @@
 #include "Serialization/JsonSerializer.h"
 #include "Policies/CondensedJsonPrintPolicy.h"
 #include "Misc/Guid.h"
+#include "Misc/EmbeddedCommunication.h"
 
 #if WITH_XMPP_STROPHE
+
+const FName FXmppMessagesStrophe::TickRequesterId = FName("StropheMessages");
 
 FXmppMessagesStrophe::FXmppMessagesStrophe(FXmppConnectionStrophe& InConnectionManager)
 	: ConnectionManager(InConnectionManager)
 {
 }
 
+FXmppMessagesStrophe::~FXmppMessagesStrophe()
+{
+	CleanupMessages();
+}
+
 void FXmppMessagesStrophe::OnDisconnect()
 {
-	IncomingMessages.Empty();
+	CleanupMessages();
+}
+
+void FXmppMessagesStrophe::OnReconnect()
+{
+
 }
 
 bool FXmppMessagesStrophe::ReceiveStanza(const FStropheStanza& IncomingStanza)
@@ -64,7 +77,7 @@ bool FXmppMessagesStrophe::HandleMessageStanza(const FStropheStanza& IncomingSta
 	{
 		JsonBody->TryGetStringField(TEXT("type"), Message.Type);
 		const TSharedPtr<FJsonObject>* JsonPayload = NULL;
-			if (JsonBody->TryGetObjectField(TEXT("payload"), JsonPayload) &&
+		if (JsonBody->TryGetObjectField(TEXT("payload"), JsonPayload) &&
 			JsonPayload != NULL &&
 			(*JsonPayload).IsValid())
 		{
@@ -72,9 +85,14 @@ bool FXmppMessagesStrophe::HandleMessageStanza(const FStropheStanza& IncomingSta
 			FJsonSerializer::Serialize((*JsonPayload).ToSharedRef(), JsonWriter);
 			JsonWriter->Close();
 		}
+		else if (JsonBody->TryGetStringField(TEXT("payload"), Message.Payload))
+		{
+			// Payload is now in Message.Payload
+		}
 		else
 		{
-			JsonBody->TryGetStringField(TEXT("payload"), Message.Payload);
+			// Treat the entire body as the payload
+			Message.Payload = IncomingStanza.GetBodyText().GetValue();
 		}
 		FString TimestampStr;
 		if (JsonBody->TryGetStringField(TEXT("timestamp"), TimestampStr))
@@ -83,6 +101,7 @@ bool FXmppMessagesStrophe::HandleMessageStanza(const FStropheStanza& IncomingSta
 		}
 	}
 
+	FEmbeddedCommunication::KeepAwake(TickRequesterId, false);
 	IncomingMessages.Enqueue(MakeUnique<FXmppMessage>(MoveTemp(Message)));
 	return true;
 }
@@ -174,6 +193,7 @@ bool FXmppMessagesStrophe::Tick(float DeltaTime)
 		TUniquePtr<FXmppMessage> Message;
 		if (IncomingMessages.Dequeue(Message))
 		{
+			FEmbeddedCommunication::AllowSleep(TickRequesterId);
 			OnMessageReceived(MoveTemp(Message));
 		}
 	}
@@ -185,6 +205,16 @@ void FXmppMessagesStrophe::OnMessageReceived(TUniquePtr<FXmppMessage>&& Message)
 {
 	const TSharedRef<FXmppMessage> MessageRef = MakeShareable(Message.Release());
 	OnMessageReceivedDelegate.Broadcast(ConnectionManager.AsShared(), MessageRef->FromJid, MessageRef);
+}
+
+void FXmppMessagesStrophe::CleanupMessages()
+{
+	while (!IncomingMessages.IsEmpty())
+	{
+		TUniquePtr<FXmppMessage> Message;
+		IncomingMessages.Dequeue(Message);
+		FEmbeddedCommunication::AllowSleep(TickRequesterId);
+	}
 }
 
 #endif

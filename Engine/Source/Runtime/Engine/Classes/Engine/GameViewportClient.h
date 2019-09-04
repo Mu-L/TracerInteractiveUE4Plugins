@@ -31,8 +31,6 @@ class UCanvas;
 class UGameInstance;
 class ULocalPlayer;
 class UNetDriver;
-class FHardwareCursor;
-
 
 /** Delegate for overriding the behavior when a navigation action is taken, Not to be confused with FNavigationDelegate which allows a specific widget to override behavior for itself */
 DECLARE_DELEGATE_RetVal_TwoParams(bool, FCustomNavigationHandler, const uint32, TSharedPtr<SWidget>);
@@ -140,6 +138,7 @@ public:
 	//~ Begin UObject Interface
 	virtual void PostInitProperties() override;
 	virtual void BeginDestroy() override;
+	virtual bool IsDestructionThreadSafe() const override { return false; }
 	//~ End UObject Interface
 
 	//~ Begin FViewportClient Interface.
@@ -155,13 +154,14 @@ public:
 	virtual TOptional<TSharedRef<SWidget>> MapCursor(FViewport* Viewport, const FCursorReply& CursorReply) override;
 	virtual void Precache() override;
 	virtual void Draw(FViewport* Viewport,FCanvas* SceneCanvas) override;
-	virtual void ProcessScreenShots(FViewport* Viewport) override;
+	virtual bool ProcessScreenShots(FViewport* Viewport) override;
 	virtual TOptional<bool> QueryShowFocus(const EFocusCause InFocusCause) const override;
 	virtual void LostFocus(FViewport* Viewport) override;
 	virtual void ReceivedFocus(FViewport* Viewport) override;
 	virtual bool IsFocused(FViewport* Viewport) override;
 	virtual void Activated(FViewport* InViewport, const FWindowActivateEvent& InActivateEvent) override;
 	virtual void Deactivated(FViewport* InViewport, const FWindowActivateEvent& InActivateEvent) override;
+	virtual bool IsInPermanentCapture() override;
 	virtual bool WindowCloseRequested() override;
 	virtual void CloseRequested(FViewport* Viewport) override;
 	virtual bool RequiresHitProxyStorage() override { return 0; }
@@ -490,7 +490,13 @@ public:
 	{
 		return ScreenshotCapturedDelegate;
 	}
-
+	
+	/** Accessor for delegate called when a viewport is rendered */
+	static FOnViewportRendered& OnViewportRendered()
+	{
+		return ViewportRenderedDelegate;
+	}
+	
 	/* Accessor for the delegate called when a viewport is asked to close. */
 	FOnCloseRequested& OnCloseRequested()
 	{
@@ -574,6 +580,9 @@ public:
 protected:
 
 	bool GetUseMouseForTouch() const;
+	void SetCurrentBufferVisualizationMode(FName NewBufferVisualizationMode) { CurrentBufferVisualizationMode = NewBufferVisualizationMode; }
+	FName GetCurrentBufferVisualizationMode() const { return CurrentBufferVisualizationMode; }
+	bool HasAudioFocus() const { return bHasAudioFocus; }
 
 protected:
 	/** FCommonViewportClient interface */
@@ -638,22 +647,6 @@ public:
 	virtual bool IsStatEnabled(const FString& InName) const override
 	{
 		return EnabledStats.Contains(InName);
-	}
-
-	/**
-	 * Get the sound stat flags enabled for this viewport
-	 */
-	virtual ESoundShowFlags::Type GetSoundShowFlags() const override
-	{ 
-		return SoundShowFlags;
-	}
-
-	/**
-	 * Set the sound stat flags enabled for this viewport
-	 */
-	virtual void SetSoundShowFlags(const ESoundShowFlags::Type InSoundShowFlags) override
-	{
-		SoundShowFlags = InSoundShowFlags;
 	}
 
 	/**
@@ -836,6 +829,24 @@ private:
 	/** Delegate handler for when a window DPI changes and we might need to adjust the scenes resolution */
 	void HandleWindowDPIScaleChanged(TSharedRef<SWindow> InWindow);
 
+	struct FPngFileData
+	{
+		FString FileName;
+		double ScaleFactor;
+		TArray<uint8> FileData;
+
+		FPngFileData()
+			: ScaleFactor(1.0)
+		{
+		}
+	};
+
+	/** Tries to create a hardware cursor from supplied PNGs images */
+	void* LoadCursorFromPngs(ICursor& PlatformCursor, const FString& InPathToCursorWithoutExtension, FVector2D InHotSpot);
+
+	/** Finds available PNG cursor images */
+	bool LoadAvailableCursorPngs(TArray<TSharedPtr<FPngFileData>>& Results, const FString& InPathToCursorWithoutExtension);
+
 private:
 	/** Slate window associated with this viewport client.  The same window may host more than one viewport client. */
 	TWeakPtr<SWindow> Window;
@@ -853,13 +864,13 @@ private:
 	TWeakPtr<SWindow> HighResScreenshotDialog;
 
 	/** Hardware Cursor Cache */
-	TMap<FName, TSharedPtr<FHardwareCursor>> HardwareCursorCache;
+	TMap<FName, void*> HardwareCursorCache;
 
 	/** Hardware cursor mapping for default cursor shapes. */
-	TMap<EMouseCursor::Type, TSharedPtr<FHardwareCursor>> HardwareCursors;
+	TMap<EMouseCursor::Type, void*> HardwareCursors;
 
 	/** Map of Software Cursor Widgets*/
-	TMap<EMouseCursor::Type, TSharedRef<SWidget>> CursorWidgets;
+	TMap<EMouseCursor::Type, TSharedPtr<SWidget>> CursorWidgets;
 
 	/** Controls if the Map of Software Cursor Widgets is used */
 	bool bUseSoftwareCursorWidgets;
@@ -874,6 +885,9 @@ private:
 	 */
 	bool SetDisplayConfiguration( const FIntPoint* Dimensions, EWindowMode::Type WindowMode);
 
+	/** Updates CSVProfiler camera stats */
+	void UpdateCsvCameraStats(const FSceneView* View);
+
 #if WITH_EDITOR
 	/** Delegate called when game viewport client received input key */
 	FOnGameViewportInputKey GameViewportInputKeyDelegate;
@@ -881,6 +895,9 @@ private:
 
 	/** Delegate called at the end of the frame when a screenshot is captured */
 	static FOnScreenshotCaptured ScreenshotCapturedDelegate;
+	
+	/** Delegate called right after the viewport is rendered */
+	static FOnViewportRendered ViewportRenderedDelegate;
 
 	/** Delegate called when a request to close the viewport is received */
 	FOnCloseRequested CloseRequestedDelegate;
@@ -923,9 +940,6 @@ private:
 
 	/** A list of all the stat names which are enabled for this viewport (static so they persist between runs) */
 	static TArray<FString> EnabledStats;
-
-	/** Those sound stat flags which are enabled on this viewport */
-	static ESoundShowFlags::Type SoundShowFlags;
 
 	/** Disables splitscreen, useful when game code is in menus, and doesn't want splitscreen on */
 	bool bDisableSplitScreenOverride;

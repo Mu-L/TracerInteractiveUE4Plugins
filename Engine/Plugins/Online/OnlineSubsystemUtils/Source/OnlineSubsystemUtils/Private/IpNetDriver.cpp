@@ -74,6 +74,259 @@ TAutoConsoleVariable<int32> CVarNetIpNetDriverReceiveThreadPollTimeMS(
 	250,
 	TEXT("If net.IpNetDriverUseReceiveThread is true, the number of milliseconds to use as the timeout value for FSocket::Wait on the receive thread. A negative value means to wait indefinitely (FSocket::Shutdown should cancel it though)."));
 
+
+
+/**
+ * FPacketItrator
+ *
+ * Encapsulates the NetDriver TickDispatch code required for executing all variations of packet receives
+ * (FSocket::RecvFrom, FSocket::RecvMulti, and the Receive Thread),
+ * as well as implementing/abstracting-away some of the outermost (non-NetConnection-related) parts of the DDoS detection code.
+ */
+class FPacketIterator
+{
+	friend class UIpNetDriver;
+	
+private:
+	struct FCachedPacket
+	{
+		/** Whether or not socket receive succeeded. Don't rely on the Error field for this, due to implementation/platform uncertainties. */
+		bool bRecvSuccess;
+
+		/** Pre-allocated Data field, for storing packets of any expected size */
+		TArray<uint8, TFixedAllocator<MAX_PACKET_SIZE>> Data;
+
+		/** Receive address for the packet */
+		TSharedPtr<FInternetAddr> Address;
+
+		/** OS-level timestamp for the packet receive, if applicable */
+		double PacketTimestamp;
+
+		/** Error if receiving a packet failed */
+		ESocketErrors Error;
+	};
+	
+private:
+	FPacketIterator(UIpNetDriver* InDriver)
+		: bBreak(false)
+		, Driver(InDriver)
+		, DDoS(Driver->DDoS)
+		, SocketSubsystem(Driver->GetSocketSubsystem())
+		, Socket(Driver->Socket)
+		, SocketReceiveThreadRunnable(Driver->SocketReceiveThreadRunnable.Get())
+		, CurrentPacket()
+	{
+		if (SocketSubsystem != nullptr)
+		{
+			CurrentPacket.Address = SocketSubsystem->CreateInternetAddr();
+		}
+
+		AdvanceCurrentPacket();
+	}
+
+	FORCEINLINE FPacketIterator& operator++()
+	{
+		AdvanceCurrentPacket();
+
+		return *this;
+	}
+
+	FORCEINLINE explicit operator bool() const
+	{
+		return !bBreak;
+	}
+
+
+	/**
+	 * Retrieves the packet information from the current iteration. Avoid calling more than once, per iteration.
+	 *
+	 * @param OutData		Returns a pointer to the packet data
+	 * @param OutBytesRead	Returns the number of bytes read
+	 * @param OutError		Returns the socket error, if receiving failed
+	 * @param OutAddr		Returns the address the packet was received from
+	 * @return				Returns whether or not receiving was successful for the current packet
+	 */
+	bool GetCurrentPacket(const uint8*& OutData, uint32& OutBytesRead, ESocketErrors& OutError, TSharedPtr<FInternetAddr>& OutAddr)
+	{
+		bool bRecvSuccess = false;
+
+		OutData = CurrentPacket.Data.GetData();
+		OutBytesRead = CurrentPacket.Data.Num();
+		OutError = CurrentPacket.Error;
+		OutAddr = CurrentPacket.Address;
+		bRecvSuccess = CurrentPacket.bRecvSuccess;
+
+		return bRecvSuccess;
+	}
+
+	/**
+	 * Advances the current packet to the next iteration
+	 */
+	void AdvanceCurrentPacket()
+	{
+		bBreak = !ReceiveSinglePacket();
+	}
+
+	/**
+	 * Receives a single packet from the network socket, outputting to the CurrentPacket buffer.
+	 *
+	 * @return				Whether or not a packet or an error was successfully received
+	 */
+	bool ReceiveSinglePacket()
+	{
+		bool bReceivedPacketOrError = false;
+
+		CurrentPacket.bRecvSuccess = false;
+		CurrentPacket.Data.SetNumUninitialized(0, false);
+
+		if (CurrentPacket.Address.IsValid())
+		{
+			CurrentPacket.Address->SetAnyAddress();
+		}
+
+		CurrentPacket.PacketTimestamp = 0.0;
+		CurrentPacket.Error = SE_NO_ERROR;
+
+		while (true)
+		{
+			bReceivedPacketOrError = false;
+
+			if (SocketReceiveThreadRunnable != nullptr)
+			{
+				// Very-early-out - the NetConnection per frame time limit, limits all packet processing
+				// @todo #JohnB: This DDoS detection code will be redundant, as it's performed in the Receive Thread in a coming refactor
+				if (DDoS.ShouldBlockNetConnPackets())
+				{
+					// Approximate due to threading
+					uint32 DropCountApprox = SocketReceiveThreadRunnable->ReceiveQueue.Count();
+
+					SocketReceiveThreadRunnable->ReceiveQueue.Empty();
+
+					if (DropCountApprox > 0)
+					{
+						DDoS.IncDroppedPacketCounter(DropCountApprox);
+					}
+				}
+				else
+				{
+					UIpNetDriver::FReceivedPacket IncomingPacket;
+					const bool bHasPacket = SocketReceiveThreadRunnable->ReceiveQueue.Dequeue(IncomingPacket);
+
+					if (bHasPacket)
+					{
+						if (IncomingPacket.FromAddress.IsValid())
+						{
+							CurrentPacket.Address = IncomingPacket.FromAddress.ToSharedRef();
+						}
+
+						ESocketErrors CurError = IncomingPacket.Error;
+						bool bReceivedPacket = CurError == SE_NO_ERROR;
+
+						CurrentPacket.bRecvSuccess = bReceivedPacket;
+						CurrentPacket.PacketTimestamp = IncomingPacket.PlatformTimeSeconds;
+						CurrentPacket.Error = CurError;
+						bReceivedPacketOrError = bReceivedPacket;
+
+						if (bReceivedPacket)
+						{
+							int32 BytesRead = IncomingPacket.PacketBytes.Num();
+
+							if (IncomingPacket.PacketBytes.Num() <= MAX_PACKET_SIZE)
+							{
+								CurrentPacket.Data.SetNumUninitialized(BytesRead, false);
+
+								FMemory::Memcpy(CurrentPacket.Data.GetData(), IncomingPacket.PacketBytes.GetData(), BytesRead);
+							}
+							else
+							{
+								UE_LOG(LogNet, Warning, TEXT("IpNetDriver receive thread received a packet of %d bytes, which is larger than the data buffer size of %d bytes."),
+										BytesRead, MAX_PACKET_SIZE);
+
+								continue;
+							}
+						}
+						// Received an error
+						else if (!UIpNetDriver::IsRecvFailBlocking(CurError))
+						{
+							bReceivedPacketOrError = true;
+						}
+					}
+				}
+			}
+			else if (Socket != nullptr && SocketSubsystem != nullptr)
+			{
+				SCOPE_CYCLE_COUNTER(STAT_IpNetDriver_RecvFromSocket);
+
+				int32 BytesRead = 0;
+				bool bReceivedPacket = Socket->RecvFrom(CurrentPacket.Data.GetData(), MAX_PACKET_SIZE, BytesRead, *CurrentPacket.Address);
+
+				CurrentPacket.bRecvSuccess = bReceivedPacket;
+				bReceivedPacketOrError = bReceivedPacket;
+
+				if (bReceivedPacket)
+				{
+					// Fixed allocator, so no risk of realloc from copy-then-resize
+					CurrentPacket.Data.SetNumUninitialized(BytesRead, false);
+				}
+				else
+				{
+					ESocketErrors CurError = SocketSubsystem->GetLastErrorCode();
+
+					CurrentPacket.Error = CurError;
+					CurrentPacket.Data.SetNumUninitialized(0, false);
+
+					// Received an error
+					if (!UIpNetDriver::IsRecvFailBlocking(CurError))
+					{
+						bReceivedPacketOrError = true;
+					}
+				}
+
+				// Very-early-out - the NetConnection per frame time limit, limits all packet processing
+				if (bReceivedPacketOrError && DDoS.ShouldBlockNetConnPackets())
+				{
+					if (bReceivedPacket)
+					{
+						DDoS.IncDroppedPacketCounter();
+					}
+
+					continue;
+				}
+			}
+
+			// While loop only exists to allow 'continue' for DDoS and invalid packet code, above
+			break;
+		}
+
+		return bReceivedPacketOrError;
+	}
+
+
+private:
+	/** Specified internally, when the packet iterator should break/stop (no packets, DDoS limits triggered, etc.) */
+	bool bBreak;
+
+
+	/** Cached reference to the NetDriver, and NetDriver variables/values */
+
+	UIpNetDriver* Driver;
+
+	FDDoSDetection& DDoS;
+
+	ISocketSubsystem* SocketSubsystem;
+
+	FSocket*& Socket;
+
+	UIpNetDriver::FReceiveThreadRunnable* SocketReceiveThreadRunnable;
+
+	/** Stores information for the current packet being received (when using single-receive mode) */
+	FCachedPacket CurrentPacket;
+};
+
+/**
+ * UIpNetDriver
+ */
+
 UIpNetDriver::UIpNetDriver(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 	, PauseReceiveEnd(0.f)
@@ -106,7 +359,7 @@ FSocket * UIpNetDriver::CreateSocket()
 		return NULL;
 	}
 
-	return SocketSubsystem->CreateSocket( NAME_DGram, TEXT( "Unreal" ) );
+	return SocketSubsystem->CreateSocket(NAME_DGram, TEXT("Unreal"), ( LocalAddr.IsValid() ? LocalAddr->GetProtocolType() : NAME_None) );
 }
 
 int UIpNetDriver::GetClientPort()
@@ -122,18 +375,32 @@ bool UIpNetDriver::InitBase( bool bInitAsClient, FNetworkNotify* InNotify, const
 	}
 
 	ISocketSubsystem* SocketSubsystem = GetSocketSubsystem();
-	if (SocketSubsystem == NULL)
+	if (SocketSubsystem == nullptr)
 	{
 		UE_LOG(LogNet, Warning, TEXT("Unable to find socket subsystem"));
 		return false;
 	}
 
 	// Derived types may have already allocated a socket
+	const TCHAR* MultiHomeBindAddr = URL.GetOption(TEXT("multihome="), nullptr);
+	if (MultiHomeBindAddr != nullptr)
+	{
+		LocalAddr = SocketSubsystem->GetAddressFromString(MultiHomeBindAddr);
+		if (!LocalAddr.IsValid())
+		{
+			UE_LOG(LogNet, Warning, TEXT("Failed to created valid address from multihome address: %s"), MultiHomeBindAddr);
+		}
+	}
+
+	if (!LocalAddr.IsValid())
+	{
+		LocalAddr = SocketSubsystem->GetLocalBindAddr(*GLog);
+	}
 
 	// Create the socket that we will use to communicate with
 	Socket = CreateSocket();
 
-	if( Socket == NULL )
+	if(Socket == nullptr)
 	{
 		Socket = 0;
 		Error = FString::Printf( TEXT("%s: socket failed (%i)"), SocketSubsystem->GetSocketAPIName(), (int32)SocketSubsystem->GetLastErrorCode() );
@@ -158,32 +425,14 @@ bool UIpNetDriver::InitBase( bool bInitAsClient, FNetworkNotify* InNotify, const
 
 	// Increase socket queue size, because we are polling rather than threading
 	// and thus we rely on the OS socket to buffer a lot of data.
-	int32 RecvSize = bInitAsClient ? ClientDesiredSocketReceiveBufferBytes	: ServerDesiredSocketReceiveBufferBytes;
-	int32 SendSize = bInitAsClient ? ClientDesiredSocketSendBufferBytes		: ServerDesiredSocketSendBufferBytes;
-	Socket->SetReceiveBufferSize(RecvSize,RecvSize);
-	Socket->SetSendBufferSize(SendSize,SendSize);
-	UE_LOG(LogInit, Log, TEXT("%s: Socket queue %i / %i"), SocketSubsystem->GetSocketAPIName(), RecvSize, SendSize );
-
-	// allow multihome as a url option
-	const TCHAR* MultiHomeBindAddr = URL.GetOption(TEXT("multihome="), nullptr);
-	if (MultiHomeBindAddr != nullptr)
-	{
-		LocalAddr = SocketSubsystem->CreateInternetAddr();
-
-		bool bIsValid = false;
-		LocalAddr->SetIp(MultiHomeBindAddr, bIsValid);
-
-		if (!bIsValid)
-		{
-			LocalAddr = nullptr;
-			UE_LOG(LogNet, Warning, TEXT("Failed to created valid address from multihome address: %s"), MultiHomeBindAddr);
-		}
-	}
-
-	if (!LocalAddr.IsValid())
-	{
-		LocalAddr = SocketSubsystem->GetLocalBindAddr(*GLog);
-	}
+	const int32 DesiredRecvSize = bInitAsClient ? ClientDesiredSocketReceiveBufferBytes	: ServerDesiredSocketReceiveBufferBytes;
+	const int32 DesiredSendSize = bInitAsClient ? ClientDesiredSocketSendBufferBytes	: ServerDesiredSocketSendBufferBytes;
+	int32 ActualRecvSize(0);
+	int32 ActualSendSize(0);
+	Socket->SetReceiveBufferSize(DesiredRecvSize, ActualRecvSize);
+	Socket->SetSendBufferSize(DesiredSendSize, ActualSendSize);
+	UE_LOG(LogInit, Log, TEXT("%s: Socket queue. Rx: %i (config %i) Tx: %i (config %i)"), SocketSubsystem->GetSocketAPIName(),
+		ActualRecvSize, DesiredRecvSize, ActualSendSize, DesiredSendSize);
 
 	// Bind socket to our port.
 	LocalAddr->SetPort(bInitAsClient ? GetClientPort() : URL.Port);
@@ -251,6 +500,16 @@ bool UIpNetDriver::InitListen( FNetworkNotify* InNotify, FURL& LocalURL, bool bR
 	return true;
 }
 
+class FIpConnectionHelper
+{
+private:
+	friend class UIpNetDriver;
+	static void HandleSocketRecvError(UIpNetDriver* Driver, UIpConnection* Connection, const FString& ErrorString)
+	{
+		Connection->HandleSocketRecvError(Driver, ErrorString);
+	}
+};
+
 void UIpNetDriver::TickDispatch(float DeltaTime)
 {
 	LLM_SCOPE(ELLMTag::Networking);
@@ -274,19 +533,22 @@ void UIpNetDriver::TickDispatch(float DeltaTime)
 
 	FScopedLevelCollectionContextSwitch LCSwitch(FoundCollectionIndex, World);
 
-	ISocketSubsystem* SocketSubsystem = GetSocketSubsystem();
 
 	DDoS.PreFrameReceive(DeltaTime);
 
+	ISocketSubsystem* SocketSubsystem = GetSocketSubsystem();
 	const double StartReceiveTime = FPlatformTime::Seconds();
 	double AlarmTime = StartReceiveTime + GIpNetDriverMaxDesiredTimeSliceBeforeAlarmSecs;
 	const bool bSlowFrameChecks = OnNetworkProcessingCausingSlowFrame.IsBound();
 
-	// Process all incoming packets.
-	uint8 Data[MAX_PACKET_SIZE];
-	TSharedRef<FInternetAddr> FromAddr = SocketSubsystem->CreateInternetAddr();
+	const bool bCheckReceiveTime = (MaxSecondsInReceive > 0.0) && (NbPacketsBetweenReceiveTimeTest > 0);
+	const double BailOutTime = StartReceiveTime + MaxSecondsInReceive;
+	int32 PacketsLeftUntilTimeTest = NbPacketsBetweenReceiveTimeTest;
 
-	for (; Socket != nullptr;)
+	bool bContinueProcessing(true);
+
+	// Process all incoming packets
+	for (FPacketIterator It(this); It && bContinueProcessing; ++It)
 	{
 		// @todo: Remove the slow frame checks, eventually - potential DDoS and Switch platform constraint
 		if (bSlowFrameChecks)
@@ -300,49 +562,28 @@ void UIpNetDriver::TickDispatch(float DeltaTime)
 			}
 		}
 
+		if (bCheckReceiveTime)
+		{
+			--PacketsLeftUntilTimeTest;
+			if (PacketsLeftUntilTimeTest <= 0)
+			{
+				PacketsLeftUntilTimeTest = NbPacketsBetweenReceiveTimeTest;
+
+				const double CurrentTime = FPlatformTime::Seconds();
+				if (CurrentTime > BailOutTime)
+				{
+					bContinueProcessing = false;
+					UE_LOG(LogNet, Warning, TEXT("UIpNetDriver::TickDispatch: Stopping packet reception after processing for more than %f seconds. %s"), MaxSecondsInReceive, *GetName());
+				}
+			}
+		}
+
+		uint8* Data = nullptr;
 		int32 BytesRead = 0;
-
-		// Reset the address on every pass. Otherwise if there's an error receiving, the address may be from a previous packet.
-		FromAddr->SetAnyAddress();
-
-		// Get data, if any.
-		bool bOk = false;
 		ESocketErrors Error = SE_NO_ERROR;
-		bool bUsingReceiveThread = SocketReceiveThreadRunnable.IsValid();
-
-		if (bUsingReceiveThread)
-		{
-			FReceivedPacket IncomingPacket;
-			const bool bHasPacket = SocketReceiveThreadRunnable->ReceiveQueue.Dequeue(IncomingPacket);
-			if (!bHasPacket)
-			{
-				break;
-			}
-
-			if (IncomingPacket.FromAddress.IsValid())
-			{
-				FromAddr = IncomingPacket.FromAddress.ToSharedRef();
-			}
-			Error = IncomingPacket.Error;
-			bOk = Error == SE_NO_ERROR;
-			
-			if (IncomingPacket.PacketBytes.Num() <= sizeof(Data))
-			{
-				FMemory::Memcpy(Data, IncomingPacket.PacketBytes.GetData(), IncomingPacket.PacketBytes.Num());
-				BytesRead = IncomingPacket.PacketBytes.Num();
-			}
-			else
-			{
-				UE_LOG(LogNet, Log, TEXT("IpNetDriver receive thread received a packet of %d bytes, which is larger than the data buffer size of %d bytes."), IncomingPacket.PacketBytes.Num(), sizeof(Data));
-				continue;
-			}
-		}
-		else
-		{
-			SCOPE_CYCLE_COUNTER(STAT_IpNetDriver_RecvFromSocket);
-			bOk = Socket->RecvFrom(Data, sizeof(Data), BytesRead, *FromAddr);
-		}
-
+		TSharedPtr<FInternetAddr> FromAddrPtr;
+		bool bOk = It.GetCurrentPacket((const uint8*&)Data, (uint32&)BytesRead, Error, FromAddrPtr);
+		TSharedRef<FInternetAddr> FromAddr = FromAddrPtr.ToSharedRef();
 		UNetConnection* Connection = nullptr;
 		UIpConnection* const MyServerConnection = GetServerConnection();
 
@@ -359,12 +600,7 @@ void UIpNetDriver::TickDispatch(float DeltaTime)
 		}
 		else
 		{
-			if (!bUsingReceiveThread)
-			{
-				Error = SocketSubsystem->GetLastErrorCode();
-			}
-
-			if (Error == SE_EWOULDBLOCK || Error == SE_NO_ERROR || Error == SE_ECONNABORTED)
+			if (IsRecvFailBlocking(Error))
 			{
 				// No data or no error? (SE_ECONNABORTED is for PS4 LAN cable pulls)
 				break;
@@ -411,13 +647,19 @@ void UIpNetDriver::TickDispatch(float DeltaTime)
 				// This should only occur on clients - on servers it leaves the NetDriver in an invalid/vulnerable state
 				if (MyServerConnection != nullptr)
 				{
-					GEngine->BroadcastNetworkFailure(GetWorld(), this, ENetworkFailure::ConnectionLost, ErrorString);
-					Shutdown();
+					// TODO: Maybe we should check to see whether or not the From address matches the server?
+					// If not, we could forward errors incorrectly, causing the connection to shut down.
 
+					FIpConnectionHelper::HandleSocketRecvError(this, MyServerConnection, ErrorString);
 					break;
 				}
 				else
 				{
+					// TODO: Should we also forward errors to connections here?
+					// If we did, instead of just shutting down the NetDriver completely we could instead
+					// boot the given connection.
+					// May be DDoS concerns with the cost of looking up the connections for malicious packets
+					// from sources that won't have connections.
 					UE_CLOG(!DDoS.CheckLogRestrictions(), LogNet, Warning, TEXT("%s"), *ErrorString);
 				}
 
@@ -426,16 +668,6 @@ void UIpNetDriver::TickDispatch(float DeltaTime)
 			}
 		}
 
-		// Very-early-out - the NetConnection per frame time limit, limits all packet processing
-		if (DDoS.ShouldBlockNetConnPackets())
-		{
-			if (bOk)
-			{
-				DDoS.IncDroppedPacketCounter();
-			}
-
-			continue;
-		}
 
 		// Figure out which socket the received data came from.
 		if (MyServerConnection)
@@ -456,7 +688,8 @@ void UIpNetDriver::TickDispatch(float DeltaTime)
 
 		if (Connection == nullptr)
 		{
-			UNetConnection** Result = MappedClientConnections.Find(FromAddr);
+			const TSharedRef<const FInternetAddr> ConstFromAddr = FromAddr;
+			UNetConnection** Result = MappedClientConnections.Find(ConstFromAddr);
 
 			if (Result != nullptr)
 			{
@@ -589,11 +822,11 @@ UNetConnection* UIpNetDriver::ProcessConnectionlessPacket(const TSharedRef<FInte
 	{
 		StatelessConnect = StatelessConnectComponent.Pin();
 
-		const ProcessedPacket UnProcessedPacket = ConnectionlessHandler->IncomingConnectionless(IncomingAddress, Data, CountBytesRef);
+		const ProcessedPacket UnProcessedPacket = ConnectionlessHandler->IncomingConnectionless(Address, Data, CountBytesRef);
 
 		if (!UnProcessedPacket.bError)
 		{
-			bPassedChallenge = StatelessConnect->HasPassedChallenge(IncomingAddress, bRestartedHandshake);
+			bPassedChallenge = StatelessConnect->HasPassedChallenge(Address, bRestartedHandshake);
 
 			if (bPassedChallenge)
 			{
@@ -626,6 +859,8 @@ UNetConnection* UIpNetDriver::ProcessConnectionlessPacket(const TSharedRef<FInte
 						// @todo: There needs to be a proper/standardized copy API for this. Also in IpConnection.cpp
 						bool bIsValid = false;
 
+						const FString OldAddress = RemoteAddrRef->ToString(true);
+
 						RemoteAddrRef->SetIp(*Address->ToString(false), bIsValid);
 						RemoteAddrRef->SetPort(Address->GetPort());
 
@@ -648,7 +883,8 @@ UNetConnection* UIpNetDriver::ProcessConnectionlessPacket(const TSharedRef<FInte
 
 						ReturnVal = FoundConn;
 
-						UE_LOG(LogNet, Log, TEXT("Updated IP address for connection %s to: %s"), *FoundConn->Describe(), *IncomingAddress);
+						// We shouldn't need to log IncomingAddress, as the UNetConnection should dump it with it's description.
+						UE_LOG(LogNet, Log, TEXT("Updated IP address for connection. Connection = %s, Old Address = %s"), *FoundConn->Describe(), *OldAddress);
 					}
 					else
 					{
@@ -735,17 +971,9 @@ UNetConnection* UIpNetDriver::ProcessConnectionlessPacket(const TSharedRef<FInte
 	return ReturnVal;
 }
 
-void UIpNetDriver::LowLevelSend(FString Address, void* Data, int32 CountBits, FOutPacketTraits& Traits)
+void UIpNetDriver::LowLevelSend(TSharedPtr<const FInternetAddr> Address, void* Data, int32 CountBits, FOutPacketTraits& Traits)
 {
-	bool bValidAddress = !Address.IsEmpty();
-	TSharedRef<FInternetAddr> RemoteAddr = GetSocketSubsystem()->CreateInternetAddr();
-
-	if (bValidAddress)
-	{
-		RemoteAddr->SetIp(*Address, bValidAddress);
-	}
-
-	if (bValidAddress)
+	if (Address.IsValid() && Address->IsValid())
 	{
 		const uint8* DataToSend = reinterpret_cast<uint8*>(Data);
 
@@ -771,7 +999,7 @@ void UIpNetDriver::LowLevelSend(FString Address, void* Data, int32 CountBits, FO
 		if (CountBits > 0)
 		{
 			CLOCK_CYCLES(SendCycles);
-			Socket->SendTo(DataToSend, FMath::DivideAndRoundUp(CountBits, 8), BytesSent, *RemoteAddr);
+			Socket->SendTo(DataToSend, FMath::DivideAndRoundUp(CountBits, 8), BytesSent, *Address);
 			UNCLOCK_CYCLES(SendCycles);
 		}
 
@@ -783,7 +1011,7 @@ void UIpNetDriver::LowLevelSend(FString Address, void* Data, int32 CountBits, FO
 	}
 	else
 	{
-		UE_LOG(LogNet, Warning, TEXT("UIpNetDriver::LowLevelSend: Invalid send address '%s'"), *Address);
+		UE_LOG(LogNet, Warning, TEXT("UIpNetDriver::LowLevelSend: Invalid send address '%s'"), *Address->ToString(true));
 	}
 }
 
@@ -791,7 +1019,7 @@ void UIpNetDriver::LowLevelSend(FString Address, void* Data, int32 CountBits, FO
 
 FString UIpNetDriver::LowLevelGetNetworkNumber()
 {
-	return LocalAddr->ToString(true);
+	return LocalAddr.IsValid() ? LocalAddr->ToString(true) : FString(TEXT(""));
 }
 
 void UIpNetDriver::LowLevelDestroy()
@@ -809,24 +1037,33 @@ void UIpNetDriver::LowLevelDestroy()
 			IpServerConnection->WaitForSendTasks();
 		}
 
+		ISocketSubsystem* SocketSubsystem = GetSocketSubsystem();
+
 		// If using a recieve thread, shut down the socket, which will signal the thread to exit gracefully, then wait on the thread.
 		if (SocketReceiveThread.IsValid() && SocketReceiveThreadRunnable.IsValid())
 		{
+			UE_LOG(LogNet, Log, TEXT("Shutting down and waiting for socket receive thread for %s"), *GetDescription());
+
 			SocketReceiveThreadRunnable->bIsRunning = false;
-			Socket->Shutdown(ESocketShutdownMode::Read);
+			
+			if (!Socket->Shutdown(ESocketShutdownMode::Read))
+			{
+				const ESocketErrors ShutdownError = SocketSubsystem->GetLastErrorCode();
+				UE_LOG(LogNet, Log, TEXT("UIpNetDriver::LowLevelDestroy Socket->Shutdown returned error %s (%d) for %s"), SocketSubsystem->GetSocketError(ShutdownError), static_cast<int>(ShutdownError), *GetDescription());
+			}
 
 			SCOPE_CYCLE_COUNTER(STAT_IpNetDriver_Destroy_WaitForReceiveThread);
 			SocketReceiveThread->WaitForCompletion();
 		}
 
-		ISocketSubsystem* SocketSubsystem = GetSocketSubsystem();
 		if( !Socket->Close() )
 		{
 			UE_LOG(LogExit, Log, TEXT("closesocket error (%i)"), (int32)SocketSubsystem->GetLastErrorCode() );
 		}
 		// Free the memory the OS allocated for this socket
 		SocketSubsystem->DestroySocket(Socket);
-		Socket = NULL;
+		Socket = nullptr;
+
 		UE_LOG(LogExit, Log, TEXT("%s shut down"),*GetDescription() );
 	}
 
@@ -930,7 +1167,7 @@ uint32 UIpNetDriver::FReceiveThreadRunnable::Run()
 {
 	const FTimespan Timeout = FTimespan::FromMilliseconds(CVarNetIpNetDriverReceiveThreadPollTimeMS.GetValueOnAnyThread());
 
-	UE_LOG(LogNet, Log, TEXT("Receive Thread Startup."));
+	UE_LOG(LogNet, Log, TEXT("UIpNetDriver::FReceiveThreadRunnable::Run starting up."));
 
 	while (bIsRunning && OwningNetDriver->Socket)
 	{
@@ -964,7 +1201,7 @@ uint32 UIpNetDriver::FReceiveThreadRunnable::Run()
 				IncomingPacket.Error = SocketSubsystem->GetLastErrorCode();
 
 				// Pass all other errors back to the Game Thread
-				if (IncomingPacket.Error == SE_EWOULDBLOCK || IncomingPacket.Error == SE_NO_ERROR || IncomingPacket.Error == SE_ECONNABORTED)
+				if (IsRecvFailBlocking(IncomingPacket.Error))
 				{
 					continue;
 				}
@@ -985,10 +1222,14 @@ uint32 UIpNetDriver::FReceiveThreadRunnable::Run()
 				IncomingPacket.Error = WaitError;
 				IncomingPacket.PlatformTimeSeconds = FPlatformTime::Seconds();
 
+				UE_LOG(LogNet, Log, TEXT("UIpNetDriver::FReceiveThreadRunnable::Run: Socket->Wait returned error %s (%d)"), SocketSubsystem->GetSocketError(IncomingPacket.Error), static_cast<int>(IncomingPacket.Error));
+
 				ReceiveQueue.Enqueue(MoveTemp(IncomingPacket));
 			}
 		}
 	}
+
+	UE_LOG(LogNet, Log, TEXT("UIpNetDriver::FReceiveThreadRunnable::Run returning."));
 
 	return 0;
 }

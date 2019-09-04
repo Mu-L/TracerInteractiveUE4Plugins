@@ -96,8 +96,13 @@ public:
 
 	static bool RequiresWaitingForFrameCompletionEvent() { return false; }
 	
-	static void BlockUntilWindowIsAwailable();
-	
+	static void BlockUntilWindowIsAvailable();
+
+	// Does the platform allow a nullptr Pixelshader on the pipeline
+	static bool SupportsNullPixelShader() { return false; }
+
+	static bool RequiresRenderPassResolveAttachments() { return true; }
+
 protected:
 	static void* VulkanLib;
 	static bool bAttemptedLoad;

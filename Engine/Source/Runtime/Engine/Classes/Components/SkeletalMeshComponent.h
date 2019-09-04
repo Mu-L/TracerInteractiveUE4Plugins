@@ -282,7 +282,7 @@ class ENGINE_API USkeletalMeshComponent : public USkinnedMeshComponent, public I
 
 	friend class FSkinnedMeshComponentRecreateRenderStateContext;
 	friend class FParallelAnimationCompletionTask;
-	
+	friend class USkeletalMesh; 
 	/**
 	 * Animation 
 	 */
@@ -339,9 +339,18 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=Animation, meta=(ShowOnlyInnerProperties))
 	struct FSingleAnimationPlayData AnimationData;
 
-	/** Temporary array of local-space (relative to parent bone) rotation/translation for each bone. */
+	// this is explicit copy because this buffer is reused during evaluation
+	// we want to have reference and emptied during evaluation
+	TArray<FTransform> GetBoneSpaceTransforms();
+
+	/** 
+	 * Temporary array of local-space (relative to parent bone) rotation/translation for each bone. 
+	 * This property is not safe to access during evaluation, so we created wrapper.
+	 */
+	UE_DEPRECATED(4.23, "Direct access to this property is deprecated, please use GetBoneSpaceTransforms instead. We will move to private in the future.")
 	TArray<FTransform> BoneSpaceTransforms;
-	
+
+public:
 	/** Offset of the root bone from the reference pose. Used to offset bounding box. */
 	UPROPERTY(transient)
 	FVector RootBoneTranslation;
@@ -701,9 +710,16 @@ public:
 	/** Array of physical interactions for the frame. This is a temporary solution for a more permanent force system and should not be used directly*/
 	TArray<FPendingRadialForces> PendingRadialForces;
 
-	/** Set the anim instance class. Clears and re-initializes the anim instance with the new class and sets animation mode to 'AnimationBlueprint' */
-	UFUNCTION(BlueprintCallable, Category="Components|SkeletalMesh", meta=(Keywords = "AnimBlueprint", DisplayName = "Set Anim Instance Class"))
+	UE_DEPRECATED(4.23, "This function is deprecated. Please use SetAnimClass instead. ")
 	virtual void K2_SetAnimInstanceClass(class UClass* NewClass);
+
+	/** Set the anim instance class. Clears and re-initializes the anim instance with the new class and sets animation mode to 'AnimationBlueprint' */
+	UFUNCTION(BlueprintCallable, Category = "Components|SkeletalMesh", meta = (Keywords = "AnimBlueprint", DisplayName = "Set Anim Instance Class"))
+	virtual void SetAnimClass(class UClass* NewClass);
+
+	/** Get the anim instance class via getter callable by sequencer.  */
+	UFUNCTION(BlueprintInternalUseOnly)
+	class UClass*  GetAnimClass();
 
 	/** Set the anim instance class. Clears and re-initializes the anim instance with the new class and sets animation mode to 'AnimationBlueprint' */
 	void SetAnimInstanceClass(class UClass* NewClass);
@@ -723,12 +739,33 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Components|SkeletalMesh", meta = (Keywords = "AnimBlueprint"))
 	UAnimInstance* GetPostProcessInstance() const;
 
+	UE_DEPRECATED(4.23, "This function is deprecated. Please use GetSubInstanceByTag")
+	UAnimInstance* GetSubInstanceByName(FName InTag) const { return GetSubInstanceByTag(InTag); }
+
 	/**
-	 * Returns the a tagged sub-instance node. If non sub instances are found or none are tagged with the
+	 * Returns the a tagged sub-instance node. If no sub instances are found or none are tagged with the
 	 * supplied name, this will return NULL.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Components|SkeletalMesh", meta = (Keywords = "AnimBlueprint"))
-	UAnimInstance* GetSubInstanceByName(FName InName) const;
+	UAnimInstance* GetSubInstanceByTag(FName InTag) const;
+
+	/**
+	 * Returns all tagged sub-instance nodes that match the tag.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Components|SkeletalMesh", meta = (Keywords = "AnimBlueprint"))
+	void GetSubInstancesByTag(FName InTag, TArray<UAnimInstance*>& OutSubInstances) const;
+
+	/** 
+	 * Runs through all layer nodes, attempting to find nodes that are implemented by the specified class, then sets up a sub instance of the class for each.
+	 * Allocates one sub instance to run each of the groups specified in the class, so state is shared.
+	 * If InClass is null, then layers are reset to their defaults.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Components|SkeletalMesh|Layers")
+	void SetLayerOverlay(TSubclassOf<UAnimInstance> InClass);
+
+	/** Gets the sub instance corresponding to the specified group */
+	UFUNCTION(BlueprintCallable, Category = "Components|SkeletalMesh|Layers")
+	UAnimInstance* GetLayerSubInstanceByGroup(FName InGroup) const;
 
 	/** 
 	 * Returns whether there are any valid instances to run, currently this means whether we have
@@ -1214,6 +1251,11 @@ private:
 	 **/
 	TMap<FName, float>	MorphTargetCurves;
 
+	/** 
+	 * Temporary storage for Curve UIDList of evaluating Animation 
+	 */
+	TArray<uint16> CachedCurveUIDList;
+
 public:
 	const TMap<FName, float>& GetMorphTargetCurves() const { return MorphTargetCurves;  }
 	// 
@@ -1343,7 +1385,7 @@ public:
 	virtual FBoxSphereBounds CalcBounds(const FTransform& LocalToWorld) const override;
 	virtual bool IsAnySimulatingPhysics() const override;
 	virtual void OnUpdateTransform(EUpdateTransformFlags UpdateTransformFlags, ETeleportType Teleport = ETeleportType::None) override;
-	virtual bool UpdateOverlapsImpl(TArray<FOverlapInfo> const* PendingOverlaps=NULL, bool bDoNotifies=true, const TArray<FOverlapInfo>* OverlapsAtEndLocation=NULL) override;
+	virtual bool UpdateOverlapsImpl(const TOverlapArrayView* PendingOverlaps=NULL, bool bDoNotifies=true, const TOverlapArrayView* OverlapsAtEndLocation=NULL) override;
 	//~ End USceneComponent Interface.
 
 	//~ Begin UPrimitiveComponent Interface.
@@ -1436,7 +1478,19 @@ public:
 	bool K2_GetClosestPointOnPhysicsAsset(const FVector& WorldPosition, FVector& ClosestWorldPosition, FVector& Normal, FName& BoneName, float& Distance) const;
 
 	virtual bool LineTraceComponent( FHitResult& OutHit, const FVector Start, const FVector End, const FCollisionQueryParams& Params ) override;
-    virtual bool SweepComponent( FHitResult& OutHit, const FVector Start, const FVector End, const FQuat& ShapRotation, const FCollisionShape& CollisionShape, bool bTraceComplex=false) override;
+	
+	/** 
+	 *  Trace a shape against just this component. Will trace against each body, returning as soon as any collision is found. Note that this collision may not be the closest.
+	 *  @param  OutHit          	Information about hit against this component, if true is returned
+	 *  @param  Start           	Start location of the trace
+	 *  @param  End             	End location of the trace
+	 *  @param  ShapeWorldRotation  The rotation applied to the collision shape in world space
+	 *  @param  CollisionShape  	Collision Shape
+	 *	@param	bTraceComplex	Whether or not to trace complex
+	 *  @return true if a hit is found
+	 */
+	 virtual bool SweepComponent( FHitResult& OutHit, const FVector Start, const FVector End, const FQuat& ShapRotation, const FCollisionShape& CollisionShape, bool bTraceComplex=false) override;
+	
 	virtual bool OverlapComponent(const FVector& Pos, const FQuat& Rot, const FCollisionShape& CollisionShape) override;
 	virtual void SetSimulatePhysics(bool bEnabled) override;
 	virtual void AddRadialImpulse(FVector Origin, float Radius, float Strength, ERadialImpulseFalloff Falloff, bool bVelChange=false) override;
@@ -2014,6 +2068,7 @@ private:
 	 * Update MorphTargetCurves from mesh - these are not animation curves, but SetMorphTarget and similar functions that can set to this mesh component
 	 */
 	void UpdateMorphTargetOverrideCurves();
+
 	/*
 	 * Reset MorphTarget Curves - Reset all morphtarget curves
 	 */

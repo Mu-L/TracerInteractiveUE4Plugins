@@ -55,23 +55,29 @@ public:
 
 	virtual void GetRichPresenceText(FText& OutRichPresence) const;
 
+	bool IsRecentPlayer() const;
+	bool IsRecentPlayer(ESocialSubsystem SubsystemType) const;
+	
 	bool IsBlocked() const;
 	bool IsBlocked(ESocialSubsystem SubsystemType) const;
 
 	bool IsOnline() const;
 	bool IsPlayingThisGame() const;
 	
+	virtual bool CanReceiveOfflineInvite() const { return false; }
+	virtual int32 GetCustomSortValue() const { return 0; }
+
 	bool SetUserLocalAttribute(ESocialSubsystem SubsystemType, const FString& AttrName, const FString& AttrValue);
 	bool GetUserAttribute(ESocialSubsystem SubsystemType, const FString& AttrName, FString& OutAttrValue) const;
 
 	bool HasAnyInteractionsAvailable() const;
 	TArray<FSocialInteractionHandle> GetAllAvailableInteractions() const;
 
-	bool CanSendFriendInvite(ESocialSubsystem SubsystemType) const;
-	bool SendFriendInvite(ESocialSubsystem SubsystemType);
-	bool AcceptFriendInvite(ESocialSubsystem SocialSubsystem) const;
-	bool RejectFriendInvite(ESocialSubsystem SocialSubsystem) const;
-	bool EndFriendship(ESocialSubsystem SocialSubsystem) const;
+	virtual bool CanSendFriendInvite(ESocialSubsystem SubsystemType) const;
+	virtual bool SendFriendInvite(ESocialSubsystem SubsystemType);
+	virtual bool AcceptFriendInvite(ESocialSubsystem SocialSubsystem) const;
+	virtual bool RejectFriendInvite(ESocialSubsystem SocialSubsystem) const;
+	virtual bool EndFriendship(ESocialSubsystem SocialSubsystem) const;
 
 	bool ShowPlatformProfile();
 
@@ -86,8 +92,8 @@ public:
 	bool CanInviteToParty(const FOnlinePartyTypeId& PartyTypeId) const;
 	bool InviteToParty(const FOnlinePartyTypeId& PartyTypeId) const;
 
-	bool BlockUser(ESocialSubsystem Subsystem);
-	bool UnblockUser(ESocialSubsystem Subsystem);
+	virtual bool BlockUser(ESocialSubsystem Subsystem) const;
+	virtual bool UnblockUser(ESocialSubsystem Subsystem) const;
 
 	UPartyMember* GetPartyMember(const FOnlinePartyTypeId& PartyTypeId) const;
 
@@ -97,6 +103,11 @@ public:
 
 	DECLARE_EVENT_OneParam(USocialUser, FOnUserPresenceChanged, ESocialSubsystem)
 	FOnUserPresenceChanged& OnUserPresenceChanged() const { return OnUserPresenceChangedEvent; }
+
+	// provided so that lists with custom game-specific filtering (and any other listeners) can potentially re-evaluate a user
+	// the pattern here is similar to OnUserPresenceChanged but not subsystem-specific
+	DECLARE_EVENT(USocialUser, FOnUserGameSpecificStatusChanged)
+	FOnUserGameSpecificStatusChanged& OnUserGameSpecificStatusChanged() const { return OnUserGameSpecificStatusChangedEvent; }
 
 	DECLARE_EVENT_OneParam(USocialUser, FOnFriendRemoved, ESocialSubsystem)
 	FOnFriendRemoved& OnFriendRemoved() const { return OnFriendRemovedEvent; }
@@ -127,15 +138,18 @@ PARTY_SCOPE:
 
 protected:
 	virtual void OnPresenceChangedInternal(ESocialSubsystem SubsystemType);
+	virtual void OnPartyInviteAcceptedInternal(const FOnlinePartyTypeId& PartyTypeId) const;
+	virtual void OnPartyInviteRejectedInternal(const FOnlinePartyTypeId& PartyTypeId) const;
+	virtual void SetSubsystemId(ESocialSubsystem SubsystemType, const FUniqueNetIdRepl& SubsystemId);
+	int32 NumPendingQueries = 0;
 
+	void TryBroadcastInitializationComplete();
 private:
-	void SetSubsystemId(ESocialSubsystem SubsystemType, const FUniqueNetIdRepl& SubsystemId);
 	
 	void SetUserInfo(ESocialSubsystem SubsystemType, const TSharedRef<FOnlineUser>& UserInfo);
 	void HandleQueryUserInfoComplete(ESocialSubsystem SubsystemType, bool bWasSuccessful, const TSharedPtr<FOnlineUser>& UserInfo);
 	
 private:
-	void TryBroadcastInitializationComplete();
 
 	struct FSubsystemUserInfo
 	{
@@ -162,10 +176,9 @@ private:
 	};
 	FSubsystemUserInfo& FindOrCreateSubsystemInfo(const FUniqueNetIdRepl& SubsystemId, ESocialSubsystem SubsystemType);
 
-	int32 NumPendingQueries = 0;
 	bool bIsInitialized = false;
 
-	TSharedPtr<IOnlinePartyJoinInfo> PersistentPartyInfo;
+	TSharedPtr<const IOnlinePartyJoinInfo> PersistentPartyInfo;
 	TMap<ESocialSubsystem, FSubsystemUserInfo> SubsystemInfoByType;
 
 	// Initialization delegates that fire only when a specific user has finishing initializing
@@ -178,4 +191,5 @@ private:
 	mutable FOnFriendRemoved OnFriendInviteRemovedEvent;
 	mutable FOnBlockedStatusChanged OnBlockedStatusChangedEvent;
 	mutable FOnSubsystemIdEstablished OnSubsystemIdEstablishedEvent;
+	mutable FOnUserGameSpecificStatusChanged OnUserGameSpecificStatusChangedEvent;
 };

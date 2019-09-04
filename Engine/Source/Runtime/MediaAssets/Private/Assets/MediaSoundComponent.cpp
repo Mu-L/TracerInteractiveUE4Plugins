@@ -29,14 +29,6 @@ FAutoConsoleVariableRef CVarSyncAudioAfterDropouts(
 	TEXT("0: Not Enabled, 1: Enabled"),
 	ECVF_Default);
 
-static int32 FlushBackloggedAudioCVar = 0;
-FAutoConsoleVariableRef CVarFlushBackloggedAudio(
-	TEXT("m.FlushBackloggedAudio"),
-	FlushBackloggedAudioCVar,
-	TEXT("Flush backlogged audio samples when max value reached.\n")
-	TEXT("0: Not Enabled, 4 or higher: Max queued samples"),
-	ECVF_Default);
-
 DECLARE_FLOAT_COUNTER_STAT(TEXT("MediaUtils MediaSoundComponent Sync"), STAT_MediaUtils_MediaSoundComponentSync, STATGROUP_Media);
 DECLARE_FLOAT_COUNTER_STAT(TEXT("MediaUtils MediaSoundComponent SampleTime"), STAT_MediaUtils_MediaSoundComponentSampleTime, STATGROUP_Media);
 DECLARE_DWORD_COUNTER_STAT(TEXT("MediaUtils MediaSoundComponent Queued"), STAT_Media_SoundCompQueued, STATGROUP_Media);
@@ -80,7 +72,7 @@ UMediaSoundComponent::UMediaSoundComponent(const FObjectInitializer& ObjectIniti
 	bVisualizeComponent = true;
 #endif
 
-#if PLATFORM_PS4 || PLATFORM_SWITCH || PLATFORM_XBOXONE
+#if PLATFORM_PS4 || PLATFORM_XBOXONE
 	bSyncAudioAfterDropouts = true;
 #else
 	bSyncAudioAfterDropouts = false;
@@ -163,6 +155,19 @@ void UMediaSoundComponent::UpdatePlayer()
 		}
 
 		CurrentPlayerFacade = PlayerFacade;
+	}
+
+	//
+	// Some players might require bSyncAudioAfterDropouts to be forced to true or false
+	if (PlayerFacade->GetPlayer())
+	{
+		bool bNewAudioSyncAfterDropouts = PlayerFacade->GetPlayer()->RequiresAudioSyncAfterDropouts();
+		if (bNewAudioSyncAfterDropouts != bSyncAudioAfterDropouts)
+		{
+			FScopeLock Lock(&CriticalSection);
+			bSyncAudioAfterDropouts = bNewAudioSyncAfterDropouts;
+			FrameSyncOffset = 0;
+		}
 	}
 
 	// caching play rate and time for audio thread (eventual consistency is sufficient)
@@ -417,12 +422,17 @@ int32 UMediaSoundComponent::OnGenerateAudio(float* OutAudio, int32 NumSamples)
 		}
 		else
 		{
-			const int32 FramesRequested = NumSamples / NumChannels;
+			const uint32 FramesRequested = uint32(NumSamples / NumChannels);
 			uint32 JumpFrame = MAX_uint32;
-			uint32 FramesWritten = Resampler->Generate(OutAudio, OutTime, (uint32)FramesRequested, Rate, Time, *PinnedSampleQueue, JumpFrame);
+			uint32 FramesWritten = Resampler->Generate(OutAudio, OutTime, FramesRequested, Rate, Time, *PinnedSampleQueue, JumpFrame);
 			if (FramesWritten == 0)
 			{
 				return 0; // no samples available
+			}
+
+			if (FramesWritten < FramesRequested)
+			{
+				memset(OutAudio + FramesWritten * NumChannels, 0, (NumSamples - FramesWritten * NumChannels) * sizeof(float));
 			}
 		}
 
@@ -480,20 +490,6 @@ int32 UMediaSoundComponent::OnGenerateAudio(float* OutAudio, int32 NumSamples)
 				}
 			}
 		}
-
-#if PLATFORM_WINDOWS
-		// Garbage collection and other operations can cause calls to OnGenerateAudio() to be spaced too far apart (no audio being processed)
-		// These gaps are not tracked leading to a backlogged buffer that becomes further and further out of sync
-		if (FlushBackloggedAudioCVar > 3 && PinnedSampleQueue->Num() > FlushBackloggedAudioCVar)
-		{
-			const int32 NumQueued = PinnedSampleQueue->Num();
-			for (int32 i = 0; i < NumQueued - 3; ++i)
-			{
-				TSharedPtr<IMediaAudioSample, ESPMode::ThreadSafe> NextSample;
-				PinnedSampleQueue->Dequeue(NextSample);
-			}
-		}
-#endif
 
 		SET_FLOAT_STAT(STAT_MediaUtils_MediaSoundComponentSync, FMath::Abs((Time - OutTime).GetTotalMilliseconds()));
 		SET_FLOAT_STAT(STAT_MediaUtils_MediaSoundComponentSampleTime, OutTime.GetTotalMilliseconds());

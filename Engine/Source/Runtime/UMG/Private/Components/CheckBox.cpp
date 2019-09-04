@@ -11,21 +11,34 @@
 /////////////////////////////////////////////////////
 // UCheckBox
 
+static FCheckBoxStyle* DefaultCheckboxStyle = nullptr;
+
 UCheckBox::UCheckBox(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
-	SCheckBox::FArguments SlateDefaults;
-	WidgetStyle = *SlateDefaults._Style;
+	if (DefaultCheckboxStyle == nullptr)
+	{
+		// HACK: THIS SHOULD NOT COME FROM CORESTYLE AND SHOULD INSTEAD BE DEFINED BY ENGINE TEXTURES/PROJECT SETTINGS
+		DefaultCheckboxStyle = new FCheckBoxStyle(FCoreStyle::Get().GetWidgetStyle<FCheckBoxStyle>("Checkbox"));
+
+		// Unlink UMG default colors from the editor settings colors.
+		DefaultCheckboxStyle->UnlinkColors();
+	}
+
+	WidgetStyle = *DefaultCheckboxStyle;
 
 	CheckedState = ECheckBoxState::Unchecked;
 
-	HorizontalAlignment = SlateDefaults._HAlign;
-	Padding_DEPRECATED = SlateDefaults._Padding.Get();
+	HorizontalAlignment = HAlign_Fill;
+	Padding_DEPRECATED = FMargin(0, 0, 0, 0);
 
 	BorderBackgroundColor_DEPRECATED = FLinearColor::White;
 
 	IsFocusable = true;
-
+#if WITH_EDITORONLY_DATA
+	AccessibleBehavior = ESlateAccessibleBehavior::Summary;
+	bCanChildrenBeAccessible = false;
+#endif
 }
 
 void UCheckBox::ReleaseSlateResources(bool bReleaseChildren)
@@ -219,6 +232,13 @@ void UCheckBox::PostLoad()
 		}
 	}
 }
+
+#if WITH_ACCESSIBILITY
+TSharedPtr<SWidget> UCheckBox::GetAccessibleWidget() const
+{
+	return MyCheckbox;
+}
+#endif
 
 #if WITH_EDITOR
 

@@ -58,6 +58,7 @@
     <Compile Include="AutomationException.cs" />
     <Compile Include="BuildCommand.cs" />
     <Compile Include="BuildUtils.cs" />
+    <Compile Include="BundleUtils.cs" />
     <Compile Include="CommandEnvironment.cs" />
     <Compile Include="DeviceReservation.cs" />
     <Compile Include="ImageUtils.cs" />
@@ -91,6 +92,7 @@
     <Compile Include="UE4Build.cs" />
     <Compile Include="Utils.cs" />
     <Compile Include="WindowsHostPlatform.cs" />
+    <Compile Include="P4WriteConfig.cs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\DotNETCommon\DotNETUtilities\DotNETUtilities.csproj">

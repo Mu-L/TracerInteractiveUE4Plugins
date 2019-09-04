@@ -11,11 +11,6 @@ DebugViewModeMaterialManager.cpp : Implements debug shader management.
 #include "RendererInterface.h"
 #include "UnrealEngine.h"
 
-ENGINE_API bool HasMissingDebugViewModeShaders(bool bClearFlag)
-{
-	return false;
-}
-
 ENGINE_API bool GetDebugViewMaterial(const UMaterialInterface* InMaterialInterface, EDebugViewShaderMode InDebugViewMode, ERHIFeatureLevel::Type InFeatureLevel, const FMaterialRenderProxy*& OutMaterialRenderProxy, const FMaterial*& OutMaterial)
 {
 #if WITH_EDITORONLY_DATA

@@ -18,6 +18,7 @@
 #include "ScenePrivate.h"
 #include "Containers/AllocatorFixedSizeFreeList.h"
 #include "MaterialShared.h"
+#include "HAL/LowLevelMemTracker.h"
 
 int32 GUnbuiltPreviewShadowsInGame = 1;
 FAutoConsoleVariableRef CVarUnbuiltPreviewShadowsInGame(
@@ -112,6 +113,8 @@ uint32 FLightPrimitiveInteraction::GetMemoryPoolSize()
 
 void FLightPrimitiveInteraction::Create(FLightSceneInfo* LightSceneInfo,FPrimitiveSceneInfo* PrimitiveSceneInfo)
 {
+	LLM_SCOPE(ELLMTag::SceneRender);
+
 	// Attach the light to the primitive's static meshes.
 	bool bDynamic = true;
 	bool bRelevant = false;
@@ -368,7 +371,6 @@ FExponentialHeightFogSceneInfo::FExponentialHeightFogSceneInfo(const UExponentia
 	FogMaxOpacity(InComponent->FogMaxOpacity),
 	StartDistance(InComponent->StartDistance),
 	FogCutoffDistance(InComponent->FogCutoffDistance),
-	LightTerminatorAngle(0),
 	DirectionalInscatteringExponent(InComponent->DirectionalInscatteringExponent),
 	DirectionalInscatteringStartDistance(InComponent->DirectionalInscatteringStartDistance),
 	DirectionalInscatteringColor(InComponent->DirectionalInscatteringColor)

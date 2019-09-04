@@ -1,3 +1,5 @@
+#pragma once
+
 #include "AudioCapture.h"
 
 #if PLATFORM_WINDOWS

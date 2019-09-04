@@ -64,7 +64,7 @@ public:
 	TSharedPtr< FUICommandInfo > AddNewLocalVariable;
 	TSharedPtr< FUICommandInfo > AddNewFunction;
 	TSharedPtr< FUICommandInfo > AddNewMacroDeclaration;
-	TSharedPtr< FUICommandInfo > AddNewAnimationGraph;
+	TSharedPtr< FUICommandInfo > AddNewAnimationLayer;
 	TSharedPtr< FUICommandInfo > AddNewEventGraph;
 	TSharedPtr< FUICommandInfo > AddNewDelegate;
 
@@ -75,6 +75,9 @@ public:
 
 	// SSC commands
 	TSharedPtr< FUICommandInfo > BeginBlueprintMerge;
+	
+	// Toggle focusing nodes which are related to the selected nodes
+	TSharedPtr< FUICommandInfo > ToggleHideUnrelatedNodes;
 };
 
 //////////////////////////////////////////////////////////////////////////

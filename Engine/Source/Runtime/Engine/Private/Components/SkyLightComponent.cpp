@@ -21,6 +21,7 @@
 #include "Components/BillboardComponent.h"
 #include "UObject/ReleaseObjectVersion.h"
 #include "Modules/ModuleManager.h"
+#include "Internationalization/Text.h"
 
 #if RHI_RAYTRACING
 #include "GlobalShader.h"
@@ -58,11 +59,22 @@ FAutoConsoleVariableRef CVarUpdateSkylightsEveryFrame(
 	ECVF_Default
 	);
 
+float GSkylightIntensityMultiplier = 1.0f;
+FAutoConsoleVariableRef CVarSkylightIntensityMultiplier(
+	TEXT("r.SkylightIntensityMultiplier"),
+	GSkylightIntensityMultiplier,
+	TEXT("Intensity scale on Stationary and Movable skylights.  This is useful to control overall lighting contrast in dynamically lit games with scalability levels which disable Ambient Occlusion.  For example, if medium quality disables SSAO and DFAO, reduce skylight intensity."),
+	ECVF_Scalability | ECVF_RenderThreadSafe
+	);
+
+constexpr EPixelFormat SKYLIGHT_CUBEMAP_FORMAT = PF_FloatRGBA;
+
 void FSkyTextureCubeResource::InitRHI()
 {
 	if (GetFeatureLevel() >= ERHIFeatureLevel::SM4 || GSupportsRenderTargetFormat_PF_FloatRGBA)
 	{
 		FRHIResourceCreateInfo CreateInfo;
+		checkf(FMath::IsPowerOfTwo(Size), TEXT("Size of SkyTextureCube must be a power of two; size is %d"), Size);
 		TextureCubeRHI = RHICreateTextureCube(Size, Format, NumMips, 0, CreateInfo);
 		TextureRHI = TextureCubeRHI;
 
@@ -145,6 +157,11 @@ void FSkyLightSceneProxy::Initialize(
 #endif
 }
 
+FLinearColor FSkyLightSceneProxy::GetEffectiveLightColor() const
+{
+	return LightColor * GSkylightIntensityMultiplier;
+}
+
 FSkyLightSceneProxy::FSkyLightSceneProxy(const USkyLightComponent* InLightComponent)
 	: LightComponent(InLightComponent)
 	, ProcessedTexture(InLightComponent->ProcessedSkyTexture)
@@ -156,7 +173,6 @@ FSkyLightSceneProxy::FSkyLightSceneProxy(const USkyLightComponent* InLightCompon
 	, bCastVolumetricShadow(InLightComponent->bCastVolumetricShadow)
 	, bCastRayTracedShadow(InLightComponent->bCastRaytracedShadow)
 	, OcclusionCombineMode(InLightComponent->OcclusionCombineMode)
-	, LightColor(FLinearColor(InLightComponent->LightColor) * InLightComponent->Intensity)
 	, IndirectLightingIntensity(InLightComponent->IndirectLightingIntensity)
 	, VolumetricScatteringIntensity(FMath::Max(InLightComponent->VolumetricScatteringIntensity, 0.0f))
 	, OcclusionMaxDistance(InLightComponent->OcclusionMaxDistance)
@@ -168,6 +184,7 @@ FSkyLightSceneProxy::FSkyLightSceneProxy(const USkyLightComponent* InLightCompon
 #if RHI_RAYTRACING
 	, IsDirtyImportanceSamplingData(true)
 #endif
+	, LightColor(FLinearColor(InLightComponent->LightColor) * InLightComponent->Intensity)
 {
 	const FSHVectorRGB3* InIrradianceEnvironmentMap = &InLightComponent->IrradianceEnvironmentMap;
 	const FSHVectorRGB3* BlendDestinationIrradianceEnvironmentMap = &InLightComponent->BlendDestinationIrradianceEnvironmentMap;
@@ -251,9 +268,46 @@ void USkyLightComponent::SetCaptureIsDirty()
 
 void USkyLightComponent::SanitizeCubemapSize()
 {
-	static const int32 MaxCubemapResolution = 1024;
-	static const int32 MinCubemapResolution = 64;
+	const int32 MaxCubemapResolution = GetMaxCubeTextureDimension();
+	const int32 MinCubemapResolution = 8;
+
 	CubemapResolution = FMath::Clamp(int32(FMath::RoundUpToPowerOfTwo(CubemapResolution)), MinCubemapResolution, MaxCubemapResolution);
+
+#if WITH_EDITOR
+	if (FApp::CanEverRender() && !FApp::IsUnattended())
+	{
+		SIZE_T TexMemRequired = CalcTextureSize(CubemapResolution, CubemapResolution, SKYLIGHT_CUBEMAP_FORMAT, FMath::CeilLogTwo(CubemapResolution) + 1) * CubeFace_MAX;
+
+		FTextureMemoryStats TextureMemStats;
+		RHIGetTextureMemoryStats(TextureMemStats);
+
+		if (TextureMemStats.DedicatedVideoMemory > 0 && TexMemRequired > SIZE_T(TextureMemStats.DedicatedVideoMemory / 4))
+		{
+			FNumberFormattingOptions FmtOpts = FNumberFormattingOptions()
+				.SetUseGrouping(false)
+				.SetMaximumFractionalDigits(2)
+				.SetMinimumFractionalDigits(0)
+				.SetRoundingMode(HalfFromZero);
+
+			EAppReturnType::Type Response = FPlatformMisc::MessageBoxExt(
+				EAppMsgType::YesNo,
+				*FText::Format(
+					LOCTEXT("MemAllocWarning_Message_SkylightCubemap", "A resolution of {0} will require {1} of video memory. Are you sure?"),
+					FText::AsNumber(CubemapResolution, &FmtOpts),
+					FText::AsMemory(TexMemRequired, &FmtOpts)
+				).ToString(),
+				*LOCTEXT("MemAllocWarning_Title_SkylightCubemap", "Memory Allocation Warning").ToString()
+			);
+
+			if (Response == EAppReturnType::No)
+			{
+				CubemapResolution = PreEditCubemapResolution;
+			}
+		}
+
+		PreEditCubemapResolution = CubemapResolution;
+	}
+#endif // WITH_EDITOR
 }
 
 void USkyLightComponent::SetBlendDestinationCaptureIsDirty()
@@ -343,7 +397,7 @@ void USkyLightComponent::UpdateLimitedRenderingStateFast()
 		ENQUEUE_RENDER_COMMAND(FFastUpdateSkyLightCommand)(
 			[LightSceneProxy, InLightColor, InIndirectLightingIntensity, InVolumetricScatteringIntensity](FRHICommandList& RHICmdList)
 			{
-				LightSceneProxy->LightColor = InLightColor;
+				LightSceneProxy->SetLightColor(InLightColor);
 				LightSceneProxy->IndirectLightingIntensity = InIndirectLightingIntensity;
 				LightSceneProxy->VolumetricScatteringIntensity = InVolumetricScatteringIntensity;
 			});
@@ -417,11 +471,21 @@ void USkyLightComponent::DestroyRenderState_Concurrent()
 }
 
 #if WITH_EDITOR
+void USkyLightComponent::PreEditChange(UProperty* PropertyAboutToChange)
+{
+	Super::PreEditChange(PropertyAboutToChange);
+
+	PreEditCubemapResolution = CubemapResolution;
+}
+
 void USkyLightComponent::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
+	if (PropertyChangedEvent.Property && 
+		PropertyChangedEvent.Property->GetFName() == GET_MEMBER_NAME_CHECKED(USkyLightComponent, CubemapResolution))
+	{
+		SanitizeCubemapSize();
+	}
 	Super::PostEditChangeProperty(PropertyChangedEvent);
-
-	SanitizeCubemapSize();
 	SetCaptureIsDirty();
 }
 
@@ -540,7 +604,7 @@ void USkyLightComponent::ApplyComponentInstanceData(FPrecomputedSkyLightInstance
 {
 	check(LightMapData);
 
-	LightGuid = LightMapData->LightGuid;
+	LightGuid = (HasStaticShadowing() ? LightMapData->LightGuid : FGuid());
 	ProcessedSkyTexture = LightMapData->ProcessedSkyTexture;
 	IrradianceEnvironmentMap = LightMapData->IrradianceEnvironmentMap;
 	AverageBrightness = LightMapData->AverageBrightness;
@@ -580,7 +644,7 @@ void USkyLightComponent::UpdateSkyCaptureContentsArray(UWorld* WorldToUpdate, TA
 					if (!CaptureComponent->ProcessedSkyTexture || CaptureComponent->ProcessedSkyTexture->GetSizeX() != CaptureComponent->CubemapResolution)
 					{
 						CaptureComponent->ProcessedSkyTexture = new FSkyTextureCubeResource();
-						CaptureComponent->ProcessedSkyTexture->SetupParameters(CaptureComponent->CubemapResolution, FMath::CeilLogTwo(CaptureComponent->CubemapResolution) + 1, PF_FloatRGBA);
+						CaptureComponent->ProcessedSkyTexture->SetupParameters(CaptureComponent->CubemapResolution, FMath::CeilLogTwo(CaptureComponent->CubemapResolution) + 1, SKYLIGHT_CUBEMAP_FORMAT);
 						BeginInitResource(CaptureComponent->ProcessedSkyTexture);
 						CaptureComponent->MarkRenderStateDirty();
 					}
@@ -595,7 +659,7 @@ void USkyLightComponent::UpdateSkyCaptureContentsArray(UWorld* WorldToUpdate, TA
 					if (!CaptureComponent->BlendDestinationProcessedSkyTexture || CaptureComponent->BlendDestinationProcessedSkyTexture->GetSizeX() != CaptureComponent->CubemapResolution)
 					{
 						CaptureComponent->BlendDestinationProcessedSkyTexture = new FSkyTextureCubeResource();
-						CaptureComponent->BlendDestinationProcessedSkyTexture->SetupParameters(CaptureComponent->CubemapResolution, FMath::CeilLogTwo(CaptureComponent->CubemapResolution) + 1, PF_FloatRGBA);
+						CaptureComponent->BlendDestinationProcessedSkyTexture->SetupParameters(CaptureComponent->CubemapResolution, FMath::CeilLogTwo(CaptureComponent->CubemapResolution) + 1, SKYLIGHT_CUBEMAP_FORMAT);
 						BeginInitResource(CaptureComponent->BlendDestinationProcessedSkyTexture);
 						CaptureComponent->MarkRenderStateDirty(); 
 					}

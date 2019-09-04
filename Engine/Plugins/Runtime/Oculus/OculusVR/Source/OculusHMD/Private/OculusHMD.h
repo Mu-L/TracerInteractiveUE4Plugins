@@ -86,7 +86,7 @@ public:
 	virtual bool GetRelativeEyePose(int32 InDeviceId, EStereoscopicPass InEye, FQuat& OutOrientation, FVector& OutPosition) override;
 	virtual bool GetTrackingSensorProperties(int32 InDeviceId, FQuat& OutOrientation, FVector& OutPosition, FXRSensorProperties& OutSensorProperties) override;
 	virtual void SetTrackingOrigin(EHMDTrackingOrigin::Type NewOrigin) override;
-	virtual EHMDTrackingOrigin::Type GetTrackingOrigin() override;
+	virtual EHMDTrackingOrigin::Type GetTrackingOrigin() const override;
 	virtual bool GetFloorToEyeTrackingTransform(FTransform& OutFloorToEye) const override;
 	//virtual FVector GetAudioListenerOffset(int32 InDeviceId = HMDDeviceId) const override;
 	virtual void ResetOrientationAndPosition(float Yaw = 0.f) override;
@@ -174,7 +174,7 @@ public:
 	// FHeadMoundedDisplayBase interface
 	virtual FVector2D GetEyeCenterPoint_RenderThread(EStereoscopicPass StereoPassType) const override;
 	virtual FIntRect GetFullFlatEyeRect_RenderThread(FTexture2DRHIRef EyeTexture) const override;
-	virtual void CopyTexture_RenderThread(FRHICommandListImmediate& RHICmdList, FTexture2DRHIParamRef SrcTexture, FIntRect SrcRect, FTexture2DRHIParamRef DstTexture, FIntRect DstRect, bool bClearBlack, bool bNoAlpha) const override;
+	virtual void CopyTexture_RenderThread(FRHICommandListImmediate& RHICmdList, FRHITexture2D* SrcTexture, FIntRect SrcRect, FRHITexture2D* DstTexture, FIntRect DstRect, bool bClearBlack, bool bNoAlpha) const override;
 	virtual bool PopulateAnalyticsAttributes(TArray<struct FAnalyticsEventAttribute>& EventAttributes) override;
 
 	// FXRRenderTargetManager interface

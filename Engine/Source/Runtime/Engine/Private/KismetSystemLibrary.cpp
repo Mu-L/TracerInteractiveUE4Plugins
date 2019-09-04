@@ -157,6 +157,11 @@ float UKismetSystemLibrary::GetGameTimeInSeconds(UObject* WorldContextObject)
 	return World ? World->GetTimeSeconds() : 0.f;
 }
 
+int64 UKismetSystemLibrary::GetFrameCount()
+{
+	return (int64) GFrameCounter;
+}
+
 bool UKismetSystemLibrary::IsServer(UObject* WorldContextObject)
 {
 	UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
@@ -387,7 +392,7 @@ FTimerHandle UKismetSystemLibrary::K2_InvalidateTimerHandle(FTimerHandle& TimerH
 	return TimerHandle;
 }
 
-FTimerHandle UKismetSystemLibrary::K2_SetTimer(UObject* Object, FString FunctionName, float Time, bool bLooping)
+FTimerHandle UKismetSystemLibrary::K2_SetTimer(UObject* Object, FString FunctionName, float Time, bool bLooping, float InitialStartDelay, float InitialStartDelayVariance)
 {
 	FName const FunctionFName(*FunctionName);
 
@@ -404,12 +409,18 @@ FTimerHandle UKismetSystemLibrary::K2_SetTimer(UObject* Object, FString Function
 		}
 	}
 
+	InitialStartDelay += FMath::RandRange(-InitialStartDelayVariance, InitialStartDelayVariance);
+	if (Time <= 0.f || ((Time + InitialStartDelay) - InitialStartDelayVariance) < 0.f)
+	{
+		FFrame::KismetExecutionMessage(TEXT("SetTimer passed a negative time.  The associated timer may fail to fire!  If using InitialStartDelayVariance, be sure it is smaller than (Time + InitialStartDelay)."), ELogVerbosity::Warning);
+	}
+
 	FTimerDynamicDelegate Delegate;
 	Delegate.BindUFunction(Object, FunctionFName);
-	return K2_SetTimerDelegate(Delegate, Time, bLooping);
+	return K2_SetTimerDelegate(Delegate, Time, bLooping, InitialStartDelay);
 }
 
-FTimerHandle UKismetSystemLibrary::K2_SetTimerDelegate(FTimerDynamicDelegate Delegate, float Time, bool bLooping)
+FTimerHandle UKismetSystemLibrary::K2_SetTimerDelegate(FTimerDynamicDelegate Delegate, float Time, bool bLooping, float InitialStartDelay, float InitialStartDelayVariance)
 {
 	FTimerHandle Handle;
 	if (Delegate.IsBound())
@@ -417,9 +428,15 @@ FTimerHandle UKismetSystemLibrary::K2_SetTimerDelegate(FTimerDynamicDelegate Del
 		const UWorld* const World = GEngine->GetWorldFromContextObject(Delegate.GetUObject(), EGetWorldErrorMode::LogAndReturnNull);
 		if(World)
 		{
+			InitialStartDelay += FMath::RandRange(-InitialStartDelayVariance, InitialStartDelayVariance);
+			if (Time <= 0.f || ((Time + InitialStartDelay) - InitialStartDelayVariance) < 0.f)
+			{
+				FFrame::KismetExecutionMessage(TEXT("SetTimer passed a negative time or initial start delay.  The associated timer may fail to fire!  If using InitialStartDelayVariance, be sure it is smaller than (Time + InitialStartDelay)."), ELogVerbosity::Warning);
+			}
+
 			FTimerManager& TimerManager = World->GetTimerManager();
 			Handle = TimerManager.K2_FindDynamicTimerHandle(Delegate);
-			TimerManager.SetTimer(Handle, Delegate, Time, bLooping);
+			TimerManager.SetTimer(Handle, Delegate, Time, bLooping, (Time + InitialStartDelay));
 		}
 	}
 	else
@@ -976,6 +993,11 @@ void UKismetSystemLibrary::BreakSoftClassPath(FSoftClassPath InSoftClassPath, FS
 	PathString = InSoftClassPath.ToString();
 }
 
+TSoftClassPtr<UObject> UKismetSystemLibrary::Conv_SoftClassPathToSoftClassRef(const FSoftClassPath& SoftClassPath)
+{
+	return TSoftClassPtr<UObject>(SoftClassPath);
+}
+
 bool UKismetSystemLibrary::IsValidSoftObjectReference(const TSoftObjectPtr<UObject>& SoftObjectReference)
 {
 	return !SoftObjectReference.IsNull();
@@ -996,6 +1018,11 @@ bool UKismetSystemLibrary::NotEqual_SoftObjectReference(const TSoftObjectPtr<UOb
 	return A != B;
 }
 
+UObject* UKismetSystemLibrary::LoadAsset_Blocking(TSoftObjectPtr<UObject> Asset)
+{
+	return Asset.LoadSynchronous();
+}
+
 bool UKismetSystemLibrary::IsValidSoftClassReference(const TSoftClassPtr<UObject>& SoftClassReference)
 {
 	return !SoftClassReference.IsNull();
@@ -1014,6 +1041,11 @@ bool UKismetSystemLibrary::EqualEqual_SoftClassReference(const TSoftClassPtr<UOb
 bool UKismetSystemLibrary::NotEqual_SoftClassReference(const TSoftClassPtr<UObject>& A, const TSoftClassPtr<UObject>& B)
 {
 	return A != B;
+}
+
+UClass* UKismetSystemLibrary::LoadClassAsset_Blocking(TSoftClassPtr<UObject> AssetClass)
+{
+	return AssetClass.LoadSynchronous();
 }
 
 UObject* UKismetSystemLibrary::Conv_SoftObjectReferenceToObject(const TSoftObjectPtr<UObject>& SoftObject)
@@ -2547,11 +2579,6 @@ void UKismetSystemLibrary::LoadAsset(UObject* WorldContextObject, TSoftObjectPtr
 		FLoadAssetAction* NewAction = new FLoadAssetAction(Asset.ToSoftObjectPath(), OnLoaded, LatentInfo);
 		LatentManager.AddNewAction(LatentInfo.CallbackTarget, LatentInfo.UUID, NewAction);
 	}
-}
-
-UObject* UKismetSystemLibrary::LoadAsset_Blocking(TSoftObjectPtr<UObject> Asset)
-{
-	return Asset.ToSoftObjectPath().TryLoad();
 }
 
 void UKismetSystemLibrary::LoadAssetClass(UObject* WorldContextObject, TSoftClassPtr<UObject> AssetClass, UKismetSystemLibrary::FOnAssetClassLoaded OnLoaded, FLatentActionInfo LatentInfo)

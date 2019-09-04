@@ -88,10 +88,6 @@ namespace symbols
 		bool isPartOfLibrary;
 		bool wasRecompiled;
 
-		// BEGIN EPIC MOD - Allow mapping from object files to their unity object file
-		uint32_t amalgamatedUniqueId = ~(uint32_t)0;
-		// END EPIC MOD
-
 		LC_DISABLE_ASSIGNMENT(Compiland);
 		LC_DISABLE_COPY(Compiland);
 	};
@@ -187,6 +183,7 @@ namespace symbols
 		IDiaDataSource* diaDataSource;
 		IDiaSession* diaSession;
 		IDiaSymbol* globalScope;
+		TimeStamp lastModificationTime;
 	};
 
 	struct DynamicInitializerDB
@@ -215,6 +212,11 @@ namespace symbols
 	Provider* OpenEXE(const wchar_t* filename, uint32_t openOptions);
 	void Close(Provider* provider);
 
+	// BEGIN EPIC MOD - Static grouping of compilands by unity blobs
+	void ResetCachedUnityManifests();
+	bool TryGetCompilandIdFromUnityManifest(const std::wstring& objPath, uint32_t& compilandId);
+	uint32_t GetCompilandIdFromPath(const std::wstring& objPath);
+	// END EPIC MOD
 
 
 	// UPDATE
@@ -227,10 +229,6 @@ namespace symbols
 
 	// CACHE: temporary, throw away after use
 	DiaCompilandDB* GatherDiaCompilands(Provider* provider);
-
-
-	// gathers all modules used by the executable
-	ModuleDB* GatherModules(DiaCompilandDB* diaCompilandDb);
 
 
 	// gathers user-defined types for a given compiland
@@ -249,7 +247,7 @@ namespace symbols
 	};
 
 	// CACHE: stored only ONCE, after initial load, cannot change
-	CompilandDB* GatherCompilands(Provider* provider, const DiaCompilandDB* diaCompilandDb, unsigned int splitAmalgamatedFilesThreshold, uint32_t compilandOptions);
+	CompilandDB* GatherCompilands(const Provider* provider, const DiaCompilandDB* diaCompilandDb, unsigned int splitAmalgamatedFilesThreshold, uint32_t compilandOptions);
 
 	// CACHE: stored only ONCE, after initial load, cannot change
 	LibraryDB* GatherLibraries(const DiaCompilandDB* diaCompilandDb);
@@ -346,6 +344,7 @@ namespace symbols
 
 	bool IsExceptionRelatedSymbol(const ImmutableString& symbolName);
 	bool IsExceptionClauseSymbol(const ImmutableString& symbolName);
+	bool IsExceptionUnwindSymbolForDynamicInitializer(const ImmutableString& symbolName);
 
 	bool IsRuntimeCheckRelatedSymbol(const ImmutableString& symbolName);
 	bool IsSdlCheckRelatedSymbol(const ImmutableString& symbolName);

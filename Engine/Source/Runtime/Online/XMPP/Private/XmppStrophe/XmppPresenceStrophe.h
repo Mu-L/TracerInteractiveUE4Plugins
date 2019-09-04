@@ -21,14 +21,14 @@ class FXmppPresenceStrophe
 public:
 	// FXmppPresenceStrophe
 	FXmppPresenceStrophe(FXmppConnectionStrophe& InConnectionManager);
-	virtual ~FXmppPresenceStrophe() = default;
+	virtual ~FXmppPresenceStrophe();
 
 	// XMPP Thread
-
-	void OnDisconnect();
 	bool ReceiveStanza(const FStropheStanza& IncomingStanza);
 
 	// Game Thread
+	void OnDisconnect();
+	void OnReconnect();
 
 	// IXmppPresence
 	virtual bool UpdatePresence(const FXmppUserPresence& NewPresence) override;
@@ -43,6 +43,9 @@ public:
 
 protected:
 	void OnPresenceUpdate(TUniquePtr<FXmppUserPresence>&& UpdatedPresence);
+
+	/** Remove pending messages and engine KeepAwake calls */
+	void CleanupMessages();
 
 protected:
 	/** Connection manager controls sending data to XMPP thread */
@@ -59,6 +62,9 @@ protected:
 
 	/** Delegate to signal presence information has been received for a user */
 	FOnXmppPresenceReceived OnXmppPresenceReceivedDelegate;
+
+	/* Engine Tick Requester name */
+	const static FName TickRequesterId;
 };
 
 #endif

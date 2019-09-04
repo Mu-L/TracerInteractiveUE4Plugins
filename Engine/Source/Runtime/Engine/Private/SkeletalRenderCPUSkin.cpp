@@ -155,6 +155,27 @@ void FSkeletalMeshObjectCPUSkin::Update(int32 LODIndex,USkinnedMeshComponent* In
 	}
 }
 
+
+void FSkeletalMeshObjectCPUSkin::UpdateSkinWeightBuffer(USkinnedMeshComponent* InMeshComponent)
+{
+	for (int32 LODIndex = 0; LODIndex < LODs.Num(); LODIndex++)
+	{
+		FSkeletalMeshObjectLOD& SkelLOD = LODs[LODIndex];
+
+		// Skip LODs that have their render data stripped
+		if (SkelLOD.SkelMeshRenderData->LODRenderData[LODIndex].GetNumVertices() > 0)
+		{
+			FSkelMeshComponentLODInfo* CompLODInfo = nullptr;
+			if (InMeshComponent->LODInfo.IsValidIndex(LODIndex))
+			{
+				CompLODInfo = &InMeshComponent->LODInfo[LODIndex];
+			}
+
+			SkelLOD.UpdateSkinWeights(CompLODInfo);
+		}
+	}
+}
+
 void FSkeletalMeshObjectCPUSkin::UpdateDynamicData_RenderThread(FRHICommandListImmediate& RHICmdList, FDynamicSkelMeshObjectDataCPUSkin* InDynamicData, uint32 FrameNumberToPrepare, uint32 RevisionNumber)
 {
 	// we should be done with the old data at this point
@@ -284,9 +305,15 @@ void FSkeletalMeshObjectCPUSkin::FSkeletalMeshObjectLOD::InitResources(FSkelMesh
 			check(LODData.SkinWeightVertexBuffer.HasExtraBoneInfluences() == CompLODInfo->OverrideSkinWeights->HasExtraBoneInfluences());
 			MeshObjectWeightBuffer = CompLODInfo->OverrideSkinWeights;
 		}
+		else if (CompLODInfo->OverrideProfileSkinWeights &&
+			CompLODInfo->OverrideProfileSkinWeights->GetNumVertices() == LODData.StaticVertexBuffers.PositionVertexBuffer.GetNumVertices())
+		{
+			check(LODData.SkinWeightVertexBuffer.HasExtraBoneInfluences() == CompLODInfo->OverrideProfileSkinWeights->HasExtraBoneInfluences());
+			MeshObjectWeightBuffer = CompLODInfo->OverrideProfileSkinWeights;
+		}
 		else
 		{
-			MeshObjectWeightBuffer = &LODData.SkinWeightVertexBuffer;
+			MeshObjectWeightBuffer = LODData.GetSkinWeightVertexBuffer();
 		}
 
 		if (CompLODInfo->OverrideVertexColors &&
@@ -341,7 +368,6 @@ void FSkeletalMeshObjectCPUSkin::FSkeletalMeshObjectLOD::InitResources(FSkelMesh
 		FIndexBufferRHIRef IndexBufferRHI = LODModel.MultiSizeIndexContainer.GetIndexBuffer()->IndexBufferRHI;
 		uint32 VertexBufferStride = LODModel.StaticVertexBuffers.PositionVertexBuffer.GetStride();
 
-		//#dxr_todo: do we need support for separate sections in FRayTracingGeometryData?
 		uint32 TrianglesCount = 0;
 		for (int32 SectionIndex = 0; SectionIndex < LODModel.RenderSections.Num(); SectionIndex++)
 		{
@@ -361,7 +387,7 @@ void FSkeletalMeshObjectCPUSkin::FSkeletalMeshObjectLOD::InitResources(FSkelMesh
 				Initializer.VertexBufferByteOffset = 0;
 				Initializer.TotalPrimitiveCount = TrianglesCount;
 				Initializer.VertexBufferElementType = VET_Float3;
-				Initializer.PrimitiveType = PT_TriangleList;
+				Initializer.GeometryType = RTGT_Triangles;
 				Initializer.bFastBuild = true;
 
 				TArray<FRayTracingGeometrySegment> GeometrySections;
@@ -385,6 +411,41 @@ void FSkeletalMeshObjectCPUSkin::FSkeletalMeshObjectLOD::InitResources(FSkelMesh
 	bResourcesInitialized = true;
 }
 
+
+void FSkeletalMeshObjectCPUSkin::FSkeletalMeshObjectLOD::UpdateSkinWeights(FSkelMeshComponentLODInfo* CompLODInfo)
+{
+	check(SkelMeshRenderData);
+	check(SkelMeshRenderData->LODRenderData.IsValidIndex(LODIndex));
+
+	// If we have a skin weight override buffer (and it's the right size) use it
+	FSkeletalMeshLODRenderData& LODData = SkelMeshRenderData->LODRenderData[LODIndex];
+	FSkinWeightVertexBuffer* NewMeshObjectWeightBuffer = nullptr;
+	if (CompLODInfo)
+	{
+		if (CompLODInfo->OverrideSkinWeights &&
+			CompLODInfo->OverrideSkinWeights->GetNumVertices() == LODData.StaticVertexBuffers.PositionVertexBuffer.GetNumVertices())
+		{
+			check(LODData.SkinWeightVertexBuffer.HasExtraBoneInfluences() == CompLODInfo->OverrideSkinWeights->HasExtraBoneInfluences());
+			NewMeshObjectWeightBuffer = CompLODInfo->OverrideSkinWeights;
+		}
+		else if (CompLODInfo->OverrideProfileSkinWeights &&
+			CompLODInfo->OverrideProfileSkinWeights->GetNumVertices() == LODData.StaticVertexBuffers.PositionVertexBuffer.GetNumVertices())
+		{
+			check(LODData.SkinWeightVertexBuffer.HasExtraBoneInfluences() == CompLODInfo->OverrideProfileSkinWeights->HasExtraBoneInfluences());
+			NewMeshObjectWeightBuffer = CompLODInfo->OverrideProfileSkinWeights;
+		}
+		else
+		{
+			NewMeshObjectWeightBuffer = LODData.GetSkinWeightVertexBuffer();
+		}
+
+		if (MeshObjectWeightBuffer != NewMeshObjectWeightBuffer)
+		{
+			MeshObjectWeightBuffer = NewMeshObjectWeightBuffer;
+		}
+	}	
+}
+
 /** 
  * Release rendering resources for this LOD 
  */
@@ -400,22 +461,6 @@ void FSkeletalMeshObjectCPUSkin::FSkeletalMeshObjectLOD::ReleaseResources()
 
 	bResourcesInitialized = false;
 }
-
-#if RHI_RAYTRACING
-// #dxr_todo: this looks like dead code
-void FSkeletalMeshObjectCPUSkin::FSkeletalMeshObjectLOD::BuildRayTracingAccelerationStructure()
-{
-	if (RayTracingGeometry.Initializer.PositionVertexBuffer && RayTracingGeometry.Initializer.IndexBuffer)
-	{
-		ENQUEUE_RENDER_COMMAND(SkeletalRenderCPUSkinBuildRayTracingAccelerationStructure)(
-			[this](FRHICommandListImmediate& RHICmdList)
-		{
-			RHICmdList.BuildAccelerationStructure(RayTracingGeometry.RayTracingGeometryRHI);
-		}
-		);
-	}
-}
-#endif // RHI_RAYTRACING
 
 TArray<FTransform>* FSkeletalMeshObjectCPUSkin::GetComponentSpaceTransforms() const
 {

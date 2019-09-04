@@ -18,6 +18,9 @@ public:
 	virtual ~FIOSApplication() {}
 
 	void SetMessageHandler( const TSharedRef< FGenericApplicationMessageHandler >& InMessageHandler );
+#if WITH_ACCESSIBILITY
+	virtual void SetAccessibleMessageHandler(const TSharedRef<FGenericAccessibleMessageHandler>& InAccessibleMessageHandler) override;
+#endif
 
 	virtual void PollGameDeviceState( const float TimeDelta ) override;
 
@@ -28,12 +31,14 @@ public:
 	virtual void AddExternalInputDevice(TSharedPtr<class IInputDevice> InputDevice);
 
 #if !PLATFORM_TVOS
-	static void OrientationChanged(UIDeviceOrientation orientation);
+	static void OrientationChanged(UIInterfaceOrientation orientation);
 #endif
 
 	virtual IInputInterface* GetInputInterface() override { return (IInputInterface*)InputInterface.Get(); }
 
 	virtual bool IsGamepadAttached() const override;
+
+	TSharedRef<FIOSWindow> FindWindowByAppDelegateView();
 
 protected:
 	virtual void InitializeWindow( const TSharedRef< FGenericWindow >& Window, const TSharedRef< FGenericWindowDefinition >& InDefinition, const TSharedPtr< FGenericWindow >& InParent, const bool bShowImmediately ) override;
@@ -41,7 +46,9 @@ protected:
 private:
 
 	FIOSApplication();
-
+#if WITH_ACCESSIBILITY
+	void OnAccessibleEventRaised(TSharedRef<IAccessibleWidget> Widget, EAccessibleEvent Event, FVariant OldValue, FVariant NewValue);
+#endif
 
 private:
 

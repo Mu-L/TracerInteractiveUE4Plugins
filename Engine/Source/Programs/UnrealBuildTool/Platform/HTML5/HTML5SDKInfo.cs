@@ -1,4 +1,4 @@
-﻿// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
 using System;
 using System.IO;
 using System.Text;
@@ -18,8 +18,8 @@ namespace UnrealBuildTool
 		static string NODE_VER = "8.9.1_64bit";
 		static string PYTHON_VER = "2.7.13.1_64bit"; // Only used on Windows; other platforms use built-in Python.
 
-		static string LLVM_VER = "e1.38.20_64bit";
-		static string SDKVersion = "1.38.20";
+		static string LLVM_VER = "e1.38.31_64bit";
+		static string SDKVersion = "1.38.31";
 
 //		static string LLVM_VER = "incoming";
 //		static string SDKVersion = "incoming";
@@ -62,33 +62,28 @@ namespace UnrealBuildTool
 		{
 			get
 			{
-				switch (BuildHostPlatform.Current.Platform)
+				if (BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Win64
+					|| BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Mac
+					|| BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Linux)
 				{
-					case UnrealTargetPlatform.Win64:
-						return "Win64";
-					case UnrealTargetPlatform.Mac:
-						return "Mac";
-					case UnrealTargetPlatform.Linux:
-						return "Linux";
-					default:
-						return "error_unknown_platform";
+					return BuildHostPlatform.Current.Platform.ToString();
 				}
+				return "error_unknown_platform";
 			}
 		}
 		static string PLATFORM_EXE
 		{
 			get
 			{
-				switch (BuildHostPlatform.Current.Platform)
+				if (BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Win64)
 				{
-					case UnrealTargetPlatform.Win64:
-						return ".exe";
-					case UnrealTargetPlatform.Mac:
-					case UnrealTargetPlatform.Linux:
-						return "";
-					default:
-						return "error_unknown_platform";
+					return ".exe";
 				}
+				if (BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Mac || BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Linux)
+				{
+					return "";
+				}
+				return "error_unknown_platform";
 			}
 		}
 
@@ -168,18 +163,32 @@ namespace UnrealBuildTool
 				string python = GetEmscriptenConfigVar("PYTHON");
 				if (python != null) return python;
 
-				switch (BuildHostPlatform.Current.Platform)
+// saving for reference
+//				if (BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Win64)
+//				{
+//					return Path.Combine(SDKBase, "Win64", "python", PYTHON_VER, "python.exe");
+//				}
+//				if (BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Mac || BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Linux)
+//				{
+//					return "/usr/bin/python";
+//				}
+
+				// use UE4's bundled python executable
+				string UE4PythonPath = FileReference.Combine(UnrealBuildTool.EngineDirectory, "Binaries", "ThirdParty", "Python").FullName;
+				if (BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Win64)
 				{
-					case UnrealTargetPlatform.Win64:
-						return Path.Combine(SDKBase, "Win64", "python", PYTHON_VER, "python.exe");
-
-					case UnrealTargetPlatform.Mac:
-					case UnrealTargetPlatform.Linux:
-						return "/usr/bin/python";
-
-					default:
-						return "error_unknown_platform";
+//					return Path.Combine(UE4PythonPath, "Win64", "python.exe");
+					return Path.Combine(SDKBase, "Win64", "python", PYTHON_VER, "python.exe"); // UE-76260
 				}
+				if (BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Mac)
+				{
+					return Path.Combine(UE4PythonPath, "Mac", "bin", "python2.7");
+				}
+				if (BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Linux)
+				{
+					return Path.Combine(UE4PythonPath, "Linux", "bin", "python2.7");
+				}
+				return "error_unknown_platform";
 			}
 		}
 
@@ -255,6 +264,57 @@ namespace UnrealBuildTool
 				Log.TraceErrorOnce(" Recreation of Emscripten Temp folder failed because of " + Ex.ToString());
 			}
 
+			// ----------------------------------------
+			// double check clang version, if different -- NUKE cached asmjs folder
+			string CachePath = Path.Combine(HTML5Intermediatory, "EmscriptenCache");
+			try
+			{
+				bool deleteAsmjsCache = true;
+				string isVanillaPath = Path.Combine(CachePath, "is_vanilla.txt");
+				if (File.Exists(isVanillaPath))
+				{
+					string cachedClang = File.ReadAllText(isVanillaPath);
+					if ( cachedClang.Equals("0:"+LLVM_ROOT, StringComparison.Ordinal) )
+					{
+						deleteAsmjsCache = false;
+					}
+				}
+				// ----------------------------------------
+				// sometimes, CIS machines need EmscriptenCache folder to be deleted manually
+				// automate this on every toolchain upgrade
+				string ue4emsdkcachePath = Path.Combine(HTML5Intermediatory, "ue4emsdk.txt");
+				if (File.Exists(ue4emsdkcachePath))
+				{
+					string cachedClang = File.ReadAllText(ue4emsdkcachePath);
+					if ( cachedClang.Equals(SDKVersion, StringComparison.Ordinal) )
+					{
+						deleteAsmjsCache = false;
+					}
+					else
+					{
+						File.Delete(ue4emsdkcachePath); // to be recreated
+					}
+				}
+				else
+				{
+					deleteAsmjsCache = true; // this overrides everything
+				}
+				// ----------------------------------------
+				if ( deleteAsmjsCache )
+				{
+					if (Directory.Exists(CachePath))
+					{
+						Directory.Delete(CachePath, true);
+					}
+					File.WriteAllText(ue4emsdkcachePath, SDKVersion);
+				}
+			}
+			catch (Exception Ex)
+			{
+				Log.TraceErrorOnce(" Recreation of Emscripten Temp folder failed because of " + Ex.ToString());
+			}
+
+			// done
 			return TempPath;
 		}
 
@@ -266,16 +326,15 @@ namespace UnrealBuildTool
 		{
 			get
 			{
-				switch (BuildHostPlatform.Current.Platform)
+				if (BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Win64)
 				{
-					case UnrealTargetPlatform.Win64:
-						return "USERPROFILE";
-					case UnrealTargetPlatform.Mac:
-					case UnrealTargetPlatform.Linux:
-						return "HOME";
-					default:
-						return "error_unknown_platform";
+					return "USERPROFILE";
 				}
+				if (BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Linux || BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Mac)
+				{
+					return "HOME";
+				}
+				return "error_unknown_platform";
 			}
 		}
 
@@ -334,14 +393,22 @@ namespace UnrealBuildTool
 // jic output dump is needed...
 //				processInfo.RedirectStandardError = true;
 //				processInfo.RedirectStandardOutput = true;
-				Process process = Process.Start(processInfo);
-//				process.OutputDataReceived += (object sender, DataReceivedEventArgs e) => Log.TraceInformation("output>>" + e.Data);
-//				process.BeginOutputReadLine();
-//				process.ErrorDataReceived += (object sender, DataReceivedEventArgs e) => Log.TraceInformation("error>>" + e.Data);
-//				process.BeginErrorReadLine();
-				process.WaitForExit();
-				Log.TraceInformation("emcc ExitCode: {0}", process.ExitCode);
-				process.Close();
+				try
+				{
+					Process process = Process.Start(processInfo);
+//					process.OutputDataReceived += (object sender, DataReceivedEventArgs e) => Log.TraceInformation("output>>" + e.Data);
+//					process.BeginOutputReadLine();
+//					process.ErrorDataReceived += (object sender, DataReceivedEventArgs e) => Log.TraceInformation("error>>" + e.Data);
+//					process.BeginErrorReadLine();
+					process.WaitForExit();
+					Log.TraceInformation("emcc ExitCode: {0}", process.ExitCode);
+					process.Close();
+				}
+				catch (System.ComponentModel.Win32Exception ex)
+				{
+					// Process.Start() as terminated quick enough betore control has returned to process.WaitForExit()
+					Log.TraceInformation("Win32Exception ex.NativeErrorCode: {0}", ex.NativeErrorCode);
+				}
 				// uncomment OPTIMIZER (GUBP on build machines needs this)
 				// and PYTHON (reduce warnings on EMCC_DEBUG=1)
 				string pyth = Regex.Replace(PYTHON, @"\\", @"\\");
@@ -391,6 +458,28 @@ namespace UnrealBuildTool
 			Environment.SetEnvironmentVariable("NODE", NODE_JS);
 			Environment.SetEnvironmentVariable("LLVM", LLVM_ROOT);
 
+			// --------------------------------------------------
+			// the following is needed when UE4 from GitHub on Linux is used
+			if (BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Linux)
+			{
+				string findpath = "\"" + Path.Combine(EMSCRIPTEN_ROOT, "system", "lib") + "\"";
+				ProcessStartInfo findproc = new ProcessStartInfo("find", findpath + " -type f -name \"*symbols\" -exec dos2unix {} \\;");
+				findproc.CreateNoWindow = true;
+				findproc.UseShellExecute = false;
+				try
+				{
+					Process process = Process.Start(findproc);
+					process.WaitForExit();
+					Log.TraceInformation("find symbols dos2unix conversions ExitCode: {0}", process.ExitCode);
+					process.Close();
+				}
+				catch (System.ComponentModel.Win32Exception ex)
+				{
+					// Process.Start() as terminated quick enough betore control has returned to process.WaitForExit()
+					Log.TraceInformation("Win32Exception ex.NativeErrorCode: {0}", ex.NativeErrorCode);
+				}
+			}
+
 			return DOT_EMSCRIPTEN;
 		}
 
@@ -428,6 +517,16 @@ namespace UnrealBuildTool
 		public static FileReference Python()
 		{
 			return new FileReference(PYTHON);
+		}
+
+		/// <summary>
+		///
+		/// </summary>
+		/// <returns></returns>
+		public static string MacPythonLib() // UE-75402
+		{
+			string UE4PythonPath = FileReference.Combine(UnrealBuildTool.EngineDirectory, "Binaries", "ThirdParty", "Python").FullName;
+			return Path.Combine(UE4PythonPath, "Mac", "lib", "python2.7", "lib-dynload");
 		}
 
 		/// <summary>

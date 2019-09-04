@@ -151,6 +151,9 @@ public:
 	/** Access cached final vertices */
 	const TArray<FFinalSkinVertex>& GetCachedFinalVertices() const { return CachedFinalVertices; }
 
+
+	virtual void UpdateSkinWeightBuffer(USkinnedMeshComponent* InMeshComponent) override;
+
 private:
 	/** vertex data for rendering a single LOD */
 	struct FSkeletalMeshObjectLOD
@@ -206,10 +209,7 @@ private:
 			CumulativeResourceSize.AddUnknownMemoryBytes(StaticMeshVertexBuffer.GetResourceSize() + PositionVertexBuffer.GetStride() * PositionVertexBuffer.GetNumVertices());
 		}
 
-#if RHI_RAYTRACING
-		/** Builds ray tracing acceleration structures per LOD. */
-		void BuildRayTracingAccelerationStructure();
-#endif // RHI_RAYTRACING
+		void UpdateSkinWeights(FSkelMeshComponentLODInfo* CompLODInfo);
 	};
 
 	/** Render data for each LOD */

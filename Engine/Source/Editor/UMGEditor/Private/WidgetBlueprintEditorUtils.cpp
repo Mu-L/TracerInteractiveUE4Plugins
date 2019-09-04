@@ -781,6 +781,18 @@ void FWidgetBlueprintEditorUtils::ReplaceWidgetWithSelectedTemplate(TSharedRef<F
 		CurrentParent->SetFlags(RF_Transactional);
 		CurrentParent->Modify();
 		CurrentParent->ReplaceChild(ThisWidget, NewReplacementWidget);
+
+		FString ReplaceName = ThisWidget->GetName();
+		bool bIsGeneratedName = ThisWidget->IsGeneratedName();
+		// Rename the removed widget to the transient package so that it doesn't conflict with future widgets sharing the same name.
+		ThisWidget->Rename(nullptr, nullptr);
+
+		// Rename the new Widget to maintain the current name if it's not a generic name
+		if (!bIsGeneratedName)
+		{
+			ReplaceName = FindNextValidName(BP->WidgetTree, ReplaceName);
+			NewReplacementWidget->Rename(*ReplaceName, BP->WidgetTree);
+		}
 	}
 	else if (ThisWidget == BP->WidgetTree->RootWidget)
 	{
@@ -936,8 +948,18 @@ void FWidgetBlueprintEditorUtils::ReplaceWidgets(TSharedRef<FWidgetBlueprintEdit
 				}
 			}
 
+			FString ReplaceName = Item.GetTemplate()->GetName();
+			bool bIsGeneratedName = Item.GetTemplate()->IsGeneratedName();
 			// Rename the removed widget to the transient package so that it doesn't conflict with future widgets sharing the same name.
 			Item.GetTemplate()->Rename(nullptr, nullptr);
+
+			// Rename the new Widget to maintain the current name if it's not a generic name
+			if (!bIsGeneratedName)
+			{
+				ReplaceName = FindNextValidName(BP->WidgetTree, ReplaceName);
+				NewReplacementWidget->Rename(*ReplaceName, BP->WidgetTree);
+			}
+
 	}
 
 	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
@@ -1347,17 +1369,28 @@ void FWidgetBlueprintEditorUtils::ImportWidgetsFromText(UWidgetBlueprint* BP, co
 
 		Widget->SetFlags(RF_Transactional);
 
+		// We don't export parent slot pointers, so each panel will need to point it's children back to itself
+		UPanelWidget* PanelWidget = Cast<UPanelWidget>(Widget);
+		if (PanelWidget)
+		{
+			TArray<UPanelSlot*> PanelSlots = PanelWidget->GetSlots();
+			for (int32 i = 0; i < PanelWidget->GetChildrenCount(); i++)
+			{
+				PanelWidget->GetChildAt(i)->Slot = PanelSlots[i];
+			}
+		}
+
 		// If there is an existing widget with the same name, rename the newly placed widget.
 		FString WidgetOldName = Widget->GetName();
-		if ( FindObject<UObject>(BP->WidgetTree, *WidgetOldName) )
+		FString NewName = FindNextValidName(BP->WidgetTree, WidgetOldName);
+		if (NewName != WidgetOldName)
 		{
 			UWidgetSlotPair* SlotData = PastedExtraSlotData.FindRef(Widget->GetFName());
 			if ( SlotData )
 			{
 				PastedExtraSlotData.Remove(Widget->GetFName());
 			}
-
-			Widget->Rename(nullptr, BP->WidgetTree);
+			Widget->Rename(*NewName, BP->WidgetTree);
 
 			if (Widget->GetDisplayLabel().Equals(WidgetOldName))
 			{
@@ -1486,6 +1519,47 @@ bool FWidgetBlueprintEditorUtils::IsUsableWidgetClass(UClass* WidgetClass)
 	}
 
 	return false;
+}
+
+FString RemoveSuffixFromName(const FString OldName)
+{
+	int NameLen = OldName.Len();
+	int SuffixIndex = 0;
+	if (OldName.FindLastChar('_', SuffixIndex))
+	{
+		NameLen = SuffixIndex;
+		for (int32 i = SuffixIndex + 1; i < OldName.Len(); ++i)
+		{
+			const TCHAR& C = OldName[i];
+			const bool bGoodChar = ((C >= '0') && (C <= '9'));
+			if (!bGoodChar)
+			{
+				return OldName;
+			}
+		}
+	}
+	return FString(NameLen, *OldName);
+}
+
+FString FWidgetBlueprintEditorUtils::FindNextValidName(UWidgetTree* WidgetTree, const FString& Name)
+{
+	// If the name of the widget is not already used, we use it.	
+	if (FindObject<UObject>(WidgetTree, *Name))
+	{
+		// If the name is already used, we will suffix it with '_X'
+		FString NameWithoutSuffix = RemoveSuffixFromName(Name);
+		FString NewName = NameWithoutSuffix;
+
+		int32 Postfix = 0;
+		while (FindObject<UObject>(WidgetTree, *NewName))
+		{
+			++Postfix;
+			NewName = FString::Printf(TEXT("%s_%d"), *NameWithoutSuffix, Postfix);
+		}
+
+		return NewName;
+	}
+	return Name;
 }
 
 #undef LOCTEXT_NAMESPACE

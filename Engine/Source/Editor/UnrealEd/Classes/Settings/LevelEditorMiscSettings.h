@@ -48,6 +48,10 @@ public:
 	UPROPERTY(EditAnywhere, config, Category=Sound)
 	uint32 bAllowBackgroundAudio:1;
 
+	/** If checked, will create a new audio engine instance for the play-in-editor window. Otherwise, will re-use the audio device used in content browser. */
+	UPROPERTY(EditAnywhere, config, Category = Sound)
+	uint32 bCreateNewAudioDeviceForPlayInEditor: 1;
+
 	/** If true audio will be enabled in the editor. Does not affect PIE **/
 	UPROPERTY(config)
 	uint32 bEnableRealTimeAudio:1;
@@ -65,6 +69,18 @@ public:
 	/** The default level streaming class to use when adding new streaming levels */
 	UPROPERTY(EditAnywhere, config, Category=Levels)
 	TSubclassOf<ULevelStreaming> DefaultLevelStreamingClass;
+
+	UPROPERTY(EditAnywhere, config, Category = Levels)
+	bool bPromptWhenAddingToLevelBeforeCheckout;
+
+	UPROPERTY(EditAnywhere, config, Category = Levels)
+	bool bPromptWhenAddingToLevelOutsideBounds;
+
+	UPROPERTY(EditAnywhere, config, Category = Levels, Meta = (ClampMin = "0.0", ClampMax = "100.0"))
+	float PercentageThresholdForPrompt;
+
+	UPROPERTY(EditAnywhere, config, Category = Levels)
+	FVector MinimumBoundsForCheckingSize;
 
 public:
 

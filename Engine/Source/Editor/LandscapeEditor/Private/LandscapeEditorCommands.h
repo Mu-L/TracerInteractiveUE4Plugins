@@ -34,6 +34,7 @@ public:
 	TSharedPtr<FUICommandInfo> ResizeLandscape;
 
 	TSharedPtr<FUICommandInfo> SculptTool;
+	TSharedPtr<FUICommandInfo> EraseTool;
 	TSharedPtr<FUICommandInfo> PaintTool;
 	TSharedPtr<FUICommandInfo> SmoothTool;
 	TSharedPtr<FUICommandInfo> FlattenTool;
@@ -43,7 +44,7 @@ public:
 	TSharedPtr<FUICommandInfo> NoiseTool;
 	TSharedPtr<FUICommandInfo> RetopologizeTool;
 	TSharedPtr<FUICommandInfo> VisibilityTool;
-	TSharedPtr<FUICommandInfo> BPCustomTool;
+	TSharedPtr<FUICommandInfo> BlueprintBrushTool;
 
 	TSharedPtr<FUICommandInfo> SelectComponentTool;
 	TSharedPtr<FUICommandInfo> AddComponentTool;
@@ -74,6 +75,7 @@ public:
 	TSharedPtr<FUICommandInfo> ViewModeLayerDebug;
 	TSharedPtr<FUICommandInfo> ViewModeWireframeOnTop;
 	TSharedPtr<FUICommandInfo> ViewModeLayerUsage;
+	TSharedPtr<FUICommandInfo> ViewModeLayerContribution;
 
 	// Adjusting brushes
 	TSharedPtr<FUICommandInfo> IncreaseBrushSize;

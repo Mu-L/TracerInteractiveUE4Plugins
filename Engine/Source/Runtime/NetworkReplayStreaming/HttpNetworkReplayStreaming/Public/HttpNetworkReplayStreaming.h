@@ -3,7 +3,6 @@
 
 #include "CoreMinimal.h"
 #include "Stats/Stats.h"
-#include "Misc/NetworkVersion.h"
 #include "NetworkReplayStreaming.h"
 #include "Interfaces/IHttpRequest.h"
 #include "Tickable.h"
@@ -196,6 +195,8 @@ public:
 	double				LastAccessTime;
 };
 
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
+
 /**
  * Http network replay streaming manager
  */
@@ -205,16 +206,16 @@ public:
 	FHttpNetworkReplayStreamer();
 
 	/** INetworkReplayStreamer implementation */
-	virtual void		StartStreaming( const FString& CustomName, const FString& FriendlyName, const TArray< FString >& UserNames, bool bRecord, const FNetworkReplayVersion& ReplayVersion, const FStartStreamingCallback& Delegate ) override;
-	virtual void		StartStreaming( const FString& CustomName, const FString& FriendlyName, const TArray< int32 >& UserIndices, bool bRecord, const FNetworkReplayVersion& ReplayVersion, const FStartStreamingCallback& Delegate ) override;
+	virtual void		StartStreaming(const FStartStreamingParameters& Params, const FStartStreamingCallback& Delegate) override;
 	virtual void		StopStreaming() override;
 	virtual FArchive*	GetHeaderArchive() override;
 	virtual FArchive*	GetStreamingArchive() override;
 	virtual FArchive*	GetCheckpointArchive() override;
 	virtual void		FlushCheckpoint( const uint32 TimeInMS ) override;
-	virtual void		GotoCheckpointIndex( const int32 CheckpointIndex, const FGotoCallback& Delegate ) override;
-	virtual void		GotoTimeInMS( const uint32 TimeInMS, const FGotoCallback& Delegate ) override;
+	virtual void		GotoCheckpointIndex( const int32 CheckpointIndex, const FGotoCallback& Delegate, EReplayCheckpointType CheckpointType ) override;
+	virtual void		GotoTimeInMS( const uint32 TimeInMS, const FGotoCallback& Delegate, EReplayCheckpointType CheckpointType ) override;
 	virtual void		UpdateTotalDemoTime( uint32 TimeInMS ) override;
+	virtual void		UpdatePlaybackTime(uint32 TimeInMS) override {}
 	virtual uint32		GetTotalDemoTime() const override { return TotalDemoTimeInMS; }
 	virtual bool		IsDataAvailable() const override;
 	virtual void		SetHighPriorityTimeRange( const uint32 StartTimeInMS, const uint32 EndTimeInMS ) override;
@@ -229,12 +230,14 @@ public:
 	virtual void		EnumerateEvents( const FString& Group, const FEnumerateEventsCallback& Delegate ) override;
 	virtual void		EnumerateEvents( const FString& ReplayName, const FString& Group, const FEnumerateEventsCallback& Delegate ) override;
 	virtual void		EnumerateEvents( const FString& ReplayName, const FString& Group, const int32 UserIndex, const FEnumerateEventsCallback& Delegate ) override;
-	virtual void		EnumerateRecentStreams( const FNetworkReplayVersion& ReplayVersion, const FString& RecentViewer, const FEnumerateStreamsCallback& Delegate ) override;
 	virtual void		EnumerateRecentStreams( const FNetworkReplayVersion& ReplayVersion, const int32 UserIndex, const FEnumerateStreamsCallback& Delegate ) override;
 	virtual void		AddUserToReplay(const FString& UserString) override;
 	virtual void		RequestEventData(const FString& EventId, const FRequestEventDataCallback& Delegate) override;
 	virtual void		RequestEventData(const FString& ReplayName, const FString& EventId, const FRequestEventDataCallback& Delegate) override;
 	virtual void		RequestEventData(const FString& ReplayName, const FString& EventId, const int32 UserIndex, const FRequestEventDataCallback& Delegate) override;
+	virtual void		RequestEventGroupData(const FString& Group, const FRequestEventGroupDataCallback& Delegate) override;
+	virtual void		RequestEventGroupData(const FString& ReplayName, const FString& Group, const FRequestEventGroupDataCallback& Delegate) override;
+	virtual void		RequestEventGroupData(const FString& ReplayName, const FString& Group, const int32 UserIndex, const FRequestEventGroupDataCallback& Delegate) override;
 	virtual void		SearchEvents(const FString& EventGroup, const FSearchEventsCallback& Delegate) override;
 	virtual void		KeepReplay(const FString& ReplayName, const bool bKeep, const FKeepReplayCallback& Delegate) override;
 	virtual void		KeepReplay(const FString& ReplayName, const bool bKeep, const int32 UserIndex, const FKeepReplayCallback& Delegate) override;
@@ -259,6 +262,10 @@ public:
 	{
 		return EStreamingOperationResult::Unsupported;
 	}
+
+	virtual bool IsCheckpointTypeSupported(EReplayCheckpointType CheckpointType) const override;
+
+	virtual const int32 GetUserIndexFromUserString(const FString& UserString) override;
 
 	/** FHttpNetworkReplayStreamer */
 	void UploadHeader();
@@ -292,6 +299,9 @@ public:
 	virtual bool DecompressResponse(FHttpResponsePtr HttpResponse, TArray<uint8>& ResultBuffer) const;
 	virtual bool CompressRequest(FHttpRequestPtr HttpRequest, const TArray<uint8>& RequestBuffer) const;
 
+	void InternalGotoTimeInMS(const uint32 TimeInMS, const FGotoCallback& Delegate, bool bDelta);
+	void InternalGotoCheckpointIndex(const int32 CheckpointIndex, const FGotoCallback& Delegate, const FHttpRequestCompleteDelegate& RequestDelegate);
+
 	/** EStreamerState - Overall state of the streamer */
 	enum class EStreamerState
 	{
@@ -307,6 +317,7 @@ public:
 	void HttpDownloadHeaderFinished( FHttpRequestPtr HttpRequest, FHttpResponsePtr HttpResponse, bool bSucceeded, FDownloadHeaderCallback Delegate);
 	void HttpDownloadFinished( FHttpRequestPtr HttpRequest, FHttpResponsePtr HttpResponse, bool bSucceeded, int32 RequestedStreamChunkIndex, bool bStreamWasLive );
 	void HttpDownloadCheckpointFinished( FHttpRequestPtr HttpRequest, FHttpResponsePtr HttpResponse, bool bSucceeded );
+	void HttpDownloadCheckpointDeltaFinished( FHttpRequestPtr HttpRequest, FHttpResponsePtr HttpResponse, bool bSucceeded );
 	void HttpRefreshViewerFinished( FHttpRequestPtr HttpRequest, FHttpResponsePtr HttpResponse, bool bSucceeded );
 	void HttpStartUploadingFinished( FHttpRequestPtr HttpRequest, FHttpResponsePtr HttpResponse, bool bSucceeded );
 	void HttpStopUploadingFinished( FHttpRequestPtr HttpRequest, FHttpResponsePtr HttpResponse, bool bSucceeded );
@@ -357,6 +368,7 @@ public:
 	FStartStreamingCallback			StartStreamingDelegate;		// Delegate passed in to StartStreaming
 	FGotoCallback					GotoCheckpointDelegate;
 	int32							DownloadCheckpointIndex;
+	int32							DeltaDownloadCheckpointIndex;
 	int64							LastGotoTimeInMS;
 
 	FReplayEventList					CheckpointList;
@@ -372,6 +384,8 @@ public:
 
 	int32								RefreshViewerFails;
 };
+
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
 
 class HTTPNETWORKREPLAYSTREAMING_API FHttpNetworkReplayStreamingFactory : public INetworkReplayStreamingFactory, public FTickableGameObject
 {

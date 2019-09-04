@@ -370,7 +370,7 @@ static uint32 GetMaxArgLength()
     return ARG_MAX;
 #else
     // Ask the remote machine via "getconf ARG_MAX"
-    return 1024 * 256;
+	return 1024;
 #endif
 }
 
@@ -476,6 +476,14 @@ FString GetMetalBinaryPath(uint32 ShaderPlatform)
 		{
 			FString MetalToolsPath = bIsMobile ? FString::Printf(TEXT("%s/Platforms/iPhoneOS.platform/usr/bin"), *XcodePath) : FString::Printf(TEXT("%s/Toolchains/XcodeDefault.xctoolchain/usr/metal/macos/bin"), *XcodePath);
 			FString MetalPath = MetalToolsPath + TEXT("/metal");
+			
+			// Also consider the alternative metal path for iOS in XCode 11 beta
+			if (!RemoteFileExists(MetalPath) && bIsMobile)
+			{
+				MetalToolsPath = FString::Printf(TEXT("%s/Toolchains/XcodeDefault.xctoolchain/usr/metal/ios/bin"), *XcodePath);
+				MetalPath = MetalToolsPath + TEXT("/metal");
+			}
+			
 			if (!RemoteFileExists(MetalPath))
 			{
 				if (bIsMobile)
@@ -487,6 +495,12 @@ FString GetMetalBinaryPath(uint32 ShaderPlatform)
 					MetalToolsPath = FString::Printf(TEXT("%s/Platforms/MacOSX.platform/usr/bin"), *XcodePath);
 				}
 				MetalPath = MetalToolsPath + TEXT("/metal");
+
+				if (!RemoteFileExists(MetalPath) && bIsMobile)
+				{
+					MetalToolsPath = FString::Printf(TEXT("%s/Toolchains/XcodeDefault.xctoolchain/usr/metal/ios/bin"), *XcodePath);
+					MetalPath = MetalToolsPath + TEXT("/metal");
+				}
 			}
 
 			if (RemoteFileExists(MetalPath))
@@ -1102,6 +1116,12 @@ void BuildMetalShaderOutput(
 			}
 		}
 		
+		if (Version == 6 || ShaderInput.Environment.CompilerFlags.Contains(CFLAG_ForceDXC))
+		{
+			Header.Bindings.LinearBuffer = Header.Bindings.TypedBuffers;
+			Header.Bindings.TypedBuffers = 0;
+		}
+		
 		// Raw mode means all buffers are invariant
 		if (TypeMode == EMetalTypeBufferModeRaw)
 		{
@@ -1134,7 +1154,7 @@ void BuildMetalShaderOutput(
 
 	// Then the list of outputs.
 	static const FString TargetPrefix = "FragColor";
-	static const FString GL_FragDepth = "FragDepth";
+	static const FString TargetPrefix2 = "SV_Target";
 	// Only outputs for pixel shaders must be tracked.
 	if (Frequency == SF_Pixel)
 	{
@@ -1146,12 +1166,18 @@ void BuildMetalShaderOutput(
 				uint8 TargetIndex = ParseNumber(*Output.Name + TargetPrefix.Len());
 				Header.Bindings.InOutMask |= (1 << TargetIndex);
 			}
-			// Handle depth writes.
-			else if (Output.Name.Equals(GL_FragDepth))
+			else if (Output.Name.StartsWith(TargetPrefix2))
 			{
-				Header.Bindings.InOutMask |= 0x8000;
+				uint8 TargetIndex = ParseNumber(*Output.Name + TargetPrefix2.Len());
+				Header.Bindings.InOutMask |= (1 << TargetIndex);
 			}
         }
+		
+		// For fragment shaders that discard but don't output anything we need at least a depth-stencil surface, so we need a way to validate this at runtime.
+		if (FCStringAnsi::Strstr(USFSource, "[[ depth(") != nullptr || FCStringAnsi::Strstr(USFSource, "[[depth(") != nullptr)
+		{
+			Header.Bindings.InOutMask |= 0x8000;
+		}
         
         // For fragment shaders that discard but don't output anything we need at least a depth-stencil surface, so we need a way to validate this at runtime.
         if (FCStringAnsi::Strstr(USFSource, "discard_fragment()") != nullptr)
@@ -1305,20 +1331,27 @@ void BuildMetalShaderOutput(
 	Header.NumThreadsY = CCHeader.NumThreads[1];
 	Header.NumThreadsZ = CCHeader.NumThreads[2];
 	
-	Header.TessellationOutputControlPoints 		= CCHeader.TessellationOutputControlPoints;
-	Header.TessellationDomain					= CCHeader.TessellationDomain;
-	Header.TessellationInputControlPoints       = CCHeader.TessellationInputControlPoints;
-	Header.TessellationMaxTessFactor            = CCHeader.TessellationMaxTessFactor;
-	Header.TessellationOutputWinding			= CCHeader.TessellationOutputWinding;
-	Header.TessellationPartitioning				= CCHeader.TessellationPartitioning;
-	Header.TessellationPatchesPerThreadGroup    = CCHeader.TessellationPatchesPerThreadGroup;
-	Header.TessellationPatchCountBuffer         = CCHeader.TessellationPatchCountBuffer;
-	Header.TessellationIndexBuffer              = CCHeader.TessellationIndexBuffer;
-	Header.TessellationHSOutBuffer              = CCHeader.TessellationHSOutBuffer;
-	Header.TessellationHSTFOutBuffer            = CCHeader.TessellationHSTFOutBuffer;
-	Header.TessellationControlPointOutBuffer    = CCHeader.TessellationControlPointOutBuffer;
-	Header.TessellationControlPointIndexBuffer  = CCHeader.TessellationControlPointIndexBuffer;
-	Header.TessellationOutputAttribs            = TessOutputAttribs;
+	if (ShaderInput.Target.Platform == SP_METAL_SM5 && (Frequency == SF_Vertex || Frequency == SF_Hull || Frequency == SF_Domain))
+	{
+		FMetalTessellationHeader TessHeader;
+		TessHeader.TessellationOutputControlPoints 		= CCHeader.TessellationOutputControlPoints;
+		TessHeader.TessellationDomain					= CCHeader.TessellationDomain;
+		TessHeader.TessellationInputControlPoints       = CCHeader.TessellationInputControlPoints;
+		TessHeader.TessellationMaxTessFactor            = CCHeader.TessellationMaxTessFactor;
+		TessHeader.TessellationOutputWinding			= CCHeader.TessellationOutputWinding;
+		TessHeader.TessellationPartitioning				= CCHeader.TessellationPartitioning;
+		TessHeader.TessellationPatchesPerThreadGroup    = CCHeader.TessellationPatchesPerThreadGroup;
+		TessHeader.TessellationPatchCountBuffer         = CCHeader.TessellationPatchCountBuffer;
+		TessHeader.TessellationIndexBuffer              = CCHeader.TessellationIndexBuffer;
+		TessHeader.TessellationHSOutBuffer              = CCHeader.TessellationHSOutBuffer;
+		TessHeader.TessellationHSTFOutBuffer            = CCHeader.TessellationHSTFOutBuffer;
+		TessHeader.TessellationControlPointOutBuffer    = CCHeader.TessellationControlPointOutBuffer;
+		TessHeader.TessellationControlPointIndexBuffer  = CCHeader.TessellationControlPointIndexBuffer;
+		TessHeader.TessellationOutputAttribs            = TessOutputAttribs;
+
+		Header.Tessellation.Add(TessHeader);
+		
+	}
 	Header.bDeviceFunctionConstants				= (FCStringAnsi::Strstr(USFSource, "#define __METAL_DEVICE_CONSTANT_INDEX__ 1") != nullptr);
 	Header.SideTable 							= CCHeader.SideTable;
 	Header.Bindings.ArgumentBufferMasks			= CCHeader.ArgumentBuffers;
@@ -1938,8 +1971,6 @@ void CompileShader_Metal(const FShaderCompilerInput& _Input,FShaderCompilerOutpu
 		AdditionalDefines.SetDefine(TEXT("MAC"), 1);
 	}
 	
-	AdditionalDefines.SetDefine(TEXT("COMPILER_HLSLCC"), 1 );
-	AdditionalDefines.SetDefine(TEXT("row_major"), TEXT(""));
 	AdditionalDefines.SetDefine(TEXT("COMPILER_METAL"), 1);
 
 	static FName NAME_SF_METAL(TEXT("SF_METAL"));
@@ -1963,6 +1994,11 @@ void CompileShader_Metal(const FShaderCompilerInput& _Input,FShaderCompilerOutpu
             LexFromString(VersionEnum, *(*MaxVersion));
         }
     }
+	
+	// The new compiler is only available on Mac or Windows for the moment.
+#if !(PLATFORM_MAC || PLATFORM_WINDOWS)
+	VersionEnum = FMath::Min(VersionEnum, (uint8)5);
+#endif
 	
 	bool bAppleTV = (Input.ShaderFormat == NAME_SF_METAL_TVOS || Input.ShaderFormat == NAME_SF_METAL_MRT_TVOS);
     if (Input.ShaderFormat == NAME_SF_METAL || Input.ShaderFormat == NAME_SF_METAL_TVOS)
@@ -2028,11 +2064,24 @@ void CompileShader_Metal(const FShaderCompilerInput& _Input,FShaderCompilerOutpu
 		return;
 	}
 	
+
+	bool const bUseSC = Input.Environment.CompilerFlags.Contains(CFLAG_ForceDXC);
+	if (bUseSC)
+	{
+        AdditionalDefines.SetDefine(TEXT("COMPILER_HLSLCC"), 2);
+	}
+	else
+	{
+        AdditionalDefines.SetDefine(TEXT("COMPILER_HLSLCC"), 1);
+		AdditionalDefines.SetDefine(TEXT("row_major"), TEXT(""));
+	}
+	
     EMetalTypeBufferMode TypeMode = EMetalTypeBufferModeRaw;
 	FString MinOSVersion;
 	FString StandardVersion;
 	switch(VersionEnum)
     {
+		case 6:
         case 5:
             // Enable full SM5 feature support so tessellation & fragment UAVs compile
             TypeMode = EMetalTypeBufferModeTB;
@@ -2248,12 +2297,12 @@ void CompileShader_Metal(const FShaderCompilerInput& _Input,FShaderCompilerOutpu
 
 
 	// This requires removing the HLSLCC_NoPreprocess flag later on!
-    if (VersionEnum < 5)
+    if (VersionEnum < 5 || VersionEnum == 6)
     {
         RemoveUniformBuffersFromSource(Input.Environment, PreprocessedShader);
     }
 
-	uint32 CCFlags = HLSLCC_NoPreprocess | HLSLCC_PackUniformsIntoUniformBufferWithNames | HLSLCC_FixAtomicReferences | HLSLCC_KeepSamplerAndImageNames;
+	uint32 CCFlags = HLSLCC_NoPreprocess | HLSLCC_PackUniformsIntoUniformBufferWithNames | HLSLCC_FixAtomicReferences | HLSLCC_RetainSizes | HLSLCC_KeepSamplerAndImageNames;
 	if (!bDirectCompile || UE_BUILD_DEBUG)
 	{
 		// Validation is expensive - only do it when compiling directly for debugging
@@ -2459,7 +2508,7 @@ bool StripShader_Metal(TArray<uint8>& Code, class FString const& DebugPath, bool
 						FileHandle->Write((const uint8 *)ShaderSource, ShaderSourceLength);
 						delete FileHandle;
 
-						IFileManager::Get().Move(*DebugFilePath, *TempPath, false, false, true, false);
+						IFileManager::Get().Move(*DebugFilePath, *TempPath, true, false, true, false);
 						IFileManager::Get().Delete(*TempPath);
 					}
 					else
@@ -2702,7 +2751,7 @@ bool FinalizeLibrary_Metal(FName const& Format, FString const& WorkingDir, FStri
 				
 				// Build source file name path
 				UE_LOG(LogShaders, Verbose, TEXT("[%d/%d] %s Main_%0.8x_%0.8x.o"), ++Index, Shaders.Num(), *Format.GetPlainNameString(), Len, CRC);
-				FString SourceFileNameParam = FString::Printf(TEXT("\"%s/Main_%0.8x_%0.8x.o\""), *WorkingDir, Len, CRC);
+				FString SourceFileNameParam = FString::Printf(TEXT("%s/Main_%0.8x_%0.8x.o"), *FPaths::ConvertRelativePathToFull(WorkingDir), Len, CRC);
 				
 				// Remote builds copy file and swizzle Source File Name param
 				if(bBuildingRemotely)
@@ -2790,7 +2839,8 @@ bool FinalizeLibrary_Metal(FName const& Format, FString const& WorkingDir, FStri
 				if (ReturnCode == 0)
 				{
 					// There is problem going to location with spaces using remote copy (at least on Mac no combination of \ and/or "" works) - work around this issue @todo investigate this further
-                    FString LocalCopyLocation = FPaths::Combine(TEXT("/tmp"),FPaths::GetCleanFilename(LibraryPath));
+					FString FileName = FPaths::GetCleanFilename(LibraryPath);
+                    FString LocalCopyLocation = FPaths::Combine(*FPaths::ConvertRelativePathToFull(WorkingDir), FileName);
 						
                     if(bBuildingRemotely && CopyRemoteFileToLocal(RemoteLibPath, LocalCopyLocation))
                     {

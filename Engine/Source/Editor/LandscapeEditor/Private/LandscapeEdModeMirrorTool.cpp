@@ -18,7 +18,8 @@
 #include "LandscapeDataAccess.h"
 #include "LandscapeRender.h"
 #include "LandscapeHeightfieldCollisionComponent.h"
-//#include "LandscapeDataAccess.h"
+#include "Landscape.h"
+#include "Misc/MessageDialog.h"
 
 #define LOCTEXT_NAMESPACE "Landscape"
 
@@ -500,7 +501,14 @@ protected:
 public:
 	virtual void ApplyMirror()
 	{
+		FText Reason;
+		if (!EdMode->CanEditLayer(&Reason))
+		{
+			FMessageDialog::Open(EAppMsgType::Ok, Reason);
+			return;
+		}
 		FScopedTransaction Transaction(LOCTEXT("Mirror_Apply", "Landscape Editing: Mirror Landscape"));
+		FScopedSetLandscapeEditingLayer Scope(EdMode->GetLandscape(), EdMode->GetCurrentLayerGuid(), [&] { EdMode->RequestLayersContentUpdateForceAll(); });
 
 		const ULandscapeInfo* const LandscapeInfo = EdMode->CurrentToolTarget.LandscapeInfo.Get();
 		const ALandscapeProxy* const LandscapeProxy = LandscapeInfo->GetLandscapeProxy();
@@ -639,19 +647,21 @@ public:
 		TSet<ULandscapeComponent*> Components;
 		if (LandscapeEdit.GetComponentsInRegion(DestMinX, DestMinY, DestMaxX, DestMaxY, &Components) && Components.Num() > 0)
 		{
-			for (ULandscapeComponent* Component : Components)
+			ALandscapeProxy::InvalidateGeneratedComponentData(Components);
+
+			if (!EdMode->HasLandscapeLayersContent())
 			{
-				// Recreate collision for modified components and update the navmesh
-				ULandscapeHeightfieldCollisionComponent* CollisionComponent = Component->CollisionComponent.Get();
-				if (CollisionComponent)
+				for (ULandscapeComponent* Component : Components)
 				{
-					CollisionComponent->RecreateCollision();
-					FNavigationSystem::UpdateComponentData(*CollisionComponent);
+					// Recreate collision for modified components and update the navmesh
+					ULandscapeHeightfieldCollisionComponent* CollisionComponent = Component->CollisionComponent.Get();
+					if (CollisionComponent)
+					{
+						CollisionComponent->RecreateCollision();
+						FNavigationSystem::UpdateComponentData(*CollisionComponent);
+					}
 				}
 			}
-
-			// Flush dynamic foliage (grass)
-			ALandscapeProxy::InvalidateGeneratedComponentData(Components);
 
 			EdMode->UpdateLayerUsageInformation();
 		}

@@ -63,20 +63,20 @@ struct ENGINE_API FCollisionResponse
 	FCollisionResponse(ECollisionResponse DefaultResponse);
 
 	/** Set the response of a particular channel in the structure. */
-	void SetResponse(ECollisionChannel Channel, ECollisionResponse NewResponse);
+	bool SetResponse(ECollisionChannel Channel, ECollisionResponse NewResponse);
 
 	/** Set all channels to the specified response */
-	void SetAllChannels(ECollisionResponse NewResponse);
+	bool SetAllChannels(ECollisionResponse NewResponse);
 
 	/** Replace the channels matching the old response with the new response */
-	void ReplaceChannels(ECollisionResponse OldResponse, ECollisionResponse NewResponse);
+	bool ReplaceChannels(ECollisionResponse OldResponse, ECollisionResponse NewResponse);
 
 	/** Returns the response set on the specified channel */
 	FORCEINLINE_DEBUGGABLE ECollisionResponse GetResponse(ECollisionChannel Channel) const { return ResponseToChannels.GetResponse(Channel); }
 	const FCollisionResponseContainer& GetResponseContainer() const { return ResponseToChannels; }
 
 	/** Set all channels from ChannelResponse Array **/
-	void SetCollisionResponseContainer(const FCollisionResponseContainer& InResponseToChannels);
+	bool SetCollisionResponseContainer(const FCollisionResponseContainer& InResponseToChannels);
 	void SetResponsesArray(const TArray<FResponseChannel>& InChannelResponses);
 	void UpdateResponseContainerFromArray();
 
@@ -119,6 +119,8 @@ enum class BodyInstanceSceneState : uint8
 	AwaitingRemove,
 	Removed
 };
+
+#define USE_BODYINSTANCE_DEBUG_NAMES ((WITH_EDITORONLY_DATA || UE_BUILD_DEBUG || LOOKING_FOR_PERF_ISSUES) && !(UE_BUILD_SHIPPING || UE_BUILD_TEST) && !NO_LOGGING)
 
 /** Container for a physics representation of an object */
 USTRUCT(BlueprintType)
@@ -303,6 +305,17 @@ private:
 	UPROPERTY(EditAnywhere, Category=Custom)
 	FName CollisionProfileName;
 
+public:
+
+	/** This physics body's solver iteration count for position. Increasing this will be more CPU intensive, but better stabilized.  */
+	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category=Physics)
+	uint8 PositionSolverIterationCount;
+
+	/** This physics body's solver iteration count for velocity. Increasing this will be more CPU intensive, but better stabilized. */
+	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category = Physics)
+	uint8 VelocitySolverIterationCount;
+
+private:
 	/** Custom Channels for Responses*/
 	UPROPERTY(EditAnywhere, Category = Custom)
 	struct FCollisionResponse CollisionResponses;
@@ -412,14 +425,6 @@ public:
 	UPROPERTY()
 	float PhysicsBlendWeight;
 
-	/** This physics body's solver iteration count for position. Increasing this will be more CPU intensive, but better stabilized.  */
-	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category=Physics)
-	int32 PositionSolverIterationCount;
-
-	/** This physics body's solver iteration count for velocity. Increasing this will be more CPU intensive, but better stabilized. */
-	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category = Physics)
-	int32 VelocitySolverIterationCount;
-
 public:
 
 	FPhysicsActorHandle& GetPhysicsActorHandle();
@@ -429,7 +434,9 @@ public:
 	// Internal physics representation of our body instance
 	FPhysicsActorHandle ActorHandle;
 
+#if USE_BODYINSTANCE_DEBUG_NAMES
 	TSharedPtr<TArray<ANSICHAR>> CharDebugName;
+#endif
 
 	/** PrimitiveComponent containing this body.   */
 	TWeakObjectPtr<class UPrimitiveComponent> OwnerComponent;
@@ -498,7 +505,8 @@ public:
 
 
 	/** Get the scene that owns this body. */
-	FPhysScene* GetPhysicsScene() const;
+	FPhysScene* GetPhysicsScene();
+	const FPhysScene* GetPhysicsScene() const;
 
 	/** Initialise dynamic properties for this instance when using physics - this must be done after scene addition.
 	 *  Note: This function is not thread safe. Make sure to obtain the appropriate physics scene locks before calling this function
@@ -558,6 +566,8 @@ public:
 
 	/** Returns the mass coordinate system to world space transform (position is world center of mass, rotation is world inertia orientation) */
 	FTransform GetMassSpaceToWorldSpace() const;
+
+	/** Returns the mass coordinate system to local space transform (position is local center of mass, rotation should be identity) */
 	FTransform GetMassSpaceLocal() const;
 
 	/** TODO: this only works at runtime when the physics state has been created. Any changes that result in recomputing mass properties will not properly remember this */
@@ -668,11 +678,62 @@ public:
 	/** Enable/disable Continuous Collidion Detection feature */
 	void SetUseCCD(bool bInUseCCD);
 
-	/** Custom projection for physics (callback to update component transform based on physics data) */
-	FCalculateCustomProjection OnCalculateCustomProjection;
+private:
 
-	/** Called whenever mass properties have been re-calculated. */
-	FRecalculatedMassProperties OnRecalculatedMassProperties;
+	/** Struct of body instance delegates that are rarely bound so that we can only allocate memory if one is actually being used. */
+	struct FBodyInstanceDelegates
+	{
+		/** Custom projection for physics (callback to update component transform based on physics data) */
+		FCalculateCustomProjection OnCalculateCustomProjection;
+
+		/** Called whenever mass properties have been re-calculated. */
+		FRecalculatedMassProperties OnRecalculatedMassProperties;
+	};
+
+	/** Specialization of TUniquePtr for storing body instance delegates as there is a need to copy the contents of the delegate structure. */
+	struct FBodyInstanceDelegatesPtr : public TUniquePtr<FBodyInstanceDelegates>
+	{
+		FBodyInstanceDelegatesPtr() = default;
+		FBodyInstanceDelegatesPtr(const FBodyInstanceDelegatesPtr& Other)
+		{
+			if (Other.IsValid())
+			{
+				Reset(new FBodyInstanceDelegates);
+				*Get() = *Other;
+			}
+		}
+
+		FBodyInstanceDelegatesPtr& operator=(const FBodyInstanceDelegatesPtr& Other)
+		{
+			if (Other.IsValid())
+			{
+				if (!IsValid())
+				{
+					Reset(new FBodyInstanceDelegates);
+				}
+				*Get() = *Other;
+			}
+			else
+			{
+				Reset();
+			}
+
+			return *this;
+		}
+	};
+
+	/** Pointer to lazily created container for the body instance delegates. */
+	FBodyInstanceDelegatesPtr BodyInstanceDelegates;
+
+public:
+	/** Executes the OnCalculateCustomProjection delegate if bound. */
+	void ExecuteOnCalculateCustomProjection(FTransform& WorldTM) const;
+
+	/** Returns reference to the OnCalculateCustomProjection delegate. Will allocate delegate struct if not already created. */
+	FCalculateCustomProjection& OnCalculateCustomProjection();
+
+	/** Returns reference to the OnRecalculatedMassProperties delegate. Will allocate delegate struct if not already created. */
+	FRecalculatedMassProperties& OnRecalculatedMassProperties();
 
 	/** See if this body is valid. */
 	bool IsValidBodyInstance() const;
@@ -714,19 +775,19 @@ public:
 	void SetContactReportForceThreshold(float Threshold);
 
 	/** Set the collision response of this body to a particular channel */
-	void SetResponseToChannel(ECollisionChannel Channel, ECollisionResponse NewResponse);
+	bool SetResponseToChannel(ECollisionChannel Channel, ECollisionResponse NewResponse);
 
 	/** Get the collision response of this body to a particular channel */
 	FORCEINLINE_DEBUGGABLE ECollisionResponse GetResponseToChannel(ECollisionChannel Channel) const { return CollisionResponses.GetResponse(Channel); }
 
 	/** Set the response of this body to all channels */
-	void SetResponseToAllChannels(ECollisionResponse NewResponse);
+	bool SetResponseToAllChannels(ECollisionResponse NewResponse);
 
 	/** Replace the channels on this body matching the old response with the new response */
-	void ReplaceResponseToChannels(ECollisionResponse OldResponse, ECollisionResponse NewResponse);
+	bool ReplaceResponseToChannels(ECollisionResponse OldResponse, ECollisionResponse NewResponse);
 
 	/** Set the response of this body to the supplied settings */
-	void SetResponseToChannels(const FCollisionResponseContainer& NewReponses);
+	bool SetResponseToChannels(const FCollisionResponseContainer& NewReponses);
 
 	/** Get Collision ResponseToChannels container for this component **/
 	FORCEINLINE_DEBUGGABLE const FCollisionResponseContainer& GetResponseToChannels() const { return CollisionResponses.GetResponseContainer(); }

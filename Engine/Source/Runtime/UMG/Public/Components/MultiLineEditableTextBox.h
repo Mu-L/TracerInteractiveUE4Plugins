@@ -47,7 +47,7 @@ public:
 	FEditableTextBoxStyle WidgetStyle;
 
 	/** The text style */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Style", meta=(DisplayName="Text Style"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, BlueprintSetter = SetTextStyle, Category="Style", meta=(DisplayName="Text Style"))
 	FTextBlockStyle TextStyle;
 
 	/** Sets whether this text block can be modified interactively by the user */
@@ -85,7 +85,7 @@ public:
 	UPROPERTY()
 	FLinearColor ReadOnlyForegroundColor_DEPRECATED;
 
-	/** Called whenever the text is changed interactively by the user */
+	/** Called whenever the text is changed programmatically or interactively by the user */
 	UPROPERTY(BlueprintAssignable, Category="Widget Event", meta=(DisplayName="OnTextChanged (Multi-Line Text Box)"))
 	FOnMultiLineEditableTextBoxChangedEvent OnTextChanged;
 
@@ -106,11 +106,22 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Widget", meta=(DisplayName="SetText (Multi-Line Text Box)"))
 	void SetText(FText InText);
 
+	/**  */
+	UFUNCTION(BlueprintCallable, Category="Widget", meta=(DisplayName="GetHintText (Multi-Line Text Box)"))
+	FText GetHintText() const;
+
+	/**  */
+	UFUNCTION(BlueprintCallable, Category="Widget", meta=(DisplayName="SetHintText (Multi-Line Text Box)"))
+	void SetHintText(FText InHintText);
+
 	UFUNCTION(BlueprintCallable, Category="Widget", meta=(DisplayName="SetError (Multi-Line Text Box)"))
 	void SetError(FText InError);
 
 	UFUNCTION(BlueprintCallable, Category="Widget", meta=(DisplayName="SetIsReadOnly (Multi-Line Text Box)"))
 	void SetIsReadOnly(bool bReadOnly);
+
+	UFUNCTION(BlueprintSetter)
+	void SetTextStyle(const FTextBlockStyle& InTextStyle);
 
 	//TODO UMG Add Set ReadOnlyForegroundColor
 	//TODO UMG Add Set BackgroundColor

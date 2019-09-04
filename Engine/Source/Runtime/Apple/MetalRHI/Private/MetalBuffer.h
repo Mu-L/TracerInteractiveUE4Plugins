@@ -11,22 +11,28 @@
 
 struct FMetalPooledBufferArgs
 {
-	FMetalPooledBufferArgs() : Device(nil), Size(0), Storage(mtlpp::StorageMode::Shared) {}
+    FMetalPooledBufferArgs() : Device(nil), Size(0), Flags(0), Storage(mtlpp::StorageMode::Shared) {}
 	
-	FMetalPooledBufferArgs(mtlpp::Device InDevice, uint32 InSize, mtlpp::StorageMode InStorage)
+    FMetalPooledBufferArgs(mtlpp::Device InDevice, uint32 InSize, uint32 InFlags, mtlpp::StorageMode InStorage, mtlpp::CpuCacheMode InCpuCacheMode = mtlpp::CpuCacheMode::DefaultCache)
 	: Device(InDevice)
 	, Size(InSize)
+    , Flags(InFlags)
 	, Storage(InStorage)
+	, CpuCacheMode(InCpuCacheMode)
 	{
 	}
 	
 	mtlpp::Device Device;
 	uint32 Size;
+    uint32 Flags;
 	mtlpp::StorageMode Storage;
+	mtlpp::CpuCacheMode CpuCacheMode;
 };
 
 class FMetalSubBufferHeap
 {
+    friend class FMetalResourceHeap;
+    
 public:
 	FMetalSubBufferHeap(NSUInteger Size, NSUInteger Alignment, mtlpp::ResourceOptions, FCriticalSection& PoolMutex);
 	~FMetalSubBufferHeap();
@@ -39,6 +45,7 @@ public:
     NSUInteger     GetUsedSize() const;
 	NSUInteger	 MaxAvailableSize() const;
 	int64     NumCurrentAllocations() const;
+    bool     CanAllocateSize(NSUInteger Size) const;
 
     void SetLabel(const ns::String& label);
 	
@@ -46,7 +53,16 @@ public:
     mtlpp::PurgeableState SetPurgeableState(mtlpp::PurgeableState state);
 	void FreeRange(ns::Range const& Range);
 
+    void SetOwner(ns::Range const& Range, FMetalRHIBuffer* Owner);
+
 private:
+    struct Allocation
+    {
+        ns::Range Range;
+        mtlpp::Buffer::Type Resource;
+        FMetalRHIBuffer* Owner;
+    };
+    
 	FCriticalSection& PoolMutex;
 	int64 volatile OutstandingAllocs;
 	NSUInteger MinAlign;
@@ -54,6 +70,7 @@ private:
 	mtlpp::Buffer ParentBuffer;
 	mutable mtlpp::Heap ParentHeap;
 	TArray<ns::Range> FreeRanges;
+    TArray<Allocation> AllocRanges;
 };
 
 class FMetalSubBufferLinear
@@ -99,6 +116,7 @@ public:
     NSUInteger     GetUsedSize() const;
 	NSUInteger	 GetFreeSize() const;
 	int64     NumCurrentAllocations() const;
+    bool     CanAllocateSize(NSUInteger Size) const;
 
     void SetLabel(const ns::String& label);
 	void FreeRange(ns::Range const& Range);
@@ -108,11 +126,12 @@ public:
 
 private:
 	NSUInteger MinAlign;
+    NSUInteger BlockSize;
 	int64 volatile OutstandingAllocs;
 	int64 volatile UsedSize;
 	mtlpp::Buffer ParentBuffer;
 	mutable mtlpp::Heap ParentHeap;
-	TLockFreePointerListLIFO<ns::Range> FreeRanges;
+	TArray<int8> Blocks;
 };
 
 struct FMetalRingBufferRef
@@ -250,6 +269,7 @@ class FMetalTexturePool
 {
 	enum
 	{
+        PurgeAfterNumFrames = 2, /* Textures must be reused fairly rapidly but after this number of frames we reclaim the memory, even though the object persists */
 		CullAfterNumFrames = 3, /* Textures must be reused fairly rapidly or we bin them as they are much larger than buffers */
 	};
 public:
@@ -345,17 +365,12 @@ class FMetalResourceHeap
 		Size1024,
 		Size2048,
 		Size4096,
+        Size8192,
 		NumMagazineSizes
 	};
 	
 	enum HeapSize
 	{
-		Size16k,
-		Size32k,
-		Size64k,
-		Size128k,
-		Size256k,
-		Size512k,
 		Size1Mb,
 		Size2Mb,
 		NumHeapSizes
@@ -391,20 +406,27 @@ class FMetalResourceHeap
 		/** Number of texture usage types */
 		EMetalHeapTextureUsageNum = 2
 	};
-
+    
+    enum UsageTypes
+    {
+        UsageStatic,
+        UsageDynamic,
+        NumUsageTypes = 2
+    };
+    
 public:
 	FMetalResourceHeap(void);
 	~FMetalResourceHeap();
 	
 	void Init(FMetalCommandQueue& Queue);
 	
-	FMetalBuffer CreateBuffer(uint32 Size, uint32 Alignment, mtlpp::ResourceOptions Options, bool bForceUnique = false);
+    FMetalBuffer CreateBuffer(uint32 Size, uint32 Alignment, uint32 Flags, mtlpp::ResourceOptions Options, bool bForceUnique = false);
 	FMetalTexture CreateTexture(mtlpp::TextureDescriptor Desc, FMetalSurface* Surface);
 	
 	void ReleaseBuffer(FMetalBuffer& Buffer);
 	void ReleaseTexture(FMetalSurface* Surface, FMetalTexture& Texture);
 	
-	void Compact(bool const bForce);
+	void Compact(class FMetalRenderPass* Pass, bool const bForce);
 	
 private:
 	uint32 GetMagazineIndex(uint32 Size);
@@ -424,11 +446,11 @@ private:
 	FMetalCommandQueue* Queue;
 	
 	/** Small allocations (<= 4KB) are made from magazine allocators that use sub-ranges of a buffer */
-	TArray<FMetalSubBufferMagazine*> SmallBuffers[NumAllocTypes][NumMagazineSizes];
+    TArray<FMetalSubBufferMagazine*> SmallBuffers[NumUsageTypes][NumAllocTypes][NumMagazineSizes];
 
 	/** Typical allocations (4KB - 4MB) are made from heap allocators that use sub-ranges of a buffer */
 	/** There are two alignment categories for heaps - 16b for Vertes/Index data and 256b for constant data (macOS-only) */
-	TArray<FMetalSubBufferHeap*> BufferHeaps[NumAllocTypes][NumHeapSizes];
+    TArray<FMetalSubBufferHeap*> BufferHeaps[NumUsageTypes][NumAllocTypes][NumHeapSizes];
 	
 	/** Larger buffers (up-to 32MB) that are subject to bucketing & pooling rather than sub-allocation */
 	FMetalBufferPool Buffers[NumAllocTypes];

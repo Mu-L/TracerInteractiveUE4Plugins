@@ -130,6 +130,10 @@ protected:
 	virtual void OnRightMouseButtonDown(const FPointerEvent& MouseEvent) override;
 	virtual void OnRightMouseButtonUp(const FPointerEvent& MouseEvent) override;
 
+public:
+
+	virtual FReply OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent) override;
+
 private:
 
 	/** Updates the tree selection to match the current sequencer selection. */
@@ -268,6 +272,9 @@ public:
 
 	/** Called to complete a drag and drop onto this drop. */
 	FReply OnAcceptDrop( const FDragDropEvent& DragDropEvent, EItemDropZone ItemDropZone, FDisplayNodeRef DisplayNode );
+
+	/** Gets the padding for this row based on whether it is a root node or not */
+	FMargin GetRowPadding() const;
 
 private:
 

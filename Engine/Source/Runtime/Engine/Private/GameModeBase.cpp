@@ -201,9 +201,9 @@ bool AGameModeBase::SetPause(APlayerController* PC, FCanUnpause CanUnpauseDelega
 
 		// Let the first one in "own" the pause state
 		AWorldSettings * WorldSettings = GetWorldSettings();
-		if (WorldSettings->Pauser == nullptr)
+		if (WorldSettings->GetPauserPlayerState() == nullptr)
 		{
-			WorldSettings->Pauser = PC->PlayerState;
+			WorldSettings->SetPauserPlayerState(PC->PlayerState);
 		}
 		return true;
 	}
@@ -243,7 +243,7 @@ bool AGameModeBase::ClearPause()
 	// Clear the pause state if the list is empty
 	if (Pausers.Num() == 0)
 	{
-		GetWorldSettings()->Pauser = nullptr;
+		GetWorldSettings()->SetPauserPlayerState(nullptr);
 	}
 
 	return bPauseCleared;
@@ -272,9 +272,9 @@ void AGameModeBase::ForceClearUnpauseDelegates(AActor* PauseActor)
 
 		APlayerController* PC = Cast<APlayerController>(PauseActor);
 		AWorldSettings * WorldSettings = GetWorldSettings();
-		if (PC != nullptr && PC->PlayerState != nullptr && WorldSettings != nullptr && WorldSettings->Pauser == PC->PlayerState)
+		if (PC != nullptr && PC->PlayerState != nullptr && WorldSettings != nullptr && WorldSettings->GetPauserPlayerState() == PC->PlayerState)
 		{
-			// Try to find another player to be the worldsettings's Pauser
+			// Try to find another player to be the worldsettings's PauserPlayerState
 			for (FConstPlayerControllerIterator Iterator = GetWorld()->GetPlayerControllerIterator(); Iterator; ++Iterator)
 			{
 				APlayerController* Player = Iterator->Get();
@@ -282,15 +282,15 @@ void AGameModeBase::ForceClearUnpauseDelegates(AActor* PauseActor)
 					&&	Player->PlayerState != PC->PlayerState
 					&& !Player->IsPendingKillPending() && !Player->PlayerState->IsPendingKillPending())
 				{
-					WorldSettings->Pauser = Player->PlayerState;
+					WorldSettings->SetPauserPlayerState(Player->PlayerState);
 					break;
 				}
 			}
 
 			// If it's still pointing to the original player's PlayerState, clear it completely
-			if (WorldSettings->Pauser == PC->PlayerState)
+			if (WorldSettings->GetPauserPlayerState() == PC->PlayerState)
 			{
-				WorldSettings->Pauser = nullptr;
+				WorldSettings->SetPauserPlayerState(nullptr);
 			}
 		}
 	}
@@ -444,37 +444,24 @@ void AGameModeBase::ProcessServerTravel(const FString& URL, bool bAbsolute)
 #if WITH_SERVER_CODE
 	StartToLeaveMap();
 
-	// Force an old style load screen if the server has been up for a long time so that TimeSeconds doesn't overflow and break everything
-	bool bSeamless = (bUseSeamlessTravel && GetWorld()->TimeSeconds < 172800.0f); // 172800 seconds == 48 hours
-
-	FString NextMap;
-	if (URL.ToUpper().Contains(TEXT("?RESTART")))
-	{
-		NextMap = UWorld::RemovePIEPrefix(GetOutermost()->GetName());
-	}
-	else
-	{
-		int32 OptionStart = URL.Find(TEXT("?"));
-		if (OptionStart == INDEX_NONE)
-		{
-			NextMap = URL;
-		}
-		else
-		{
-			NextMap = URL.Left(OptionStart);
-		}
-	}
-
-	FGuid NextMapGuid = UEngine::GetPackageGuid(FName(*NextMap), GetWorld()->IsPlayInEditor());
-
-	// Notify clients we're switching level and give them time to receive.
-	FString URLMod = URL;
-	APlayerController* LocalPlayer = ProcessClientTravel(URLMod, NextMapGuid, bSeamless, bAbsolute);
-
 	UE_LOG(LogGameMode, Log, TEXT("ProcessServerTravel: %s"), *URL);
 	UWorld* World = GetWorld();
 	check(World);
-	World->NextURL = URL;
+	FWorldContext& WorldContext = GEngine->GetWorldContextFromWorldChecked(World);
+
+	// Force an old style load screen if the server has been up for a long time so that TimeSeconds doesn't overflow and break everything
+	bool bSeamless = (bUseSeamlessTravel && GetWorld()->TimeSeconds < 172800.0f); // 172800 seconds == 48 hours
+
+	// Compute the next URL, and pull the map out of it. This handles short->long package name conversion
+	FURL NextURL = FURL(&WorldContext.LastURL, *URL, bAbsolute ? TRAVEL_Absolute : TRAVEL_Relative);
+
+	FGuid NextMapGuid = UEngine::GetPackageGuid(FName(*NextURL.Map), GetWorld()->IsPlayInEditor());
+
+	// Notify clients we're switching level and give them time to receive.
+	FString URLMod = NextURL.ToString();
+	APlayerController* LocalPlayer = ProcessClientTravel(URLMod, NextMapGuid, bSeamless, bAbsolute);
+
+	World->NextURL = URLMod;
 	ENetMode NetMode = GetNetMode();
 
 	if (bSeamless)
@@ -520,6 +507,7 @@ void AGameModeBase::SwapPlayerControllers(APlayerController* OldPC, APlayerContr
 		UPlayer* Player = OldPC->Player;
 		NewPC->NetPlayerIndex = OldPC->NetPlayerIndex; //@warning: critical that this is first as SetPlayer() may trigger RPCs
 		NewPC->NetConnection = OldPC->NetConnection;
+		NewPC->SetReplicates(OldPC->GetIsReplicated());
 		NewPC->SetPlayer(Player);
 		NewPC->CopyRemoteRoleFrom(OldPC);
 
@@ -1366,10 +1354,9 @@ bool AGameModeBase::SpawnPlayerFromSimulate(const FVector& NewLocation, const FR
 		if (PC->GetPawn() == nullptr)
 		{
 			// Use the "auto-possess" pawn in the world, if there is one.
-			for (FConstPawnIterator Iterator = GetWorld()->GetPawnIterator(); Iterator; ++Iterator)
+			for (APawn* Pawn : TActorRange<APawn>(GetWorld()))
 			{
-				APawn* Pawn = Iterator->Get();
-				if (Pawn && Pawn->AutoPossessPlayer == EAutoReceiveInput::Player0)
+				if (Pawn->AutoPossessPlayer == EAutoReceiveInput::Player0)
 				{
 					if (Pawn->Controller == nullptr)
 					{

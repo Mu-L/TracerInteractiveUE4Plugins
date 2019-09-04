@@ -366,7 +366,9 @@ struct FBroadphaseSettings
 	FBroadphaseSettings()
 		: bUseMBPOnClient(false)
 		, bUseMBPOnServer(false)
+		, bUseMBPOuterBounds(false)
 		, MBPBounds(EForceInit::ForceInitToZero)
+		, MBPOuterBounds(EForceInit::ForceInitToZero)
 		, MBPNumSubdivs(2)
 	{
 
@@ -379,12 +381,20 @@ struct FBroadphaseSettings
 	UPROPERTY(EditAnywhere, Category = Broadphase)
 	bool bUseMBPOnServer;
 
+	/** Whether to have MBP grid over concentrated inner bounds with loose outer bounds */
+	UPROPERTY(EditAnywhere, Category = Broadphase)
+	bool bUseMBPOuterBounds;
+
 	/** Total bounds for MBP, must cover the game world or collisions are disabled for out of bounds actors */
-	UPROPERTY(EditAnywhere, Category = Broadphase, meta = (EditCondition = bUseMBP))
+	UPROPERTY(EditAnywhere, Category = Broadphase, meta = (EditCondition = "bUseMBPOnClient || bUseMBPOnServer"))
 	FBox MBPBounds;
 
+	/** Total bounds for MBP, should cover absolute maximum bounds of the game world where physics is required */
+	UPROPERTY(EditAnywhere, Category = Broadphase, meta = (EditCondition = "bUseMBPOnClient || bUseMBPOnServer"))
+	FBox MBPOuterBounds;
+
 	/** Number of times to subdivide the MBP bounds, final number of regions is MBPNumSubdivs^2 */
-	UPROPERTY(EditAnywhere, Category = Broadphase, meta = (EditCondition = bUseMBP, ClampMin=1, ClampMax=16))
+	UPROPERTY(EditAnywhere, Category = Broadphase, meta = (EditCondition = "bUseMBPOnClient || bUseMBPOnServer", ClampMin=1, ClampMax=16))
 	uint32 MBPNumSubdivs;
 };
 
@@ -453,7 +463,7 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=World)
 	uint8 bEnableWorldComposition:1;
-
+		
 	/**
 	 * Enables client-side streaming volumes instead of server-side.
 	 * Expected usage scenario: server has all streaming levels always loaded, clients independently stream levels in/out based on streaming volumes.
@@ -682,7 +692,8 @@ public:
 	FBroadphaseSettings BroadphaseSettings;
 
 	// If paused, FName of person pausing the game.
-	UPROPERTY(transient, replicated)
+	UE_DEPRECATED(4.23, "This property is deprecated. Please use Get/SetPauserPlayerState().")
+	UPROPERTY(transient)
 	class APlayerState* Pauser;
 
 	/** valid only during replication - information about the player(s) being replicated to
@@ -703,13 +714,17 @@ public:
 	UPROPERTY()
 	TArray<UAssetUserData*> AssetUserData;
 
+	// If paused, PlayerState of person pausing the game.
+	UPROPERTY(transient, replicated)
+	class APlayerState* PauserPlayerState;
+
 public:
 	//~ Begin UObject Interface.
 	virtual void PostLoad() override;
 #if WITH_EDITOR
 	virtual bool CanEditChange(const UProperty* InProperty) const override;
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
-	virtual void PostEditChangeChainProperty(FPropertyChangedChainEvent& PropertyChangedEvent) override;
+	virtual void PostTransacted(const FTransactionObjectEvent& TransactionEvent) override;
 #endif // WITH_EDITOR
 	//~ End UObject Interface.
 
@@ -778,6 +793,11 @@ public:
 	UMaterialInterface* GetHierarchicalLODBaseMaterial() const;
 #endif // WITH EDITOR
 
+	FORCEINLINE class APlayerState* GetPauserPlayerState() const { return PauserPlayerState; }
+	FORCEINLINE virtual void SetPauserPlayerState(class APlayerState* PlayerState) { PauserPlayerState = PlayerState; }
+
+	virtual void RewindForReplay() override;
+
 private:
 
 	// Hidden functions that don't make sense to use on this class.
@@ -786,6 +806,7 @@ private:
 	virtual void Serialize( FArchive& Ar ) override;
 
 private:
+	void InternalPostPropertyChanged(FName PropertyName);
 
 	void AdjustNumberOfBookmarks();
 	void UpdateNumberOfBookmarks();

@@ -56,6 +56,9 @@ public:
 			LODs[I].GetResourceSizeEx(CumulativeResourceSize);
 		}
 	}
+
+	virtual void UpdateSkinWeightBuffer(USkinnedMeshComponent* InMeshComponent) override {}
+
 	//~ End FSkeletalMeshObject Interface
 
 private:
@@ -100,11 +103,6 @@ private:
  		{
 			CumulativeResourceSize.AddDedicatedSystemMemoryBytes(sizeof(*this));
  		}
-
-#if RHI_RAYTRACING
-		/** Builds ray tracing acceleration structures per LOD. */
-		void BuildRayTracingAccelerationStructure();
-#endif // RHI_RAYTRACING
 	};
 
 	/** Render data for each LOD */

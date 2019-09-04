@@ -27,11 +27,15 @@
 		  "LoadingPhase": "PreDefault"
 		},
 		{
+			"Name" : "NiagaraAnimNotifies",
+			"Type" : "Runtime",
+			"LoadingPhase" : "PreDefault"
+		},
+		{
 			"Name" : "NiagaraShader",
 			"Type" : "Runtime",
 			"LoadingPhase" : "PostConfigInit"
 		},
-
 		{
 			"Name" : "NiagaraVertexFactories",
 			"Type" : "Runtime",
@@ -40,7 +44,7 @@
 		{
 			"Name" : "NiagaraEditor",
 			"Type" : "Editor",
-			"LoadingPhase" : "Default"
+			"LoadingPhase" : "PreDefault"
 		},
 		{
 			"Name" : "NiagaraEditorWidgets",

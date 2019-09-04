@@ -46,7 +46,7 @@ public:
 	template <typename TRHICmdList>
 	void SetPS(TRHICmdList& RHICmdList, const FRenderingCompositePassContext& Context, uint16 InShadingModelMaskInView)
 	{
-		const FPixelShaderRHIParamRef ShaderRHI = GetPixelShader();
+		FRHIPixelShader* ShaderRHI = GetPixelShader();
 		
 		FGlobalShader::SetParameters<FViewUniformShaderParameters>(RHICmdList, ShaderRHI, Context.View.ViewUniformBuffer);
 
@@ -167,7 +167,7 @@ void FRCPassPostProcessVisualizeShadingModels::Process(FRenderingCompositePassCo
 
 	Y += 5;
 
-	for(uint32 i = 0; i < MSM_MAX; ++i)
+	for(uint32 i = 0; i < MSM_NUM; ++i)
 	{
 		FString Name = Enum->GetNameStringByValue(i);
 		Line = FString::Printf(TEXT("%d.  %s"), i, *Name);

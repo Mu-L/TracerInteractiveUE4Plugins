@@ -16,6 +16,7 @@
 #include "Templates/UniquePtr.h"
 #include "Runtime/Launch/Resources/Version.h"
 #include "UObject/RenderingObjectVersion.h"
+#include "SceneTypes.h"
 #include "StaticMeshComponent.generated.h"
 
 class FColorVertexBuffer;
@@ -42,18 +43,16 @@ struct FPaintedVertex
 	FVector Position;
 
 	UPROPERTY()
-	FVector4 Normal;
-
-	UPROPERTY()
 	FColor Color;
 
+	UPROPERTY()
+	FVector4 Normal;
 
 	FPaintedVertex()
 		: Position(ForceInit)
 		, Color(ForceInit)
 	{
 	}
-
 
 	FORCEINLINE friend FArchive& operator<<(FArchive& Ar, FPaintedVertex& PaintedVertex)
 	{
@@ -103,7 +102,6 @@ struct FStaticMeshComponentLODInfo
 	TUniquePtr<FMeshMapBuildData> OverrideMapBuildData;
 
 	/** Vertex data cached at the time this LOD was painted, if any */
-	UPROPERTY()
 	TArray<struct FPaintedVertex> PaintedVertices;
 
 	/** Vertex colors to use for this mesh LOD */
@@ -197,7 +195,6 @@ private:
 	class UStaticMesh* StaticMesh;
 
 public:
-
 	/** Helper function to get the FName of the private static mesh member */
 	static const FName GetMemberNameChecked_StaticMesh() { return GET_MEMBER_NAME_CHECKED(UStaticMeshComponent, StaticMesh); }
 
@@ -438,6 +435,7 @@ public:
 protected: 
 	virtual void OnRegister() override;
 	virtual void OnUnregister() override;
+	virtual void CreateRenderState_Concurrent() override;
 	virtual void OnCreatePhysicsState() override;
 	virtual void OnDestroyPhysicsState() override;
 public:
@@ -471,7 +469,7 @@ public:
 	/** Build the data to compute accuracte StreaminTexture data. */
 	virtual bool BuildTextureStreamingData(ETextureStreamingBuildType BuildType, EMaterialQualityLevel::Type QualityLevel, ERHIFeatureLevel::Type FeatureLevel, TSet<FGuid>& DependentResources) override;
 	/** Get the StreaminTexture data. */
-	virtual void GetStreamingTextureInfo(FStreamingTextureLevelContext& LevelContext, TArray<FStreamingTexturePrimitiveInfo>& OutStreamingTextures) const override;
+	virtual void GetStreamingRenderAssetInfo(FStreamingTextureLevelContext& LevelContext, TArray<FStreamingRenderAssetPrimitiveInfo>& OutStreamingRenderAssets) const override;
 
 	virtual class UBodySetup* GetBodySetup() override;
 	virtual bool CanEditSimulatePhysics() override;
@@ -620,7 +618,6 @@ private:
 
 	/** Update the vertex override colors */
 	void PrivateFixupOverrideColors();
-
 protected:
 
 	/** Whether the component type supports static lighting. */
@@ -668,7 +665,7 @@ public:
 
 	virtual void PropagateLightingScenarioChange() override;
 
-	const FMeshMapBuildData* GetMeshMapBuildData(const FStaticMeshComponentLODInfo& LODInfo) const;
+	const FMeshMapBuildData* GetMeshMapBuildData(const FStaticMeshComponentLODInfo& LODInfo, bool bCheckForResourceCluster = true) const;
 
 
 #if WITH_EDITOR
@@ -678,6 +675,8 @@ public:
 private:
 	FOnStaticMeshChanged OnStaticMeshChangedEvent;
 #endif
+
+	friend class FStaticMeshComponentRecreateRenderStateContext;
 };
 
 /** Vertex data stored per-LOD */

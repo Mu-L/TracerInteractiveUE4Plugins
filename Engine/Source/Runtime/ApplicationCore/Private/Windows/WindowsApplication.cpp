@@ -24,6 +24,12 @@
 #include "Developer/SourceCodeAccess/Public/ISourceCodeAccessModule.h"
 #endif
 
+#if WITH_ACCESSIBILITY
+#include "Windows/Accessibility/WindowsUIAManager.h"
+#include "Windows/Accessibility/WindowsUIAWidgetProvider.h"
+#include <UIAutomation.h>
+#endif
+
 // Allow Windows Platform types in the entire file.
 #include "Windows/AllowWindowsPlatformTypes.h"
 THIRD_PARTY_INCLUDES_START
@@ -78,6 +84,7 @@ FWindowsApplication* FWindowsApplication::CreateWindowsApplication( const HINSTA
 FWindowsApplication::FWindowsApplication( const HINSTANCE HInstance, const HICON IconHandle )
 	: GenericApplication( MakeShareable( new FWindowsCursor() ) )
 	, InstanceHandle( HInstance )
+	, bMinimized( false )
 	, bUsingHighPrecisionMouseInput( false )
 	, bIsMouseAttached( false )
 	, bForceActivateByMouse( false )
@@ -91,6 +98,9 @@ FWindowsApplication::FWindowsApplication( const HINSTANCE HInstance, const HICON
 		bAllowedToDeferMessageProcessing,
 		TEXT( "Whether windows message processing is deferred until tick or if they are processed immediately" ) )
 	, bInModalSizeLoop( false )
+#if WITH_ACCESSIBILITY
+	, UIAManager(new FWindowsUIAManager(*this))
+#endif
 
 {
 	FMemory::Memzero(ModifierKeyState, EModifierKey::Count);
@@ -311,6 +321,14 @@ void FWindowsApplication::SetMessageHandler( const TSharedRef< FGenericApplicati
 	}
 
 }
+
+#if WITH_ACCESSIBILITY
+void FWindowsApplication::SetAccessibleMessageHandler(const TSharedRef<FGenericAccessibleMessageHandler>& InAccessibleMessageHandler)
+{
+	GenericApplication::SetAccessibleMessageHandler(InAccessibleMessageHandler);
+	UIAManager->OnAccessibleMessageHandlerChanged();
+}
+#endif
 
 bool FWindowsApplication::IsGamepadAttached() const
 {
@@ -1353,6 +1371,13 @@ int32 FWindowsApplication::ProcessMessage( HWND hwnd, uint32 msg, WPARAM wParam,
 		case WM_DESTROY:
 			{
 				Windows.Remove( CurrentNativeEventWindow );
+#if WITH_ACCESSIBILITY
+				// Tell UIA that the window no longer exists so that it can release some resources
+				if (GetAccessibleMessageHandler()->ApplicationIsAccessible())
+				{
+					UiaReturnRawElementProvider(hwnd, 0, 0, nullptr);
+				}
+#endif
 				return 0;
 			}
 			break;
@@ -1515,6 +1540,19 @@ int32 FWindowsApplication::ProcessMessage( HWND hwnd, uint32 msg, WPARAM wParam,
 				QueryConnectedMice();
 			}
 			break;
+
+#if WITH_ACCESSIBILITY
+		case WM_GETOBJECT:
+		{
+			if (GetAccessibleMessageHandler()->ApplicationIsAccessible())
+			{
+				FScopedWidgetProvider Provider(UIAManager->GetWindowProvider(CurrentNativeEventWindow));
+				LRESULT Result = UiaReturnRawElementProvider(hwnd, wParam, lParam, &Provider.Provider);
+				return Result;
+			}
+			break;
+		}
+#endif
 
 		default:
 			if (bMessageExternallyHandled)
@@ -2065,9 +2103,11 @@ int32 FWindowsApplication::ProcessDeferredMessage( const FDeferredWindowsMessage
 					{
 					case SW_PARENTCLOSING:
 						CurrentNativeEventWindowPtr->OnParentWindowMinimized();
+						bMinimized = true;
 						break;
 					case SW_PARENTOPENING:
 						CurrentNativeEventWindowPtr->OnParentWindowRestored();
+						bMinimized = true;
 						break;
 					default:
 						break;

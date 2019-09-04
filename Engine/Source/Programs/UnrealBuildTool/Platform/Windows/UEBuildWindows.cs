@@ -77,10 +77,38 @@ namespace UnrealBuildTool
 	}
 
 	/// <summary>
+	/// Available architectures on Windows platform
+	/// </summary>
+	public enum WindowsArchitecture
+	{
+		/// <summary>
+		/// x86
+		/// </summary>
+		x86,
+		/// <summary>
+		/// x64
+		/// </summary>
+		x64,
+		/// <summary>
+		/// ARM
+		/// </summary>
+		ARM32,
+		/// <summary>
+		/// ARM64
+		/// </summary>
+		ARM64,
+	}
+
+	/// <summary>
 	/// Windows-specific target settings
 	/// </summary>
 	public class WindowsTargetRules
 	{
+		/// <summary>
+		/// The target rules which owns this object. Used to resolve some properties.
+		/// </summary>
+		TargetRules Target;
+
 		/// <summary>
 		/// Version of the compiler toolchain to use on Windows platform. A value of "default" will be changed to a specific version at UBT startup.
 		/// </summary>
@@ -90,6 +118,11 @@ namespace UnrealBuildTool
 		[CommandLine("-2017", Value = "VisualStudio2017")]
 		[CommandLine("-2019", Value = "VisualStudio2019")]
 		public WindowsCompiler Compiler = WindowsCompiler.Default;
+
+		/// <summary>
+		/// Architecture of Target.
+		/// </summary>
+		public WindowsArchitecture Architecture = WindowsArchitecture.x64;
 
 		/// <summary>
 		/// The specific toolchain version to use. This may be a specific version number (eg. "14.13.26128") or the string "Latest" to select the newest available version. By default, we use the
@@ -115,6 +148,12 @@ namespace UnrealBuildTool
 		/// </summary>
 		[ConfigFile(ConfigHierarchyType.Engine, "/Script/WindowsTargetPlatform.WindowsTargetSettings", "bEnablePIXProfiling")]
 		public bool bPixProfilingEnabled = true;
+
+		/// <summary>
+		/// Enable building with the Win10 SDK instead of the older Win8.1 SDK 
+		/// </summary>
+		[ConfigFile(ConfigHierarchyType.Engine, "/Script/WindowsTargetPlatform.WindowsTargetSettings", "bUseWindowsSDK10")]
+		public bool bUseWindowsSDK10 = false;
 
 		/// <summary>
 		/// The name of the company (author, provider) that created the project.
@@ -196,7 +235,32 @@ namespace UnrealBuildTool
 		/// <summary>
 		/// Create an image that can be hot patched (/FUNCTIONPADMIN)
 		/// </summary>
-		public bool bCreateHotPatchableImage = false;
+		public bool bCreateHotPatchableImage
+		{
+			get { return bCreateHotPatchableImagePrivate ?? Target.bWithLiveCoding; }
+			set { bCreateHotPatchableImagePrivate = true; }
+		}
+		private bool? bCreateHotPatchableImagePrivate;
+
+		/// <summary>
+		/// Strip unreferenced symbols (/OPT:REF)
+		/// </summary>
+		public bool bStripUnreferencedSymbols
+		{
+			get { return bStripUnreferencedSymbolsPrivate ?? ((Target.Configuration == UnrealTargetConfiguration.Test || Target.Configuration == UnrealTargetConfiguration.Shipping) && !Target.bWithLiveCoding); }
+			set { bStripUnreferencedSymbolsPrivate = value; }
+		}
+		private bool? bStripUnreferencedSymbolsPrivate;
+			
+		/// <summary>
+		/// Merge identical COMDAT sections together (/OPT:ICF)
+		/// </summary>
+		public bool bMergeIdenticalCOMDATs
+		{
+			get { return bMergeIdenticalCOMDATsPrivate ?? ((Target.Configuration == UnrealTargetConfiguration.Test || Target.Configuration == UnrealTargetConfiguration.Shipping) && !Target.bWithLiveCoding); }
+			set { bMergeIdenticalCOMDATsPrivate = value; }
+		}
+		private bool? bMergeIdenticalCOMDATsPrivate;
 
 		/// <summary>
 		/// Whether to put global symbols in their own sections (/Gw), allowing the linker to discard any that are unused.
@@ -209,6 +273,12 @@ namespace UnrealBuildTool
 		/// </summary>
 		[XmlConfigFile(Category = "WindowsPlatform")]
 		public bool bClangTimeTrace = false;
+
+		/// <summary>
+		/// Outputs compile timing information so that it can be analyzed.
+		/// </summary>
+		[XmlConfigFile(Category = "WindowsPlatform")]
+		public bool bCompilerTrace = false;
 
 		/// <summary>
 		/// Bundle a working version of dbghelp.dll with the application, and use this to generate minidumps. This works around a bug with the Windows 10 Fall Creators Update (1709)
@@ -272,6 +342,15 @@ namespace UnrealBuildTool
 					throw new BuildException("Unexpected WindowsCompiler version for GetVisualStudioCompilerVersionName().  Either not using a Visual Studio compiler or switch block needs to be updated");
 			}
 		}
+
+		/// <summary>
+		/// Constructor
+		/// </summary>
+		/// <param name="Target">The target rules which owns this object</param>
+		internal WindowsTargetRules(TargetRules Target)
+		{
+			this.Target = Target;
+		}
 	}
 
 	/// <summary>
@@ -305,6 +384,10 @@ namespace UnrealBuildTool
 		{
 			get { return Inner.Compiler; }
 		}
+		public WindowsArchitecture Architecture
+		{
+			get { return Inner.Architecture; }
+		}
 
 		public string CompilerVersion
 		{
@@ -324,6 +407,11 @@ namespace UnrealBuildTool
 		public bool bPixProfilingEnabled
 		{
 			get { return Inner.bPixProfilingEnabled; }
+		}
+
+		public bool bUseWindowsSDK10
+		{
+			get { return Inner.bUseWindowsSDK10; }
 		}
 
 		public string CompanyName
@@ -391,6 +479,16 @@ namespace UnrealBuildTool
 			get { return Inner.bCreateHotPatchableImage; }
 		}
 
+		public bool bStripUnreferencedSymbols
+		{
+			get { return Inner.bStripUnreferencedSymbols; }
+		}
+
+		public bool bMergeIdenticalCOMDATs
+		{
+			get { return Inner.bMergeIdenticalCOMDATs; }
+		}
+
 		public bool bOptimizeGlobalData
 		{
 			get { return Inner.bOptimizeGlobalData; }
@@ -399,6 +497,11 @@ namespace UnrealBuildTool
 		public bool bClangTimeTrace
 		{
 			get { return Inner.bClangTimeTrace; }
+		}
+
+		public bool bCompilerTrace
+		{
+			get { return Inner.bCompilerTrace; }
 		}
 
 		public string GetVisualStudioCompilerVersionName()
@@ -435,6 +538,11 @@ namespace UnrealBuildTool
 		{
 			get { return Inner.DiaSdkDir; }
 		}
+		
+		public string GetArchitectureSubpath()
+		{
+			return WindowsExports.GetArchitectureSubpath(Architecture);
+		}
 
 		#if !__MonoCS__
 		#pragma warning restore CS1591
@@ -447,12 +555,12 @@ namespace UnrealBuildTool
 		/// <summary>
 		/// The default compiler version to be used, if installed. 
 		/// </summary>
-		static readonly VersionNumber DefaultClangToolChainVersion = VersionNumber.Parse("7.0.1");
+		static readonly VersionNumber DefaultClangToolChainVersion = VersionNumber.Parse("8.0.0");
 
 		/// <summary>
 		/// The default compiler version to be used, if installed. 
 		/// </summary>
-		static readonly VersionNumber DefaultVisualStudioToolChainVersion = VersionNumber.Parse("14.16.27023");
+		static readonly VersionNumber DefaultVisualStudioToolChainVersion = VersionNumber.Parse("14.16.27023.1");
 
 		/// <summary>
 		/// The default Windows SDK version to be used, if installed.
@@ -494,15 +602,20 @@ namespace UnrealBuildTool
 		/// </summary>
 		public static readonly bool bAllowICLLinker = true;
 
+		/// <summary>
+		/// True if we allow using addresses larger than 2GB on 32 bit builds
+		/// </summary>
+		public static readonly bool bBuildLargeAddressAwareBinary = true;
+
 		WindowsPlatformSDK SDK;
 
 		/// <summary>
 		/// Constructor
 		/// </summary>
 		/// <param name="InPlatform">Creates a windows platform with the given enum value</param>
-		/// <param name="InDefaultCppPlatform">The default C++ platform to compile for</param>
 		/// <param name="InSDK">The installed Windows SDK</param>
-		public WindowsPlatform(UnrealTargetPlatform InPlatform, CppPlatform InDefaultCppPlatform, WindowsPlatformSDK InSDK) : base(InPlatform, InDefaultCppPlatform)
+		public WindowsPlatform(UnrealTargetPlatform InPlatform, WindowsPlatformSDK InSDK)
+			: base(InPlatform)
 		{
 			SDK = InSDK;
 		}
@@ -522,12 +635,6 @@ namespace UnrealBuildTool
 		public override void ResetTarget(TargetRules Target)
 		{
 			base.ResetTarget(Target);
-
-			if(Target.Configuration != UnrealTargetConfiguration.Shipping)
-			{
-				Target.bWithLiveCoding = true;
-				Target.WindowsPlatform.bCreateHotPatchableImage = true;
-			}
 		}
 
 		/// <summary>
@@ -535,6 +642,21 @@ namespace UnrealBuildTool
 		/// </summary>
 		public override void ValidateTarget(TargetRules Target)
 		{
+			if (Platform == UnrealTargetPlatform.HoloLens && Target.Architecture.ToLower() == "arm64")
+			{
+				Target.WindowsPlatform.Architecture = WindowsArchitecture.ARM64;
+				Log.TraceInformation("Using Windows ARM64 architecture");
+			}
+			else if (Platform == UnrealTargetPlatform.Win64)
+			{
+				Target.WindowsPlatform.Architecture = WindowsArchitecture.x64;
+			}
+			else if (Platform == UnrealTargetPlatform.Win32)
+			{
+				Target.WindowsPlatform.Architecture = WindowsArchitecture.x86;
+			}
+
+			// Disable Simplygon support if compiling against the NULL RHI.
 			if (Target.GlobalDefinitions.Contains("USE_NULL_RHI=1"))
 			{				
 				Target.bCompileCEF3 = false;
@@ -559,15 +681,6 @@ namespace UnrealBuildTool
 			}
 
 			// Override PCH settings
-			if (Target.WindowsPlatform.Compiler == WindowsCompiler.Clang)
-			{
-				// @todo clang: Shared PCHs don't work on clang yet because the PCH will have definitions assigned to different values
-				// than the consuming translation unit.  Unlike the warning in MSVC, this is a compile in Clang error which cannot be suppressed
-				Target.bUseSharedPCHs = false;
-
-				// @todo clang: PCH files aren't supported by "clang-cl" yet (no /Yc support, and "-x c++-header" cannot be specified)
-				Target.bUsePCHFiles = false;
-			}
 			if (Target.WindowsPlatform.Compiler == WindowsCompiler.Intel)
 			{
 				Target.NumIncludedBytesPerUnityCPP = Math.Min(Target.NumIncludedBytesPerUnityCPP, 256 * 1024);
@@ -594,7 +707,7 @@ namespace UnrealBuildTool
 			}
 
 			// Initialize the VC environment for the target, and set all the version numbers to the concrete values we chose.
-			VCEnvironment Environment = VCEnvironment.Create(Target.WindowsPlatform.Compiler, DefaultCppPlatform, Target.WindowsPlatform.CompilerVersion, Target.WindowsPlatform.WindowsSdkVersion);
+			VCEnvironment Environment = VCEnvironment.Create(Target.WindowsPlatform.Compiler, Platform, Target.WindowsPlatform.Architecture, Target.WindowsPlatform.CompilerVersion, Target.WindowsPlatform.WindowsSdkVersion);
 			Target.WindowsPlatform.Environment = Environment;
 			Target.WindowsPlatform.Compiler = Environment.Compiler;
 			Target.WindowsPlatform.CompilerVersion = Environment.CompilerVersion.ToString();
@@ -805,7 +918,7 @@ namespace UnrealBuildTool
 
 									int SortOrder = SortedInstallDirs.Count;
 
-									ISetupInstanceCatalog Catalog = (ISetupInstanceCatalog)Instance as ISetupInstanceCatalog;
+									ISetupInstanceCatalog Catalog = Instance as ISetupInstanceCatalog;
 									if (Catalog != null && Catalog.IsPrerelease())
 									{
 										SortOrder |= (1 << 16);
@@ -1215,6 +1328,28 @@ namespace UnrealBuildTool
  			return Location;
 		}
 
+		public static string GetArchitectureSubpath(WindowsArchitecture arch)
+		{
+			string archPath = "Unknown";
+			if (arch == WindowsArchitecture.x86)
+			{
+				archPath = "x86";
+			}
+			else if (arch == WindowsArchitecture.ARM32)
+			{
+				archPath = "arm";
+			}
+			else if (arch == WindowsArchitecture.x64)
+			{
+				archPath = "x64";
+			}
+			else if (arch == WindowsArchitecture.ARM64)
+			{
+				archPath = "arm64";
+			}
+			return archPath;
+		}
+
 		/// <summary>
 		/// Function to query the registry under HKCU/HKLM Win32/Wow64 software registry keys for a certain install directory.
 		/// This mirrors the logic in GetMSBuildPath.bat.
@@ -1418,7 +1553,7 @@ namespace UnrealBuildTool
 
 			// Figure out which version number to look for
 			VersionNumber WindowsSdkVersion = null;
-			if(DesiredVersion != null)
+			if(!string.IsNullOrEmpty(DesiredVersion))
 			{
 				if(String.Compare(DesiredVersion, "Latest", StringComparison.InvariantCultureIgnoreCase) == 0 && CachedWindowsSdkDirs.Count > 0)
 				{
@@ -1684,9 +1819,22 @@ namespace UnrealBuildTool
 		/// <param name="LinkEnvironment">The link environment for this target</param>
 		public override void SetUpEnvironment(ReadOnlyTargetRules Target, CppCompileEnvironment CompileEnvironment, LinkEnvironment LinkEnvironment)
 		{
+			// @todo Remove this hack to work around broken includes
+			CompileEnvironment.Definitions.Add("NDIS_MINIPORT_MAJOR_VERSION=0");
+
 			CompileEnvironment.Definitions.Add("WIN32=1");
-			CompileEnvironment.Definitions.Add(String.Format("_WIN32_WINNT=0x{0:X4}", Target.WindowsPlatform.TargetWindowsVersion));
-			CompileEnvironment.Definitions.Add(String.Format("WINVER=0x{0:X4}", Target.WindowsPlatform.TargetWindowsVersion));
+			if (Target.WindowsPlatform.bUseWindowsSDK10)
+			{
+				CompileEnvironment.Definitions.Add(String.Format("_WIN32_WINNT=0x{0:X4}", 0x0602));
+				CompileEnvironment.Definitions.Add(String.Format("WINVER=0x{0:X4}", 0x0602));
+
+			}
+			else
+			{
+				CompileEnvironment.Definitions.Add(String.Format("_WIN32_WINNT=0x{0:X4}", Target.WindowsPlatform.TargetWindowsVersion));
+				CompileEnvironment.Definitions.Add(String.Format("WINVER=0x{0:X4}", Target.WindowsPlatform.TargetWindowsVersion));
+			}
+			
 			CompileEnvironment.Definitions.Add("PLATFORM_WINDOWS=1");
 			
 			// both Win32 and Win64 use Windows headers, so we enforce that here
@@ -1883,18 +2031,17 @@ namespace UnrealBuildTool
 		/// <summary>
 		/// Creates a toolchain instance for the given platform.
 		/// </summary>
-		/// <param name="CppPlatform">The platform to create a toolchain for</param>
 		/// <param name="Target">The target being built</param>
 		/// <returns>New toolchain instance.</returns>
-		public override UEToolChain CreateToolChain(CppPlatform CppPlatform, ReadOnlyTargetRules Target)
+		public override UEToolChain CreateToolChain(ReadOnlyTargetRules Target)
 		{
 			if (Target.WindowsPlatform.StaticAnalyzer == WindowsStaticAnalyzer.PVSStudio)
 			{
-				return new PVSToolChain(CppPlatform, Target);
+				return new PVSToolChain(Target);
 			}
 			else
 			{
-				return new VCToolChain(CppPlatform, Target);
+				return new VCToolChain(Target);
 			}
 		}
 
@@ -1947,12 +2094,12 @@ namespace UnrealBuildTool
 
 			// Register this build platform for both Win64 and Win32
 			Log.TraceVerbose("        Registering for {0}", UnrealTargetPlatform.Win64.ToString());
-			UEBuildPlatform.RegisterBuildPlatform(new WindowsPlatform(UnrealTargetPlatform.Win64, CppPlatform.Win64, SDK));
+			UEBuildPlatform.RegisterBuildPlatform(new WindowsPlatform(UnrealTargetPlatform.Win64, SDK));
 			UEBuildPlatform.RegisterPlatformWithGroup(UnrealTargetPlatform.Win64, UnrealPlatformGroup.Windows);
 			UEBuildPlatform.RegisterPlatformWithGroup(UnrealTargetPlatform.Win64, UnrealPlatformGroup.Microsoft);
 
 			Log.TraceVerbose("        Registering for {0}", UnrealTargetPlatform.Win32.ToString());
-			UEBuildPlatform.RegisterBuildPlatform(new WindowsPlatform(UnrealTargetPlatform.Win32, CppPlatform.Win32, SDK));
+			UEBuildPlatform.RegisterBuildPlatform(new WindowsPlatform(UnrealTargetPlatform.Win32, SDK));
 			UEBuildPlatform.RegisterPlatformWithGroup(UnrealTargetPlatform.Win32, UnrealPlatformGroup.Windows);
 			UEBuildPlatform.RegisterPlatformWithGroup(UnrealTargetPlatform.Win32, UnrealPlatformGroup.Microsoft);
 		}

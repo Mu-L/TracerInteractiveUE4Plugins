@@ -166,10 +166,12 @@ struct FRecastDebugGeometry
 
 	TArray<FVector> MeshVerts;
 	TArray<int32> AreaIndices[RECAST_MAX_AREAS];
+	TArray<int32> ForbiddenIndices;
 	TArray<int32> BuiltMeshIndices;
 	TArray<FVector> PolyEdges;
 	TArray<FVector> NavMeshEdges;
 	TArray<FOffMeshLink> OffMeshLinks;
+	TArray<FOffMeshLink> ForbiddenLinks;
 	TArray<FCluster> Clusters;
 	TArray<FClusterLink> ClusterLinks;
 	TArray<FOffMeshSegment> OffMeshSegments;
@@ -177,8 +179,9 @@ struct FRecastDebugGeometry
 
 	int32 bGatherPolyEdges : 1;
 	int32 bGatherNavMeshEdges : 1;
-
-	FRecastDebugGeometry() : bGatherPolyEdges(false), bGatherNavMeshEdges(false)
+	int32 bMarkForbiddenPolys : 1;
+	
+	FRecastDebugGeometry() : bGatherPolyEdges(false), bGatherNavMeshEdges(false), bMarkForbiddenPolys(false)
 	{}
 
 	uint32 NAVIGATIONSYSTEM_API GetAllocatedSize() const;
@@ -332,6 +335,9 @@ class NAVIGATIONSYSTEM_API ARecastNavMesh : public ANavigationData
 
 	UPROPERTY(EditAnywhere, Category = Display, meta=(editcondition = "bDrawOctree"))
 	uint32 bDrawOctreeDetails : 1;
+
+	UPROPERTY(EditAnywhere, Category = Display)
+	uint32 bDrawMarkedForbiddenPolys : 1;
 
 	UPROPERTY(config)
 	uint32 bDistinctlyDrawTilesBeingBuilt:1;
@@ -508,6 +514,9 @@ private:
 	/** Squared draw distance */
 	static float DrawDistanceSq;
 
+	/** MinimumSizeForChaosNavMeshInfluence*/
+	static float MinimumSizeForChaosNavMeshInfluenceSq;
+
 public:
 
 	struct FRaycastResult
@@ -555,6 +564,10 @@ public:
 
 	FORCEINLINE static void SetDrawDistance(float NewDistance) { DrawDistanceSq = NewDistance * NewDistance; }
 	FORCEINLINE static float GetDrawDistanceSq() { return DrawDistanceSq; }
+
+	FORCEINLINE static void SetMinimumSizeForChaosNavMeshInfluence(float NewSize) { MinimumSizeForChaosNavMeshInfluenceSq = NewSize * NewSize; }
+	FORCEINLINE static float GetMinimumSizeForChaosNavMeshInfluenceSq() { return MinimumSizeForChaosNavMeshInfluenceSq; }
+	
 
 	//////////////////////////////////////////////////////////////////////////
 
@@ -793,6 +806,10 @@ public:
 	/** Sets area ID for the specified polygons */
 	void SetPolyArrayArea(const TArray<FNavPoly>& Polys, TSubclassOf<UNavArea> AreaClass);
 
+	/** In given Bounds find all areas of class OldArea and replace them with NewArea
+	 *	@return number of polys touched */
+	int32 ReplaceAreaInTileBounds(const FBox& Bounds, TSubclassOf<UNavArea> OldArea, TSubclassOf<UNavArea> NewArea, bool ReplaceLinks = true, TArray<NavNodeRef>* OutTouchedNodes = nullptr);
+	
 	/** Retrieves poly and area flags for specified polygon */
 	bool GetPolyFlags(NavNodeRef PolyID, uint16& PolyFlags, uint16& AreaFlags) const;
 	bool GetPolyFlags(NavNodeRef PolyID, FNavMeshNodeFlags& Flags) const;
@@ -888,8 +905,8 @@ public:
 	bool ShouldGatherDataOnGameThread() const { return bDoFullyAsyncNavDataGathering == false; }
 	int32 GetTileNumberHardLimit() const { return TileNumberHardLimit; }
 
-	void UpdateActiveTiles(const TArray<FNavigationInvokerRaw>& InvokerLocations);
-	void RemoveTiles(const TArray<FIntPoint>& Tiles);
+	virtual void UpdateActiveTiles(const TArray<FNavigationInvokerRaw>& InvokerLocations);
+	virtual void RemoveTiles(const TArray<FIntPoint>& Tiles);
 	void RebuildTile(const TArray<FIntPoint>& Tiles);
 
 protected:
@@ -944,6 +961,10 @@ private:
 private:
 	static const FRecastQueryFilter* NamedFilters[ERecastNamedFilter::NamedFiltersCount];
 #endif // WITH_RECAST
+
+	/** @return true if any polygon/link has been touched */
+	UFUNCTION(BlueprintCallable, Category = NavMesh, meta = (DisplayName = "ReplaceAreaInTileBounds"))
+	bool K2_ReplaceAreaInTileBounds(FBox Bounds, TSubclassOf<UNavArea> OldArea, TSubclassOf<UNavArea> NewArea, bool ReplaceLinks = true);
 };
 
 #if WITH_RECAST

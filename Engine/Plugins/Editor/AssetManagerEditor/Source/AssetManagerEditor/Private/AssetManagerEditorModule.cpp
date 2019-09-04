@@ -182,7 +182,7 @@ void IAssetManagerEditorModule::GeneratePrimaryAssetTypeComboBoxStrings(TArray< 
 	TArray<FPrimaryAssetTypeInfo> TypeInfos;
 
 	AssetManager.GetPrimaryAssetTypeInfoList(TypeInfos);
-	TypeInfos.Sort([](const FPrimaryAssetTypeInfo& LHS, const FPrimaryAssetTypeInfo& RHS) { return LHS.PrimaryAssetType < RHS.PrimaryAssetType; });
+	TypeInfos.Sort([](const FPrimaryAssetTypeInfo& LHS, const FPrimaryAssetTypeInfo& RHS) { return LHS.PrimaryAssetType.LexicalLess(RHS.PrimaryAssetType); });
 
 	// Can the field be cleared
 	if (bAllowClear)
@@ -296,6 +296,7 @@ public:
 	void PerformAuditConsoleCommand(const TArray<FString>& Args);
 	void PerformDependencyChainConsoleCommand(const TArray<FString>& Args);
 	void PerformDependencyClassConsoleCommand(const TArray<FString>& Args);
+	void DumpAssetRegistry(const TArray<FString>& Args);
 	void DumpAssetDependencies(const TArray<FString>& Args);
 
 	virtual void OpenAssetAuditUI(TArray<FAssetData> SelectedAssets) override;
@@ -434,6 +435,15 @@ void FAssetManagerEditorModule::StartupModule()
 			FConsoleCommandWithArgsDelegate::CreateRaw(this, &FAssetManagerEditorModule::PerformDependencyClassConsoleCommand),
 			ECVF_Default
 			));
+
+	#if ASSET_REGISTRY_STATE_DUMPING_ENABLED
+		AuditCmds.Add(IConsoleManager::Get().RegisterConsoleCommand(
+			TEXT("AssetManager.DumpAssetRegistry"),
+			TEXT("Prints entries in the asset registry. Arguments are required: ObjectPath, PackageName, Path, Class, Tag, Dependencies, PackageData."),
+			FConsoleCommandWithArgsDelegate::CreateRaw(this, &FAssetManagerEditorModule::DumpAssetRegistry),
+			ECVF_Default
+		));
+	#endif
 
 		AuditCmds.Add(IConsoleManager::Get().RegisterConsoleCommand(
 			TEXT("AssetManager.DumpAssetDependencies"),
@@ -1973,7 +1983,7 @@ void FAssetManagerEditorModule::LogAssetsWithMultipleLabels()
 		}
 	}
 
-	PackageToLabelMap.KeySort(TLess<FName>());
+	PackageToLabelMap.KeySort(FNameLexicalLess());
 
 	UE_LOG(LogAssetManagerEditor, Log, TEXT("\nAssets with multiple labels follow"));
 
@@ -1997,6 +2007,21 @@ void FAssetManagerEditorModule::LogAssetsWithMultipleLabels()
 	}
 }
 
+
+void FAssetManagerEditorModule::DumpAssetRegistry(const TArray<FString>& Args)
+{
+#if ASSET_REGISTRY_STATE_DUMPING_ENABLED
+	UAssetManager& Manager = UAssetManager::Get();
+	TArray<FString> ReportLines;
+
+	const FAssetRegistryState* State = Manager.GetAssetRegistry().GetAssetRegistryState();
+	State->Dump(Args, ReportLines);
+
+	Manager.WriteCustomReport(FString::Printf(TEXT("AssetRegistryState-%s.txt"), *FDateTime::Now().ToString()), ReportLines);
+#endif
+}
+
+
 void FAssetManagerEditorModule::DumpAssetDependencies(const TArray<FString>& Args)
 {
 	if (!UAssetManager::IsValid())
@@ -2011,7 +2036,7 @@ void FAssetManagerEditorModule::DumpAssetDependencies(const TArray<FString>& Arg
 
 	Manager.GetPrimaryAssetTypeInfoList(TypeInfos);
 
-	TypeInfos.Sort([](const FPrimaryAssetTypeInfo& LHS, const FPrimaryAssetTypeInfo& RHS) { return LHS.PrimaryAssetType < RHS.PrimaryAssetType; });
+	TypeInfos.Sort([](const FPrimaryAssetTypeInfo& LHS, const FPrimaryAssetTypeInfo& RHS) { return LHS.PrimaryAssetType.LexicalLess(RHS.PrimaryAssetType); });
 
 	UE_LOG(LogAssetManagerEditor, Log, TEXT("=========== Asset Manager Dependencies ==========="));
 
@@ -2058,7 +2083,7 @@ void FAssetManagerEditorModule::DumpAssetDependencies(const TArray<FString>& Arg
 		{
 			UE_LOG(LogAssetManagerEditor, Log, TEXT("  Type %s:"), *TypeInfo.PrimaryAssetType.ToString());
 
-			DependencyInfos.Sort([](const FDependencyInfo& LHS, const FDependencyInfo& RHS) { return LHS.AssetName < RHS.AssetName; });
+			DependencyInfos.Sort([](const FDependencyInfo& LHS, const FDependencyInfo& RHS) { return LHS.AssetName.LexicalLess(RHS.AssetName); });
 
 			for (FDependencyInfo& DependencyInfo : DependencyInfos)
 			{

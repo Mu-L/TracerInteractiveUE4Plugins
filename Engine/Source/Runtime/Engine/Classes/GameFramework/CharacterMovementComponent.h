@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Math/RandomStream.h"
 #include "UObject/ObjectMacros.h"
 #include "UObject/UObjectGlobals.h"
 #include "Engine/NetSerialization.h"
@@ -668,6 +669,12 @@ protected:
 	/** Used when throttling "stuck in geometry" logging, to output the number of events we skipped if throttling. */
 	uint32 StuckWarningCountSinceNotify;
 
+	/**
+	 * Used to limit number of jump apex attempts per tick.
+	 * @see MaxJumpApexAttemptsPerSimulation
+	 */
+	int32 NumJumpApexAttempts;
+
 public:
 
 	/** Returns the location at the end of the last tick. */
@@ -720,6 +727,13 @@ public:
 	 */
 	UPROPERTY(Category="Character Movement (General Settings)", EditAnywhere, BlueprintReadWrite, AdvancedDisplay, meta=(ClampMin="1", ClampMax="25", UIMin="1", UIMax="25"))
 	int32 MaxSimulationIterations;
+
+	/**
+	 * Max number of attempts per simulation to attempt to exactly reach the jump apex when falling movement reaches the top of the arc.
+	 * Limiting this prevents deep recursion when special cases cause collision or other conditions which reactivate the apex condition.
+	 */
+	UPROPERTY(Category="Character Movement (General Settings)", EditAnywhere, BlueprintReadWrite, AdvancedDisplay, meta=(ClampMin="1", ClampMax="4", UIMin="1", UIMax="4"))
+	int32 MaxJumpApexAttemptsPerSimulation;
 
 	/**
 	* Max distance we allow simulated proxies to depenetrate when moving out of anything but Pawns.
@@ -908,13 +922,24 @@ public:
 	uint8 bNetworkMovementModeChanged:1;
 
 	/** 
-	 * True when we should ignore server location difference checks for client error on this movement component 
+	 * If true, we should ignore server location difference checks for client error on this movement component.
 	 * This can be useful when character is moving at extreme speeds for a duration and you need it to look
-	 * smooth on clients. Make sure to disable when done, as this would break this character's server-client
-	 * movement correction.
+	 * smooth on clients without the server correcting the client. Make sure to disable when done, as this would
+	 * break this character's server-client movement correction.
+	 * @see bServerAcceptClientAuthoritativePosition, ServerCheckClientError()
 	 */
 	UPROPERTY(Transient, Category="Character Movement", EditAnywhere, BlueprintReadWrite)
 	uint8 bIgnoreClientMovementErrorChecksAndCorrection:1;
+
+	/**
+	 * If true, and server does not detect client position error, server will copy the client movement location/velocity/etc after simulating the move.
+	 * This can be useful for short bursts of movement that are difficult to sync over the network.
+	 * Note that if bIgnoreClientMovementErrorChecksAndCorrection is used, this means the server will not detect an error.
+	 * Also see GameNetworkManager->ClientAuthorativePosition which permanently enables this behavior.
+	 * @see bIgnoreClientMovementErrorChecksAndCorrection, ServerShouldUseAuthoritativePosition()
+	 */
+	UPROPERTY(Transient, Category="Character Movement", EditAnywhere, BlueprintReadWrite)
+	uint8 bServerAcceptClientAuthoritativePosition : 1;
 
 	/**
 	 * If true, event NotifyJumpApex() to CharacterOwner's controller when at apex of jump. Is cleared when event is triggered.
@@ -1230,12 +1255,18 @@ public:
 	virtual bool HasValidData() const;
 
 	/**
-	 * Update Velocity and Acceleration to air control in the desired Direction for character using path following.
+	 * If ShouldPerformAirControlForPathFollowing() returns true, it will update Velocity and Acceleration to air control in the desired Direction for character using path following.
 	 * @param Direction is the desired direction of movement
 	 * @param ZDiff is the height difference between the destination and the Pawn's current position
 	 * @see RequestDirectMove()
 	*/
 	virtual void PerformAirControlForPathFollowing(FVector Direction, float ZDiff);
+
+	/**
+	 * Whether Character should perform air control via PerformAirControlForPathFollowing when falling and following a path at the same time
+	 * Default implementation always returns true during MOVE_Falling.
+	 */
+	virtual bool ShouldPerformAirControlForPathFollowing() const;
 
 	/** Transition from walking to falling */
 	virtual void StartFalling(int32 Iterations, float remainingTime, float timeTick, const FVector& Delta, const FVector& subLoc);
@@ -1499,6 +1530,14 @@ public:
 	 */
 	virtual FVector GetFallingLateralAcceleration(float DeltaTime);
 	
+	/**
+	 * Returns true if falling movement should limit air control. Limiting air control prevents input acceleration during falling movement
+	 * from allowing velocity to redirect forces upwards while falling, which could result in slower falling or even upward boosting.
+	 *
+	 * @see GetFallingLateralAcceleration(), BoostAirControl(), GetAirControl(), LimitAirControl()
+	 */
+	virtual bool ShouldLimitAirControl(float DeltaTime, const FVector& FallAcceleration) const;
+
 	/**
 	 * Get the air control to use during falling movement.
 	 * Given an initial air control (TickAirControl), applies the result of BoostAirControl().
@@ -2082,9 +2121,13 @@ public:
 	virtual void ResetPredictionData_Client() override;
 	virtual void ResetPredictionData_Server() override;
 
+	static uint32 PackYawAndPitchTo32(const float Yaw, const float Pitch);
+
 protected:
 	class FNetworkPredictionData_Client_Character* ClientPredictionData;
 	class FNetworkPredictionData_Server_Character* ServerPredictionData;
+
+	FRandomStream RandomStream;
 
 	/**
 	 * Smooth mesh location for network interpolation, based on values set up by SmoothCorrection.
@@ -2102,8 +2145,6 @@ protected:
 
 	/** Update mesh location based on interpolated values. */
 	void SmoothClientPosition_UpdateVisuals();
-
-	static uint32 PackYawAndPitchTo32(const float Yaw, const float Pitch); 
 
 	/*
 	========================================================================
@@ -2150,6 +2191,11 @@ protected:
 	 * @see ServerMoveHandleClientError()
 	 */
 	virtual bool ServerCheckClientError(float ClientTimeStamp, float DeltaTime, const FVector& Accel, const FVector& ClientWorldLocation, const FVector& RelativeClientLocation, UPrimitiveComponent* ClientMovementBase, FName ClientBaseBoneName, uint8 ClientMovementMode);
+
+	/**
+	 * If ServerCheckClientError() does not find an error, this determines if the server should also copy the client's movement params rather than keep the server sim result.
+	 */
+	virtual bool ServerShouldUseAuthoritativePosition(float ClientTimeStamp, float DeltaTime, const FVector& Accel, const FVector& ClientWorldLocation, const FVector& RelativeClientLocation, UPrimitiveComponent* ClientMovementBase, FName ClientBaseBoneName, uint8 ClientMovementMode);
 
 	/* Process a move at the given time stamp, given the compressed flags representing various events that occurred (ie jump). */
 	virtual void MoveAutonomous( float ClientTimeStamp, float DeltaTime, uint8 CompressedFlags, const FVector& NewAccel);
@@ -2599,6 +2645,12 @@ public:
 	/** Returns a byte containing encoded special movement information (jumping, crouching, etc.)	 */
 	virtual uint8 GetCompressedFlags() const;
 
+	/** Compare current control rotation with stored starting data */
+	virtual bool IsMatchingStartControlRotation(const APlayerController* PC) const;
+
+	/** Packs control rotation for network transport */
+	virtual void GetPackedAngles(uint32& YawAndPitchPack, uint8& RollPack) const;
+
 	// Bit masks used by GetCompressedFlags() to encode movement information.
 	enum CompressedFlags
 	{
@@ -2677,11 +2729,14 @@ public:
 	FNetworkPredictionData_Client_Character(const UCharacterMovementComponent& ClientMovement);
 	virtual ~FNetworkPredictionData_Client_Character();
 
-	/** Client timestamp of last time it sent a servermove() to the server.  Used for holding off on sending movement updates to save bandwidth. */
+	/** Client timestamp of last time it sent a servermove() to the server. This is an increasing timestamp from the owning UWorld. Used for holding off on sending movement updates to save bandwidth. */
 	float ClientUpdateTime;
 
-	/** Current TimeStamp for sending new Moves to the Server. */
+	/** Current TimeStamp for sending new Moves to the Server. This time resets to zero at a frequency of MinTimeBetweenTimeStampResets. */
 	float CurrentTimeStamp;
+
+	/** Last World timestamp (undilated, real time) at which we received a server ack for a move. This could be either a good move or a correction from the server. */
+	float LastReceivedAckRealTime;
 
 	TArray<FSavedMovePtr> SavedMoves;		// Buffered moves pending position updates, orderd oldest to newest. Moves that have been acked by the server are removed.
 	TArray<FSavedMovePtr> FreeMoves;		// freed moves, available for buffering
@@ -2785,7 +2840,7 @@ public:
 	int32 GetSavedMoveIndex(float TimeStamp) const;
 
 	/** Ack a given move. This move will become LastAckedMove, SavedMoves will be adjusted to only contain unAcked moves. */
-	void AckMove(int32 AckedMoveIndex);
+	void AckMove(int32 AckedMoveIndex, UCharacterMovementComponent& CharacterMovementComponent);
 
 	/** Allocate a new saved move. Subclasses should override this if they want to use a custom move class. */
 	virtual FSavedMovePtr AllocateNewMove();

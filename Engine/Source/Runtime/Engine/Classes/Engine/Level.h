@@ -342,6 +342,7 @@ struct FReplicatedStaticActorDestructionInfo
 	GENERATED_BODY()
 
 	FName PathName;
+	FString FullName;
 	FVector	DestroyedPosition;
 	TWeakObjectPtr<UObject> ObjOuter;
 	UPROPERTY()
@@ -480,7 +481,7 @@ public:
 	 * Registry for data from the map build.  This is stored in a separate package from the level to speed up saving / autosaving. 
 	 * ReleaseRenderingResources must be called before changing what is referenced, to update the rendering thread state.
 	 */
-	UPROPERTY()
+	UPROPERTY(NonPIEDuplicateTransient)
 	UMapBuildDataRegistry* MapBuildData;
 
 	/** Level offset at time when lighting was built */
@@ -591,6 +592,9 @@ public:
 
 	float FixupOverrideVertexColorsTime;
 	int32 FixupOverrideVertexColorsCount;
+
+	UPROPERTY(transient)
+	bool bLevelOkayForPlacementWhileCheckedIn;
 #endif //WITH_EDITORONLY_DATA
 
 	/** Actor which defines level logical bounding box				*/
@@ -735,11 +739,6 @@ public:
 	 * faces and vertex positions haven't changed, only the applied materials.
 	 */
 	void InvalidateModelSurface();
-
-	/**
-	 * Makes sure that all light components have valid GUIDs associated.
-	 */
-	void ValidateLightGUIDs();
 
 	/**
 	 * Sorts the actor list by net relevancy and static behaviour. First all not net relevant static

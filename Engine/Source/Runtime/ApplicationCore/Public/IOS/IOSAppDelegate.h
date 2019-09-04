@@ -15,6 +15,18 @@
 
 #define USE_MUTE_SWITCH_DETECTION 0
 
+enum class EAudioFeature : uint8
+{
+	ExternalAudio, // background music, music app, etc
+	VoiceChat,
+	Playback,
+	Record,
+	BackgroundAudio,
+	
+	NumFeatures,
+};
+
+
 // Predicate to decide whether a push notification message should be processed
 DECLARE_DELEGATE_RetVal_OneParam(bool, FPushNotificationFilter, NSDictionary*);
 
@@ -58,9 +70,13 @@ namespace FAppEntry
 	void Init();
 	void Tick();
     void SuspendTick();
+	void ResumeAudioContext();
+	void ResetAudioContextResumeTime();
 	void Shutdown();
     void Suspend(bool bIsInterrupt = false);
     void Resume(bool bIsInterrupt = false);
+	void RestartAudio();
+
 	bool IsStartupMoviePlaying();
 
 	extern bool	gAppLaunchedWithLocalNotification;
@@ -68,6 +84,7 @@ namespace FAppEntry
 	extern int32	gLaunchLocalNotificationFireDate;
 }
 
+APPLICATIONCORE_API
 @interface IOSAppDelegate : UIResponder <UIApplicationDelegate,
 #if !UE_BUILD_SHIPPING
 	UIGestureRecognizerDelegate,
@@ -76,7 +93,10 @@ namespace FAppEntry
 #if __IPHONE_OS_VERSION_MIN_REQUIRED >= __IPHONE_10_0
 	UNUserNotificationCenterDelegate,
 #endif
-UITextFieldDelegate>
+	UITextFieldDelegate>
+{
+    bool bForceExit;
+}
 
 /** Window object */
 @property (strong, retain, nonatomic) UIWindow *Window;
@@ -87,7 +107,7 @@ UITextFieldDelegate>
 @property class FIOSApplication* IOSApplication;
 
 /** The controller to handle rotation of the view */
-@property (retain) IOSViewController* IOSController;
+@property (readonly) UIViewController* IOSController;
 
 /** The view controlled by the auto-rotating controller */
 @property (retain) UIView* RootView;
@@ -113,6 +133,13 @@ UITextFieldDelegate>
 /** The time delay (in seconds) between idle timer enable requests and actually enabling the idle timer */
 @property (readonly) float IdleTimerEnablePeriod;
 
+#if WITH_ACCESSIBILITY
+/** Timer used for updating cached data from game thread for all accessible widgets. */
+@property (nonatomic, retain) NSTimer* AccessibilityCacheTimer;
+/** Callback for IOS notification of VoiceOver being enabled or disabled. */
+-(void)OnVoiceOverStatusChanged;
+#endif
+
 // parameters passed from openURL
 @property (nonatomic, retain) NSMutableArray* savedOpenUrlParameters;
 
@@ -122,7 +149,7 @@ UITextFieldDelegate>
 	@property (nonatomic, retain) UIAlertView*		ConsoleAlert;
 #endif
 #ifdef __IPHONE_8_0
-	@property (nonatomic, assign) UIAlertController* ConsoleAlertController;
+	@property (nonatomic, retain) UIAlertController* ConsoleAlertController;
 #endif
 	@property (nonatomic, retain) NSMutableArray*	ConsoleHistoryValues;
 	@property (nonatomic, assign) int				ConsoleHistoryValuesIndex;
@@ -149,8 +176,10 @@ UITextFieldDelegate>
 
 -(bool)IsIdleTimerEnabled;
 -(void)EnableIdleTimer:(bool)bEnable;
-
--(void) ParseCommandLineOverrides;
+-(void)StartGameThread;
+/** Uses the TaskGraph to execute a function on the game thread, and then blocks until the function is executed. */
++(bool)WaitAndRunOnGameThread:(TUniqueFunction<void()>)Function;
+-(void)NoUrlCommandLine;
 
 -(int)GetAudioVolume;
 -(bool)AreHeadphonesPluggedIn;
@@ -158,6 +187,8 @@ UITextFieldDelegate>
 -(bool)IsRunningOnBattery;
 -(NSProcessInfoThermalState)GetThermalState;
 -(void)CheckForZoomAccessibility;
+-(float)GetBackgroundingMainThreadBlockTime;
+-(void)OverrideBackgroundingMainThreadBlockTime:(float)BlockTime;
 
 /** TRUE if the device is playing background music and we want to allow that */
 @property (assign) bool bUsingBackgroundMusic;
@@ -175,16 +206,26 @@ UITextFieldDelegate>
 - (void)InitializeAudioSession;
 - (void)ToggleAudioSession:(bool)bActive force:(bool)bForce;
 - (bool)IsBackgroundAudioPlaying;
+- (bool)HasRecordPermission;
 - (void)EnableVoiceChat:(bool)bEnable;
+- (void)EnableHighQualityVoiceChat:(bool)bEnable;
 - (bool)IsVoiceChatEnabled;
+
+- (void)SetFeature:(EAudioFeature)Feature Active:(bool)bIsActive;
+- (bool)IsFeatureActive:(EAudioFeature)Mode;
 
 @property (atomic) bool bAudioActive;
 @property (atomic) bool bVoiceChatEnabled;
+@property (atomic) bool bHighQualityVoiceChatEnabled;
 
 @property (atomic) bool bIsSuspended;
 @property (atomic) bool bHasSuspended;
 @property (atomic) bool bHasStarted;
 - (void)ToggleSuspend:(bool)bSuspend;
+
+- (void)ForceExit;
+
+@property (nonatomic, copy) void(^BackgroundSessionEventCompleteDelegate)();
 
 static void interruptionListener(void* ClientData, UInt32 Interruption);
 

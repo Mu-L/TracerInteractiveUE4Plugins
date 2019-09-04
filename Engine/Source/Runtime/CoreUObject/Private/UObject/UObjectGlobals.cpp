@@ -37,6 +37,7 @@
 #include "Serialization/DuplicatedObject.h"
 #include "Serialization/DuplicatedDataReader.h"
 #include "Serialization/DuplicatedDataWriter.h"
+#include "Serialization/LoadTimeTracePrivate.h"
 #include "Misc/PackageName.h"
 #include "UObject/LinkerLoad.h"
 #include "Blueprint/BlueprintSupport.h"
@@ -467,9 +468,9 @@ void StaticTick( float DeltaTime, bool bUseFullTimeLimit, float AsyncLoadingTime
 
 #if STATS
 	// Set name table stats.
-	int32 NameTableEntries = FName::GetMaxNames();
 	int32 NameTableAnsiEntries = FName::GetNumAnsiNames();
 	int32 NameTableWideEntries = FName::GetNumWideNames();
+	int32 NameTableEntries = NameTableAnsiEntries + NameTableWideEntries;
 	int32 NameTableMemorySize = FName::GetNameTableMemorySize();
 	SET_DWORD_STAT( STAT_NameTableEntries, NameTableEntries );
 	SET_DWORD_STAT( STAT_NameTableAnsiEntries, NameTableAnsiEntries );
@@ -513,13 +514,15 @@ void StaticTick( float DeltaTime, bool bUseFullTimeLimit, float AsyncLoadingTime
 -----------------------------------------------------------------------------*/
 
 //
-// Safe load error-handling.
+// Safe load error-handling. Returns true if a message was emitted.
 //
-void SafeLoadError( UObject* Outer, uint32 LoadFlags, const TCHAR* ErrorMessage)
+bool SafeLoadError( UObject* Outer, uint32 LoadFlags, const TCHAR* ErrorMessage)
 {
+	bool bRetVal = false;
 	if( FParse::Param( FCommandLine::Get(), TEXT("TREATLOADWARNINGSASERRORS") ) == true )
 	{
 		UE_LOG(LogUObjectGlobals, Error, TEXT("%s"), ErrorMessage);
+		bRetVal = true;
 	}
 	else
 	{
@@ -527,8 +530,11 @@ void SafeLoadError( UObject* Outer, uint32 LoadFlags, const TCHAR* ErrorMessage)
 		if( (LoadFlags & LOAD_Quiet) == 0 && (LoadFlags & LOAD_NoWarn) == 0)
 		{ 
 			UE_LOG(LogUObjectGlobals, Warning, TEXT("%s"), ErrorMessage);
+			bRetVal = true;
 		}
 	}
+
+	return bRetVal;
 }
 
 UPackage* FindPackage( UObject* InOuter, const TCHAR* PackageName )
@@ -1756,12 +1762,13 @@ FName MakeUniqueObjectName( UObject* Parent, UClass* Class, FName InBaseName/*=N
 		do
 		{
 			// create the next name in the sequence for this class
-			if (BaseName.GetComparisonIndex() == NAME_Package)
+			static const FName NamePackage(NAME_Package);
+			if (BaseName == NamePackage)
 			{
 				if (Parent == NULL)
 				{
 					//package names should default to "/Temp/Untitled" when their parent is NULL. Otherwise they are a group.
-					TestName = FName(*FString::Printf(TEXT("/Temp/%s"), *FName(NAME_Untitled).ToString()), ++Class->ClassUnique);
+					TestName = FName(*FString::Printf(TEXT("/Temp/%s"), LexToString(NAME_Untitled)), ++Class->ClassUnique);
 				}
 				else
 				{
@@ -3070,12 +3077,13 @@ UObject* StaticConstructObject_Internal
 			!InTemplate || 
 			(InName != NAME_None && (bAssumeTemplateIsArchetype || InTemplate == UObject::GetArchetypeFromRequiredInfo(InClass, InOuter, InName, InFlags)))
 			);
+	const bool bCanRecycleSubobjects = bIsNativeFromCDO && (!(InFlags & RF_DefaultSubObject) || !FUObjectThreadContext::Get().IsInConstructor)
 #if WITH_HOT_RELOAD
 	// Do not recycle subobjects when performing hot-reload as they may contain old property values.
-	const bool bCanRecycleSubobjects = bIsNativeFromCDO && !GIsHotReload;
-#else
-	const bool bCanRecycleSubobjects = bIsNativeFromCDO;
+	&& !GIsHotReload
 #endif
+		;
+
 	bool bRecycledSubobject = false;	
 	Result = StaticAllocateObject(InClass, InOuter, InName, InFlags, InternalSetFlags, bCanRecycleSubobjects, &bRecycledSubobject);
 	check(Result != NULL);
@@ -3477,11 +3485,15 @@ private:
 	{
 #if ENABLE_GC_DEBUG_OUTPUT
 		// this message is to help track down culprits behind "Object in PIE world still referenced" errors
-		if ( GIsEditor && !GIsPlayInEditorWorld && !CurrentObject->RootPackageHasAnyFlags(PKG_PlayInEditor) && Object->RootPackageHasAnyFlags(PKG_PlayInEditor) )
+		if ( GIsEditor && !GIsPlayInEditorWorld && !CurrentObject->HasAnyFlags(RF_Transient) && Object->RootPackageHasAnyFlags(PKG_PlayInEditor) )
 		{
-			UE_LOG(LogGarbage, Warning, TEXT("GC detected illegal reference to PIE object from content [possibly via %s]:"), *ReferencingProperty->GetFullName());
-			UE_LOG(LogGarbage, Warning, TEXT("      PIE object: %s"), *Object->GetFullName());
-			UE_LOG(LogGarbage, Warning, TEXT("  NON-PIE object: %s"), *CurrentObject->GetFullName());
+			UPackage* ReferencingPackage = CurrentObject->GetOutermost();
+			if (!ReferencingPackage->HasAnyPackageFlags(PKG_PlayInEditor) && !ReferencingPackage->HasAnyFlags(RF_Transient))
+			{
+				UE_LOG(LogGarbage, Warning, TEXT("GC detected illegal reference to PIE object from content [possibly via %s]:"), *ReferencingProperty->GetFullName());
+				UE_LOG(LogGarbage, Warning, TEXT("      PIE object: %s"), *Object->GetFullName());
+				UE_LOG(LogGarbage, Warning, TEXT("  NON-PIE object: %s"), *CurrentObject->GetFullName());
+			}
 		}
 #endif
 
@@ -3630,7 +3642,7 @@ UScriptStruct* GetFallbackStruct()
 	return TBaseStructure<FFallbackStruct>::Get();
 }
 
-UObject* FObjectInitializer::CreateDefaultSubobject(UObject* Outer, FName SubobjectFName, UClass* ReturnType, UClass* ClassToCreateByDefault, bool bIsRequired, bool bAbstract, bool bIsTransient) const
+UObject* FObjectInitializer::CreateDefaultSubobject(UObject* Outer, FName SubobjectFName, UClass* ReturnType, UClass* ClassToCreateByDefault, bool bIsRequired, bool bIsTransient) const
 {
 	UE_CLOG(!FUObjectThreadContext::Get().IsInConstructor, LogClass, Fatal, TEXT("Subobjects cannot be created outside of UObject constructors. UObject constructing subobjects cannot be created using new or placement new operator."));
 	if (SubobjectFName == NAME_None)
@@ -3649,11 +3661,18 @@ UObject* FObjectInitializer::CreateDefaultSubobject(UObject* Outer, FName Subobj
 	{
 		check(OverrideClass->IsChildOf(ReturnType));
 
-		// Abstract sub-objects are only allowed when explicitly created with CreateAbstractDefaultSubobject.
-		if (!OverrideClass->HasAnyClassFlags(CLASS_Abstract) || !bAbstract)
+		if (OverrideClass->HasAnyClassFlags(CLASS_Abstract))
+		{
+			// Attempts to create an abstract class will return null. If it is not optional or the owning class is not also abstract report a warning.
+			if (!bIsRequired && !Outer->GetClass()->HasAnyClassFlags(CLASS_Abstract))
+			{
+				UE_LOG(LogClass, Warning, TEXT("Required default subobject %s not created as requested class %s is abstract. Returning null."), *SubobjectFName.ToString(), *OverrideClass->GetName());
+			}
+		}
+		else
 		{
 			UObject* Template = OverrideClass->GetDefaultObject(); // force the CDO to be created if it hasn't already
-			EObjectFlags SubobjectFlags = Outer->GetMaskedFlags(RF_PropagateToSubObjects);
+			EObjectFlags SubobjectFlags = Outer->GetMaskedFlags(RF_PropagateToSubObjects) | RF_DefaultSubObject;
 			bool bOwnerArchetypeIsNotNative;
 			UClass* OuterArchetypeClass;
 
@@ -3703,7 +3722,6 @@ UObject* FObjectInitializer::CreateDefaultSubobject(UObject* Outer, FName Subobj
 #endif
 				Outer->GetClass()->AddDefaultSubobject(Result, ReturnType);
 			}
-			Result->SetFlags(RF_DefaultSubObject);
 			// Clear PendingKill flag in case we recycled a subobject of a dead object.
 			// @todo: we should not be recycling subobjects unless we're currently loading from a package
 			Result->ClearInternalFlags(EInternalObjectFlags::PendingKill);
@@ -3716,7 +3734,7 @@ UObject* FObjectInitializer::CreateEditorOnlyDefaultSubobject(UObject* Outer, FN
 #if WITH_EDITOR
 	if (GIsEditor)
 	{
-		UObject* EditorSubobject = CreateDefaultSubobject(Outer, SubobjectName, ReturnType, ReturnType, /*bIsRequired =*/ false, /*bIsAbstract =*/ false, bTransient);
+		UObject* EditorSubobject = CreateDefaultSubobject(Outer, SubobjectName, ReturnType, ReturnType, /*bIsRequired =*/ false, bTransient);
 		if (EditorSubobject)
 		{
 			EditorSubobject->MarkAsEditorOnlySubobject();
@@ -4183,14 +4201,26 @@ namespace UE4CodeGen_Private
 			}
 			break;
 
-			case EPropertyGenFlags::MulticastDelegate:
+			case EPropertyGenFlags::InlineMulticastDelegate:
 			{
 				const FMulticastDelegatePropertyParams* Prop = (const FMulticastDelegatePropertyParams*)PropBase;
-				NewProp = new (EC_InternalUseOnlyConstructor, Outer, UTF8_TO_TCHAR(Prop->NameUTF8), Prop->ObjectFlags) UMulticastDelegateProperty(FObjectInitializer(), EC_CppProperty, Prop->Offset, Prop->PropertyFlags, Prop->SignatureFunctionFunc ? Prop->SignatureFunctionFunc() : nullptr);
+				NewProp = new (EC_InternalUseOnlyConstructor, Outer, UTF8_TO_TCHAR(Prop->NameUTF8), Prop->ObjectFlags) UMulticastInlineDelegateProperty(FObjectInitializer(), EC_CppProperty, Prop->Offset, Prop->PropertyFlags, Prop->SignatureFunctionFunc ? Prop->SignatureFunctionFunc() : nullptr);
 
 #if WITH_METADATA
 				MetaDataArray = Prop->MetaDataArray;
 				NumMetaData   = Prop->NumMetaData;
+#endif
+			}
+			break;
+
+			case EPropertyGenFlags::SparseMulticastDelegate:
+			{
+				const FMulticastDelegatePropertyParams* Prop = (const FMulticastDelegatePropertyParams*)PropBase;
+				NewProp = new (EC_InternalUseOnlyConstructor, Outer, UTF8_TO_TCHAR(Prop->NameUTF8), Prop->ObjectFlags) UMulticastSparseDelegateProperty(FObjectInitializer(), EC_CppProperty, Prop->Offset, Prop->PropertyFlags, Prop->SignatureFunctionFunc ? Prop->SignatureFunctionFunc() : nullptr);
+
+#if WITH_METADATA
+				MetaDataArray = Prop->MetaDataArray;
+				NumMetaData = Prop->NumMetaData;
 #endif
 			}
 			break;
@@ -4286,12 +4316,27 @@ namespace UE4CodeGen_Private
 		UFunction* NewFunction;
 		if (Params.FunctionFlags & FUNC_Delegate)
 		{
-			NewFunction = new (EC_InternalUseOnlyConstructor, Outer, UTF8_TO_TCHAR(Params.NameUTF8), Params.ObjectFlags) UDelegateFunction(
-				FObjectInitializer(),
-				Super,
-				Params.FunctionFlags,
-				Params.StructureSize
-			);
+			if (Params.OwningClassName == nullptr)
+			{
+				NewFunction = new (EC_InternalUseOnlyConstructor, Outer, UTF8_TO_TCHAR(Params.NameUTF8), Params.ObjectFlags) UDelegateFunction(
+					FObjectInitializer(),
+					Super,
+					Params.FunctionFlags,
+					Params.StructureSize
+				);
+			}
+			else
+			{
+				USparseDelegateFunction* NewSparseFunction = new (EC_InternalUseOnlyConstructor, Outer, UTF8_TO_TCHAR(Params.NameUTF8), Params.ObjectFlags) USparseDelegateFunction(
+					FObjectInitializer(),
+					Super,
+					Params.FunctionFlags,
+					Params.StructureSize
+				);
+				NewSparseFunction->OwningClassName = FName(Params.OwningClassName);
+				NewSparseFunction->DelegateName = FName(Params.DelegateName);
+				NewFunction = NewSparseFunction;
+			}
 		}
 		else
 		{
@@ -4307,6 +4352,8 @@ namespace UE4CodeGen_Private
 #if WITH_METADATA
 		AddMetaData(NewFunction, Params.MetaDataArray, Params.NumMetaData);
 #endif
+		NewFunction->RPCId = Params.RPCId;
+		NewFunction->RPCResponseId = Params.RPCResponseId;
 
 		ConstructUProperties(NewFunction, Params.PropertyArray, Params.NumProperties);
 
@@ -4382,7 +4429,20 @@ namespace UE4CodeGen_Private
 			return;
 		}
 
-		UPackage* NewPackage = CastChecked<UPackage>(StaticFindObjectFast(UPackage::StaticClass(), nullptr, FName(UTF8_TO_TCHAR(Params.NameUTF8)), false, false));
+		UObject* FoundPackage = StaticFindObjectFast(UPackage::StaticClass(), nullptr, FName(UTF8_TO_TCHAR(Params.NameUTF8)), false, false);
+
+#if USE_PER_MODULE_UOBJECT_BOOTSTRAP
+		if (!FoundPackage)
+		{
+			UE_LOG(LogUObjectGlobals, Log, TEXT("Creating package on the fly %s"), UTF8_TO_TCHAR(Params.NameUTF8));
+			ProcessNewlyLoadedUObjects(FName(UTF8_TO_TCHAR(Params.NameUTF8)), false);
+			FoundPackage = CreatePackage(nullptr, UTF8_TO_TCHAR(Params.NameUTF8));
+		}
+#endif
+
+		checkf(FoundPackage, TEXT("Code not found for generated code (package %s)."), UTF8_TO_TCHAR(Params.NameUTF8));
+
+		UPackage* NewPackage = CastChecked<UPackage>(FoundPackage);
 		OutPackage = NewPackage;
 
 #if WITH_METADATA
@@ -4466,4 +4526,32 @@ namespace UE4CodeGen_Private
 
 		NewClass->StaticLink();
 	}
+}
+
+EDataValidationResult CombineDataValidationResults(EDataValidationResult Result1, EDataValidationResult Result2)
+{
+	/**
+	 * Anything combined with an Invalid result is Invalid. Any result combined with a NotValidated result is the same result
+	 *
+	 * The combined results should match the following matrix
+	 *
+	 *				|	NotValidated	|	Valid	|	Invalid
+	 * -------------+-------------------+-----------+----------
+	 * NotValidated	|	NotValidated	|	Valid	|	Invalid
+	 * Valid		|	Valid			|	Valid	|	Invalid
+	 * Invalid		|	Invalid			|	Invalid	|	Invalid
+	 *
+	 */
+
+	if (Result1 == EDataValidationResult::Invalid || Result2 == EDataValidationResult::Invalid)
+	{
+		return EDataValidationResult::Invalid;
+	}
+
+	if (Result1 == EDataValidationResult::Valid || Result2 == EDataValidationResult::Valid)
+	{
+		return EDataValidationResult::Valid;
+	}
+
+	return EDataValidationResult::NotValidated;
 }

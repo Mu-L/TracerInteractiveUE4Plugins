@@ -29,6 +29,25 @@ class ENGINE_API AGameNetworkManager : public AInfo
 	GENERATED_UCLASS_BODY()
 
 	//======================================================================================================================
+	// Analytics
+
+	/* If packet loss goes over this value, we have bad packet loss. Value is between 0 and 1.*/
+	UPROPERTY(GlobalConfig)
+	float BadPacketLossThreshold = 0.05f;
+
+	/* If the packet loss goes over this threshold, we have severe packet loss. Value is between 0 and 1*/
+	UPROPERTY(GlobalConfig)
+	float SeverePacketLossThreshold = 0.15f;
+
+	/** The point we determine the server is either delaying packets or has bad upstream. */
+	UPROPERTY(GlobalConfig)
+	int32 BadPingThreshold;
+
+	/** Similar to BadPingThreshold, but used to track exceptionally bad pings. */
+	UPROPERTY(GlobalConfig)
+	int32 SeverePingThreshold;
+
+	//======================================================================================================================
 	// Listen server dynamic netspeed adjustment
 	
 	/** Current adjusted net speed - Used for dynamically managing netspeed for listen servers*/
@@ -69,10 +88,6 @@ class ENGINE_API AGameNetworkManager : public AInfo
 	/** The amount of time without packets before triggering the cheat code */
 	UPROPERTY(config)
 	float StandbyTxCheatTime;
-
-	/** The point we determine the server is either delaying packets or has bad upstream */
-	UPROPERTY(config)
-	int32 BadPingThreshold;
 
 	/** The percentage of clients missing RX data before triggering the standby code */
 	UPROPERTY(config)
@@ -117,6 +132,14 @@ class ENGINE_API AGameNetworkManager : public AInfo
 	/** MaxClientForcedUpdateDuration is the maximum time duration over which the server will force updates, after MAXCLIENTUPDATEINTERVAL is initially exceeded. */
 	UPROPERTY(GlobalConfig)
 	float MaxClientForcedUpdateDuration;
+	
+	/** Ignore forced client movement updates when server hitches for longer than this duration. */
+	UPROPERTY(GlobalConfig)
+	float ServerForcedUpdateHitchThreshold;
+
+	/** Ignore forced client movement updates when server hitch was detected within this amount of time in the past. */
+	UPROPERTY(GlobalConfig)
+	float ServerForcedUpdateHitchCooldown;
 
 	/** MaxMoveDeltaTime is the default maximum time delta of CharacterMovement ServerMoves. Should be less than or equal to MAXCLIENTUPDATEINTERVAL, otherwise server will interfere by forcing position updates. */
 	UPROPERTY(GlobalConfig)
@@ -156,6 +179,14 @@ class ENGINE_API AGameNetworkManager : public AInfo
 	/** Minimum delay between the server sending error corrections to a client, in seconds. */
 	UPROPERTY(GlobalConfig)
 	float ClientErrorUpdateRateLimit;
+
+	/** Minimum delay between calls to ServerUpdateCamera, in seconds. */
+	UPROPERTY(GlobalConfig)
+	float ClientNetCamUpdateDeltaTime;
+
+	/** Camera position change limit, when exceeded allows an immediate ServerUpdateCamera call. */
+	UPROPERTY(GlobalConfig)
+	float ClientNetCamUpdatePositionLimit;
 
 	//======================================================================================================================
 	// Movement Time Discrepancy settings for Characters (speed hack detection and prevention)

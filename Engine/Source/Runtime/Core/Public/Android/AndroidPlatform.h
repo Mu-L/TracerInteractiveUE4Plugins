@@ -56,8 +56,12 @@ typedef FAndroidTypes FPlatformTypes;
 #define PLATFORM_UI_NEEDS_TOOLTIPS					0
 #define PLATFORM_UI_NEEDS_FOCUS_OUTLINES			0
 #define PLATFORM_SUPPORTS_EARLY_MOVIE_PLAYBACK		1 // movies will start before engine is initalized
+#define PLATFORM_SUPPORTS_GEOMETRY_SHADERS			0
+#define PLATFORM_SUPPORTS_TESSELLATION_SHADERS		0
 
 #define PLATFORM_CODE_SECTION(Name)					__attribute__((section(Name)))
+
+#define PLATFORM_GLOBAL_LOG_CATEGORY				LogAndroid
 
 #if defined(EXPERIMENTAL_OPENGL_RHITHREAD) && EXPERIMENTAL_OPENGL_RHITHREAD
 	#define PLATFORM_RHITHREAD_DEFAULT_BYPASS			0
@@ -113,7 +117,20 @@ typedef FAndroidTypes FPlatformTypes;
 #define FUNCTION_CHECK_RETURN_END __attribute__ ((warn_unused_result))	/* Warn that callers should not ignore the return value. */
 #define FUNCTION_NO_RETURN_END __attribute__ ((noreturn))				/* Indicate that the function never returns. */
 
+// Optimization macros
+#define PRAGMA_DISABLE_OPTIMIZATION_ACTUAL _Pragma("clang optimize off")
+#define PRAGMA_ENABLE_OPTIMIZATION_ACTUAL _Pragma("clang optimize on")
+
+// Disable optimization of a specific function
+#define DISABLE_FUNCTION_OPTIMIZATION	__attribute__((optnone))
+
 #define ABSTRACT abstract
+
+// DLL export and import for types, only supported on clang
+#if (__clang_major__ > 3 || (__clang_major__ == 3 && __clang_minor__ >= 8))
+#define DLLEXPORT_VTABLE	__attribute__ ((__type_visibility__("default")))
+#define DLLIMPORT_VTABLE	__attribute__ ((__type_visibility__("default")))
+#endif
 
 // DLL export and import definitions
 #define DLLEXPORT			__attribute__((visibility("default")))

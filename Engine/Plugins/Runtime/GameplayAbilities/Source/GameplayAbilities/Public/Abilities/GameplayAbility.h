@@ -163,6 +163,8 @@ public:
 	/** Returns the AbilitySystemComponent that is activating this ability */
 	UFUNCTION(BlueprintCallable, Category = Ability)
 	UAbilitySystemComponent* GetAbilitySystemComponentFromActorInfo() const;
+	UAbilitySystemComponent* GetAbilitySystemComponentFromActorInfo_Checked() const;
+	UAbilitySystemComponent* GetAbilitySystemComponentFromActorInfo_Ensured() const;
 
 	/** Gets the current actor info bound to this ability - can only be called on instanced abilities. */
 	const FGameplayAbilityActorInfo* GetCurrentActorInfo() const
@@ -473,7 +475,7 @@ public:
 	//	UObject overrides
 	// --------------------------------------	
 	virtual UWorld* GetWorld() const override;
-	virtual int32 GetFunctionCallspace(UFunction* Function, void* Parameters, FFrame* Stack) override;
+	virtual int32 GetFunctionCallspace(UFunction* Function, FFrame* Stack) override;
 	virtual bool CallRemoteFunction(UFunction* Function, void* Parameters, FOutParmRec* OutParms, FFrame* Stack) override;
 	virtual bool IsSupportedForNetworking() const override;
 

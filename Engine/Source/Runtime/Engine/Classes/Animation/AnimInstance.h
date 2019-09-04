@@ -698,7 +698,39 @@ public:
 	virtual void OnMontageInstanceStopped(FAnimMontageInstance & StoppedMontageInstance);
 	void ClearMontageInstanceReferences(FAnimMontageInstance& InMontageInstance);
 
-	FAnimNode_SubInput* GetSubInputNode() const;
+	/** 
+	 * Get a sub-input node by name, given a named graph.
+	 * @param	InSubInput	The name of the sub-input. If this is NAME_None, then we assume that the desired input is FAnimNode_SubInput::DefaultInputPoseName.
+	 * @param	InGraph		The name of the graph in which to find the sub-input. If this is NAME_None, then we assume that the desired graph is "AnimGraph", the default.
+	 */
+	FAnimNode_SubInput* GetSubInputNode(FName InSubInput = NAME_None, FName InGraph = NAME_None);
+
+	/** Runs through all nodes, attempting to find the first sub-instance by name/tag */
+	UFUNCTION(BlueprintPure, Category = "Sub-Instances")
+	UAnimInstance* GetSubInstanceByTag(FName InTag) const;
+
+	/** Runs through all nodes, attempting to find all sub-instance that match the name/tag */
+	UFUNCTION(BlueprintPure, Category = "Sub-Instances")
+	void GetSubInstancesByTag(FName InTag, TArray<UAnimInstance*>& OutSubInstances) const;
+
+	/** Runs through all nodes, attempting to find sub-instance by name/tag, then sets the class of each node if the tag matches */
+	UFUNCTION(BlueprintCallable, Category = "Sub-Instances")
+	void SetSubInstanceClassByTag(FName InTag, TSubclassOf<UAnimInstance> InClass);
+
+	/** 
+	 * Runs through all layer nodes, attempting to layer nodes that are implemented by the specified class, then sets up a sub instance of the class for each.
+	 * Allocates one sub instance to run each of the groups specified in the class, so state is shared.
+	 * If InClass is null, then layers are reset to their defaults.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Layers")
+	void SetLayerOverlay(TSubclassOf<UAnimInstance> InClass);
+
+	/** Gets the sub instance corresponding to the specified group */
+	UFUNCTION(BlueprintCallable, Category = "Layers")
+	UAnimInstance* GetLayerSubInstanceByGroup(FName InGroup) const;
+
+	/** Sets up initial layer groupings */
+	void InitializeGroupedLayers();
 
 protected:
 	/** Map between Active Montages and their FAnimMontageInstance */
@@ -956,6 +988,17 @@ public:
 	 */
 	virtual void OnUROPreInterpolation_AnyThread(FAnimationEvaluationContext& InOutContext) {}
 
+	/** Flag passed to UpdateAnimation, determines the path we follow */
+	enum class EUpdateAnimationFlag : uint8
+	{
+		/** Enforce an immediate update, regardless of state*/
+		ForceImmediateUpdate,
+		/** Enforces a parallel update, regardless of state */
+		ForceParallelUpdate,
+		/** Use state to determine whether or not to immediately or update in parallel */
+		Default
+	};
+
 	// Animation phase trigger
 	// start with initialize
 	// update happens in every tick. Can happen in parallel with others if conditions are right.
@@ -963,7 +1006,9 @@ public:
 	// post eval happens after evaluation is done
 	// uninitialize happens when owner is unregistered
 	void InitializeAnimation();
-	void UpdateAnimation(float DeltaSeconds, bool bNeedsValidRootMotion);
+
+	/** Update Animation code-paths, updates and advances animation state, returns whether or not the actual update should have been called immediately */
+	bool UpdateAnimation(float DeltaSeconds, bool bNeedsValidRootMotion, EUpdateAnimationFlag UpdateFlag = EUpdateAnimationFlag::Default );
 
 	/** Run update animation work on a worker thread */
 	void ParallelUpdateAnimation();
@@ -980,7 +1025,7 @@ public:
 	/** Perform evaluation. Can be called from worker threads. */
 	void ParallelEvaluateAnimation(bool bForceRefPose, const USkeletalMesh* InSkeletalMesh, FBlendedHeapCurve& OutCurve, FCompactPose& OutPose);
 
-	UE_DEPRECATED(4.32, "Please use ParallelEvaluateAnimation without passing OutBoneSpaceTransforms.")
+	UE_DEPRECATED(4.23, "Please use ParallelEvaluateAnimation without passing OutBoneSpaceTransforms.")
 	void ParallelEvaluateAnimation(bool bForceRefPose, const USkeletalMesh* InSkeletalMesh, TArray<FTransform>& OutBoneSpaceTransforms, FBlendedHeapCurve& OutCurve, FCompactPose& OutPose);
 
 	void PostEvaluateAnimation();
@@ -1311,6 +1356,9 @@ protected:
 	}
 
 	friend struct FAnimNode_SubInstance;
+	
+	/** Return whethere this AnimNotifyState should be triggered */
+	virtual bool ShouldTriggerAnimNotifyState(const UAnimNotifyState* AnimNotifyState) const { return true; }
 
 protected:
 	/** Proxy object, nothing should access this from an externally-callable API as it is used as a scratch area on worker threads */

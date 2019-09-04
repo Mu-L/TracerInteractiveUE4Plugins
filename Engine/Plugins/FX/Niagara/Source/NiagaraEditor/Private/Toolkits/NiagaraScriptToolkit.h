@@ -10,6 +10,8 @@
 #include "Toolkits/AssetEditorToolkit.h"
 #include "UObject/GCObject.h"
 
+#include "NiagaraEditorCommon.h"
+
 class IDetailsView;
 class SGraphEditor;
 class UEdGraph;
@@ -18,6 +20,8 @@ class UNiagaraScriptSource;
 class FNiagaraScriptViewModel;
 class FNiagaraObjectSelection;
 struct FEdGraphEditAction;
+class FNiagaraMessageLogViewModel;
+class FNiagaraStandaloneScriptViewModel;
 
 /** Viewer/editor for a DataTable */
 class FNiagaraScriptToolkit : public FAssetEditorToolkit, public FGCObject
@@ -71,15 +75,21 @@ private:
 	TSharedRef<SDockTab> SpawnTabNodeGraph(const FSpawnTabArgs& Args);
 
 	/** Spawns the tab with the script details inside. */
-	TSharedRef<SDockTab> SpawnTabNodeDetails(const FSpawnTabArgs& Args);
+	TSharedRef<SDockTab> SpawnTabScriptDetails(const FSpawnTabArgs& Args);
+
+	/** Spawns the tab with the details of the current selection. */
+	TSharedRef<SDockTab> SpawnTabSelectedDetails(const FSpawnTabArgs& Args);
 
 	/** Spawns the tab with the script details inside. */
 	TSharedRef<SDockTab> SpawnTabScriptParameters(const FSpawnTabArgs& Args);
 	TSharedRef<SDockTab> SpawnTabStats(const FSpawnTabArgs& Args);
 
+	TSharedRef<SDockTab> SpawnTabMessageLog(const FSpawnTabArgs& Args);
+
 	/** Sets up commands for the toolkit toolbar. */
 	void SetupCommands();
 
+	const FName GetNiagaraScriptMessageLogName(UNiagaraScript* InScript) const;
 	FSlateIcon GetCompileStatusImage() const;
 	FText GetCompileStatusTooltip() const;
 
@@ -105,19 +115,31 @@ private:
 
 	void OnEditedScriptGraphChanged(const FEdGraphEditAction& InAction);
 
+	/** Navigates to element in graph (node, pin, etc.) 
+	* @Param ElementToFocus Defines the graph element to navigate to and select.
+	*/
+	void FocusGraphElementIfSameScriptID(const FNiagaraScriptIDAndGraphFocusInfo* ElementToFocus);
+
 private:
 
 	/** The Script being edited */
-	TSharedPtr<FNiagaraScriptViewModel> ScriptViewModel;
+	TSharedPtr<FNiagaraStandaloneScriptViewModel> ScriptViewModel;
 
 	/** The selection displayed by the details tab. */
-	TSharedPtr<FNiagaraObjectSelection> DetailsSelection;
+	TSharedPtr<FNiagaraObjectSelection> DetailsScriptSelection;
+
+	/** Message log, with the log listing that it reflects */
+	TSharedPtr<FNiagaraMessageLogViewModel> NiagaraMessageLogViewModel;
+	TSharedPtr<class SWidget> NiagaraMessageLog;
 
 	/**	The tab ids for the Niagara editor */
 	static const FName NodeGraphTabId; 
-	static const FName DetailsTabId;
+	static const FName ScriptDetailsTabId;
+	static const FName SelectedDetailsTabId;
 	static const FName ParametersTabId;
 	static const FName StatsTabId;
+	static const FName MessageLogTabID;
+
 	/** Stats log, with the log listing that it reflects */
 	TSharedPtr<class SWidget> Stats;
 	TSharedPtr<class IMessageLogListing> StatsListing;
@@ -126,4 +148,6 @@ private:
 
 	bool bEditedScriptHasPendingChanges;
 	bool bChangesDiscarded;
+
+	TSharedPtr<class SNiagaraScriptGraph> NiagaraScriptGraphWidget;
 };

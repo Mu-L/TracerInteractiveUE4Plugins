@@ -10,6 +10,7 @@ using System.IO;
 using Microsoft.Win32;
 using System.Xml.Linq;
 using Tools.DotNETCommon;
+using System.Security.Cryptography;
 
 namespace UnrealBuildTool
 {
@@ -61,7 +62,7 @@ namespace UnrealBuildTool
 		private string UPLHashCode = null;
 		private bool ARCorePluginEnabled = false;
 		private bool FacebookPluginEnabled = false;
-		private bool GearVRPluginEnabled = false;
+		private bool OculusMobilePluginEnabled = false;
 		private bool GoogleVRPluginEnabled = false;
 		private bool CrashlyticsPluginEnabled = false;
 
@@ -77,7 +78,7 @@ namespace UnrealBuildTool
 			ARCorePluginEnabled = false;
 			FacebookPluginEnabled = false;
 			GoogleVRPluginEnabled = false;
-			GearVRPluginEnabled = false;
+			OculusMobilePluginEnabled = false;
 			CrashlyticsPluginEnabled = false;
 			foreach (string Plugin in inPluginExtraData)
 			{
@@ -95,10 +96,10 @@ namespace UnrealBuildTool
 					continue;
 				}
 
-				// check if the Gear VR plugin was enabled
-				if (Plugin.Contains("GearVR_APL"))
+				// check if the Oculus Mobile plugin was enabled
+				if (Plugin.Contains("OculusMobile_APL"))
 				{
-					GearVRPluginEnabled = true;
+					OculusMobilePluginEnabled = true;
 					continue;
 				}
 
@@ -451,12 +452,12 @@ namespace UnrealBuildTool
 			}
 		}
 
-		public bool IsPackagingForGearVR(ConfigHierarchy Ini = null)
+		public List<string> GetTargetOculusMobileDevices(ConfigHierarchy Ini = null)
 		{
-			// always false if the Gear VR plugin wasn't enabled
-			if (!GearVRPluginEnabled)
+			// always false if the Oculus Mobile plugin wasn't enabled
+			if (!OculusMobilePluginEnabled)
 			{
-				return false;
+				return new List<string>();
 			}
 
 			// make a new one if one wasn't passed in
@@ -465,10 +466,30 @@ namespace UnrealBuildTool
 				Ini = GetConfigCacheIni(ConfigHierarchyType.Engine);
 			}
 
+			List<string> OculusMobileDevices;
+			bool result = Ini.GetArray("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "PackageForOculusMobile", out OculusMobileDevices);
+			if (!result || OculusMobileDevices == null)
+			{
+				OculusMobileDevices = new List<string>();
+			}
+
+			// Handle bPackageForGearVR for backwards compatibility
 			bool bPackageForGearVR = false;
 			Ini.GetBool("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "bPackageForGearVR", out bPackageForGearVR);
+			if (bPackageForGearVR && !OculusMobileDevices.Contains("GearGo"))
+			{
+				OculusMobileDevices.Add("GearGo");
+			}
 
-			return bPackageForGearVR;
+			return OculusMobileDevices;
+		}
+
+		public bool IsPackagingForOculusMobile(ConfigHierarchy Ini = null)
+		{
+			List<string> TargetOculusDevices = GetTargetOculusMobileDevices(Ini);
+			bool bTargetOculusDevices = (TargetOculusDevices != null && TargetOculusDevices.Count() > 0);
+
+			return bTargetOculusDevices;
 		}
 
 		public bool DisableVerifyOBBOnStartUp(ConfigHierarchy Ini = null)
@@ -848,8 +869,11 @@ namespace UnrealBuildTool
 		}
 
 		private int CachedStoreVersion = -1;
+		private int CachedStoreVersionOffsetArmV7 = 0;
+		private int CachedStoreVersionOffsetArm64 = 0;
+		private int CachedStoreVersionOffsetX8664= 0;
 
-		public int GetStoreVersion()
+		public int GetStoreVersion(string UE4Arch)
 		{
 			if (CachedStoreVersion < 1)
 			{
@@ -860,9 +884,13 @@ namespace UnrealBuildTool
 				bool bUseChangeListAsStoreVersion = false;
 				Ini.GetBool("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "bUseChangeListAsStoreVersion", out bUseChangeListAsStoreVersion);
 
+				bool IsBuildMachine = Environment.GetEnvironmentVariable("IsBuildMachine") == "1";
 				// override store version with changelist if enabled and is build machine
-				if (bUseChangeListAsStoreVersion && Environment.GetEnvironmentVariable("IsBuildMachine") == "1")
+				if (bUseChangeListAsStoreVersion && IsBuildMachine)
 				{
+					// make sure changelist is cached
+					string EngineVersion = ReadEngineVersion();
+					
 					int Changelist = 0;
 					if (int.TryParse(EngineChangelist, out Changelist))
 					{
@@ -873,7 +901,20 @@ namespace UnrealBuildTool
 					}
 				}
 
+				Log.TraceInformation("GotStoreVersion found v{0}. (bUseChangeListAsStoreVersion={1} IsBuildMachine={2} EngineChangeList={3})", StoreVersion, bUseChangeListAsStoreVersion, IsBuildMachine, EngineChangelist);
+
 				CachedStoreVersion = StoreVersion;
+
+				Ini.GetInt32("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "StoreVersionOffsetArmV7", out CachedStoreVersionOffsetArmV7);
+				Ini.GetInt32("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "StoreVersionOffsetArm64", out CachedStoreVersionOffsetArm64);
+				Ini.GetInt32("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "StoreVersionOffsetX8664", out CachedStoreVersionOffsetX8664);
+			}
+
+			switch (UE4Arch)
+			{
+				case "-armv7": return CachedStoreVersion + CachedStoreVersionOffsetArmV7;
+				case "-arm64": return CachedStoreVersion + CachedStoreVersionOffsetArm64;
+				case "-x64": return CachedStoreVersion + CachedStoreVersionOffsetX8664;
 			}
 
 			return CachedStoreVersion;
@@ -881,7 +922,7 @@ namespace UnrealBuildTool
 
 		private string CachedVersionDisplayName;
 
-		public string GetVersionDisplayName()
+		public string GetVersionDisplayName(bool bIsEmbedded)
 		{
 			if (string.IsNullOrEmpty(CachedVersionDisplayName))
 			{
@@ -904,6 +945,16 @@ namespace UnrealBuildTool
 					{
 						VersionDisplayName = string.Format("{0}-Android", VersionDisplayName);
 					}
+
+					// append optional text to version name if embedded build
+					if (bIsEmbedded)
+					{
+						string EmbeddedAppendDisplayName = "";
+						if (Ini.GetString("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "EmbeddedAppendDisplayName", out EmbeddedAppendDisplayName))
+						{
+							VersionDisplayName = VersionDisplayName + EmbeddedAppendDisplayName;
+						}
+					}
 				}
 
 				CachedVersionDisplayName = VersionDisplayName;
@@ -912,7 +963,7 @@ namespace UnrealBuildTool
 			return CachedVersionDisplayName;
 		}
 
-		public void WriteJavaOBBDataFile(string FileName, string PackageName, List<string> ObbSources, string CookFlavor, bool bPackageDataInsideApk)
+		public void WriteJavaOBBDataFile(string FileName, string PackageName, List<string> ObbSources, string CookFlavor, bool bPackageDataInsideApk, string UE4Arch)
 		{
 			Log.TraceInformation("\n==== Writing to OBB data file {0} ====", FileName);
 
@@ -926,7 +977,7 @@ namespace UnrealBuildTool
 //				AppType = ".Client";		// should always be empty now; fix up the name in batch file instead
 			}
 
-			int StoreVersion = GetStoreVersion();
+			int StoreVersion = GetStoreVersion(UE4Arch);
 
 			StringBuilder obbData = new StringBuilder("package " + PackageName + ";\n\n");
 			obbData.Append("public class OBBData\n{\n");
@@ -945,7 +996,7 @@ namespace UnrealBuildTool
 				bool bOBBExists = File.Exists(ObbSource);
 				AnyOBBExists |= bOBBExists;
 
-				obbData.Append("new XAPKFile(\ntrue, // true signifies a main file\n");
+				obbData.Append("new XAPKFile(\n" + (ObbSource.Contains(".patch.") ? "false, // false signifies a patch file\n" : "true, // true signifies a main file\n"));
 				obbData.AppendFormat("\"{0}\", // the version of the APK that the file was uploaded against\n", GetOBBVersionNumber(StoreVersion));
 				obbData.AppendFormat("{0}L // the length of the file in bytes\n", bOBBExists ? new FileInfo(ObbSource).Length : 0);
 				obbData.AppendFormat("){0}\n", first ? "," : "");
@@ -1021,9 +1072,9 @@ namespace UnrealBuildTool
 			ShimFileContent.Append("\tpublic static Class<DownloaderActivity> GetDownloaderType() { return DownloaderActivity.class; }\n");
 
 			// Do OBB file checking without using DownloadActivity to avoid transit to another activity
-			ShimFileContent.Append("\tpublic static boolean expansionFilesDelivered(Activity activity) {\n");
+			ShimFileContent.Append("\tpublic static boolean expansionFilesDelivered(Activity activity, int version) {\n");
 			ShimFileContent.Append("\t\tfor (OBBData.XAPKFile xf : OBBData.xAPKS) {\n");
-			ShimFileContent.Append("\t\t\tString fileName = Helpers.getExpansionAPKFileName(activity, xf.mIsMain, xf.mFileVersion, OBBData.AppType);\n");
+			ShimFileContent.Append("\t\t\tString fileName = Helpers.getExpansionAPKFileName(activity, xf.mIsMain, Integer.toString(version), OBBData.AppType);\n");
 			ShimFileContent.Append("\t\t\tGameActivity.Log.debug(\"Checking for file : \" + fileName);\n");
 			ShimFileContent.Append("\t\t\tString fileForNewFile = Helpers.generateSaveFileName(activity, fileName);\n");
 			ShimFileContent.Append("\t\t\tString fileForDevFile = Helpers.generateSaveFileNameDevelopment(activity, fileName);\n");
@@ -1104,12 +1155,12 @@ namespace UnrealBuildTool
 			}
 		}
 
-		public void WriteCrashlyticsResources(string UEBuildPath, string PackageName, string ApplicationDisplayName)
+		public void WriteCrashlyticsResources(string UEBuildPath, string PackageName, string ApplicationDisplayName, bool bIsEmbedded, string UE4Arch)
 		{
 			System.DateTime CurrentDateTime = System.DateTime.Now;
 			string BuildID = Guid.NewGuid().ToString();
 
-			string VersionDisplayName = GetVersionDisplayName();
+			string VersionDisplayName = GetVersionDisplayName(bIsEmbedded);
 
 			StringBuilder CrashPropertiesContent = new StringBuilder("");
 			CrashPropertiesContent.Append("# This file is automatically generated by Crashlytics to uniquely\n");
@@ -1121,7 +1172,7 @@ namespace UnrealBuildTool
 			CrashPropertiesContent.Append("version_name=" + VersionDisplayName + "\n");
 			CrashPropertiesContent.Append("package_name=" + PackageName + "\n");
 			CrashPropertiesContent.Append("build_id=" + BuildID + "\n");
-			CrashPropertiesContent.Append("version_code=" + GetStoreVersion().ToString() + "\n");
+			CrashPropertiesContent.Append("version_code=" + GetStoreVersion(UE4Arch).ToString() + "\n");
 
 			string CrashPropertiesFileName = Path.Combine(UEBuildPath, "assets", "crashlytics-build.properties");
 			MakeDirectoryIfRequired(CrashPropertiesFileName);
@@ -1151,7 +1202,7 @@ namespace UnrealBuildTool
 			switch (UE4Arch)
 			{
 				case "-armv7":	return "armeabi-v7a";
-                case "-arm64":  return "arm64-v8a";
+				case "-arm64":  return "arm64-v8a";
 				case "-x64":	return "x86_64";
 				case "-x86":	return "x86";
 
@@ -1164,15 +1215,15 @@ namespace UnrealBuildTool
 			switch (NDKArch)
 			{
 				case "armeabi-v7a": return "-armv7";
-                case "arm64-v8a":   return "-arm64";
-                case "x86":         return "-x86";
-                case "arm64":       return "-arm64";
+				case "arm64-v8a":   return "-arm64";
+				case "x86":         return "-x86";
+				case "arm64":       return "-arm64";
 				case "x86_64":
 				case "x64":			return "-x64";
 					
-//				default: throw new BuildException("Unknown NDK architecture '{0}'", NDKArch);
-                // future-proof by returning armv7 for unknown
-                default:            return "-armv7";
+	//				default: throw new BuildException("Unknown NDK architecture '{0}'", NDKArch);
+				// future-proof by returning armv7 for unknown
+				default:            return "-armv7";
 			}
 		}
 
@@ -1404,11 +1455,30 @@ namespace UnrealBuildTool
 		{
 			if (e.Data != null)
 			{
-				// apply filtering of the warning we want to ignore
+				// apply filtering of the warnings we want to ignore
+				if (e.Data.Contains("WARNING: The option 'android.enableD8' is deprecated and should not be used anymore."))
+				{
+					Log.TraceInformation("{0}", e.Data.Replace("WARNING: ", ">> "));
+					return;
+				}
+				if (e.Data.Contains("WARNING: The specified Android SDK Build Tools version"))
+				{
+					Log.TraceInformation("{0}", e.Data.Replace("WARNING: ", ">> "));
+					return;
+				}
 				if (e.Data.Contains("Warning: Resigning with jarsigner."))
 				{
 					Log.TraceInformation("{0}", e.Data.Replace("Warning: ", ">> "));
 					return;
+				}
+				if (e.Data.Contains("Unable to strip library"))
+				{
+					Log.TraceInformation("{0}", e.Data.Replace("due to error", ""));
+					return;
+				}
+				if (e.Data.Contains("To suppress this warning,"))
+				{
+					Log.TraceInformation("{0}", e.Data.Replace(" warning,", ","));
 				}
 				Log.TraceInformation("{0}", e.Data);
 			}
@@ -1595,7 +1665,7 @@ namespace UnrealBuildTool
 		}
 
 
-		private string GetAllBuildSettings(AndroidToolChain ToolChain, string BuildPath, bool bForDistribution, bool bMakeSeparateApks, bool bPackageDataInsideApk, bool bDisableVerifyOBBOnStartUp, bool bUseExternalFilesDir, bool bGradleEnabled)
+		private string GetAllBuildSettings(AndroidToolChain ToolChain, string BuildPath, bool bForDistribution, bool bMakeSeparateApks, bool bPackageDataInsideApk, bool bDisableVerifyOBBOnStartUp, bool bUseExternalFilesDir, bool bGradleEnabled, string TemplatesHashCode)
 		{
 			// make the settings string - this will be char by char compared against last time
 			StringBuilder CurrentSettings = new StringBuilder();
@@ -1611,6 +1681,7 @@ namespace UnrealBuildTool
 			CurrentSettings.AppendLine(string.Format("bDisableVerifyOBBOnStartUp={0}", bDisableVerifyOBBOnStartUp));
 			CurrentSettings.AppendLine(string.Format("bUseExternalFilesDir={0}", bUseExternalFilesDir));
 			CurrentSettings.AppendLine(string.Format("UPLHashCode={0}", UPLHashCode));
+			CurrentSettings.AppendLine(string.Format("TemplatesHashCode={0}", TemplatesHashCode));
 
 			// all AndroidRuntimeSettings ini settings in here
 			ConfigHierarchy Ini = GetConfigCacheIni(ConfigHierarchyType.Engine);
@@ -1625,7 +1696,7 @@ namespace UnrealBuildTool
 						continue;
 					}
 
-					IEnumerable<string> Values;
+					IReadOnlyList<string> Values;
 					Section.TryGetValues(Key, out Values);
 
 					foreach (string Value in Values)
@@ -1646,7 +1717,7 @@ namespace UnrealBuildTool
 						continue;
 					}
 
-					IEnumerable<string> Values;
+					IReadOnlyList<string> Values;
 					Section.TryGetValues(Key, out Values);
 					foreach (string Value in Values)
 					{
@@ -1785,16 +1856,28 @@ namespace UnrealBuildTool
 			}
 		}
 
-		private void DetermineScreenOrientationRequirements(out bool bNeedPortrait, out bool bNeedLandscape)
+		private string GetOrientation(string NDKArch)
 		{
 			ConfigHierarchy Ini = GetConfigCacheIni(ConfigHierarchyType.Engine);
 			string Orientation;
 			Ini.GetString("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "Orientation", out Orientation);
 
+			// check for UPL override
+			string OrientationOverride = UPL.ProcessPluginNode(NDKArch, "orientationOverride", "");
+			if (!String.IsNullOrEmpty(OrientationOverride))
+			{
+				Orientation = OrientationOverride;
+			}
+
+			return ConvertOrientationIniValue(Orientation);
+		}
+
+		private void DetermineScreenOrientationRequirements(string Arch, out bool bNeedPortrait, out bool bNeedLandscape)
+		{
 			bNeedLandscape = false;
 			bNeedPortrait = false;
 
-			switch (Orientation.ToLower())
+			switch (GetOrientation(Arch).ToLower())
 			{
 				case "portrait":
 					bNeedPortrait = true;
@@ -1904,11 +1987,11 @@ namespace UnrealBuildTool
 			ConfigHierarchy Ini = GetConfigCacheIni(ConfigHierarchyType.Engine);
 			bool bShowLaunchImage = false;
 			Ini.GetBool("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "bShowLaunchImage", out bShowLaunchImage);
-			bool bPackageForGearVR = IsPackagingForGearVR(Ini); ;
+			bool bPackageForOculusMobile = IsPackagingForOculusMobile(Ini); ;
 			bool bPackageForDaydream = IsPackagingForDaydream(Ini);
 			
-			//override the parameters if we are not showing a launch image or are packaging for Gear VR and Daydream
-			if (bPackageForGearVR || bPackageForDaydream || !bShowLaunchImage)
+			//override the parameters if we are not showing a launch image or are packaging for Oculus Mobile and Daydream
+			if (bPackageForOculusMobile || bPackageForDaydream || !bShowLaunchImage)
 			{
 				bNeedPortrait = bNeedLandscape = false;
 			}
@@ -1941,6 +2024,10 @@ namespace UnrealBuildTool
 				{
 					// Remove unused image
 					SafeDeleteFile(PortraitFilename);
+
+					// Remove optional extended resource
+					string PortraitXmlFilename = UE4BuildPath + ResolutionPath + "splashscreen_p.xml";
+					SafeDeleteFile(PortraitXmlFilename);
 				}
 
 				string LandscapeFilename = UE4BuildPath + ResolutionPath + "splashscreen_landscape.png";
@@ -1955,6 +2042,10 @@ namespace UnrealBuildTool
 				{
 					// Remove unused image
 					SafeDeleteFile(LandscapeFilename);
+
+					// Remove optional extended resource
+					string LandscapeXmlFilename = UE4BuildPath + ResolutionPath + "splashscreen_l.xml";
+					SafeDeleteFile(LandscapeXmlFilename);
 				}
 			}
 		}
@@ -2076,7 +2167,7 @@ namespace UnrealBuildTool
 		private string EngineChangelist = "0";
 		private string EngineBranch = "UE4";
 
-		private string ReadEngineVersion(string EngineDirectory)
+		private string ReadEngineVersion()
 		{
 			if (!bHaveReadEngineVersion)
 			{
@@ -2095,24 +2186,18 @@ namespace UnrealBuildTool
 		}
 
 
-		private string GenerateManifest(AndroidToolChain ToolChain, string ProjectName, TargetType InTargetType, string EngineDirectory, bool bIsForDistribution, bool bPackageDataInsideApk, string GameBuildFilesPath, bool bHasOBBFiles, bool bDisableVerifyOBBOnStartUp, string UE4Arch, string GPUArch, string CookFlavor, bool bUseExternalFilesDir, string Configuration, int SDKLevelInt)
+		private string GenerateManifest(AndroidToolChain ToolChain, string ProjectName, TargetType InTargetType, string EngineDirectory, bool bIsForDistribution, bool bPackageDataInsideApk, string GameBuildFilesPath, bool bHasOBBFiles, bool bDisableVerifyOBBOnStartUp, string UE4Arch, string GPUArch, string CookFlavor, bool bUseExternalFilesDir, string Configuration, int SDKLevelInt, bool bIsEmbedded)
 		{
 			// Read the engine version
-			string EngineVersion = ReadEngineVersion(EngineDirectory);
+			string EngineVersion = ReadEngineVersion();
 
-			int StoreVersion = GetStoreVersion();
+			int StoreVersion = GetStoreVersion(UE4Arch);
 
 			string Arch = GetNDKArch(UE4Arch);
-			int NDKLevelInt = ToolChain.GetNdkApiLevelInt();
-
-			// 64-bit targets must be android-21 or higher
-			if (NDKLevelInt < 21)
-			{
-				if (UE4Arch == "-arm64" || UE4Arch == "-x64")
-				{
-					NDKLevelInt = 21;
-				}
-			}
+			int NDKLevelInt = 0;
+			int MinSDKVersion = 0;
+			int TargetSDKVersion = 0;
+			GetMinTargetSDKVersions(ToolChain, UE4Arch, UPL, Arch, out MinSDKVersion, out TargetSDKVersion, out NDKLevelInt);
 
 			// get project version from ini
 			ConfigHierarchy GameIni = GetConfigCacheIni(ConfigHierarchyType.Game);
@@ -2122,24 +2207,19 @@ namespace UnrealBuildTool
 			// ini file to get settings from
 			ConfigHierarchy Ini = GetConfigCacheIni(ConfigHierarchyType.Engine);
 			string PackageName = GetPackageName(ProjectName);
-			string VersionDisplayName = GetVersionDisplayName();
+			string VersionDisplayName = GetVersionDisplayName(bIsEmbedded);
 			bool bEnableGooglePlaySupport;
 			Ini.GetBool("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "bEnableGooglePlaySupport", out bEnableGooglePlaySupport);
 			bool bUseGetAccounts;
 			Ini.GetBool("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "bUseGetAccounts", out bUseGetAccounts);
 			string DepthBufferPreference;
 			Ini.GetString("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "DepthBufferPreference", out DepthBufferPreference);
-			int MinSDKVersion;
-			Ini.GetInt32("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "MinSDKVersion", out MinSDKVersion);
-			int TargetSDKVersion = MinSDKVersion;
-			Ini.GetInt32("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "TargetSDKVersion", out TargetSDKVersion);
 			float MaxAspectRatioValue;
 			if (!Ini.TryGetValue("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "MaxAspectRatio", out MaxAspectRatioValue))
 			{
 				MaxAspectRatioValue = 2.1f;
-            }
-			string Orientation;
-			Ini.GetString("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "Orientation", out Orientation);
+			}
+			string Orientation = ConvertOrientationIniValue(GetOrientation(Arch));
 			bool EnableFullScreen;
 			Ini.GetBool("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "bFullScreen", out EnableFullScreen);
 			bool bUseDisplayCutout;
@@ -2156,7 +2236,7 @@ namespace UnrealBuildTool
 			Ini.GetString("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "ExtraApplicationSettings", out ExtraApplicationSettings);
 			List<string> ExtraPermissions;
 			Ini.GetArray("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "ExtraPermissions", out ExtraPermissions);
-			bool bPackageForGearVR = IsPackagingForGearVR(Ini);
+			bool bPackageForOculusMobile = IsPackagingForOculusMobile(Ini);
 			bool bEnableIAP = false;
 			Ini.GetBool("OnlineSubsystemGooglePlay.Store", "bSupportsInAppPurchasing", out bEnableIAP);
 			bool bShowLaunchImage = false;
@@ -2198,46 +2278,25 @@ namespace UnrealBuildTool
 					break;
 			}
 
-			// fix up the MinSdkVersion
-			if (NDKLevelInt > 19)
-			{
-				if (MinSDKVersion < 21)
-				{
-					MinSDKVersion = 21;
-					Log.TraceInformation("Fixing minSdkVersion; NDK level above 19 requires minSdkVersion of 21 (arch={0})", UE4Arch.Substring(1));
-				}
-			}
-
-			if (bGradleEnabled && MinSDKVersion < MinimumSDKLevelForGradle)
-			{
-				MinSDKVersion = MinimumSDKLevelForGradle;
-				Log.TraceInformation("Fixing minSdkVersion; requires minSdkVersion of {0} with Gradle based on active plugins", MinimumSDKLevelForGradle);
-			}
-
-			if (TargetSDKVersion < MinSDKVersion)
-			{
-				TargetSDKVersion = MinSDKVersion;
-			}
-
 			// only apply density to configChanges if using android-24 or higher and minimum sdk is 17
 			bool bAddDensity = (SDKLevelInt >= 24) && (MinSDKVersion >= 17);
 
-			// disable Gear VR if not supported platform (in this case only armv7 for now)
+			// disable Oculus Mobile if not supported platform (in this case only armv7 for now)
 			if (UE4Arch != "-armv7" && UE4Arch != "-arm64")
 			{
-				if (bPackageForGearVR)
+				if (bPackageForOculusMobile)
 				{
-					Log.TraceInformation("Disabling Package For Gear VR for unsupported architecture {0}", UE4Arch);
-					bPackageForGearVR = false;
+					Log.TraceInformation("Disabling Package For Oculus Mobile for unsupported architecture {0}", UE4Arch);
+					bPackageForOculusMobile = false;
 				}
 			}
 
-			// disable splash screen for Gear VR (for now)
-			if (bPackageForGearVR)
+			// disable splash screen for Oculus Mobile (for now)
+			if (bPackageForOculusMobile)
 			{
 				if (bShowLaunchImage)
 				{
-					Log.TraceInformation("Disabling Show Launch Image for Gear VR enabled application");
+					Log.TraceInformation("Disabling Show Launch Image for Oculus Mobile enabled application");
 					bShowLaunchImage = false;
 				}
 			}
@@ -2279,7 +2338,7 @@ namespace UnrealBuildTool
 					case "_Multi":
 						//need to check ini to determine which are supported
 						Ini.GetBool("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "bMultiTargetFormat_ETC1", out bETC1Enabled);
-                        Ini.GetBool("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "bMultiTargetFormat_ETC1a", out bETC1aEnabled);
+						Ini.GetBool("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "bMultiTargetFormat_ETC1a", out bETC1aEnabled);
 						Ini.GetBool("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "bMultiTargetFormat_ETC2", out bETC2Enabled);
 						Ini.GetBool("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "bMultiTargetFormat_DXT", out bDXTEnabled);
 						Ini.GetBool("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "bMultiTargetFormat_ATC", out bATCEnabled);
@@ -2289,9 +2348,9 @@ namespace UnrealBuildTool
 					case "_ETC1":
 						bETC1Enabled = true;
 						break;
-                    case "_ETC1a":
-                        bETC1aEnabled = true;
-                        break;
+					case "_ETC1a":
+						bETC1aEnabled = true;
+						break;
 					case "_ETC2":
 						bETC2Enabled = true;
 						break;
@@ -2354,6 +2413,10 @@ namespace UnrealBuildTool
 				}
 			}
 			Text.AppendLine("\t             android:hardwareAccelerated=\"true\"");
+			if (bGradleEnabled)
+			{
+				Text.AppendLine("\t				android:name=\"com.epicgames.ue4.GameApplication\"");
+			}
 			Text.AppendLine("\t             android:hasCode=\"true\">");
 			if (bShowLaunchImage)
 			{
@@ -2362,7 +2425,7 @@ namespace UnrealBuildTool
 				Text.AppendLine("\t\t          android:label=\"@string/app_name\"");
 				Text.AppendLine("\t\t          android:theme=\"@style/UE4SplashTheme\"");
 				Text.AppendLine("\t\t          android:launchMode=\"singleTask\"");
-				Text.AppendLine(string.Format("\t\t          android:screenOrientation=\"{0}\"", ConvertOrientationIniValue(Orientation)));
+				Text.AppendLine(string.Format("\t\t          android:screenOrientation=\"{0}\"", Orientation));
 				Text.AppendLine(string.Format("\t\t          android:debuggable=\"{0}\">", bIsForDistribution ? "false" : "true"));
 				Text.AppendLine("\t\t\t<intent-filter>");
 				Text.AppendLine("\t\t\t\t<action android:name=\"android.intent.action.MAIN\" />");
@@ -2372,19 +2435,24 @@ namespace UnrealBuildTool
 				Text.AppendLine("\t\t<activity android:name=\"com.epicgames.ue4.GameActivity\"");
 				Text.AppendLine("\t\t          android:label=\"@string/app_name\"");
 				Text.AppendLine("\t\t          android:theme=\"@style/UE4SplashTheme\"");
-				Text.AppendLine(bAddDensity ? "\t\t          android:configChanges=\"mcc|mnc|uiMode|density|screenSize|orientation|keyboardHidden|keyboard\""
-											: "\t\t          android:configChanges=\"mcc|mnc|uiMode|screenSize|orientation|keyboardHidden|keyboard\"");
+				Text.AppendLine(bAddDensity ? "\t\t          android:configChanges=\"mcc|mnc|uiMode|density|screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden|keyboard\""
+											: "\t\t          android:configChanges=\"mcc|mnc|uiMode|screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden|keyboard\"");
 			}
 			else
 			{
 				Text.AppendLine("\t\t<activity android:name=\"com.epicgames.ue4.GameActivity\"");
 				Text.AppendLine("\t\t          android:label=\"@string/app_name\"");
 				Text.AppendLine("\t\t          android:theme=\"@android:style/Theme.Black.NoTitleBar.Fullscreen\"");
-				Text.AppendLine(bAddDensity ? "\t\t          android:configChanges=\"mcc|mnc|uiMode|density|screenSize|orientation|keyboardHidden|keyboard\""
-											: "\t\t          android:configChanges=\"mcc|mnc|uiMode|screenSize|orientation|keyboardHidden|keyboard\"");
+				Text.AppendLine(bAddDensity ? "\t\t          android:configChanges=\"mcc|mnc|uiMode|density|screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden|keyboard\""
+											: "\t\t          android:configChanges=\"mcc|mnc|uiMode|screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden|keyboard\"");
+
+			}
+			if (SDKLevelInt >= 24)
+			{
+				Text.AppendLine("\t\t          android:resizeableActivity=\"false\"");
 			}
 			Text.AppendLine("\t\t          android:launchMode=\"singleTask\"");
-			Text.AppendLine(string.Format("\t\t          android:screenOrientation=\"{0}\"", ConvertOrientationIniValue(Orientation)));
+			Text.AppendLine(string.Format("\t\t          android:screenOrientation=\"{0}\"", Orientation));
 			if (ExtraActivityNodeTags != null)
 			{
 				foreach (string Line in ExtraActivityNodeTags)
@@ -2423,7 +2491,7 @@ namespace UnrealBuildTool
 			if (bShowLaunchImage)
 			{
 				Text.AppendLine("\t\t<activity android:name=\".DownloaderActivity\"");
-				Text.AppendLine(string.Format("\t\t          android:screenOrientation=\"{0}\"", ConvertOrientationIniValue(Orientation)));
+				Text.AppendLine(string.Format("\t\t          android:screenOrientation=\"{0}\"", Orientation));
 				Text.AppendLine(bAddDensity ? "\t\t          android:configChanges=\"mcc|mnc|uiMode|density|screenSize|orientation|keyboardHidden|keyboard\""
 											: "\t\t          android:configChanges=\"mcc|mnc|uiMode|screenSize|orientation|keyboardHidden|keyboard\"");
 				Text.AppendLine("\t\t          android:theme=\"@style/UE4SplashTheme\" />");
@@ -2431,6 +2499,20 @@ namespace UnrealBuildTool
 			else
 			{
 				Text.AppendLine("\t\t<activity android:name=\".DownloaderActivity\" />");
+			}
+
+			// Figure out the required startup permissions if targetting devices supporting runtime permissions
+			String StartupPermissions = "";
+			if (TargetSDKVersion >= 23)
+			{
+				if (Configuration != "Shipping" || !bUseExternalFilesDir)
+				{
+					StartupPermissions = StartupPermissions + (StartupPermissions.Length > 0 ? "," : "") + "android.permission.WRITE_EXTERNAL_STORAGE";
+				}
+				if (bEnableGooglePlaySupport && bUseGetAccounts)
+				{
+					StartupPermissions = StartupPermissions + (StartupPermissions.Length > 0 ? "," : "") + "android.permission.GET_ACCOUNTS";
+				}
 			}
 
 			Text.AppendLine(string.Format("\t\t<meta-data android:name=\"com.epicgames.ue4.GameActivity.EngineVersion\" android:value=\"{0}\"/>", EngineVersion));
@@ -2450,6 +2532,7 @@ namespace UnrealBuildTool
 			Text.AppendLine(string.Format("\t\t<meta-data android:name=\"com.epicgames.ue4.GameActivity.bUseDisplayCutout\" android:value=\"{0}\"/>", bUseDisplayCutout ? "true" : "false"));
 			Text.AppendLine(string.Format("\t\t<meta-data android:name=\"com.epicgames.ue4.GameActivity.bAllowIMU\" android:value=\"{0}\"/>", bAllowIMU ? "true" : "false"));
 			Text.AppendLine(string.Format("\t\t<meta-data android:name=\"com.epicgames.ue4.GameActivity.bSupportsVulkan\" android:value=\"{0}\"/>", bSupportsVulkan ? "true" : "false"));
+			Text.AppendLine(string.Format("\t\t<meta-data android:name=\"com.epicgames.ue4.GameActivity.StartupPermissions\" android:value=\"{0}\"/>", StartupPermissions));
 			if (bUseNEONForArmV7)
 			{
 				Text.AppendLine("\t\t<meta-data android:name=\"com.epicgames.ue4.GameActivity.bUseNEONForArmV7\" android:value=\"{true}\"/>");
@@ -2498,7 +2581,7 @@ namespace UnrealBuildTool
 
 			// Max supported aspect ratio
 			string MaxAspectRatioString = MaxAspectRatioValue.ToString("f", System.Globalization.CultureInfo.InvariantCulture);
-            Text.AppendLine(string.Format("\t\t<meta-data android:name=\"android.max_aspect\" android:value=\"{0}\" />", MaxAspectRatioString));
+			Text.AppendLine(string.Format("\t\t<meta-data android:name=\"android.max_aspect\" android:value=\"{0}\" />", MaxAspectRatioString));
 					
 			Text.AppendLine("\t</application>");
 
@@ -2516,8 +2599,11 @@ namespace UnrealBuildTool
 			}
 			else
 			{
-				// need just the number part of the sdk
-				Text.AppendLine(string.Format("\t<uses-sdk android:minSdkVersion=\"{0}\" android:targetSdkVersion=\"{1}\"/>", MinSDKVersion, TargetSDKVersion));
+				if (!bGradleEnabled)
+				{
+					// need just the number part of the sdk
+					Text.AppendLine(string.Format("\t<uses-sdk android:minSdkVersion=\"{0}\" android:targetSdkVersion=\"{1}\"/>", MinSDKVersion, TargetSDKVersion));
+				}
 				Text.AppendLine("\t<uses-feature android:glEsVersion=\"" + AndroidToolChain.GetGLESVersionFromGPUArch(GPUArch, bOnlyETC2Enabled, bBuildForES2, bBuildForES31) + "\" android:required=\"true\" />");
 				Text.AppendLine("\t<uses-permission android:name=\"android.permission.INTERNET\"/>");
 				Text.AppendLine("\t<uses-permission android:name=\"android.permission.WRITE_EXTERNAL_STORAGE\"/>");
@@ -2532,7 +2618,7 @@ namespace UnrealBuildTool
 					Text.AppendLine("\t<uses-permission android:name=\"android.permission.GET_ACCOUNTS\"/>");
 				}
 
-				if(!bPackageForGearVR)
+				if(!bPackageForOculusMobile)
 				{
 					Text.AppendLine("\t<uses-permission android:name=\"android.permission.MODIFY_AUDIO_SETTINGS\"/>");
 					Text.AppendLine("\t<uses-permission android:name=\"android.permission.VIBRATE\"/>");
@@ -2784,24 +2870,24 @@ namespace UnrealBuildTool
 			return false;
 		}
 
-        private bool RequiresOBB(bool bDisallowPackageInAPK, string OBBLocation)
-        {
-            if (bDisallowPackageInAPK)
-            {
-                Log.TraceInformation("APK contains data.");
-                return false;
-            }
-            else if (!String.IsNullOrEmpty(Environment.GetEnvironmentVariable("uebp_LOCAL_ROOT")))
-            {
-                Log.TraceInformation("On build machine.");
-                return true;
-            }
-            else
-            {
-                Log.TraceInformation("Looking for OBB.");
-                return File.Exists(OBBLocation);
-            }
-        }
+		private bool RequiresOBB(bool bDisallowPackageInAPK, string OBBLocation)
+		{
+			if (bDisallowPackageInAPK)
+			{
+				Log.TraceInformation("APK contains data.");
+				return false;
+			}
+			else if (!String.IsNullOrEmpty(Environment.GetEnvironmentVariable("uebp_LOCAL_ROOT")))
+			{
+				Log.TraceInformation("On build machine.");
+				return true;
+			}
+			else
+			{
+				Log.TraceInformation("Looking for OBB.");
+				return File.Exists(OBBLocation);
+			}
+		}
 
 		private void PatchAntBatIfNeeded()
 		{
@@ -2981,7 +3067,232 @@ namespace UnrealBuildTool
 			return true;
 		}
 
-		private void MakeApk(AndroidToolChain ToolChain, string ProjectName, TargetType InTargetType, string ProjectDirectory, string OutputPath, string EngineDirectory, bool bForDistribution, string CookFlavor, bool bMakeSeparateApks, bool bIncrementalPackage, bool bDisallowPackagingDataInApk, bool bDisallowExternalFilesDir)
+		private void GetMinTargetSDKVersions(AndroidToolChain ToolChain, string Arch, UnrealPluginLanguage UPL, string NDKArch, out int MinSDKVersion, out int TargetSDKVersion, out int NDKLevelInt)
+		{
+			ConfigHierarchy Ini = GetConfigCacheIni(ConfigHierarchyType.Engine);
+			Ini.GetInt32("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "MinSDKVersion", out MinSDKVersion);
+			TargetSDKVersion = MinSDKVersion;
+			Ini.GetInt32("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "TargetSDKVersion", out TargetSDKVersion);
+
+			// Check for targetSDKOverride from UPL
+			string TargetOverride = UPL.ProcessPluginNode(NDKArch, "targetSDKOverride", "");
+			if (!String.IsNullOrEmpty(TargetOverride))
+			{
+				int OverrideInt = 0;
+				if (int.TryParse(TargetOverride, out OverrideInt))
+				{
+					TargetSDKVersion = OverrideInt;
+				}
+			}
+
+			// Make sure minSdkVersion is at least 13 (need this for appcompat-v13 used by AndroidPermissions)
+			// this may be changed by active plugins (Google Play Services 11.0.4 needs 14 for example)
+			if (bGradleEnabled && MinSDKVersion < MinimumSDKLevelForGradle)
+			{
+				MinSDKVersion = MinimumSDKLevelForGradle;
+				Log.TraceInformation("Fixing minSdkVersion; requires minSdkVersion of {0} with Gradle based on active plugins", MinimumSDKLevelForGradle);
+			}
+
+			// 64-bit targets must be android-21 or higher
+			NDKLevelInt = ToolChain.GetNdkApiLevelInt();
+			if (NDKLevelInt < 21)
+			{
+				if (Arch == "-arm64" || Arch == "-x64")
+				{
+					NDKLevelInt = 21;
+				}
+			}
+
+			// fix up the MinSdkVersion
+			if (NDKLevelInt > 19)
+			{
+				if (MinSDKVersion < 21)
+				{
+					MinSDKVersion = 21;
+					Log.TraceInformation("Fixing minSdkVersion; NDK level above 19 requires minSdkVersion of 21 (arch={0})", Arch.Substring(1));
+				}
+			}
+
+			if (TargetSDKVersion < MinSDKVersion)
+			{
+				TargetSDKVersion = MinSDKVersion;
+			}
+		}
+
+		private void CreateGradlePropertiesFiles(string Arch, int MinSDKVersion, int TargetSDKVersion, string CompileSDKVersion, string BuildToolsVersion, string PackageName,
+			string DestApkName, string NDKArch,	string UE4BuildFilesPath, string GameBuildFilesPath, string UE4BuildGradleAppPath, string UE4BuildPath, string UE4BuildGradlePath, bool bForDistribution, bool bIsEmbedded)
+		{
+			// Create gradle.properties
+			StringBuilder GradleProperties = new StringBuilder();
+
+			int StoreVersion = GetStoreVersion(GetUE4Arch(NDKArch));
+			string VersionDisplayName = GetVersionDisplayName(bIsEmbedded);
+
+			ConfigHierarchy Ini = GetConfigCacheIni(ConfigHierarchyType.Engine);
+
+			GradleProperties.AppendLine("org.gradle.daemon=false");
+			GradleProperties.AppendLine("org.gradle.jvmargs=-XX:MaxHeapSize=4096m -Xmx9216m");
+			GradleProperties.AppendLine(string.Format("COMPILE_SDK_VERSION={0}", CompileSDKVersion));
+			GradleProperties.AppendLine(string.Format("BUILD_TOOLS_VERSION={0}", BuildToolsVersion));
+			GradleProperties.AppendLine(string.Format("PACKAGE_NAME={0}", PackageName));
+			GradleProperties.AppendLine(string.Format("MIN_SDK_VERSION={0}", MinSDKVersion.ToString()));
+			GradleProperties.AppendLine(string.Format("TARGET_SDK_VERSION={0}", TargetSDKVersion.ToString()));
+			GradleProperties.AppendLine(string.Format("STORE_VERSION={0}", StoreVersion.ToString()));
+			GradleProperties.AppendLine(string.Format("VERSION_DISPLAY_NAME={0}", VersionDisplayName));
+
+			if (DestApkName != null)
+			{
+				GradleProperties.AppendLine(string.Format("OUTPUT_PATH={0}", Path.GetDirectoryName(DestApkName).Replace("\\", "/")));
+				GradleProperties.AppendLine(string.Format("OUTPUT_FILENAME={0}", Path.GetFileName(DestApkName)));
+			}
+
+			// add any Gradle properties from UPL
+			string GradlePropertiesUPL = UPL.ProcessPluginNode(NDKArch, "gradleProperties", "");
+			GradleProperties.AppendLine(GradlePropertiesUPL);
+
+			StringBuilder GradleBuildAdditionsContent = new StringBuilder();
+			GradleBuildAdditionsContent.AppendLine("apply from: 'aar-imports.gradle'");
+			GradleBuildAdditionsContent.AppendLine("apply from: 'projects.gradle'");
+
+			GradleBuildAdditionsContent.AppendLine("android {");
+			GradleBuildAdditionsContent.AppendLine("\tdefaultConfig {");
+			GradleBuildAdditionsContent.AppendLine("\t\tndk {");
+			GradleBuildAdditionsContent.AppendLine(string.Format("\t\t\tabiFilter \"{0}\"", NDKArch));
+			GradleBuildAdditionsContent.AppendLine("\t\t}");
+			GradleBuildAdditionsContent.AppendLine("\t}");
+
+			if (bForDistribution)
+			{
+				bool bDisableV2Signing = false;
+
+				if (GetTargetOculusMobileDevices().Contains("GearGo"))
+				{
+					bDisableV2Signing = true;
+					Log.TraceInformation("Disabling v2Signing for Oculus Go / Gear VR APK");
+				}
+
+				string KeyAlias, KeyStore, KeyStorePassword, KeyPassword;
+				Ini.GetString("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "KeyStore", out KeyStore);
+				Ini.GetString("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "KeyAlias", out KeyAlias);
+				Ini.GetString("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "KeyStorePassword", out KeyStorePassword);
+				Ini.GetString("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "KeyPassword", out KeyPassword);
+
+				if (string.IsNullOrEmpty(KeyStore) || string.IsNullOrEmpty(KeyAlias) || string.IsNullOrEmpty(KeyStorePassword))
+				{
+					throw new BuildException("DistributionSigning settings are not all set. Check the DistributionSettings section in the Android tab of Project Settings");
+				}
+
+				if (string.IsNullOrEmpty(KeyPassword) || KeyPassword == "_sameaskeystore_")
+				{
+					KeyPassword = KeyStorePassword;
+				}
+
+				// Make sure the keystore file exists
+				string KeyStoreFilename = Path.Combine(UE4BuildPath, KeyStore);
+				if (!File.Exists(KeyStoreFilename))
+				{
+					throw new BuildException("Keystore file is missing. Check the DistributionSettings section in the Android tab of Project Settings");
+				}
+
+				GradleProperties.AppendLine(string.Format("STORE_FILE={0}", KeyStoreFilename.Replace("\\", "/")));
+				GradleProperties.AppendLine(string.Format("STORE_PASSWORD={0}", KeyStorePassword));
+				GradleProperties.AppendLine(string.Format("KEY_ALIAS={0}", KeyAlias));
+				GradleProperties.AppendLine(string.Format("KEY_PASSWORD={0}", KeyPassword));
+
+				GradleBuildAdditionsContent.AppendLine("\tsigningConfigs {");
+				GradleBuildAdditionsContent.AppendLine("\t\trelease {");
+				GradleBuildAdditionsContent.AppendLine(string.Format("\t\t\tstoreFile file('{0}')", KeyStoreFilename.Replace("\\", "/")));
+				GradleBuildAdditionsContent.AppendLine(string.Format("\t\t\tstorePassword '{0}'", KeyStorePassword));
+				GradleBuildAdditionsContent.AppendLine(string.Format("\t\t\tkeyAlias '{0}'", KeyAlias));
+				GradleBuildAdditionsContent.AppendLine(string.Format("\t\t\tkeyPassword '{0}'", KeyPassword));
+				if (bDisableV2Signing)
+				{
+					GradleBuildAdditionsContent.AppendLine("\t\t\tv2SigningEnabled false");
+				}
+				GradleBuildAdditionsContent.AppendLine("\t\t}");
+				GradleBuildAdditionsContent.AppendLine("\t}");
+
+				// Generate the Proguard file contents and write it
+				string ProguardContents = GenerateProguard(NDKArch, UE4BuildFilesPath, GameBuildFilesPath);
+				string ProguardFilename = Path.Combine(UE4BuildGradleAppPath, "proguard-rules.pro");
+				SafeDeleteFile(ProguardFilename);
+				File.WriteAllText(ProguardFilename, ProguardContents);
+			}
+			else
+			{
+				// empty just for Gradle not to complain
+				GradleProperties.AppendLine("STORE_FILE=");
+				GradleProperties.AppendLine("STORE_PASSWORD=");
+				GradleProperties.AppendLine("KEY_ALIAS=");
+				GradleProperties.AppendLine("KEY_PASSWORD=");
+
+				// empty just for Gradle not to complain
+				GradleBuildAdditionsContent.AppendLine("\tsigningConfigs {");
+				GradleBuildAdditionsContent.AppendLine("\t\trelease {");
+				GradleBuildAdditionsContent.AppendLine("\t\t}");
+				GradleBuildAdditionsContent.AppendLine("\t}");
+			}
+
+			GradleBuildAdditionsContent.AppendLine("\tbuildTypes {");
+			GradleBuildAdditionsContent.AppendLine("\t\trelease {");
+			GradleBuildAdditionsContent.AppendLine("\t\t\tsigningConfig signingConfigs.release");
+			if (GradlePropertiesUPL.Contains("DISABLE_MINIFY=1"))
+			{
+				GradleBuildAdditionsContent.AppendLine("\t\t\tminifyEnabled false");
+			}
+			else
+			{
+				GradleBuildAdditionsContent.AppendLine("\t\t\tminifyEnabled true");
+			}
+			if (GradlePropertiesUPL.Contains("DISABLE_PROGUARD=1"))
+			{
+				GradleBuildAdditionsContent.AppendLine("\t\t\tuseProguard false");
+			}
+			else
+			{
+				GradleBuildAdditionsContent.AppendLine("\t\t\tproguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'");
+			}
+			GradleBuildAdditionsContent.AppendLine("\t\t}");
+			GradleBuildAdditionsContent.AppendLine("\t\tdebug {");
+			GradleBuildAdditionsContent.AppendLine("\t\t\tdebuggable true");
+			GradleBuildAdditionsContent.AppendLine("\t\t}");
+			GradleBuildAdditionsContent.AppendLine("\t}");
+			GradleBuildAdditionsContent.AppendLine("}");
+
+			// Add any UPL app buildGradleAdditions
+			GradleBuildAdditionsContent.Append(UPL.ProcessPluginNode(NDKArch, "buildGradleAdditions", ""));
+
+			string GradleBuildAdditionsFilename = Path.Combine(UE4BuildGradleAppPath, "buildAdditions.gradle");
+			File.WriteAllText(GradleBuildAdditionsFilename, GradleBuildAdditionsContent.ToString());
+
+			string GradlePropertiesFilename = Path.Combine(UE4BuildGradlePath, "gradle.properties");
+			File.WriteAllText(GradlePropertiesFilename, GradleProperties.ToString());
+
+			// Add lint if requested (note depreciation warnings can be suppressed with @SuppressWarnings("deprecation")
+			string GradleBaseBuildAdditionsContents = "";
+			bool bEnableLint = false;
+			Ini.GetBool("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "bEnableLint", out bEnableLint);
+			if (bEnableLint)
+			{
+				GradleBaseBuildAdditionsContents =
+					"allprojects {\n" +
+					"\ttasks.withType(JavaCompile) {\n" +
+					"\t\toptions.compilerArgs << \"-Xlint:unchecked\" << \"-Xlint:deprecation\"\n" +
+					"\t}\n" +
+					"}\n\n";
+			}
+
+			// Create baseBuildAdditions.gradle from plugins baseBuildGradleAdditions
+			string GradleBaseBuildAdditionsFilename = Path.Combine(UE4BuildGradlePath, "baseBuildAdditions.gradle");
+			File.WriteAllText(GradleBaseBuildAdditionsFilename, UPL.ProcessPluginNode(NDKArch, "baseBuildGradleAdditions", GradleBaseBuildAdditionsContents));
+
+			// Create buildscriptAdditions.gradle from plugins buildscriptGradleAdditions
+			string GradleBuildScriptAdditionsFilename = Path.Combine(UE4BuildGradlePath, "buildscriptAdditions.gradle");
+			File.WriteAllText(GradleBuildScriptAdditionsFilename, UPL.ProcessPluginNode(NDKArch, "buildscriptGradleAdditions", ""));
+		}
+
+		private void MakeApk(AndroidToolChain ToolChain, string ProjectName, TargetType InTargetType, string ProjectDirectory, string OutputPath, string EngineDirectory, bool bForDistribution, string CookFlavor, 
+			UnrealTargetConfiguration Configuration, bool bMakeSeparateApks, bool bIncrementalPackage, bool bDisallowPackagingDataInApk, bool bDisallowExternalFilesDir, bool bSkipGradleBuild)
 		{
 			Log.TraceInformation("\n===={0}====PREPARING TO MAKE APK=================================================================", DateTime.Now.ToString());
 
@@ -2989,6 +3300,9 @@ namespace UnrealBuildTool
 			{
 				throw new BuildException("Cannot make APK with UPL errors");
 			}
+
+			// make sure it is cached
+			string EngineVersion = ReadEngineVersion();
 
 			SetMinimumSDKLevelForGradle();
 
@@ -3017,27 +3331,47 @@ namespace UnrealBuildTool
 				PatchAntBatIfNeeded();
 			}
 
-			// make sure it is cached
-			string EngineVersion = ReadEngineVersion(EngineDirectory);
-
 			// cache some tools paths
 			string NDKBuildPath = Environment.ExpandEnvironmentVariables("%NDKROOT%/ndk-build" + (Utils.IsRunningOnMono ? "" : ".cmd"));
 
 			// set up some directory info
-			string IntermediateAndroidPath = Path.Combine(ProjectDirectory, "Intermediate/Android/");
+			string IntermediateAndroidPath = Path.Combine(ProjectDirectory, "Intermediate", "Android");
 			string UE4BuildPath = Path.Combine(IntermediateAndroidPath, "APK");
 			string UE4JavaFilePath = Path.Combine(ProjectDirectory, "Build", "Android", GetUE4JavaSrcPath());
 			string UE4BuildFilesPath = GetUE4BuildFilePath(EngineDirectory);
-			string GameBuildFilesPath = Path.Combine(ProjectDirectory, "Build/Android");
+			string GameBuildFilesPath = Path.Combine(ProjectDirectory, "Build", "Android");
 			string UE4BuildAssetsPath = Path.Combine(UE4BuildPath, "assets");
 			string UE4BuildResourcesPath = Path.Combine(UE4BuildPath, "res");
 
 			// force create from scratch if on build machine
-			if (bIsBuildMachine)
+			bool bCreateFromScratch = bIsBuildMachine;
+
+			// see if last time matches the skipGradle setting
+			string BuildTypeFilename = Path.Combine(IntermediateAndroidPath, "BuildType.txt");
+			string BuildTypeID = bSkipGradleBuild ? "Embedded" : "Standalone";
+			if (File.Exists(BuildTypeFilename))
 			{
+				string BuildTypeContents = File.ReadAllText(BuildTypeFilename);
+				if (BuildTypeID != BuildTypeContents)
+				{
+					bCreateFromScratch = true;
+				}
+			}
+
+			if (bCreateFromScratch)
+			{
+				Log.TraceInformation("Cleaning {0}", IntermediateAndroidPath);
 				DeleteDirectory(IntermediateAndroidPath);
 				Directory.CreateDirectory(IntermediateAndroidPath);
 			}
+			
+			if (!System.IO.Directory.Exists(IntermediateAndroidPath))
+			{
+				System.IO.Directory.CreateDirectory(IntermediateAndroidPath);
+			}
+
+			// write build type
+			File.WriteAllText(BuildTypeFilename, BuildTypeID);
 
 			// cache if we want data in the Apk
 			bool bPackageDataInsideApk = bDisallowPackagingDataInApk ? false : GetPackageDataInsideApk();
@@ -3053,7 +3387,11 @@ namespace UnrealBuildTool
 			string UE4OBBDataFileName = GetUE4JavaOBBDataFileName(TemplateDestinationBase);
 			string UE4DownloadShimFileName = GetUE4JavaDownloadShimFileName(UE4JavaFilePath);
 
-			// Template generated files           
+			// Get list of all architecture and GPU targets for build
+			List<string> Arches = ToolChain.GetAllArchitectures();
+			List<string> GPUArchitectures = ToolChain.GetAllGPUArchitectures();
+
+			// Template generated files
 			string JavaTemplateSourceDir = GetUE4TemplateJavaSourceDir(EngineDirectory);
 			IEnumerable<TemplateFile> templates = from template in Directory.EnumerateFiles(JavaTemplateSourceDir, "*.template")
 							let RealName = Path.GetFileNameWithoutExtension(template)
@@ -3061,9 +3399,15 @@ namespace UnrealBuildTool
 
 			// Generate the OBB and Shim files here
 			string ObbFileLocation = ProjectDirectory + "/Saved/StagedBuilds/Android" + CookFlavor + ".obb";
+			string PatchFileLocation = ProjectDirectory + "/Saved/StagedBuilds/Android" + CookFlavor + ".patch.obb";
+			List<string> RequiredOBBFiles = new List<String> { ObbFileLocation };
+			if (File.Exists(PatchFileLocation))
+			{
+				RequiredOBBFiles.Add(PatchFileLocation);
+			}
 
 			// Generate the OBBData.java file if out of date (can skip rewriting it if packaging inside Apk in some cases)
-			WriteJavaOBBDataFile(UE4OBBDataFileName, PackageName, new List<string> { ObbFileLocation }, CookFlavor, bPackageDataInsideApk);
+			WriteJavaOBBDataFile(UE4OBBDataFileName, PackageName, RequiredOBBFiles, CookFlavor, bPackageDataInsideApk, Arches[0]);
 
 			// Make sure any existing proguard file in project is NOT used (back it up)
 			string ProjectBuildProguardFile = Path.Combine(GameBuildFilesPath, "proguard-project.txt");
@@ -3074,10 +3418,10 @@ namespace UnrealBuildTool
 			}
 
 			WriteJavaDownloadSupportFiles(UE4DownloadShimFileName, templates, new Dictionary<string, string>{
-                { "$$GameName$$", ProjectName },
-                { "$$PublicKey$$", GetPublicKey() }, 
-                { "$$PackageName$$",PackageName }
-            });
+				{ "$$GameName$$", ProjectName },
+				{ "$$PublicKey$$", GetPublicKey() }, 
+				{ "$$PackageName$$",PackageName }
+			});
 
 			// Sometimes old files get left behind if things change, so we'll do a clean up pass
 			{
@@ -3159,7 +3503,8 @@ namespace UnrealBuildTool
 
 
 			// check to see if any "meta information" is newer than last time we build
-			string CurrentBuildSettings = GetAllBuildSettings(ToolChain, UE4BuildPath, bForDistribution, bMakeSeparateApks, bPackageDataInsideApk, bDisableVerifyOBBOnStartUp, bUseExternalFilesDir, bGradleEnabled);
+			string TemplatesHashCode = GenerateTemplatesHashCode(EngineDirectory);
+			string CurrentBuildSettings = GetAllBuildSettings(ToolChain, UE4BuildPath, bForDistribution, bMakeSeparateApks, bPackageDataInsideApk, bDisableVerifyOBBOnStartUp, bUseExternalFilesDir, bGradleEnabled, TemplatesHashCode);
 			string BuildSettingsCacheFile = Path.Combine(UE4BuildPath, "UEBuildSettings.txt");
 
 			// do we match previous build settings?
@@ -3171,13 +3516,6 @@ namespace UnrealBuildTool
 			{
 				bBuildSettingsMatch = false;
 				Log.TraceInformation("Application display name is different than last build, forcing repackage.");
-			}
-
-			// Write Crashlytics data if enabled (not needed for Gradle)
-			if (CrashlyticsPluginEnabled && !bGradleEnabled)
-			{
-				Trace.TraceInformation("Writing Crashlytics resources");
-				WriteCrashlyticsResources(Path.Combine(ProjectDirectory, "Build", "Android"), PackageName, ApplicationDisplayName);
 			}
 
 			// if the manifest matches, look at other settings stored in a file
@@ -3194,8 +3532,8 @@ namespace UnrealBuildTool
 				}
 			}
 
-			// only check input dependencies if the build settings already match
-			if (bBuildSettingsMatch)
+			// only check input dependencies if the build settings already match (if we don't run gradle, there is no Apk file to check against)
+			if (bBuildSettingsMatch && !bSkipGradleBuild)
 			{
 				// check if so's are up to date against various inputs
 				List<string> JavaFiles = new List<string>{
@@ -3211,29 +3549,6 @@ namespace UnrealBuildTool
 
 			}
 
-			List<string> Arches = ToolChain.GetAllArchitectures();
-			List<string> GPUArchitectures = ToolChain.GetAllGPUArchitectures();
-
-			// figure out the configuration from output filename
-			string Configuration = "Development";
-			string OutputConfig = Path.GetFileNameWithoutExtension(OutputPath);
-			if (OutputConfig.EndsWith("-Debug"))
-			{
-				Configuration = "Debug";
-			}
-			else if (OutputConfig.EndsWith("-Test"))
-			{
-				Configuration = "Test";
-			}
-			else if (OutputConfig.EndsWith("-DebugGame"))
-			{
-				Configuration = "Debug";
-			}
-			else if (OutputConfig.EndsWith("-Shipping"))
-			{
-				Configuration = "Shipping";
-			}
-
 			// Initialize UPL contexts for each architecture enabled
 			List<string> NDKArches = new List<string>();
 			foreach (string Arch in Arches)
@@ -3244,7 +3559,8 @@ namespace UnrealBuildTool
 					NDKArches.Add(NDKArch);
 				}
 			}
-			UPL.Init(NDKArches, bForDistribution, EngineDirectory, UE4BuildPath, ProjectDirectory, Configuration);
+
+			UPL.Init(NDKArches, bForDistribution, EngineDirectory, UE4BuildPath, ProjectDirectory, Configuration.ToString());
 
 			IEnumerable<Tuple<string, string, string>> BuildList = null;
 
@@ -3252,7 +3568,7 @@ namespace UnrealBuildTool
 			{
 				BuildList = from Arch in Arches
 							from GPUArch in GPUArchitectures
-							let manifest = GenerateManifest(ToolChain, ProjectName, InTargetType, EngineDirectory, bForDistribution, bPackageDataInsideApk, GameBuildFilesPath, RequiresOBB(bDisallowPackagingDataInApk, ObbFileLocation), bDisableVerifyOBBOnStartUp, Arch, GPUArch, CookFlavor, bUseExternalFilesDir, Configuration, SDKLevelInt)
+							let manifest = GenerateManifest(ToolChain, ProjectName, InTargetType, EngineDirectory, bForDistribution, bPackageDataInsideApk, GameBuildFilesPath, RequiresOBB(bDisallowPackagingDataInApk, ObbFileLocation), bDisableVerifyOBBOnStartUp, Arch, GPUArch, CookFlavor, bUseExternalFilesDir, Configuration.ToString(), SDKLevelInt, bSkipGradleBuild)
 							select Tuple.Create(Arch, GPUArch, manifest);
 			}
 			else
@@ -3260,7 +3576,7 @@ namespace UnrealBuildTool
 				BuildList = from Arch in Arches
 							from GPUArch in GPUArchitectures
 							let manifestFile = Path.Combine(IntermediateAndroidPath, Arch + "_" + GPUArch + "_AndroidManifest.xml")
-							let manifest = GenerateManifest(ToolChain, ProjectName, InTargetType, EngineDirectory, bForDistribution, bPackageDataInsideApk, GameBuildFilesPath, RequiresOBB(bDisallowPackagingDataInApk, ObbFileLocation), bDisableVerifyOBBOnStartUp, Arch, GPUArch, CookFlavor, bUseExternalFilesDir, Configuration, SDKLevelInt)
+							let manifest = GenerateManifest(ToolChain, ProjectName, InTargetType, EngineDirectory, bForDistribution, bPackageDataInsideApk, GameBuildFilesPath, RequiresOBB(bDisallowPackagingDataInApk, ObbFileLocation), bDisableVerifyOBBOnStartUp, Arch, GPUArch, CookFlavor, bUseExternalFilesDir, Configuration.ToString(), SDKLevelInt, bSkipGradleBuild)
 							let OldManifest = File.Exists(manifestFile) ? File.ReadAllText(manifestFile) : ""
 							where manifest != OldManifest
 							select Tuple.Create(Arch, GPUArch, manifest);
@@ -3385,7 +3701,7 @@ namespace UnrealBuildTool
 			//determine which orientation requirements this app has
 			bool bNeedLandscape = false;
 			bool bNeedPortrait = false;
-			DetermineScreenOrientationRequirements(out bNeedPortrait, out bNeedLandscape);
+			DetermineScreenOrientationRequirements(NDKArches[0], out bNeedPortrait, out bNeedLandscape);
 
 			//Now keep the splash screen images matching orientation requested
 			PickSplashScreenOrientation(UE4BuildPath, bNeedPortrait, bNeedLandscape);
@@ -3415,20 +3731,18 @@ namespace UnrealBuildTool
 			string AntVerbosity;
 			Ini.GetString("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "AntVerbosity", out AntVerbosity);
 
+			// use Gradle for compile/package
+			string UE4BuildGradlePath = Path.Combine(UE4BuildPath, "gradle");
+			string UE4BuildGradleAppPath = Path.Combine(UE4BuildGradlePath, "app");
+			string UE4BuildGradleMainPath = Path.Combine(UE4BuildGradleAppPath, "src", "main");
+			string CompileSDKVersion = SDKAPILevel.Replace("android-", "");
+
 			foreach (Tuple<string, string, string> build in BuildList)
 			{
 				string Arch = build.Item1;
 				string GPUArchitecture = build.Item2;
 				string Manifest = build.Item3;
 				string NDKArch = GetNDKArch(Arch);
-
-				string SourceSOName = AndroidToolChain.InlineArchName(OutputPath, Arch, GPUArchitecture);
-				// if the source binary was UE4Game, replace it with the new project name, when re-packaging a binary only build
-				string ApkFilename = Path.GetFileNameWithoutExtension(OutputPath).Replace("UE4Game", ProjectName);
-				string DestApkName = Path.Combine(ProjectDirectory, "Binaries/Android/") + ApkFilename + ".apk";
-
-				// As we are always making seperate APKs we need to put the architecture into the name
-				DestApkName = AndroidToolChain.InlineArchName(DestApkName, Arch, GPUArchitecture);
 
 				// Write the manifest to the correct locations (cache and real)
 				String ManifestFile = Path.Combine(IntermediateAndroidPath, Arch + "_" + GPUArchitecture + "_AndroidManifest.xml");
@@ -3449,110 +3763,144 @@ namespace UnrealBuildTool
 
 					// modify the generated build.xml before the final include
 					UpdateBuildXML(Arch, NDKArch, EngineDirectory, UE4BuildPath);
-				}
 
-				// update GameActivity.java if out of date
-				UpdateGameActivity(Arch, NDKArch, EngineDirectory, UE4BuildPath);
-
-				// Copy the generated .so file from the binaries directory to the jni folder
-				if (!File.Exists(SourceSOName))
-				{
-					throw new BuildException("Can't make an APK without the compiled .so [{0}]", SourceSOName);
-				}
-				if (!Directory.Exists(UE4BuildPath + "/jni"))
-				{
-					throw new BuildException("Can't make an APK without the jni directory [{0}/jni]", UE4BuildFilesPath);
-				}
-
-				String FinalSOName;
-
-				if (bGradleEnabled)
-				{
-					string JniDir = UE4BuildPath + "/jni/" + NDKArch;
-					FinalSOName = JniDir + "/libUE4.so";
-
-					// clear out libs directory like ndk-build would have
-					string LibsDir = Path.Combine(UE4BuildPath, "libs");
-					DeleteDirectory(LibsDir);
-					MakeDirectoryIfRequired(LibsDir);
-
-					// check to see if libUE4.so needs to be copied
-					if (BuildListComboTotal > 1 || FilesAreDifferent(SourceSOName, FinalSOName))
+					// Write Crashlytics data if enabled (not needed for Gradle)
+					if (CrashlyticsPluginEnabled)
 					{
-						Log.TraceInformation("\nCopying new .so {0} file to jni folder...", SourceSOName);
-						Directory.CreateDirectory(JniDir);
-						// copy the binary to the standard .so location
-						File.Copy(SourceSOName, FinalSOName, true);
-						File.SetLastWriteTimeUtc(FinalSOName, File.GetLastWriteTimeUtc(SourceSOName));
+						Trace.TraceInformation("Writing Crashlytics resources");
+						WriteCrashlyticsResources(Path.Combine(ProjectDirectory, "Build", "Android"), PackageName, ApplicationDisplayName, bSkipGradleBuild, Arch);
+					}
+				}
+
+				// Generate the OBBData.java file again in case architecture has different store version
+				WriteJavaOBBDataFile(UE4OBBDataFileName, PackageName, RequiredOBBFiles, CookFlavor, bPackageDataInsideApk, Arch);
+
+				// update GameActivity.java and GameApplication.java if out of date
+				UpdateGameActivity(Arch, NDKArch, EngineDirectory, UE4BuildPath);
+				UpdateGameApplication(Arch, NDKArch, EngineDirectory, UE4BuildPath, bGradleEnabled);
+
+				// we don't actually need the SO for the bSkipGradleBuild case
+				string FinalSOName = null;
+				string DestApkDirectory = Path.Combine(ProjectDirectory, "Binaries/Android");
+				string DestApkName = null;
+				if (bSkipGradleBuild)
+				{
+					FinalSOName = OutputPath;
+					if (!File.Exists(FinalSOName))
+					{
+						Log.TraceWarning("Did not find compiled .so [{0}]", FinalSOName);
 					}
 				}
 				else
 				{
-					if (HasNDKPath)
+					string SourceSOName = AndroidToolChain.InlineArchName(OutputPath, Arch, GPUArchitecture);
+					// if the source binary was UE4Game, replace it with the new project name, when re-packaging a binary only build
+					string ApkFilename = Path.GetFileNameWithoutExtension(OutputPath).Replace("UE4Game", ProjectName);
+					DestApkName = Path.Combine(DestApkDirectory, ApkFilename + ".apk");
+
+					// As we are always making seperate APKs we need to put the architecture into the name
+					DestApkName = AndroidToolChain.InlineArchName(DestApkName, Arch, GPUArchitecture);
+
+					if (!File.Exists(SourceSOName))
 					{
-						string LibDir = UE4BuildPath + "/jni/" + NDKArch;
-						FinalSOName = LibDir + "/libUE4.so";
+						throw new BuildException("Can't make an APK without the compiled .so [{0}]", SourceSOName);
+					}
+					if (!Directory.Exists(UE4BuildPath + "/jni"))
+					{
+						throw new BuildException("Can't make an APK without the jni directory [{0}/jni]", UE4BuildFilesPath);
+					}
+
+					if (bGradleEnabled)
+					{
+						string JniDir = UE4BuildPath + "/jni/" + NDKArch;
+						FinalSOName = JniDir + "/libUE4.so";
+
+						// clear out libs directory like ndk-build would have
+						string LibsDir = Path.Combine(UE4BuildPath, "libs");
+						DeleteDirectory(LibsDir);
+						MakeDirectoryIfRequired(LibsDir);
 
 						// check to see if libUE4.so needs to be copied
 						if (BuildListComboTotal > 1 || FilesAreDifferent(SourceSOName, FinalSOName))
 						{
 							Log.TraceInformation("\nCopying new .so {0} file to jni folder...", SourceSOName);
-							Directory.CreateDirectory(LibDir);
+							Directory.CreateDirectory(JniDir);
 							// copy the binary to the standard .so location
 							File.Copy(SourceSOName, FinalSOName, true);
+							File.SetLastWriteTimeUtc(FinalSOName, File.GetLastWriteTimeUtc(SourceSOName));
 						}
 					}
 					else
 					{
-						// if no NDK, we don't need any of the debugger stuff, so we just copy the .so to where it will end up
-						FinalSOName = UE4BuildPath + "/libs/" + NDKArch + "/libUE4.so";
-
-						// check to see if libUE4.so needs to be copied
-						if (BuildListComboTotal > 1 || FilesAreDifferent(SourceSOName, FinalSOName))
+						if (HasNDKPath)
 						{
-							Log.TraceInformation("\nCopying .so {0} file to jni folder...", SourceSOName);
-							Directory.CreateDirectory(Path.GetDirectoryName(FinalSOName));
-							File.Copy(SourceSOName, FinalSOName, true);
+							string LibDir = UE4BuildPath + "/jni/" + NDKArch;
+							FinalSOName = LibDir + "/libUE4.so";
+
+							// check to see if libUE4.so needs to be copied
+							if (BuildListComboTotal > 1 || FilesAreDifferent(SourceSOName, FinalSOName))
+							{
+								Log.TraceInformation("\nCopying new .so {0} file to jni folder...", SourceSOName);
+								Directory.CreateDirectory(LibDir);
+								// copy the binary to the standard .so location
+								File.Copy(SourceSOName, FinalSOName, true);
+							}
+
+							// remove any read only flags
+							FileInfo DestFileInfo2 = new FileInfo(FinalSOName);
+							DestFileInfo2.Attributes = DestFileInfo2.Attributes & ~FileAttributes.ReadOnly;
+							File.SetLastWriteTimeUtc(FinalSOName, File.GetLastWriteTimeUtc(SourceSOName));
+
+							// run ndk-build for Ant (will stage libUE4.so into libs)
+							string LibSOName = UE4BuildPath + "/libs/" + NDKArch + "/libUE4.so";
+
+							// always delete libs up to this point so fat binaries and incremental builds work together (otherwise we might end up with multiple
+							// so files in an apk that doesn't want them)
+							// note that we don't want to delete all libs, just the ones we copied
+							TimeSpan Diff = File.GetLastWriteTimeUtc(LibSOName) - File.GetLastWriteTimeUtc(FinalSOName);
+							if (!File.Exists(LibSOName) || Diff.TotalSeconds < -1 || Diff.TotalSeconds > 1)
+							{
+								foreach (string Lib in Directory.EnumerateFiles(UE4BuildPath + "/libs", "libUE4*.so", SearchOption.AllDirectories))
+								{
+									File.Delete(Lib);
+								}
+
+								string CommandLine = "APP_ABI=\"" + NDKArch + " " + "\"";
+								if (!bForDistribution)
+								{
+									CommandLine += " NDK_DEBUG=1";
+								}
+								RunCommandLineProgramWithException(UE4BuildPath, NDKBuildPath, CommandLine, "Preparing native code for debugging...", true);
+
+								File.SetLastWriteTimeUtc(LibSOName, File.GetLastWriteTimeUtc(FinalSOName));
+							}
+						}
+						else
+						{
+							// if no NDK, we don't need any of the debugger stuff, so we just copy the .so to where it will end up
+							FinalSOName = UE4BuildPath + "/libs/" + NDKArch + "/libUE4.so";
+
+							// check to see if libUE4.so needs to be copied
+							if (BuildListComboTotal > 1 || FilesAreDifferent(SourceSOName, FinalSOName))
+							{
+								Log.TraceInformation("\nCopying .so {0} file to jni folder...", SourceSOName);
+								Directory.CreateDirectory(Path.GetDirectoryName(FinalSOName));
+								File.Copy(SourceSOName, FinalSOName, true);
+							}
 						}
 					}
-				}
 
-				// remove any read only flags
-				FileInfo DestFileInfo = new FileInfo(FinalSOName);
-				DestFileInfo.Attributes = DestFileInfo.Attributes & ~FileAttributes.ReadOnly;
-				File.SetLastWriteTimeUtc(FinalSOName, File.GetLastWriteTimeUtc(SourceSOName));
-
-				// if we need to run ndk-build, do it now (Ant-only)
-				if (!bGradleEnabled && HasNDKPath)
-				{
-					string LibSOName = UE4BuildPath + "/libs/" + NDKArch + "/libUE4.so";
-					// always delete libs up to this point so fat binaries and incremental builds work together (otherwise we might end up with multiple
-					// so files in an apk that doesn't want them)
-					// note that we don't want to delete all libs, just the ones we copied
-					TimeSpan Diff = File.GetLastWriteTimeUtc(LibSOName) - File.GetLastWriteTimeUtc(FinalSOName);
-					if (!File.Exists(LibSOName) || Diff.TotalSeconds < -1 || Diff.TotalSeconds > 1)
-					{
-						foreach (string Lib in Directory.EnumerateFiles(UE4BuildPath + "/libs", "libUE4*.so", SearchOption.AllDirectories))
-						{
-							File.Delete(Lib);
-						}
-
-						string CommandLine = "APP_ABI=\"" + NDKArch + " " + "\"";
-						if (!bForDistribution)
-						{
-							CommandLine += " NDK_DEBUG=1";
-						}
-						RunCommandLineProgramWithException(UE4BuildPath, NDKBuildPath, CommandLine, "Preparing native code for debugging...", true);
-
-						File.SetLastWriteTimeUtc(LibSOName, File.GetLastWriteTimeUtc(FinalSOName));
-					}
+					// remove any read only flags
+					FileInfo DestFileInfo = new FileInfo(FinalSOName);
+					DestFileInfo.Attributes = DestFileInfo.Attributes & ~FileAttributes.ReadOnly;
+					File.SetLastWriteTimeUtc(FinalSOName, File.GetLastWriteTimeUtc(SourceSOName));
 				}
 
 				// after ndk-build is called, we can now copy in the stl .so (ndk-build deletes old files)
 				// copy libgnustl_shared.so to library (use 4.8 if possible, otherwise 4.6)
 				CopySTL(ToolChain, UE4BuildPath, Arch, NDKArch, bForDistribution, bGradleEnabled);
 				CopyGfxDebugger(UE4BuildPath, Arch, NDKArch);
-				CopyVulkanValidationLayers(UE4BuildPath, Arch, NDKArch, Configuration);
+				CopyVulkanValidationLayers(UE4BuildPath, Arch, NDKArch, Configuration.ToString());
 
 				// copy postbuild plugin files
 				UPL.ProcessPluginNode(NDKArch, "resourceCopies", "");
@@ -3560,6 +3908,7 @@ namespace UnrealBuildTool
 				CreateAdditonalBuildPathFiles(NDKArch, UE4BuildPath, AdditionalBuildPathFilesDoc);
 
 				Log.TraceInformation("\n===={0}====PERFORMING FINAL APK PACKAGE OPERATION================================================", DateTime.Now.ToString());
+
 
 				if (!bGradleEnabled)
 				{
@@ -3619,14 +3968,6 @@ namespace UnrealBuildTool
 				}
 				else
 				{
-					// use Gradle for compile/package
-					// ini file to get settings from
-					string UE4BuildGradlePath = Path.Combine(UE4BuildPath, "gradle");
-					string UE4BuildGradleAppPath = Path.Combine(UE4BuildGradlePath, "app");
-					string UE4BuildGradleMainPath = Path.Combine(UE4BuildGradleAppPath, "src", "main");
-
-					string CompileSDKVersion = SDKAPILevel.Replace("android-", "");
-
 					// check if any plugins want to increase the required compile SDK version
 					string CompileSDKMin = UPL.ProcessPluginNode(NDKArch, "minimumSDKAPI", "");
 					if (CompileSDKMin != "")
@@ -3686,7 +4027,7 @@ namespace UnrealBuildTool
 							break;
 					}
 
-					CleanCopyDirectory(Path.Combine(UE4BuildPath, "jni"), Path.Combine(UE4BuildGradleMainPath, "jniLibs"), Excludes);     // has debug symbols
+					CleanCopyDirectory(Path.Combine(UE4BuildPath, "jni"), Path.Combine(UE4BuildGradleMainPath, "jniLibs"), Excludes);  // has debug symbols
 					CleanCopyDirectory(Path.Combine(UE4BuildPath, "libs"), Path.Combine(UE4BuildGradleMainPath, "libs"), Excludes);
 
 					CleanCopyDirectory(Path.Combine(UE4BuildPath, "assets"), Path.Combine(UE4BuildGradleMainPath, "assets"));
@@ -3696,9 +4037,15 @@ namespace UnrealBuildTool
 					// do any plugin requested copies
 					UPL.ProcessPluginNode(NDKArch, "gradleCopies", "");
 
+					// get min and target SDK versions
+					int MinSDKVersion = 0;
+					int TargetSDKVersion = 0;
+					int NDKLevelInt = 0;
+					GetMinTargetSDKVersions(ToolChain, Arch, UPL, NDKArch, out MinSDKVersion, out TargetSDKVersion, out NDKLevelInt);
+					
 					// move JavaLibs into subprojects
 					string JavaLibsDir = Path.Combine(UE4BuildPath, "JavaLibs");
-					PrepareJavaLibsForGradle(JavaLibsDir, UE4BuildGradlePath, CompileSDKVersion, BuildToolsVersion);
+					PrepareJavaLibsForGradle(JavaLibsDir, UE4BuildGradlePath, MinSDKVersion.ToString(), TargetSDKVersion.ToString(), CompileSDKVersion, BuildToolsVersion);
 
 					// Create local.properties
 					String LocalPropertiesFilename = Path.Combine(UE4BuildGradlePath, "local.properties");
@@ -3707,275 +4054,90 @@ namespace UnrealBuildTool
 					LocalProperties.AppendLine(string.Format("sdk.dir={0}", Environment.GetEnvironmentVariable("ANDROID_HOME").Replace("\\", "/")));
 					File.WriteAllText(LocalPropertiesFilename, LocalProperties.ToString());
 
-					// Create gradle.properties
-					StringBuilder GradleProperties = new StringBuilder();
+					CreateGradlePropertiesFiles(Arch, MinSDKVersion, TargetSDKVersion, CompileSDKVersion, BuildToolsVersion, PackageName, DestApkName, NDKArch,
+						UE4BuildFilesPath, GameBuildFilesPath, UE4BuildGradleAppPath, UE4BuildPath, UE4BuildGradlePath, bForDistribution, bSkipGradleBuild);
 
-					int StoreVersion = GetStoreVersion();
-					string VersionDisplayName = GetVersionDisplayName();
-					int MinSDKVersion;
-					Ini.GetInt32("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "MinSDKVersion", out MinSDKVersion);
-					int TargetSDKVersion = MinSDKVersion;
-					Ini.GetInt32("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "TargetSDKVersion", out TargetSDKVersion);
-
-					// Make sure minSdkVersion is at least 13 (need this for appcompat-v13 used by AndroidPermissions)
-					// this may be changed by active plugins (Google Play Services 11.0.4 needs 14 for example)
-					if (MinSDKVersion < MinimumSDKLevelForGradle)
+					if (!bSkipGradleBuild)
 					{
-						MinSDKVersion = MinimumSDKLevelForGradle;
-					}
-					if (TargetSDKVersion < MinSDKVersion)
-					{
-						TargetSDKVersion = MinSDKVersion;
-					}
-
-					// 64-bit targets must be android-21 or higher
-					int NDKLevelInt = ToolChain.GetNdkApiLevelInt();
-					if (NDKLevelInt < 21)
-					{
-						if (Arch == "-arm64" || Arch == "-x64")
+						string GradleScriptPath = Path.Combine(UE4BuildGradlePath, "gradlew");
+						if (Utils.IsRunningOnMono)
 						{
-							NDKLevelInt = 21;
-						}
-					}
-
-					// fix up the MinSdkVersion
-					if (NDKLevelInt > 19)
-					{
-						if (MinSDKVersion < 21)
-						{
-							MinSDKVersion = 21;
-							Log.TraceInformation("Fixing minSdkVersion; NDK level above 19 requires minSdkVersion of 21 (arch={0})", Arch.Substring(1));
-						}
-					}
-
-					GradleProperties.AppendLine("org.gradle.daemon=false");
-					GradleProperties.AppendLine("org.gradle.jvmargs=-Xmx8192m");
-					GradleProperties.AppendLine(string.Format("COMPILE_SDK_VERSION={0}", CompileSDKVersion));
-					GradleProperties.AppendLine(string.Format("BUILD_TOOLS_VERSION={0}", BuildToolsVersion));
-					GradleProperties.AppendLine(string.Format("PACKAGE_NAME={0}", PackageName));
-					GradleProperties.AppendLine(string.Format("MIN_SDK_VERSION={0}", MinSDKVersion.ToString()));
-					GradleProperties.AppendLine(string.Format("TARGET_SDK_VERSION={0}", TargetSDKVersion.ToString()));
-					GradleProperties.AppendLine(string.Format("STORE_VERSION={0}", StoreVersion.ToString()));
-					GradleProperties.AppendLine(string.Format("VERSION_DISPLAY_NAME={0}", VersionDisplayName));
-
-					GradleProperties.AppendLine(string.Format("OUTPUT_PATH={0}", Path.GetDirectoryName(DestApkName).Replace("\\", "/")));
-					GradleProperties.AppendLine(string.Format("OUTPUT_FILENAME={0}", Path.GetFileName(DestApkName)));
-
-					// add any Gradle properties from UPL
-					string GradlePropertiesUPL = UPL.ProcessPluginNode(NDKArch, "gradleProperties", "");
-					GradleProperties.AppendLine(GradlePropertiesUPL);
-
-					StringBuilder GradleBuildAdditionsContent = new StringBuilder();
-					GradleBuildAdditionsContent.AppendLine("apply from: 'aar-imports.gradle'");
-					GradleBuildAdditionsContent.AppendLine("apply from: 'projects.gradle'");
-
-					GradleBuildAdditionsContent.AppendLine("android {");
-					GradleBuildAdditionsContent.AppendLine("\tdefaultConfig {");
-					GradleBuildAdditionsContent.AppendLine("\t\tndk {");
-					GradleBuildAdditionsContent.AppendLine(string.Format("\t\t\tabiFilter \"{0}\"", NDKArch));
-					GradleBuildAdditionsContent.AppendLine("\t\t}");
-					GradleBuildAdditionsContent.AppendLine("\t}");
-
-					if (bForDistribution)
-					{
-						bool bDisableV2Signing = false;
-
-						if (IsPackagingForGearVR())
-						{
-							bDisableV2Signing = true;
-							Log.TraceInformation("Disabling v2Signing for Gear VR APK");
-						}
-
-						string KeyAlias, KeyStore, KeyStorePassword, KeyPassword;
-						Ini.GetString("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "KeyStore", out KeyStore);
-						Ini.GetString("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "KeyAlias", out KeyAlias);
-						Ini.GetString("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "KeyStorePassword", out KeyStorePassword);
-						Ini.GetString("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "KeyPassword", out KeyPassword);
-
-						if (string.IsNullOrEmpty(KeyStore) || string.IsNullOrEmpty(KeyAlias) || string.IsNullOrEmpty(KeyStorePassword))
-						{
-							throw new BuildException("DistributionSigning settings are not all set. Check the DistributionSettings section in the Android tab of Project Settings");
-						}
-
-						if (string.IsNullOrEmpty(KeyPassword) || KeyPassword == "_sameaskeystore_")
-						{
-							KeyPassword = KeyStorePassword;
-						}
-
-						// Make sure the keystore file exists
-						string KeyStoreFilename = Path.Combine(UE4BuildPath, KeyStore);
-						if (!File.Exists(KeyStoreFilename))
-						{
-							throw new BuildException("Keystore file is missing. Check the DistributionSettings section in the Android tab of Project Settings");
-						}
-
-						GradleProperties.AppendLine(string.Format("STORE_FILE={0}", KeyStoreFilename.Replace("\\", "/")));
-						GradleProperties.AppendLine(string.Format("STORE_PASSWORD={0}", KeyStorePassword));
-						GradleProperties.AppendLine(string.Format("KEY_ALIAS={0}", KeyAlias));
-						GradleProperties.AppendLine(string.Format("KEY_PASSWORD={0}", KeyPassword));
-
-						GradleBuildAdditionsContent.AppendLine("\tsigningConfigs {");
-						GradleBuildAdditionsContent.AppendLine("\t\trelease {");
-						GradleBuildAdditionsContent.AppendLine(string.Format("\t\t\tstoreFile file('{0}')", KeyStoreFilename.Replace("\\", "/")));
-						GradleBuildAdditionsContent.AppendLine(string.Format("\t\t\tstorePassword '{0}'", KeyStorePassword));
-						GradleBuildAdditionsContent.AppendLine(string.Format("\t\t\tkeyAlias '{0}'", KeyAlias));
-						GradleBuildAdditionsContent.AppendLine(string.Format("\t\t\tkeyPassword '{0}'", KeyPassword));
-						if (bDisableV2Signing)
-						{
-							GradleBuildAdditionsContent.AppendLine("\t\t\tv2SigningEnabled false");
-						}
-						GradleBuildAdditionsContent.AppendLine("\t\t}");
-						GradleBuildAdditionsContent.AppendLine("\t}");
-
-						// Generate the Proguard file contents and write it
-						string ProguardContents = GenerateProguard(NDKArch, UE4BuildFilesPath, GameBuildFilesPath);
-						string ProguardFilename = Path.Combine(UE4BuildGradleAppPath, "proguard-rules.pro");
-						SafeDeleteFile(ProguardFilename);
-						File.WriteAllText(ProguardFilename, ProguardContents);
-					}
-					else
-					{
-						// empty just for Gradle not to complain
-						GradleProperties.AppendLine("STORE_FILE=");
-						GradleProperties.AppendLine("STORE_PASSWORD=");
-						GradleProperties.AppendLine("KEY_ALIAS=");
-						GradleProperties.AppendLine("KEY_PASSWORD=");
-
-						// empty just for Gradle not to complain
-						GradleBuildAdditionsContent.AppendLine("\tsigningConfigs {");
-						GradleBuildAdditionsContent.AppendLine("\t\trelease {");
-						GradleBuildAdditionsContent.AppendLine("\t\t}");
-						GradleBuildAdditionsContent.AppendLine("\t}");
-					}
-
-					GradleBuildAdditionsContent.AppendLine("\tbuildTypes {");
-					GradleBuildAdditionsContent.AppendLine("\t\trelease {");
-					GradleBuildAdditionsContent.AppendLine("\t\t\tsigningConfig signingConfigs.release");
-					if (GradlePropertiesUPL.Contains("DISABLE_MINIFY=1"))
-					{
-						GradleBuildAdditionsContent.AppendLine("\t\t\tminifyEnabled false");
-					}
-					else
-					{
-						GradleBuildAdditionsContent.AppendLine("\t\t\tminifyEnabled true");
-					}
-					if (GradlePropertiesUPL.Contains("DISABLE_PROGUARD=1"))
-					{
-						GradleBuildAdditionsContent.AppendLine("\t\t\tuseProguard false");
-					}
-					else
-					{
-						GradleBuildAdditionsContent.AppendLine("\t\t\tproguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'");
-					}
-					GradleBuildAdditionsContent.AppendLine("\t\t}");
-					GradleBuildAdditionsContent.AppendLine("\t\tdebug {");
-					GradleBuildAdditionsContent.AppendLine("\t\t\tdebuggable true");
-					GradleBuildAdditionsContent.AppendLine("\t\t}");
-					GradleBuildAdditionsContent.AppendLine("\t}");
-					GradleBuildAdditionsContent.AppendLine("}");
-
-					// Add any UPL app buildGradleAdditions
-					GradleBuildAdditionsContent.Append(UPL.ProcessPluginNode(NDKArch, "buildGradleAdditions", ""));
-
-					string GradleBuildAdditionsFilename = Path.Combine(UE4BuildGradleAppPath, "buildAdditions.gradle");
-					File.WriteAllText(GradleBuildAdditionsFilename, GradleBuildAdditionsContent.ToString());
-
-					string GradlePropertiesFilename = Path.Combine(UE4BuildGradlePath, "gradle.properties");
-					File.WriteAllText(GradlePropertiesFilename, GradleProperties.ToString());
-
-					// Add lint if requested (note depreciation warnings can be suppressed with @SuppressWarnings("deprecation")
-					string GradleBaseBuildAdditionsContents = "";
-					bool bEnableLint = false;
-					Ini.GetBool("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "bEnableLint", out bEnableLint);
-					if (bEnableLint)
-					{
-						GradleBaseBuildAdditionsContents =
-							"allprojects {\n" +
-							"\ttasks.withType(JavaCompile) {\n" +
-							"\t\toptions.compilerArgs << \"-Xlint:unchecked\" << \"-Xlint:deprecation\"\n" +
-							"\t}\n" +
-							"}\n\n";
-					}
-
-					// Create baseBuildAdditions.gradle from plugins baseBuildGradleAdditions
-					string GradleBaseBuildAdditionsFilename = Path.Combine(UE4BuildGradlePath, "baseBuildAdditions.gradle");
-					File.WriteAllText(GradleBaseBuildAdditionsFilename, UPL.ProcessPluginNode(NDKArch, "baseBuildGradleAdditions", GradleBaseBuildAdditionsContents));
-
-					// Create buildscriptAdditions.gradle from plugins buildscriptGradleAdditions
-					string GradleBuildScriptAdditionsFilename = Path.Combine(UE4BuildGradlePath, "buildscriptAdditions.gradle");
-					File.WriteAllText(GradleBuildScriptAdditionsFilename, UPL.ProcessPluginNode(NDKArch, "buildscriptGradleAdditions", ""));
-
-					string GradleScriptPath = Path.Combine(UE4BuildGradlePath, "gradlew");
-					if (Utils.IsRunningOnMono)
-					{
-						// fix permissions for Mac/Linux
-						RunCommandLineProgramWithException(UE4BuildGradlePath, "/bin/sh", string.Format("-c 'chmod 0755 \"{0}\"'", GradleScriptPath.Replace("'", "'\"'\"'")), "Fix gradlew permissions");
-					}
-					else
-					{
-						if (CreateRunGradle(UE4BuildGradlePath))
-						{
-							GradleScriptPath = Path.Combine(UE4BuildGradlePath, "rungradle.bat");
+							// fix permissions for Mac/Linux
+							RunCommandLineProgramWithException(UE4BuildGradlePath, "/bin/sh", string.Format("-c 'chmod 0755 \"{0}\"'", GradleScriptPath.Replace("'", "'\"'\"'")), "Fix gradlew permissions");
 						}
 						else
 						{
-							GradleScriptPath = Path.Combine(UE4BuildGradlePath, "gradlew.bat");
+							if (CreateRunGradle(UE4BuildGradlePath))
+							{
+								GradleScriptPath = Path.Combine(UE4BuildGradlePath, "rungradle.bat");
+							}
+							else
+							{
+								GradleScriptPath = Path.Combine(UE4BuildGradlePath, "gradlew.bat");
+							}
 						}
-					}
 
-					string GradleBuildType = bForDistribution ? ":app:assembleRelease" : ":app:assembleDebug";
+						string GradleBuildType = bForDistribution ? ":app:assembleRelease" : ":app:assembleDebug";
 
-					// collect optional additional Gradle parameters from plugins
-					string GradleOptions = UPL.ProcessPluginNode(NDKArch, "gradleParameters", GradleBuildType); //  "--stacktrace --debug " + GradleBuildType);
+						// collect optional additional Gradle parameters from plugins
+						string GradleOptions = UPL.ProcessPluginNode(NDKArch, "gradleParameters", GradleBuildType); //  "--stacktrace --debug " + GradleBuildType);
+						string GradleSecondCallOptions = UPL.ProcessPluginNode(NDKArch, "gradleSecondCallParameters", "");
 
-					// check for Android Studio project, call Gradle if doesn't exist (assume user will build with Android Studio)
-					string GradleAppImlFilename = Path.Combine(UE4BuildGradlePath, "app.iml");
-					if (!File.Exists(GradleAppImlFilename))
-					{
-						// make sure destination exists
-						Directory.CreateDirectory(Path.GetDirectoryName(DestApkName));
-
-						// Use gradle to build the .apk file
-						string ShellExecutable = BuildHostPlatform.Current.Shell.FullName;
-						string ShellParametersBegin = (BuildHostPlatform.Current.ShellType == ShellType.Sh) ? "-c '" : "/c ";
-						string ShellParametersEnd = (BuildHostPlatform.Current.ShellType == ShellType.Sh) ? "'" : "";
-						RunCommandLineProgramWithExceptionAndFiltering(UE4BuildGradlePath, ShellExecutable, ShellParametersBegin + "\"" + GradleScriptPath + "\" " + GradleOptions + ShellParametersEnd, "Making .apk with Gradle...");
-
-						// For build machine run a clean afterward to clean up intermediate files (does not remove final APK)
-						if (bIsBuildMachine)
+						// check for Android Studio project, call Gradle if doesn't exist (assume user will build with Android Studio)
+						string GradleAppImlFilename = Path.Combine(UE4BuildGradlePath, "app.iml");
+						if (!File.Exists(GradleAppImlFilename))
 						{
-							//GradleOptions = "tasks --all";
-							//RunCommandLineProgramWithException(UE4BuildGradlePath, ShellExecutable, ShellParametersBegin + "\"" + GradleScriptPath + "\" " + GradleOptions + ShellParametersEnd, "Listing all tasks...");
+							// make sure destination exists
+							Directory.CreateDirectory(Path.GetDirectoryName(DestApkName));
 
-							GradleOptions = "clean";
-							RunCommandLineProgramWithException(UE4BuildGradlePath, ShellExecutable, ShellParametersBegin + "\"" + GradleScriptPath + "\" " + GradleOptions + ShellParametersEnd, "Cleaning Gradle intermediates...");
+							// Use gradle to build the .apk file
+							string ShellExecutable = Utils.IsRunningOnMono ? "/bin/sh" : "cmd.exe";
+							string ShellParametersBegin = Utils.IsRunningOnMono ? "-c '" : "/c ";
+							string ShellParametersEnd = Utils.IsRunningOnMono ? "'" : "";
+							RunCommandLineProgramWithExceptionAndFiltering(UE4BuildGradlePath, ShellExecutable, ShellParametersBegin + "\"" + GradleScriptPath + "\" " + GradleOptions + ShellParametersEnd, "Making .apk with Gradle...");
+
+							if (GradleSecondCallOptions != "")
+							{
+								RunCommandLineProgramWithExceptionAndFiltering(UE4BuildGradlePath, ShellExecutable, ShellParametersBegin + "\"" + GradleScriptPath + "\" " + GradleSecondCallOptions + ShellParametersEnd, "Additional Gradle steps...");
+							}
+							
+							// For build machine run a clean afterward to clean up intermediate files (does not remove final APK)
+							if (bIsBuildMachine)
+							{
+								//GradleOptions = "tasks --all";
+								//RunCommandLineProgramWithException(UE4BuildGradlePath, ShellExecutable, ShellParametersBegin + "\"" + GradleScriptPath + "\" " + GradleOptions + ShellParametersEnd, "Listing all tasks...");
+
+								GradleOptions = "clean";
+								RunCommandLineProgramWithExceptionAndFiltering(UE4BuildGradlePath, ShellExecutable, ShellParametersBegin + "\"" + GradleScriptPath + "\" " + GradleOptions + ShellParametersEnd, "Cleaning Gradle intermediates...");
+							}
+						}
+						else
+						{
+							Log.TraceInformation("=============================================================================================");
+							Log.TraceInformation("Android Studio project found, skipping Gradle; complete creation of APK in Android Studio!!!!");
+							Log.TraceInformation("Delete '{0} if you want to have UnrealBuildTool run Gradle for future runs.", GradleAppImlFilename);
+							Log.TraceInformation("=============================================================================================");
 						}
 					}
-					else
+
+					bool bBuildWithHiddenSymbolVisibility = false;
+					bool bSaveSymbols = false;
+					Ini.GetBool("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "bBuildWithHiddenSymbolVisibility", out bBuildWithHiddenSymbolVisibility);
+					Ini.GetBool("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "bSaveSymbols", out bSaveSymbols);
+					bSaveSymbols = true;
+					if (bSaveSymbols || (Configuration == UnrealTargetConfiguration.Shipping && bBuildWithHiddenSymbolVisibility))
 					{
-						Log.TraceInformation("=============================================================================================");
-						Log.TraceInformation("Android Studio project found, skipping Gradle; complete creation of APK in Android Studio!!!!");
-						Log.TraceInformation("Delete '{0} if you want to have UnrealBuildTool run Gradle for future runs.", GradleAppImlFilename);
-						Log.TraceInformation("=============================================================================================");
+						// Copy .so with symbols to 
+						int StoreVersion = GetStoreVersion(Arch);
+						string SymbolSODirectory = Path.Combine(DestApkDirectory, ProjectName + "_Symbols_v" + StoreVersion + "/" + ProjectName + Arch + GPUArchitecture);
+						string SymbolifiedSOPath = Path.Combine(SymbolSODirectory, Path.GetFileName(FinalSOName));
+						MakeDirectoryIfRequired(SymbolifiedSOPath);
+						Log.TraceInformation("Writing symbols to {0}", SymbolifiedSOPath);
+
+						File.Copy(FinalSOName, SymbolifiedSOPath, true);
 					}
-				}
-
-				bool bBuildWithHiddenSymbolVisibility = false;
-				bool bSaveSymbols = false;
-				Ini.GetBool("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "bBuildWithHiddenSymbolVisibility", out bBuildWithHiddenSymbolVisibility);
-				Ini.GetBool("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "bSaveSymbols", out bSaveSymbols);
-				if (bSaveSymbols || (Configuration == "Shipping" && bBuildWithHiddenSymbolVisibility))
-				{
-					// Copy .so with symbols to 
-					int StoreVersion = GetStoreVersion();
-					string SymbolSODirectory = Path.Combine(Path.GetDirectoryName(DestApkName), ProjectName + "_Symbols_v" + StoreVersion + "/" + ProjectName + Arch + GPUArchitecture);
-					string SymbolifiedSOPath = Path.Combine(SymbolSODirectory, Path.GetFileName(FinalSOName));
-					MakeDirectoryIfRequired(SymbolifiedSOPath);
-
-					File.Copy(FinalSOName, SymbolifiedSOPath, true);
 				}
 			}
-
 		}
 
 		private void PrepareToSignApk(string BuildPath)
@@ -4029,23 +4191,34 @@ namespace UnrealBuildTool
 
 		public override bool PrepTargetForDeployment(TargetReceipt Receipt)
 		{
+			DirectoryReference ProjectDirectory = DirectoryReference.FromFile(Receipt.ProjectFile) ?? UnrealBuildTool.EngineDirectory;
+			string TargetName = (Receipt.ProjectFile == null ? Receipt.TargetName : Receipt.ProjectFile.GetFileNameWithoutAnyExtensions());
+
 			AndroidToolChain ToolChain = ((AndroidPlatform)UEBuildPlatform.GetBuildPlatform(Receipt.Platform)).CreateTempToolChainForProject(Receipt.ProjectFile) as AndroidToolChain;
 
 			// get the receipt
 			SetAndroidPluginData(ToolChain.GetAllArchitectures(), CollectPluginDataPaths(Receipt));
 
+			bool bShouldCompileAsDll = Receipt.HasValueForAdditionalProperty("CompileAsDll", "true");
+
+			SavePackageInfo(TargetName, ProjectDirectory.FullName, Receipt.TargetType, bShouldCompileAsDll);
+
 			// Get the output paths
-			List<FileReference> OutputPaths = Receipt.BuildProducts.Where(x => x.Type == BuildProductType.Executable).Select(x => x.Path).ToList();
+			BuildProductType ProductType = bShouldCompileAsDll ? BuildProductType.DynamicLibrary : BuildProductType.Executable;
+			List<FileReference> OutputPaths = Receipt.BuildProducts.Where(x => x.Type == ProductType).Select(x => x.Path).ToList();
+			if (OutputPaths.Count < 1)
+			{
+				throw new BuildException("Target file does not contain either executable or dynamic library .so");
+			}
 
 			// we need to strip architecture from any of the output paths
 			string BaseSoName = ToolChain.RemoveArchName(OutputPaths[0].FullName);
 
 			// make an apk at the end of compiling, so that we can run without packaging (debugger, cook on the fly, etc)
 			string RelativeEnginePath = UnrealBuildTool.EngineDirectory.MakeRelativeTo(DirectoryReference.GetCurrentDirectory());
-			string TargetName = (Receipt.ProjectFile == null ? Receipt.TargetName : Receipt.ProjectFile.GetFileNameWithoutAnyExtensions());
-			DirectoryReference ProjectDirectory = DirectoryReference.FromFile(Receipt.ProjectFile) ?? UnrealBuildTool.EngineDirectory;
-			MakeApk(ToolChain, TargetName, Receipt.TargetType, ProjectDirectory.FullName, BaseSoName, RelativeEnginePath, bForDistribution: false, CookFlavor: "",
-				bMakeSeparateApks: ShouldMakeSeparateApks(), bIncrementalPackage: true, bDisallowPackagingDataInApk: false, bDisallowExternalFilesDir: true);
+
+			MakeApk(ToolChain, TargetName, Receipt.TargetType, ProjectDirectory.FullName, BaseSoName, RelativeEnginePath, bForDistribution: false, CookFlavor: "", Configuration: Receipt.Configuration,
+				bMakeSeparateApks: ShouldMakeSeparateApks(), bIncrementalPackage: true, bDisallowPackagingDataInApk: false, bDisallowExternalFilesDir: true, bSkipGradleBuild: bShouldCompileAsDll);
 
 			// if we made any non-standard .apk files, the generated debugger settings may be wrong
 			if (ShouldMakeSeparateApks() && (OutputPaths.Count > 1 || !OutputPaths[0].FullName.Contains("-armv7-es2")))
@@ -4054,6 +4227,31 @@ namespace UnrealBuildTool
 				Log.TraceInformation("Non-default apk(s) have been made: If you are debugging, you will need to manually select one to run in the debugger properties!");
 				Log.TraceInformation("================================================================================================================================");
 			}
+			return true;
+		}
+
+		// Store generated package name in a text file for builds that do not generate an apk file 
+		public bool SavePackageInfo(string TargetName, string ProjectDirectory, TargetType InTargetType, bool bIsEmbedded)
+		{
+			string PackageName = GetPackageName(TargetName);
+			string DestPackageNameFileName = Path.Combine(ProjectDirectory, "Binaries", "Android", "packageInfo.txt");
+
+			string[] PackageInfoSource = new string[4];
+			PackageInfoSource[0] = PackageName;
+			PackageInfoSource[1] = GetStoreVersion("").ToString();
+			PackageInfoSource[2] = GetVersionDisplayName(bIsEmbedded);
+			PackageInfoSource[3] = string.Format("name='com.epicgames.ue4.GameActivity.AppType' value='{0}'", InTargetType == TargetType.Game ? "" : InTargetType.ToString());
+
+			Log.TraceInformation("Writing packageInfo pkgName:{0} storeVersion:{1} versionDisplayName:{2} to {3}", PackageInfoSource[0], PackageInfoSource[1], PackageInfoSource[2], DestPackageNameFileName);
+
+			string DestDirectory = Path.GetDirectoryName(DestPackageNameFileName);
+			if (!Directory.Exists(DestDirectory))
+			{
+				Directory.CreateDirectory(DestDirectory);
+			}
+
+			File.WriteAllLines(DestPackageNameFileName, PackageInfoSource);
+
 			return true;
 		}
 
@@ -4073,7 +4271,7 @@ namespace UnrealBuildTool
 			// 			return bSeparateApks;
 		}
 
-		public bool PrepForUATPackageOrDeploy(FileReference ProjectFile, string ProjectName, DirectoryReference ProjectDirectory, string ExecutablePath, string EngineDirectory, bool bForDistribution, string CookFlavor, bool bIsDataDeploy)
+		public bool PrepForUATPackageOrDeploy(FileReference ProjectFile, string ProjectName, DirectoryReference ProjectDirectory, string ExecutablePath, string EngineDirectory, bool bForDistribution, string CookFlavor, UnrealTargetConfiguration Configuration, bool bIsDataDeploy, bool bSkipGradleBuild)
 		{
 			//Log.TraceInformation("$$$$$$$$$$$$$$ PrepForUATPackageOrDeploy $$$$$$$$$$$$$$$$$");
 
@@ -4090,8 +4288,11 @@ namespace UnrealBuildTool
 			// note that we cannot allow the data packaged into the APK if we are doing something like Launch On that will not make an obb
 			// file and instead pushes files directly via deploy
 			AndroidToolChain ToolChain = new AndroidToolChain(ProjectFile, false, null, null);
-			MakeApk(ToolChain, ProjectName, Type, ProjectDirectory.FullName, ExecutablePath, EngineDirectory, bForDistribution: bForDistribution, CookFlavor: CookFlavor,
-				bMakeSeparateApks: ShouldMakeSeparateApks(), bIncrementalPackage: false, bDisallowPackagingDataInApk: bIsDataDeploy, bDisallowExternalFilesDir: !bForDistribution || bIsDataDeploy );
+
+			SavePackageInfo(ProjectName, ProjectDirectory.FullName, Type, bSkipGradleBuild);
+
+			MakeApk(ToolChain, ProjectName, Type, ProjectDirectory.FullName, ExecutablePath, EngineDirectory, bForDistribution: bForDistribution, CookFlavor: CookFlavor, Configuration: Configuration,
+				bMakeSeparateApks: ShouldMakeSeparateApks(), bIncrementalPackage: false, bDisallowPackagingDataInApk: bIsDataDeploy, bDisallowExternalFilesDir: !bForDistribution || bIsDataDeploy, bSkipGradleBuild:bSkipGradleBuild);
 			return true;
 		}
 
@@ -4143,6 +4344,53 @@ namespace UnrealBuildTool
 			}
 		}
 
+		private string GenerateTemplatesHashCode(string EngineDir)
+		{
+			string SourceDirectory = Path.Combine(EngineDir, "Build", "Android", "Java");
+
+			if (!Directory.Exists(SourceDirectory))
+			{
+				return "badpath";
+			}
+
+			MD5 md5 = MD5.Create();
+			byte[] TotalHashBytes = null;
+
+			string[] SourceFiles = Directory.GetFiles(SourceDirectory, "*.*", SearchOption.AllDirectories);
+			foreach (string Filename in SourceFiles)
+			{
+				using (FileStream stream = File.OpenRead(Filename))
+				{
+					byte[] FileHashBytes = md5.ComputeHash(stream);
+					if (TotalHashBytes != null)
+					{
+						int index = 0;
+						foreach (byte b in FileHashBytes)
+						{
+							TotalHashBytes[index] ^= b;
+							index++;
+						}
+					}
+					else
+					{
+						TotalHashBytes = FileHashBytes;
+					}
+				}
+			}
+
+			if (TotalHashBytes != null)
+			{
+				string HashCode = "";
+				foreach (byte b in TotalHashBytes)
+				{
+					HashCode += b.ToString("x2");
+				}
+				return HashCode;
+			}
+
+			return "empty";
+		}
+
 		private void UpdateGameActivity(string UE4Arch, string NDKArch, string EngineDir, string UE4BuildPath)
 		{
 			string SourceFilename = Path.Combine(EngineDir, "Build", "Android", "Java", "src", "com", "epicgames", "ue4", "GameActivity.java.template");
@@ -4151,10 +4399,21 @@ namespace UnrealBuildTool
 			// check for GameActivity.java.template override
 			SourceFilename = UPL.ProcessPluginNode(NDKArch, "gameActivityReplacement", SourceFilename);
 
+			ConfigHierarchy Ini = GetConfigCacheIni(ConfigHierarchyType.Engine);
+
 			string LoadLibraryDefaults = "";
 
+			string SuperClassDefault;
+			if (!Ini.GetString("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "GameActivitySuperClass", out SuperClassDefault))
+			{
+				SuperClassDefault = UPL.ProcessPluginNode(NDKArch, "gameActivitySuperClass", "");
+				if (String.IsNullOrEmpty(SuperClassDefault))
+				{
+					SuperClassDefault = "NativeActivity";
+				}
+			}
+
 			string AndroidGraphicsDebugger;
-			ConfigHierarchy Ini = GetConfigCacheIni(ConfigHierarchyType.Engine);
 			Ini.GetString("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "AndroidGraphicsDebugger", out AndroidGraphicsDebugger);
 
 			switch (AndroidGraphicsDebugger.ToLower())
@@ -4170,7 +4429,7 @@ namespace UnrealBuildTool
 											"\t\t}\n";
 					break;
 			}
-			
+
 			Dictionary<string, string> Replacements = new Dictionary<string, string>{
 				{ "//$${gameActivityImportAdditions}$$", UPL.ProcessPluginNode(NDKArch, "gameActivityImportAdditions", "")},
 				{ "//$${gameActivityPostImportAdditions}$$", UPL.ProcessPluginNode(NDKArch, "gameActivityPostImportAdditions", "")},
@@ -4178,6 +4437,7 @@ namespace UnrealBuildTool
 				{ "//$${gameActivityClassAdditions}$$", UPL.ProcessPluginNode(NDKArch, "gameActivityClassAdditions", "")},
 				{ "//$${gameActivityReadMetadataAdditions}$$", UPL.ProcessPluginNode(NDKArch, "gameActivityReadMetadataAdditions", "")},
 				{ "//$${gameActivityOnCreateAdditions}$$", UPL.ProcessPluginNode(NDKArch, "gameActivityOnCreateAdditions", "")},
+				{ "//$${gameActivityOnCreateFinalAdditions}$$", UPL.ProcessPluginNode(NDKArch, "gameActivityOnCreateFinalAdditions", "")},
 				{ "//$${gameActivityOnDestroyAdditions}$$", UPL.ProcessPluginNode(NDKArch, "gameActivityOnDestroyAdditions", "")},
 				{ "//$${gameActivityOnStartAdditions}$$", UPL.ProcessPluginNode(NDKArch, "gameActivityOnStartAdditions", "")},
 				{ "//$${gameActivityOnStopAdditions}$$", UPL.ProcessPluginNode(NDKArch, "gameActivityOnStopAdditions", "")},
@@ -4185,10 +4445,15 @@ namespace UnrealBuildTool
 				{ "//$${gameActivityOnResumeAdditions}$$", UPL.ProcessPluginNode(NDKArch, "gameActivityOnResumeAdditions", "")},
 				{ "//$${gameActivityOnNewIntentAdditions}$$", UPL.ProcessPluginNode(NDKArch, "gameActivityOnNewIntentAdditions", "")},
   				{ "//$${gameActivityOnActivityResultAdditions}$$", UPL.ProcessPluginNode(NDKArch, "gameActivityOnActivityResultAdditions", "")},
+  				{ "//$${gameActivityPreConfigRulesParseAdditions}$$", UPL.ProcessPluginNode(NDKArch, "gameActivityPreConfigRulesParseAdditions", "")},
   				{ "//$${gameActivityPostConfigRulesAdditions}$$", UPL.ProcessPluginNode(NDKArch, "gameActivityPostConfigRulesAdditions", "")},
+  				{ "//$${gameActivityFinalizeConfigRulesAdditions}$$", UPL.ProcessPluginNode(NDKArch, "gameActivityFinalizeConfigRulesAdditions", "")},
 				{ "//$${gameActivityBeforeConfigRulesAppliedAdditions}$$", UPL.ProcessPluginNode(NDKArch, "gameActivityBeforeConfigRulesAppliedAdditions", "")},
+				{ "//$${gameActivityAfterMainViewCreatedAdditions}$$", UPL.ProcessPluginNode(NDKArch, "gameActivityAfterMainViewCreatedAdditions", "")},
+				{ "//$${gameActivityResizeKeyboardAdditions}$$", UPL.ProcessPluginNode(NDKArch, "gameActivityResizeKeyboardAdditions", "")},
 				{ "//$${gameActivityLoggerCallbackAdditions}$$", UPL.ProcessPluginNode(NDKArch, "gameActivityLoggerCallbackAdditions", "")},
-				{ "//$${soLoadLibrary}$$", UPL.ProcessPluginNode(NDKArch, "soLoadLibrary", LoadLibraryDefaults)}
+				{ "//$${soLoadLibrary}$$", UPL.ProcessPluginNode(NDKArch, "soLoadLibrary", LoadLibraryDefaults)},
+				{ "$${gameActivitySuperClass}$$", SuperClassDefault},
 			};
 
 			string[] TemplateSrc = File.ReadAllLines(SourceFilename);
@@ -4222,7 +4487,60 @@ namespace UnrealBuildTool
 
 			if (TemplateDest == null || TemplateSrc.Length != TemplateDest.Length || !TemplateSrc.SequenceEqual(TemplateDest))
 			{
-                Log.TraceInformation("\n==== Writing new GameActivity.java file to {0} ====", DestFilename);
+				Log.TraceInformation("\n==== Writing new GameActivity.java file to {0} ====", DestFilename);
+				File.WriteAllLines(DestFilename, TemplateSrc);
+			}
+		}
+
+		private void UpdateGameApplication(string UE4Arch, string NDKArch, string EngineDir, string UE4BuildPath, bool bGradleEnabled)
+		{
+			string SourceFilename = Path.Combine(EngineDir, "Build", "Android", "Java", "src", "com", "epicgames", "ue4", "GameApplication.java.template");
+			string DestFilename = Path.Combine(UE4BuildPath, "src", "com", "epicgames", "ue4", "GameApplication.java");
+
+			if (!bGradleEnabled)
+			{
+				// do not use GameApplication for Ant
+				SafeDeleteFile(DestFilename);
+				return;
+			}
+			
+			Dictionary<string, string> Replacements = new Dictionary<string, string>{
+				{ "//$${gameApplicationImportAdditions}$$", UPL.ProcessPluginNode(NDKArch, "gameApplicationImportAdditions", "")},
+				{ "//$${gameApplicationOnCreateAdditions}$$", UPL.ProcessPluginNode(NDKArch, "gameApplicationOnCreateAdditions", "")},
+			};
+
+			string[] TemplateSrc = File.ReadAllLines(SourceFilename);
+			string[] TemplateDest = File.Exists(DestFilename) ? File.ReadAllLines(DestFilename) : null;
+
+			bool TemplateChanged = false;
+			for (int LineIndex = 0; LineIndex < TemplateSrc.Length; ++LineIndex)
+			{
+				string SrcLine = TemplateSrc[LineIndex];
+				bool Changed = false;
+				foreach (KeyValuePair<string, string> KVP in Replacements)
+				{
+					if (SrcLine.Contains(KVP.Key))
+					{
+						SrcLine = SrcLine.Replace(KVP.Key, KVP.Value);
+						Changed = true;
+					}
+				}
+				if (Changed)
+				{
+					TemplateSrc[LineIndex] = SrcLine;
+					TemplateChanged = true;
+				}
+			}
+
+			if (TemplateChanged)
+			{
+				// deal with insertions of newlines
+				TemplateSrc = string.Join("\n", TemplateSrc).Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+			}
+
+			if (TemplateDest == null || TemplateSrc.Length != TemplateDest.Length || !TemplateSrc.SequenceEqual(TemplateDest))
+			{
+				Log.TraceInformation("\n==== Writing new GameApplication.java file to {0} ====", DestFilename);
 				File.WriteAllLines(DestFilename, TemplateSrc);
 			}
 		}
@@ -4334,7 +4652,7 @@ namespace UnrealBuildTool
 			return AARHandler;
 		}
 
-		private void PrepareJavaLibsForGradle(string JavaLibsDir, string UE4BuildGradlePath, string CompileSDKVersion, string BuildToolsVersion)
+		private void PrepareJavaLibsForGradle(string JavaLibsDir, string UE4BuildGradlePath, string InMinSdkVersion, string InTargetSdkVersion, string CompileSDKVersion, string BuildToolsVersion)
 		{
 			StringBuilder SettingsGradleContent = new StringBuilder();
 			StringBuilder ProjectDependencyContent = new StringBuilder();
@@ -4354,9 +4672,9 @@ namespace UnrealBuildTool
 				string GradleProjectPath = Path.Combine(UE4BuildGradlePath, RelativePath);
 				string GradleProjectMainPath = Path.Combine(GradleProjectPath, "src", "main");
 
+				string ManifestFilename = Path.Combine(LibDir, "AndroidManifest.xml");
 				string GradleManifest = Path.Combine(GradleProjectMainPath, "AndroidManifest.xml");
 				MakeDirectoryIfRequired(GradleManifest);
-				File.Copy(Path.Combine(LibDir, "AndroidManifest.xml"), GradleManifest, true);
 
 				// Copy parts were they need to be
 				CleanCopyDirectory(Path.Combine(LibDir, "assets"), Path.Combine(GradleProjectPath, "assets"));
@@ -4379,15 +4697,13 @@ namespace UnrealBuildTool
 				BuildGradleContent.AppendLine("apply plugin: 'com.android.library'");
 				BuildGradleContent.AppendLine("android {");
 				BuildGradleContent.AppendLine(string.Format("\tcompileSdkVersion {0}", CompileSDKVersion));
-				BuildGradleContent.AppendLine(string.Format("\tbuildToolsVersion \"{0}\"", BuildToolsVersion));
 				BuildGradleContent.AppendLine("\tdefaultConfig {");
 
 				// Try to get the SDK target from the AndroidManifest.xml
-				string MinSDK = "9";
-				string TargetSDK = "9";
 				string VersionCode = "";
 				string VersionName = "";
-				string ManifestFilename = Path.Combine(LibDir, "AndroidManifest.xml");
+				string MinSdkVersion = InMinSdkVersion;
+				string TargetSdkVersion = InTargetSdkVersion;
 				XDocument ManifestXML;
 				if (File.Exists(ManifestFilename))
 				{
@@ -4407,20 +4723,39 @@ namespace UnrealBuildTool
 							VersionName = VersionNameAttr.Value;
 						}
 
-						XElement UsesSdk = ManifestXML.Root.Element(XName.Get("uses-sdk", ManifestXML.Root.Name.NamespaceName));
-						if (UsesSdk != null)
+						XElement UseSDKNode = null;
+						foreach (XElement WorkNode in ManifestXML.Elements().First().Descendants("uses-sdk"))
 						{
-							XAttribute MinSDKAttr = UsesSdk.Attribute(XName.Get("minSdkVersion", "http://schemas.android.com/apk/res/android"));
-							if (MinSDKAttr != null)
+							UseSDKNode = WorkNode;
+
+							XAttribute MinSdkVersionAttr = WorkNode.Attribute(XName.Get("minSdkVersion", "http://schemas.android.com/apk/res/android"));
+							if (MinSdkVersionAttr != null)
 							{
-								MinSDK = MinSDKAttr.Value;
+								MinSdkVersion = MinSdkVersionAttr.Value;
 							}
 
-							XAttribute TargetSDKAttr = UsesSdk.Attribute(XName.Get("targetSdkVersion", "http://schemas.android.com/apk/res/android"));
-							if (TargetSDKAttr != null)
+							XAttribute TargetSdkVersionAttr = WorkNode.Attribute(XName.Get("targetSdkVersion", "http://schemas.android.com/apk/res/android"));
+							if (TargetSdkVersionAttr != null)
 							{
-								TargetSDK = TargetSDKAttr.Value;
+								TargetSdkVersion = TargetSdkVersionAttr.Value;
 							}
+						}
+
+						if (UseSDKNode != null)
+						{
+							UseSDKNode.Remove();
+						}
+
+						// rewrite the manifest if different
+						String NewManifestText = ManifestXML.ToString();
+						String OldManifestText = "";
+						if (File.Exists(GradleManifest))
+						{
+							OldManifestText = File.ReadAllText(GradleManifest);
+						}
+						if (NewManifestText != OldManifestText)
+						{
+							File.WriteAllText(GradleManifest, NewManifestText);
 						}
 					}
 					catch (Exception e)
@@ -4429,8 +4764,6 @@ namespace UnrealBuildTool
 					}
 				}
 
-				BuildGradleContent.AppendLine(string.Format("\t\tminSdkVersion {0}", MinSDK));
-				BuildGradleContent.AppendLine(string.Format("\t\ttargetSdkVersion {0}", TargetSDK));
 				if (VersionCode != "")
 				{
 					BuildGradleContent.AppendLine(string.Format("\t\tversionCode {0}", VersionCode));
@@ -4438,6 +4771,14 @@ namespace UnrealBuildTool
 				if (VersionName != "")
 				{
 					BuildGradleContent.AppendLine(string.Format("\t\tversionName \"{0}\"", VersionName));
+				}
+				if (MinSdkVersion != "")
+				{
+					BuildGradleContent.AppendLine(string.Format("\t\tminSdkVersion = {0}", MinSdkVersion));
+				}
+				if (TargetSdkVersion != "")
+				{
+					BuildGradleContent.AppendLine(string.Format("\t\ttargetSdkVersion = {0}", TargetSdkVersion));
 				}
 				BuildGradleContent.AppendLine("\t}");
 				BuildGradleContent.AppendLine("}");
@@ -4452,8 +4793,18 @@ namespace UnrealBuildTool
 					}
 				}
 
+				// rewrite the build.gradle if different
 				string BuildGradleFilename = Path.Combine(GradleProjectPath, "build.gradle");
-				File.WriteAllText(BuildGradleFilename, BuildGradleContent.ToString());
+				String NewBuildGradleText = BuildGradleContent.ToString();
+				String OldBuildGradleText = "";
+				if (File.Exists(BuildGradleFilename))
+				{
+					OldBuildGradleText = File.ReadAllText(BuildGradleFilename);
+				}
+				if (NewBuildGradleText != OldBuildGradleText)
+				{
+					File.WriteAllText(BuildGradleFilename, NewBuildGradleText);
+				}
 			}
 			ProjectDependencyContent.AppendLine("}");
 
@@ -4506,5 +4857,5 @@ namespace UnrealBuildTool
 			}
 			File.WriteAllText(AARExtractListFilename, AARListContents.ToString());
 		}
-    }
+	}
 }

@@ -28,6 +28,7 @@ namespace UnrealBuildTool.Rules
                     "ControlRigDeveloper",
                     "Kismet",
                     "EditorStyle",
+                    "ApplicationCore",
                     "AnimationCore",
                     "PropertyEditor",
                     "AnimGraph",
@@ -47,6 +48,7 @@ namespace UnrealBuildTool.Rules
                     "Persona",
                     "UMG",
 					"TimeManagement",
+                    "PropertyPath",
                 }
             );
         }

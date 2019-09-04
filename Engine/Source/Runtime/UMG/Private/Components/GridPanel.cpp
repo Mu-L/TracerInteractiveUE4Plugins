@@ -14,9 +14,7 @@ UGridPanel::UGridPanel(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
 	bIsVariable = false;
-
-	SGridPanel::FArguments Defaults;
-	Visibility = UWidget::ConvertRuntimeToSerializedVisibility(Defaults._Visibility.Get());
+	Visibility = ESlateVisibility::SelfHitTestInvisible;
 }
 
 void UGridPanel::ReleaseSlateResources(bool bReleaseChildren)
@@ -69,9 +67,17 @@ TSharedRef<SWidget> UGridPanel::RebuildWidget()
 	return MyGridPanel.ToSharedRef();
 }
 
-UGridSlot* UGridPanel::AddChildToGrid(UWidget* Content)
+UGridSlot* UGridPanel::AddChildToGrid(UWidget* Content, int32 InRow, int32 InColumn)
 {
-	return Cast<UGridSlot>(Super::AddChild(Content));
+	UGridSlot* GridSlot = Cast<UGridSlot>(Super::AddChild(Content));
+
+	if (GridSlot != nullptr)
+	{
+		GridSlot->SetRow(InRow);
+		GridSlot->SetColumn(InColumn);
+	}
+
+	return GridSlot;
 }
 
 void UGridPanel::SynchronizeProperties()

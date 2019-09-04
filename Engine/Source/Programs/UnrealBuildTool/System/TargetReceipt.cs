@@ -276,6 +276,11 @@ namespace UnrealBuildTool
 		public UnrealTargetPlatform Platform;
 
 		/// <summary>
+		/// Which platform the target is compiled for
+		/// </summary>
+		public string Architecture;
+
+		/// <summary>
 		/// Which configuration this target is compiled in
 		/// </summary>
 		public UnrealTargetConfiguration Configuration;
@@ -326,7 +331,8 @@ namespace UnrealBuildTool
 		/// <param name="InPlatform">Platform for the target being compiled</param>
 		/// <param name="InConfiguration">Configuration of the target being compiled</param>
 		/// <param name="InVersion">Version information for the target</param>
-		public TargetReceipt(FileReference InProjectFile, string InTargetName, TargetType InTargetType, UnrealTargetPlatform InPlatform, UnrealTargetConfiguration InConfiguration, BuildVersion InVersion)
+		/// <param name="InArchitecture">Architecture information for the target</param>
+		public TargetReceipt(FileReference InProjectFile, string InTargetName, TargetType InTargetType, UnrealTargetPlatform InPlatform, UnrealTargetConfiguration InConfiguration, BuildVersion InVersion, string InArchitecture)
 		{
 			ProjectFile = InProjectFile;
 			ProjectDir = DirectoryReference.FromFile(InProjectFile);
@@ -335,6 +341,7 @@ namespace UnrealBuildTool
 			Configuration = InConfiguration;
 			TargetType = InTargetType;
 			Version = InVersion;
+			Architecture = InArchitecture;
 		}
 
 		/// <summary>
@@ -477,6 +484,28 @@ namespace UnrealBuildTool
 		}
 
 		/// <summary>
+		/// Checks the Additional properties for one with the given name that matches the given value
+		/// </summary>
+		/// <param name="PropertyName">Property name to search for</param>
+		/// <param name="Value">Value to compare against (with StringComparison.InvariantCultureIgnoreCase)</param>
+		/// <returns>True if any property with PropertyName has a value matching Value</returns>
+		public bool HasValueForAdditionalProperty(string PropertyName, string Value)
+		{
+			// get all properties with the given name?
+			IEnumerable<ReceiptProperty> Results = AdditionalProperties.Where(x => x.Name == PropertyName);
+			foreach (ReceiptProperty Property in Results)
+			{
+				// does the property value match?
+				if (Property.Value.Equals(Value, StringComparison.InvariantCultureIgnoreCase))
+				{
+					return true;
+				}
+			}
+
+			return false;
+		}
+
+		/// <summary>
 		/// Read a receipt from disk.
 		/// </summary>
 		/// <param name="Location">Filename to read from</param>
@@ -497,7 +526,7 @@ namespace UnrealBuildTool
 			// Read the initial fields
 			string TargetName = RawObject.GetStringField("TargetName");
 			TargetType TargetType = RawObject.GetEnumField<TargetType>("TargetType");
-			UnrealTargetPlatform Platform = RawObject.GetEnumField<UnrealTargetPlatform>("Platform");
+			UnrealTargetPlatform Platform = UnrealTargetPlatform.Parse(RawObject.GetStringField("Platform"));
 			UnrealTargetConfiguration Configuration = RawObject.GetEnumField<UnrealTargetConfiguration>("Configuration");
 
 			// Try to read the build version
@@ -520,8 +549,16 @@ namespace UnrealBuildTool
 				ProjectFile = null;
 			}
 
+			// Read the launch executable
+			string Architecture;
+			if (!RawObject.TryGetStringField("Architecture", out Architecture))
+			{
+				Architecture = "";
+			}
+
+
 			// Create the receipt
-			TargetReceipt Receipt = new TargetReceipt(ProjectFile, TargetName, TargetType, Platform, Configuration, Version);
+			TargetReceipt Receipt = new TargetReceipt(ProjectFile, TargetName, TargetType, Platform, Configuration, Version, Architecture);
 
 			// Get the project directory
 			DirectoryReference ProjectDir = Receipt.ProjectDir;
@@ -663,6 +700,7 @@ namespace UnrealBuildTool
 				Writer.WriteValue("Platform", Platform.ToString());
 				Writer.WriteValue("Configuration", Configuration.ToString());
 				Writer.WriteValue("TargetType", TargetType.ToString());
+				Writer.WriteValue("Architecture", Architecture);
 
 				if(ProjectFile != null)
 				{

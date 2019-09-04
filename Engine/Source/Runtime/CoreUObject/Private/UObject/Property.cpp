@@ -17,6 +17,7 @@
 #include "UObject/CoreRedirects.h"
 #include "UObject/SoftObjectPath.h"
 #include "Math/Box2D.h"
+#include "UObject/ReleaseObjectVersion.h"
 
 DEFINE_LOG_CATEGORY(LogProperty);
 
@@ -477,6 +478,12 @@ void UProperty::Serialize( FArchive& Ar )
 	{
 		Offset_Internal = 0;
 		DestructorLinkNext = NULL;
+	}
+
+	Ar.UsingCustomVersion(FReleaseObjectVersion::GUID);
+	if (Ar.IsSaving() || Ar.CustomVer(FReleaseObjectVersion::GUID) >= FReleaseObjectVersion::PropertiesSerializeRepCondition)
+	{
+		Ar << BlueprintReplicationCondition;
 	}
 }
 
@@ -1000,12 +1007,11 @@ const TCHAR* UProperty::ImportSingleProperty( const TCHAR* Str, void* DestData, 
 			{
 				Property = FindField<UProperty>(ObjectStruct, NewPropertyName);
 			}
-#if WITH_EDITOR
+
 			if (!Property)
 			{
 				Property = ObjectStruct->CustomFindProperty(PropertyName);
 			}
-#endif	// WITH_EDITOR
 		}		
 
 		delete[] Token;
@@ -1056,7 +1062,7 @@ const TCHAR* UProperty::ImportSingleProperty( const TCHAR* Str, void* DestData, 
 		}
 
 		UArrayProperty* const ArrayProperty = ExactCast<UArrayProperty>(Property);
-		UMulticastDelegateProperty* const MulticastDelegateProperty = ExactCast<UMulticastDelegateProperty>(Property);
+		UMulticastDelegateProperty* const MulticastDelegateProperty = Cast<UMulticastDelegateProperty>(Property);
 		if( MulticastDelegateProperty != NULL && ArrayOp != ADO_None )
 		{
 			// Allow Add(), Remove() and Empty() on multi-cast delegates
@@ -1073,7 +1079,7 @@ const TCHAR* UProperty::ImportSingleProperty( const TCHAR* Str, void* DestData, 
 				if( ArrayOp == ADO_Empty )
 				{
 					// Clear out the delegate
-					MulticastDelegateProperty->GetPropertyValuePtr_InContainer(DestData)->Clear();
+					MulticastDelegateProperty->ClearDelegate(SubobjectOuter, Property->ContainerPtrToValuePtr<void>(DestData));
 				}
 				else
 				{

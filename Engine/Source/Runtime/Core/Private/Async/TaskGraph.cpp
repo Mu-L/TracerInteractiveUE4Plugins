@@ -28,6 +28,7 @@
 #include "HAL/LowLevelMemTracker.h"
 #include "HAL/ThreadHeartBeat.h"
 #include "ProfilingDebugging/ExternalProfiler.h"
+#include "ProfilingDebugging/MiscTrace.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogTaskGraph, Log, All);
 
@@ -38,7 +39,7 @@ DEFINE_STAT(STAT_ParallelForTask);
 
 static int32 GNumWorkerThreadsToIgnore = 0;
 
-#if (PLATFORM_XBOXONE || PLATFORM_PS4 || PLATFORM_WINDOWS || PLATFORM_MAC || PLATFORM_UNIX || PLATFORM_SWITCH || PLATFORM_ANDROID) && !IS_PROGRAM && WITH_ENGINE && !UE_SERVER
+#if PLATFORM_USE_FULL_TASK_GRAPH && !IS_PROGRAM && WITH_ENGINE && !UE_SERVER
 	#define CREATE_HIPRI_TASK_THREADS (1)
 	#define CREATE_BACKGROUND_TASK_THREADS (1)
 #else
@@ -1210,12 +1211,14 @@ public:
 		for (int32 ThreadIndex = LastExternalThread + 1; ThreadIndex < NumThreads; ThreadIndex++)
 		{
 			FString Name;
+			const ANSICHAR* GroupName = "TaskGraphNormal";
 			int32 Priority = ThreadIndexToPriorityIndex(ThreadIndex);
 			EThreadPriority ThreadPri;
 			uint64 Affinity = FPlatformAffinity::GetTaskGraphThreadMask();
 			if (Priority == 1)
 			{
 				Name = FString::Printf(TEXT("TaskGraphThreadHP %d"), ThreadIndex - (LastExternalThread + 1));
+				GroupName = "TaskGraphHigh";
 				ThreadPri = TPri_SlightlyBelowNormal; // we want even hi priority tasks below the normal threads
 
 				// If the platform defines FPlatformAffinity::GetTaskGraphHighPriorityTaskMask then use it
@@ -1227,6 +1230,7 @@ public:
 			else if (Priority == 2)
 			{
 				Name = FString::Printf(TEXT("TaskGraphThreadBP %d"), ThreadIndex - (LastExternalThread + 1));
+				GroupName = "TaskGraphLow";
 				ThreadPri = TPri_Lowest;
 				// If the platform defines FPlatformAffinity::GetTaskGraphBackgroundTaskMask then use it
 				if ( FPlatformAffinity::GetTaskGraphBackgroundTaskMask() != 0xFFFFFFFFFFFFFFFF )
@@ -1248,6 +1252,10 @@ public:
 #endif
 			WorkerThreads[ThreadIndex].RunnableThread = FRunnableThread::Create(&Thread(ThreadIndex), *Name, StackSize, ThreadPri, Affinity); // these are below normal threads so that they sleep when the named threads are active
 			WorkerThreads[ThreadIndex].bAttached = true;
+			if (WorkerThreads[ThreadIndex].RunnableThread)
+			{
+				TRACE_SET_THREAD_GROUP(WorkerThreads[ThreadIndex].RunnableThread->GetThreadID(), GroupName);
+			}
 		}
 	}
 
@@ -1912,7 +1920,12 @@ void FTaskGraphInterface::BroadcastSlow_OnlyUseForSpecialPurposes(bool bDoTaskTh
 
 
 	FGraphEventArray Tasks;
-	STAT(Tasks.Add(TGraphTask<FBroadcastTask>::CreateTask().ConstructAndDispatchWhenReady(Callback, StartTime, TEXT("Stats"), ENamedThreads::SetTaskPriority(ENamedThreads::StatsThread, ENamedThreads::HighTaskPriority), nullptr, nullptr, nullptr)););
+#if STATS
+	if (FTaskGraphInterface::Get().IsThreadProcessingTasks(ENamedThreads::StatsThread))
+	{
+		Tasks.Add(TGraphTask<FBroadcastTask>::CreateTask().ConstructAndDispatchWhenReady(Callback, StartTime, TEXT("Stats"), ENamedThreads::SetTaskPriority(ENamedThreads::StatsThread, ENamedThreads::HighTaskPriority), nullptr, nullptr, nullptr));
+	}
+#endif
 	if (GRHIThread_InternalUseOnly)
 	{
 		Tasks.Add(TGraphTask<FBroadcastTask>::CreateTask().ConstructAndDispatchWhenReady(Callback, StartTime, TEXT("RHIT"), ENamedThreads::SetTaskPriority(ENamedThreads::RHIThread, ENamedThreads::HighTaskPriority), nullptr, nullptr, nullptr));
@@ -1926,7 +1939,9 @@ void FTaskGraphInterface::BroadcastSlow_OnlyUseForSpecialPurposes(bool bDoTaskTh
 	{
 		Tasks.Add(TGraphTask<FBroadcastTask>::CreateTask().ConstructAndDispatchWhenReady(Callback, StartTime, TEXT("AudioT"), ENamedThreads::SetTaskPriority(ENamedThreads::AudioThread, ENamedThreads::HighTaskPriority), nullptr, nullptr, nullptr));
 	}
-	Tasks.Add(TGraphTask<FBroadcastTask>::CreateTask().ConstructAndDispatchWhenReady(Callback, StartTime, TEXT("GT"), ENamedThreads::GameThread_Local, nullptr, nullptr, nullptr));
+
+	Callback(ENamedThreads::GameThread_Local);
+
 	if (bDoTaskThreads)
 	{
 		check(MyEvent);
@@ -1954,13 +1969,31 @@ void FTaskGraphInterface::BroadcastSlow_OnlyUseForSpecialPurposes(bool bDoTaskTh
 	{
 		double StartTimeInner = FPlatformTime::Seconds();
 		QUICK_SCOPE_CYCLE_COUNTER(STAT_Broadcast_WaitForNamedThreads);
-		FTaskGraphInterface::Get().WaitUntilTasksComplete(Tasks, ENamedThreads::GameThread_Local);
+		
+		// Wait for all tasks to be complete.  Spin and pump messages to avoid deadlocks when other threads send messages and block until messages are processed
+		while (true)
 		{
-			float ThisTime = FPlatformTime::Seconds() - StartTimeInner;
-			if (ThisTime > 0.02f)
+			bool bAnyNotDone = false;
+			for (FGraphEventRef& Item : Tasks)
 			{
-				UE_CLOG(GPrintBroadcastWarnings, LogTaskGraph, Warning, TEXT("Task graph took %6.2fms to wait for named thread broadcast."), ThisTime * 1000.0f);
+				if (Item.GetReference() && !Item->IsComplete())
+				{
+					bAnyNotDone = true;
+					break;
+				}
 			}
+			if (!bAnyNotDone)
+			{
+				break;
+			}
+
+			FPlatformMisc::PumpMessagesOutsideMainLoop();
+		}
+		
+		float EndTimeInner = FPlatformTime::Seconds() - StartTimeInner;
+		if (EndTimeInner > 0.02f)
+		{
+			UE_CLOG(GPrintBroadcastWarnings, LogTaskGraph, Warning, TEXT("Task graph took %6.2fms to wait for named thread broadcast."), EndTimeInner * 1000.0f);
 		}
 	}
 	for (FEvent* TaskEvent : TaskEvents)

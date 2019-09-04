@@ -25,6 +25,11 @@ void FEmptyIndexBuffer::Unlock()
 
 FIndexBufferRHIRef FEmptyDynamicRHI::RHICreateIndexBuffer(uint32 Stride, uint32 Size, uint32 InUsage, FRHIResourceCreateInfo& CreateInfo)
 {
+	if (CreateInfo.bCreateRHIObjectOnly)
+	{
+		return new FEmptyIndexBuffer();
+	}
+
 	// make the RHI object, which will allocate memory
 	FEmptyIndexBuffer* IndexBuffer = new FEmptyIndexBuffer(Stride, Size, InUsage);
 	
@@ -47,16 +52,21 @@ FIndexBufferRHIRef FEmptyDynamicRHI::RHICreateIndexBuffer(uint32 Stride, uint32 
 	return IndexBuffer;
 }
 
-void* FEmptyDynamicRHI::RHILockIndexBuffer(FIndexBufferRHIParamRef IndexBufferRHI, uint32 Offset, uint32 Size, EResourceLockMode LockMode)
+void* FEmptyDynamicRHI::RHILockIndexBuffer(FRHIIndexBuffer* IndexBufferRHI, uint32 Offset, uint32 Size, EResourceLockMode LockMode)
 {
 	FEmptyIndexBuffer* IndexBuffer = ResourceCast(IndexBufferRHI);
 
 	return (uint8*)IndexBuffer->Lock(LockMode, Size) + Offset;
 }
 
-void FEmptyDynamicRHI::RHIUnlockIndexBuffer(FIndexBufferRHIParamRef IndexBufferRHI)
+void FEmptyDynamicRHI::RHIUnlockIndexBuffer(FRHIIndexBuffer* IndexBufferRHI)
 {
 	FEmptyIndexBuffer* IndexBuffer = ResourceCast(IndexBufferRHI);
 
 	IndexBuffer->Unlock();
+}
+
+void FEmptyDynamicRHI::RHITransferIndexBufferUnderlyingResource(FRHIIndexBuffer* DestIndexBuffer, FRHIIndexBuffer* SrcIndexBuffer)
+{
+
 }

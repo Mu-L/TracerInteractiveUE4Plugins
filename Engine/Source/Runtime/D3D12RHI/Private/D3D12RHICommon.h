@@ -64,6 +64,11 @@ public:
 		return Parent;
 	}
 
+	FD3D12Device* GetParentDevice_Unsafe() const
+	{
+		return Parent;
+	}
+
 	// To be used with delayed setup
 	inline void SetParentDevice(FD3D12Device* InParent)
 	{
@@ -146,6 +151,12 @@ public:
 	FORCEINLINE ObjectType* GetNextObject()
 	{
 		return NextNode.GetReference();
+	}
+
+	void Swap(FD3D12LinkedAdapterObject& Other)
+	{
+		check(bIsHeadLink && Other.bIsHeadLink);
+		NextNode.Swap(Other.NextNode);
 	}
 
 private:

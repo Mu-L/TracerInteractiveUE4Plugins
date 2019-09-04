@@ -173,9 +173,9 @@ namespace Gauntlet
 		}
 	}
 
-	public class WindowsDeviceFactory : IDeviceFactory
+	public class Win64DeviceFactory : IDeviceFactory
 	{
-		public bool CanSupportPlatform(UnrealTargetPlatform Platform)
+		public bool CanSupportPlatform(UnrealTargetPlatform? Platform)
 		{
 			return Platform == UnrealTargetPlatform.Win64;
 		}
@@ -183,6 +183,19 @@ namespace Gauntlet
 		public ITargetDevice CreateDevice(string InRef, string InParam)
 		{
 			return new TargetDeviceWindows(InRef, InParam);
+		}
+	}
+
+	public class Wind32DeviceFactory : IDeviceFactory
+	{
+		public bool CanSupportPlatform(UnrealTargetPlatform? Platform)
+		{
+			return Platform == UnrealTargetPlatform.Win32;
+		}
+
+		public ITargetDevice CreateDevice(string InRef, string InParam)
+		{
+			return new TargetDeviceWindows(InRef, InParam, false);
 		}
 	}
 
@@ -195,12 +208,14 @@ namespace Gauntlet
 
 		protected string UserDir { get; set; }
 
+		protected bool IsWin64 { get; set; }
+
 		/// <summary>
 		/// Our mappings of Intended directories to where they actually represent on this platform.
 		/// </summary>
 		protected Dictionary<EIntendedBaseCopyDirectory, string> LocalDirectoryMappings { get; set; }
 
-		public TargetDeviceWindows(string InName, string InTempDir)
+		public TargetDeviceWindows(string InName, string InTempDir, bool InIsWin64=true)
 		{
 			Name = InName;
 			TempDir = InTempDir;
@@ -208,6 +223,8 @@ namespace Gauntlet
 
 			UserDir = Path.Combine(TempDir, string.Format("{0}_UserDir", Name));
             LocalDirectoryMappings = new Dictionary<EIntendedBaseCopyDirectory, string>();
+
+			IsWin64 = InIsWin64;
 		}
 
 		#region IDisposable Support
@@ -243,9 +260,10 @@ namespace Gauntlet
 
         // We care about UserDir in windows as some of the roles may require files going into user instead of build dir.
         public void PopulateDirectoryMappings(string BasePath, string UserDir)
-        {
-            LocalDirectoryMappings.Add(EIntendedBaseCopyDirectory.Binaries, Path.Combine(BasePath, "Binaries"));
-            LocalDirectoryMappings.Add(EIntendedBaseCopyDirectory.Config, Path.Combine(BasePath, "Saved", "Config"));
+		{
+			LocalDirectoryMappings.Add(EIntendedBaseCopyDirectory.Build, Path.Combine(BasePath, "Build"));
+			LocalDirectoryMappings.Add(EIntendedBaseCopyDirectory.Binaries, Path.Combine(BasePath, "Binaries"));
+			LocalDirectoryMappings.Add(EIntendedBaseCopyDirectory.Config, Path.Combine(BasePath, "Saved", "Config"));
             LocalDirectoryMappings.Add(EIntendedBaseCopyDirectory.Content, Path.Combine(BasePath, "Content"));
             LocalDirectoryMappings.Add(EIntendedBaseCopyDirectory.Demos, Path.Combine(UserDir, "Saved", "Demos"));
             LocalDirectoryMappings.Add(EIntendedBaseCopyDirectory.Profiling, Path.Combine(BasePath, "Saved", "Profiling"));
@@ -367,7 +385,7 @@ namespace Gauntlet
 
 			if (string.IsNullOrEmpty(UserDir) == false)
 			{
-				WinApp.CommandArguments += string.Format(" -userdir={0}", UserDir);
+				WinApp.CommandArguments += string.Format(" -userdir=\"{0}\"", UserDir);
 				WinApp.ArtifactPath = Path.Combine(UserDir, @"Saved");
 
 				Utils.SystemHelpers.MarkDirectoryForCleanup(UserDir);
@@ -482,7 +500,7 @@ namespace Gauntlet
 			WinApp.RunOptions = RunOptions;
 	
 			// Force this to stop logs and other artifacts going to different places
-			WinApp.CommandArguments = AppConfig.CommandLine + string.Format(" -userdir={0}", UserDir);
+			WinApp.CommandArguments = AppConfig.CommandLine + string.Format(" -userdir=\"{0}\"", UserDir);
 			WinApp.ArtifactPath = Path.Combine(UserDir, @"Saved");
 			WinApp.ExecutablePath = EditorBuild.ExecutablePath;
 
@@ -495,7 +513,7 @@ namespace Gauntlet
 			return string.Compare(Path.GetPathRoot(InPath), Path.GetPathRoot(this.TempDir), StringComparison.OrdinalIgnoreCase) == 0;
 		}
 
-		public UnrealTargetPlatform Platform { get { return UnrealTargetPlatform.Win64; } }
+		public UnrealTargetPlatform? Platform { get { return IsWin64 ? UnrealTargetPlatform.Win64 : UnrealTargetPlatform.Win32; } }
 
 		public string TempDir { get; private set; }
 		public bool IsAvailable { get { return true; } }

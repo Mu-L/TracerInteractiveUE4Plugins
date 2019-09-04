@@ -113,6 +113,64 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | Level Utility")
 	static void SetSelectedLevelActors(const TArray<class AActor*>& ActorsToSelect);
 
+	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | Level Utility", meta=(DevelopmentOnly))
+	static void PilotLevelActor(AActor* ActorToPilot);
+
+	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | Level Utility", meta=(DevelopmentOnly))
+	static void EjectPilotLevelActor();
+
+#if WITH_EDITOR
+
+	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | Level Utility", meta = (DevelopmentOnly))
+	static void EditorPlaySimulate();
+
+	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | Level Utility", meta = (DevelopmentOnly))
+	static void EditorInvalidateViewports();
+
+#endif
+
+	/**
+	 * Gets information about the camera position for the primary level editor viewport.  In non-editor builds, these will be zeroed
+	 *
+	 * @param	CameraLocation	(out) Current location of the level editing viewport camera, or zero if none found
+	 * @param	CameraRotation	(out) Current rotation of the level editing viewport camera, or zero if none found
+	 * @return	Whether or not we were able to get a camera for a level editing viewport
+	 */
+	UFUNCTION(BlueprintPure, Category = "Development|Editor")
+	static bool GetLevelViewportCameraInfo(FVector& CameraLocation, FRotator& CameraRotation);
+
+	/**
+	* Sets information about the camera position for the primary level editor viewport.
+	*
+	* @param	CameraLocation	Location the camera will be moved to.
+	* @param	CameraRotation	Rotation the camera will be set to.
+	*/
+	UFUNCTION(BlueprintCallable, Category = "Development|Editor")
+	static void SetLevelViewportCameraInfo(FVector CameraLocation, FRotator CameraRotation);
+
+	// Remove all actors from the selection set
+	UFUNCTION(BlueprintCallable, Category = "Development|Editor")
+	static void ClearActorSelectionSet();
+
+	// Selects nothing in the editor (another way to clear the selection)
+	UFUNCTION(BlueprintCallable, Category = "Development|Editor")
+	static void SelectNothing();
+
+	// Set the selection state for the selected actor
+	UFUNCTION(BlueprintCallable, Category = "Development|Editor")
+	static void SetActorSelectionState(AActor* Actor, bool bShouldBeSelected);
+
+	/**
+	* Attempts to find the actor specified by PathToActor in the current editor world
+	* @param	PathToActor	The path to the actor (e.g. PersistentLevel.PlayerStart)
+	* @return	A reference to the actor, or none if it wasn't found
+	*/
+	UFUNCTION(BlueprintPure, Category = "Development|Editor")
+	static AActor* GetActorReference(FString PathToActor);
+
+	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | Level Utility", meta = (DevelopmentOnly))
+	static void EditorSetGameView(bool bGameView);
+
 	/**
 	 * Create an actor and place it in the world editor. The Actor can be created from a Factory, Archetype, Blueprint, Class or an Asset.
 	 * The actor will be created in the current level and will be selected.
@@ -147,6 +205,9 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | Level Utility")
 	static UWorld* GetEditorWorld();
+
+	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | Level Utility")
+	static UWorld* GetGameWorld();
 
 public:
 	/**
@@ -208,7 +269,7 @@ public:
 	 * @param	MaterialToBeReplaced	Material we want to replace.
 	 * @param	NewMaterial				Material to replace MaterialToBeReplaced by.
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | DataPrep")
+	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | Dataprep")
 	static void ReplaceMeshComponentsMaterials(const TArray<class UMeshComponent*>& MeshComponents, class UMaterialInterface* MaterialToBeReplaced, class UMaterialInterface* NewMaterial);
 
 	/**
@@ -217,7 +278,7 @@ public:
 	 * @param	MaterialToBeReplaced	Material we want to replace.
 	 * @param	NewMaterial				Material to replace MaterialToBeReplaced by.
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | DataPrep")
+	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | Dataprep")
 	static void ReplaceMeshComponentsMaterialsOnActors(const TArray<class AActor*>& Actors, class UMaterialInterface* MaterialToBeReplaced, class UMaterialInterface* NewMaterial);
 
 	/**
@@ -227,7 +288,7 @@ public:
 	 * @param	MeshToBeReplaced		Mesh we want to replace.
 	 * @param	NewMesh					Mesh to replace MeshToBeReplaced by.
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | DataPrep")
+	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | Dataprep")
 	static void ReplaceMeshComponentsMeshes(const TArray<class UStaticMeshComponent*>& MeshComponents, class UStaticMesh* MeshToBeReplaced, class UStaticMesh* NewMesh);
 
 	/**
@@ -236,7 +297,7 @@ public:
 	 * @param	MeshToBeReplaced		Mesh we want to replace.
 	 * @param	NewMesh					Mesh to replace MeshToBeReplaced by.
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | DataPrep")
+	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | Dataprep")
 	static void ReplaceMeshComponentsMeshesOnActors(const TArray<class AActor*>& Actors, class UStaticMesh* MeshToBeReplaced, class UStaticMesh* NewMesh);
 
 	/**
@@ -245,7 +306,7 @@ public:
 	 * @param	ActorClass				Class/Blueprint of the new actor that will be spawn.
 	 * @param	StaticMeshPackagePath	If the list contains Brushes and it is requested to change them to StaticMesh, StaticMeshPackagePath is the package path to where the StaticMesh will be created. ie. /Game/MyFolder/
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | DataPrep", meta = (DeterminesOutputType = "ActorClass"))
+	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | Dataprep", meta = (DeterminesOutputType = "ActorClass"))
 	static TArray<class AActor*> ConvertActors(const TArray<class AActor*>& Actors, TSubclassOf<class AActor> ActorClass, const FString& StaticMeshPackagePath);
 
 public:
@@ -257,7 +318,7 @@ public:
 	 * @param	JoinOptions				Options on how to join the actors.
 	 * @return The new created actor.
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | DataPrep")
+	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | Dataprep")
 	static class AActor* JoinStaticMeshActors(const TArray<class AStaticMeshActor*>& ActorsToJoin, const FEditorScriptingJoinStaticMeshActorsOptions& JoinOptions);
 
 	/**
@@ -269,7 +330,7 @@ public:
 	 * @param	OutMergedActor			The new created actor, if requested.
 	 * @return	if the operation is successful.
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | DataPrep")
+	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | Dataprep")
 	static bool MergeStaticMeshActors(const TArray<class AStaticMeshActor*>& ActorsToMerge, const FEditorScriptingMergeStaticMeshActorsOptions& MergeOptions, class AStaticMeshActor*& OutMergedActor);
 
 	/**
@@ -279,7 +340,7 @@ public:
 	 * @param   OutMergedActor generated actor if requested
 	 * @return  Success of the proxy creation
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | DataPrep")
+	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | Dataprep")
 	static bool CreateProxyMeshActor(const TArray<class AStaticMeshActor*>& ActorsToMerge, const FEditorScriptingCreateProxyMeshActorOptions& MergeOptions, class AStaticMeshActor*& OutMergedActor);
 };
 

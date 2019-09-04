@@ -9,6 +9,7 @@
 #include "K2Node.h"
 #include "UObject/SoftObjectPath.h"
 #include "EdGraphSchema_K2.h"
+#include "ControlRigModel.h"
 #include "ControlRigGraphNode.generated.h"
 
 class FBlueprintActionDatabaseRegistrar;
@@ -20,11 +21,11 @@ class UControlRigBlueprint;
 class FControlRigField
 {
 public:
-	FControlRigField(const FEdGraphPinType& InPinType, const FString& InPropertyPath, const FText& InDisplayNameText, int32 InArrayIndex = INDEX_NONE)
+	FControlRigField(const FEdGraphPinType& InPinType, const FString& InPinPath, const FText& InDisplayNameText, int32 InArrayIndex = INDEX_NONE)
 		: InputPin(nullptr)
 		, OutputPin(nullptr)
 		, PinType(InPinType)
-		, PropertyPath(InPropertyPath)
+		, PinPath(InPinPath)
 		, DisplayNameText(InDisplayNameText)
 		, ArrayIndex(InArrayIndex)
 	{
@@ -36,13 +37,13 @@ public:
 	virtual UField* GetField() const { return nullptr; }
 
 	/** Get the input pin for this item */
-	virtual UEdGraphPin* GetPin() const { return InputPin; }
-
+	virtual const FControlRigModelPin* GetPin() const { return nullptr; }
+	
 	/** Get the output pin for this item */
 	virtual UEdGraphPin* GetOutputPin() const { return OutputPin; }
 
 	/** Get the name of this field */
-	virtual FString GetPropertyPath() const { return PropertyPath; }
+	virtual FString GetPinPath() const { return PinPath; }
 
 	/** Get the name to display for this field */
 	virtual FText GetDisplayNameText() const { return DisplayNameText; }
@@ -63,7 +64,7 @@ public:
 	FEdGraphPinType PinType;
 
 	/** Cached name to display */
-	FString PropertyPath;
+	FString PinPath;
 
 	/** The name to display for this field  */
 	FText DisplayNameText;
@@ -78,40 +79,32 @@ public:
 	TArray<TSharedRef<FControlRigField>> Children;
 };
 
-/** Information about an input/output property */
-class FControlRigProperty : public FControlRigField
+/** Information about an input/output pin */
+class FControlRigPin : public FControlRigField
 {
 private:
-	static FEdGraphPinType GetPinTypeFromProperty(UProperty* InProperty)
+	static FEdGraphPinType GetPinTypeFromPin(const FControlRigModelPin* InPin)
 	{
-		FEdGraphPinType OutPinType; 
-		GetDefault<UEdGraphSchema_K2>()->ConvertPropertyToPinType(InProperty, OutPinType);
-
-		return OutPinType;
+		return InPin->Type;
 	}
 
-	static FText GetDisplayNameForProperty(UProperty* InProperty, int32 InArrayIndex)
+	static FText GetDisplayNameForPin(const FControlRigModelPin* InPin)
 	{
-		if(InArrayIndex != INDEX_NONE)
-		{
-			return FText::Format(NSLOCTEXT("ControlRigGraphNode", "ArrayPinFormat", "[{0}]"), FText::AsNumber(InArrayIndex));
-		}
-
-		return InProperty->GetDisplayNameText();
+		return FText::FromString(InPin->Name.ToString());
 	}
 
 public:
-	FControlRigProperty(UProperty* InProperty, const FString& InPropertyPath, int32 InArrayIndex = INDEX_NONE)
-		: FControlRigField(GetPinTypeFromProperty(InProperty), *InPropertyPath, GetDisplayNameForProperty(InProperty, InArrayIndex), InArrayIndex)
-		, Property(InProperty)
+	FControlRigPin(const FControlRigModelPin* InPin, const FString& InPinPath, int32 InArrayIndex = INDEX_NONE)
+		: FControlRigField(GetPinTypeFromPin(InPin), *InPinPath, GetDisplayNameForPin(InPin), InArrayIndex)
+		, Pin(*InPin)
 	{
 	}
 
-	virtual UField* GetField() const { return Property; }
+	virtual const FControlRigModelPin* GetPin() const override { return &Pin; }
 
 private:
 	/** The field that we use as input/output */
-	UProperty* Property;
+	FControlRigModelPin Pin;
 };
 
 /** Base class for animation ControlRig-related nodes */
@@ -121,6 +114,15 @@ class CONTROLRIGDEVELOPER_API UControlRigGraphNode : public UEdGraphNode
 	GENERATED_BODY()
 
 	friend class FControlRigGraphNodeDetailsCustomization;
+	friend class FControlRigBlueprintCompilerContext;
+	friend class UControlRigGraph;
+	friend class UControlRigGraphSchema;
+	friend class UControlRigBlueprint;
+	friend class FControlRigGraphTraverser;
+	friend class FControlRigGraphPanelPinFactory;
+	friend class FControlRigEditor;
+	friend struct FControlRigBlueprintUtils;
+	friend class SGraphPinCurveFloat;
 
 private:
 	/** The property we represent. For template nodes this represents the struct/property type name. */
@@ -134,6 +136,10 @@ private:
 	UPROPERTY()
 	FEdGraphPinType PinType;
 
+	/** The type of parameter */
+	UPROPERTY()
+	int32 ParameterType;
+
 	/** Expanded pins */
 	UPROPERTY()
 	TArray<FString> ExpandedPins;
@@ -146,20 +152,18 @@ private:
 	mutable FText NodeTitle;
 
 	/** Cached info about input/output pins */
+	TArray<TSharedRef<FControlRigField>> ExecutionInfos;
 	TArray<TSharedRef<FControlRigField>> InputInfos;
 	TArray<TSharedRef<FControlRigField>> InputOutputInfos;
 	TArray<TSharedRef<FControlRigField>> OutputInfos;
 
 public:
-	UControlRigGraphNode()
-		: Dimensions(0.0f, 0.0f)
-		, NodeTitleFull(FText::GetEmpty())
-		, NodeTitle(FText::GetEmpty())
-	{
-	}
+	UControlRigGraphNode();
 
 	// UEdGraphNode Interface.
 	virtual FText GetNodeTitle(ENodeTitleType::Type TitleType) const override;
+	virtual FLinearColor GetNodeTitleColor() const override;
+	virtual FLinearColor GetNodeBodyTintColor() const;
 	virtual FSlateIcon GetIconAndTint(FLinearColor& OutColor) const override;
 	virtual void AllocateDefaultPins() override;
 	virtual void ReconstructNode() override;
@@ -168,19 +172,13 @@ public:
 	virtual void DestroyNode() override;
 	virtual void PinDefaultValueChanged(UEdGraphPin* Pin) override;
 	virtual TSharedPtr<INameValidatorInterface> MakeNameValidator() const override;
-	virtual void OnRenameNode(const FString& InNewName) override;
 	virtual FText GetTooltipText() const override;
 	virtual bool CanCreateUnderSpecifiedSchema(const UEdGraphSchema* InSchema) const override;
 	virtual void AutowireNewNode(UEdGraphPin* FromPin) override;	
 	virtual void PrepareForCopying() override;
-	virtual void PostPasteNode() override;
-	// UK2Node Interface
-	// @TODO: need to find a better way to handle the following functions! 
-	// We cant derive from UK2Node as we don't want most of its functionality
-// 	virtual bool ShouldShowNodeProperties() const { return true; }
 
-	/** Handle a variable being renamed */
-	virtual void HandleVariableRenamed(UBlueprint* InBlueprint, UClass* InVariableClass, UEdGraph* InGraph, const FName& InOldVarName, const FName& InNewVarName);
+	virtual bool IsDeprecated() const override;
+	virtual FEdGraphNodeDeprecationResponse GetDeprecationResponse(EEdGraphNodeDeprecationType DeprecationType) const override;
 
 	/** Set the cached dimensions of this node */
 	void SetDimensions(const FVector2D& InDimensions) { Dimensions = InDimensions; }
@@ -193,6 +191,9 @@ public:
 
 	/** Get the property name we reference */
 	FName GetPropertyName() const { return PropertyName; }
+
+	/** Get the execution variable names */
+	const TArray<TSharedRef<FControlRigField>>& GetExecutionVariableInfo() const { return ExecutionInfos; }
 
 	/** Get the input variable names */
 	const TArray<TSharedRef<FControlRigField>>& GetInputVariableInfo() const { return InputInfos; }
@@ -210,7 +211,7 @@ public:
 	bool IsPinExpanded(const FString& InPinPropertyPath) const;
 
 	/** Propagate pin defaults to underlying properties if they have changed */
-	void CopyPinDefaultsToProperties(UEdGraphPin* Pin, bool bCallModify, bool bPropagateToInstances);
+	void CopyPinDefaultsToModel(UEdGraphPin* Pin, bool bUndo = false);
 
 	/** Check whether we are a property accessor */
 	bool IsPropertyAccessor() const { return GetUnitScriptStruct() == nullptr; }
@@ -232,9 +233,18 @@ public:
 
 	/** Insert a new array element after the element referred to by the property path */
 	void HandleInsertArrayElement(FString InPropertyPath);
+
+#if WITH_EDITORONLY_DATA
+	virtual void PostLoad() override;
+	void CacheHierarchyRefConnectionsOnPostLoad();
+#endif
+
 protected:
 	/** Rebuild the cached info about our inputs/outputs */
 	void CacheVariableInfo();
+
+	/** Helper function for AllocateDefaultPins */
+	void CreateExecutionPins(bool bAlwaysCreatePins);
 
 	/** Helper function for AllocateDefaultPins */
 	void CreateInputPins(bool bAlwaysCreatePins);
@@ -255,7 +265,10 @@ protected:
 	UClass* GetControlRigSkeletonGeneratedClass() const;
 
 	/** Create a ControlRig field from a field on the ControlRig class, if possible */
-	TSharedPtr<FControlRigField> CreateControlRigField(UField* Field, const FString& PropertyPath, int32 InArrayIndex = INDEX_NONE) const;
+	TSharedPtr<FControlRigField> CreateControlRigField(const FControlRigModelPin* InPin, const FString& InPinPath, int32 InArrayIndex = INDEX_NONE) const;
+
+	/** Get all fields that act as execution pins for this node */
+	void GetExecutionFields(TArray<TSharedRef<FControlRigField>>& OutFields) const;
 
 	/** Get all fields that act as inputs for this node */
 	void GetInputFields(TArray<TSharedRef<FControlRigField>>& OutFields) const;
@@ -267,9 +280,7 @@ protected:
 	void GetInputOutputFields(TArray<TSharedRef<FControlRigField>>& OutFields) const;
 
 	/** Helper function for GetInputFields/GetOutputFields */
-	void GetFields(TFunction<bool(UProperty*)> InPropertyCheckFunction, TArray<TSharedRef<FControlRigField>>& OutFields) const;
-	void GetFields_Recursive(const TSharedRef<FControlRigField>& ParentControlRigField, const FString& ParentPropertyPath) const;
-	void GetFields_RecursiveHelper(UProperty* InProperty, const TSharedRef<FControlRigField>& InControlRigField, const FString& InPropertyPath) const;
+	void GetFields(TFunction<bool(const FControlRigModelPin*, const FControlRigModelNode*)> InPinCheckFunction, TArray<TSharedRef<FControlRigField>>& OutFields) const;
 
 	/** Get the struct property for the unit we represent, if any (we could just be a property accessor) */
 	UStructProperty* GetUnitProperty() const;
@@ -279,9 +290,6 @@ protected:
 
 	/** Get the property for the unit we represent */
 	UProperty* GetProperty() const;
-
-	/** Creates auto generated defaults for pins */
-	void SetupPinAutoGeneratedDefaults(UEdGraphPin* Pin);
 
 	/** Copies default values from underlying properties into pin defaults, for editing */
 	void SetupPinDefaultsFromCDO(UEdGraphPin* Pin);
@@ -301,9 +309,17 @@ protected:
 	/** Destroy all pins in an array */
 	void DestroyPinList(TArray<UEdGraphPin*>& InPins);
 
-	/** 
-	 * Perform the specified operation on the array described by the passed-in property path. 
-	 * If bCallModify is true then it is assumed that the array will be mutated.
-	 */
-	bool PerformArrayOperation(const FString& InPropertyPath, TFunctionRef<bool(FScriptArrayHelper&,int32)> InOperation, bool bCallModify, bool bPropagateToInstances) const;
+	/** Sets the body + title color from a color provided by the model */
+	void SetColorFromModel(const FLinearColor& InColor);
+
+private:
+
+	bool IsVariable() const;
+
+#if WITH_EDITORONLY_DATA
+	TArray<UEdGraphNode*> HierarchyRefOutputConnections;
+#endif
+
+	FLinearColor CachedTitleColor;
+	FLinearColor CachedNodeColor;
 };

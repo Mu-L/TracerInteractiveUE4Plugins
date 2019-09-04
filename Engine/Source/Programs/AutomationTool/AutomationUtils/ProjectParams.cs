@@ -142,7 +142,7 @@ namespace AutomationTool
 					// or (if AllowPlatformParams is true)
 					// -Platform_1 -Platform_2 ... -Platform_k
 					string CmdLinePlatform = null;
-					foreach (var ParamName in PlatformParamNames)
+					foreach (string ParamName in PlatformParamNames)
 					{
 						string ParamValue = Command.ParseParamValue(ParamName);
 						if (!string.IsNullOrEmpty(ParamValue))
@@ -169,33 +169,34 @@ namespace AutomationTool
 					{
 						// Get all platforms from the param value: Platform_1+Platform_2+...+Platform_k
 						TargetPlatforms = new List<TargetPlatformDescriptor>();
-						var PlatformNames = (new HashSet<string>(CmdLinePlatform.Split(new char[] { '+' }, StringSplitOptions.RemoveEmptyEntries))).ToList();
-						foreach (var PlatformName in PlatformNames)
+						List<string> PlatformNames = (new HashSet<string>(CmdLinePlatform.Split(new char[] { '+' }, StringSplitOptions.RemoveEmptyEntries))).ToList();
+						foreach (string PlatformName in PlatformNames)
 						{
                             // Look for dependent platforms, Source_1.Dependent_1+Source_2.Dependent_2+Standalone_3
-                            var SubPlatformNames = new List<string>(PlatformName.Split(new char[] { '.' }, StringSplitOptions.RemoveEmptyEntries));
+                            List<string> SubPlatformNames = new List<string>(PlatformName.Split(new char[] { '.' }, StringSplitOptions.RemoveEmptyEntries));
 
-                            foreach (var SubPlatformName in SubPlatformNames)
+                            foreach (string SubPlatformName in SubPlatformNames)
                             {
-								// Need to tolerate cook platform names here, which UFE likes to pass in. (TODO: Not sure if it's right to do that, but it does pass -targetplatform as well)
-                                UnrealTargetPlatform NewPlatformType;
-								if(Enum.TryParse(SubPlatformName, true, out NewPlatformType))
-								{
-									// generate all valid platform descriptions for this platform type + cook flavors
-									List<TargetPlatformDescriptor> PlatformDescriptors = Platform.GetValidTargetPlatforms(NewPlatformType, CookFlavors);
-									TargetPlatforms.AddRange(PlatformDescriptors);
-                                                              
-									if (SubPlatformName != SubPlatformNames[0])
-									{
-										// This is not supported with cook flavors
-										if (!CommandUtils.IsNullOrEmpty(CookFlavors))
-										{
-											throw new AutomationException("Cook flavors are not supported for dependent platforms!");
-										}
+								// Require this to be a valid platform name
+								UnrealTargetPlatform NewPlatformType = UnrealTargetPlatform.Parse(SubPlatformName);
 
-										// We're a dependent platform so add ourselves to the map, pointing to the first element in the list
-										UnrealTargetPlatform FirstPlatformType = (UnrealTargetPlatform)Enum.Parse(typeof(UnrealTargetPlatform), SubPlatformNames[0], true);
-										DependentPlatformMap.Add(new TargetPlatformDescriptor(NewPlatformType), new TargetPlatformDescriptor(FirstPlatformType));
+								// generate all valid platform descriptions for this platform type + cook flavors
+								List<TargetPlatformDescriptor> PlatformDescriptors = Platform.GetValidTargetPlatforms(NewPlatformType, CookFlavors);
+								TargetPlatforms.AddRange(PlatformDescriptors);
+                                                              
+								if (SubPlatformName != SubPlatformNames[0])
+								{
+									// This is not supported with cook flavors
+									if (!CommandUtils.IsNullOrEmpty(CookFlavors))
+									{
+										throw new AutomationException("Cook flavors are not supported for dependent platforms!");
+									}
+
+									// We're a dependent platform so add ourselves to the map, pointing to the first element in the list
+									UnrealTargetPlatform SubPlatformType;
+									if (UnrealTargetPlatform.TryParse(SubPlatformNames[0], out SubPlatformType))
+									{
+										DependentPlatformMap.Add(new TargetPlatformDescriptor(NewPlatformType), new TargetPlatformDescriptor(SubPlatformType));
 									}
 								}
                             }
@@ -205,15 +206,12 @@ namespace AutomationTool
 					{
 						// Look up platform names in the command line: -Platform_1 -Platform_2 ... -Platform_k
 						TargetPlatforms = new List<TargetPlatformDescriptor>();
-						foreach (UnrealTargetPlatform PlatType in Enum.GetValues(typeof(UnrealTargetPlatform)))
+						foreach (UnrealTargetPlatform PlatType in UnrealTargetPlatform.GetValidPlatforms())
 						{
-							if (PlatType != UnrealTargetPlatform.Unknown)
+							if (Command.ParseParam(PlatType.ToString()))
 							{
-								if (Command.ParseParam(PlatType.ToString()))
-								{
-                                    List<TargetPlatformDescriptor> PlatformDescriptors = Platform.GetValidTargetPlatforms(PlatType, CookFlavors);
-                                    TargetPlatforms.AddRange(PlatformDescriptors);
-								}
+                                List<TargetPlatformDescriptor> PlatformDescriptors = Platform.GetValidTargetPlatforms(PlatType, CookFlavors);
+                                TargetPlatforms.AddRange(PlatformDescriptors);
 							}
 						}
 					}
@@ -287,6 +285,7 @@ namespace AutomationTool
 			this.Pak = InParams.Pak;
 			this.SignPak = InParams.SignPak;
 			this.SignedPak = InParams.SignedPak;
+			this.PakAlignForMemoryMapping = InParams.PakAlignForMemoryMapping;
 			this.SkipPak = InParams.SkipPak;
             this.PrePak = InParams.PrePak;
             this.NoXGE = InParams.NoXGE;
@@ -462,7 +461,8 @@ namespace AutomationTool
 			string AppLocalDirectory = null,
 			bool? NoBootstrapExe = null,
             bool? SignedPak = null,
-            bool? NullRHI = null,
+			bool? PakAlignForMemoryMapping = null,
+			bool? NullRHI = null,
             bool? FakeClient = null,
             bool? EditorTest = null,
             bool? RunAutomationTests = null,
@@ -627,6 +627,7 @@ namespace AutomationTool
 					this.SignPak = null;
 				}
 			}
+			this.PakAlignForMemoryMapping = GetParamValueIfNotSpecified(Command, PakAlignForMemoryMapping, this.PakAlignForMemoryMapping, "PakAlignForMemoryMapping");
 			this.Pak = GetParamValueIfNotSpecified(Command, Pak, this.Pak, "pak");
 			this.SkipPak = GetParamValueIfNotSpecified(Command, SkipPak, this.SkipPak, "skippak");
 			if (this.SkipPak)
@@ -823,18 +824,21 @@ namespace AutomationTool
 			{
 				if (Command != null)
 				{
-					var ClientConfig = Command.ParseParamValue("clientconfig");
+					string ClientConfig = Command.ParseParamValue("clientconfig");
 
                     if (ClientConfig == null)
                         ClientConfig = Command.ParseParamValue("config");
 
-                    if (ClientConfig != null)
+					if (ClientConfig == null)
+						ClientConfig = Command.ParseParamValue("configuration");
+
+					if (ClientConfig != null)
 					{
 						this.ClientConfigsToBuild = new List<UnrealTargetConfiguration>();
-						var Configs = new ParamList<string>(ClientConfig.Split(new char[] { '+' }, StringSplitOptions.RemoveEmptyEntries));
-						foreach (var ConfigName in Configs)
+						ParamList<string> Configs = new ParamList<string>(ClientConfig.Split(new char[] { '+' }, StringSplitOptions.RemoveEmptyEntries));
+						foreach (string ConfigName in Configs)
 						{
-							this.ClientConfigsToBuild.Add((UnrealTargetConfiguration)Enum.Parse(typeof(UnrealTargetConfiguration), ConfigName, true));
+							this.ClientConfigsToBuild.Add(ParseConfig(ConfigName));
 						}
 					}
 				}
@@ -986,18 +990,21 @@ namespace AutomationTool
 			{
 				if (Command != null)
 				{
-					var ServerConfig = Command.ParseParamValue("serverconfig");
+					string ServerConfig = Command.ParseParamValue("serverconfig");
 
                     if (ServerConfig == null)
                         ServerConfig = Command.ParseParamValue("config");
 
-                    if (ServerConfig != null)
+					if (ServerConfig == null)
+						ServerConfig = Command.ParseParamValue("configuration");
+
+					if (ServerConfig != null)
 					{
 						this.ServerConfigsToBuild = new List<UnrealTargetConfiguration>();
-						var Configs = new ParamList<string>(ServerConfig.Split(new char[] { '+' }, StringSplitOptions.RemoveEmptyEntries));
-						foreach (var ConfigName in Configs)
+						ParamList<string> Configs = new ParamList<string>(ServerConfig.Split(new char[] { '+' }, StringSplitOptions.RemoveEmptyEntries));
+						foreach (string ConfigName in Configs)
 						{
-							this.ServerConfigsToBuild.Add((UnrealTargetConfiguration)Enum.Parse(typeof(UnrealTargetConfiguration), ConfigName, true));
+							this.ServerConfigsToBuild.Add(ParseConfig(ConfigName));
 						}
 					}
 				}
@@ -1075,14 +1082,24 @@ namespace AutomationTool
             }
         }
 
-        #endregion
+		static UnrealTargetConfiguration ParseConfig(string ConfigName)
+		{
+			UnrealTargetConfiguration ConfigValue;
+			if (!Enum.TryParse(ConfigName, true, out ConfigValue))
+			{
+				throw new AutomationException("Invalid configuration '{0}'. Valid configurations are '{1}'.", ConfigName, String.Join("', '", Enum.GetNames(typeof(UnrealTargetConfiguration)).Where(x => x != nameof(UnrealTargetConfiguration.Unknown))));
+			}
+			return ConfigValue;
+		}
 
-        #region Shared
+		#endregion
 
-        /// <summary>
-        /// Shared: Full path to the .uproject file
-        /// </summary>
-        public FileReference RawProjectPath { private set; get; }
+		#region Shared
+
+		/// <summary>
+		/// Shared: Full path to the .uproject file
+		/// </summary>
+		public FileReference RawProjectPath { private set; get; }
 
 		/// <summary>
 		/// Shared: The current project is a foreign project, commandline: -foreign
@@ -1202,6 +1219,12 @@ namespace AutomationTool
         /// </summary>
         [Help("signed", "the game should expect to use a signed pak file.")]
 		public bool SignedPak { private set; get; }
+
+		/// <summary>
+		/// Shared: The game will be set up for memory mapping bulk data.
+		/// </summary>
+		[Help("PakAlignForMemoryMapping", "The game will be set up for memory mapping bulk data.")]
+		public bool PakAlignForMemoryMapping { private set; get; }
 
 		/// <summary>
 		/// Shared: true if this build is staged, command line: -stage
@@ -2106,11 +2129,6 @@ namespace AutomationTool
 				{
 					throw new AutomationException("Editor target not found!");
 				}
-			}
-
-			if (String.IsNullOrEmpty(GameTarget) && Run && !NoClient && (Cook || CookOnTheFly) && CommandUtils.IsNullOrEmpty(ClientCookedTargetsList))
-			{
-				throw new AutomationException("Game target not found. Game target is required with -cook or -cookonthefly");
 			}
 
 			if (EditorTargetsList == null)

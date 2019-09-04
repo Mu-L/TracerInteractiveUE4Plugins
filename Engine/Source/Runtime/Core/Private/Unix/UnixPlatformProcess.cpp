@@ -1013,6 +1013,28 @@ FProcHandle FUnixPlatformProcess::CreateProc(const TCHAR* URL, const TCHAR* Parm
 	return FProcHandle(new FProcState(ChildPid, bLaunchDetached));
 }
 
+/*
+ * Return a limited use FProcHandle from a PID. Currently can only use w/ IsProcRunning().
+ *
+ * WARNING (from Arciel): PIDs can and will be reused. We have had that issue
+ * before: the editor was tracking ShaderCompileWorker by their PIDs, and a
+ * long-running process (something from PS4 SDK) got a reused SCW PID,
+ * resulting in compilation never ending.
+ */
+FProcHandle FUnixPlatformProcess::OpenProcess(uint32 ProcessID)
+{
+	pid_t Pid = static_cast< pid_t >(ProcessID);
+
+	// check if actually running
+	int KillResult = kill(Pid, 0);	// no actual signal is sent
+	check(KillResult != -1 || errno != EINVAL);
+
+	// errno == EPERM: don't have permissions to send signal
+	// errno == ESRCH: proc doesn't exist
+	bool bIsRunning = (KillResult == 0);
+	return FProcHandle(bIsRunning ? Pid : -1);
+}
+
 /** Initialization constructor. */
 FProcState::FProcState(pid_t InProcessId, bool bInFireAndForget)
 	:	ProcessId(InProcessId)
@@ -1165,8 +1187,25 @@ void FProcState::Wait()
 
 bool FUnixPlatformProcess::IsProcRunning( FProcHandle & ProcessHandle )
 {
+	bool bIsRunning = false;
 	FProcState * ProcInfo = ProcessHandle.GetProcessInfo();
-	return ProcInfo ? ProcInfo->IsRunning() : false;
+
+	if (ProcInfo)
+	{
+		bIsRunning = ProcInfo->IsRunning();
+	}
+	else if (ProcessHandle.Get() != -1)
+	{
+		// Process opened with OpenProcess() call (we only have pid)
+		int KillResult = kill(ProcessHandle.Get(), 0);	// no actual signal is sent
+		check(KillResult != -1 || errno != EINVAL);
+
+		// errno == EPERM: don't have permissions to send signal
+		// errno == ESRCH: proc doesn't exist
+		bIsRunning = (KillResult == 0);
+	}
+
+	return bIsRunning;
 }
 
 void FUnixPlatformProcess::WaitForProc( FProcHandle & ProcessHandle )
@@ -1175,6 +1214,10 @@ void FUnixPlatformProcess::WaitForProc( FProcHandle & ProcessHandle )
 	if (ProcInfo)
 	{
 		ProcInfo->Wait();
+	}
+	else if (ProcessHandle.Get() != -1)
+	{
+		STUBBED("FUnixPlatformProcess::WaitForProc() : Waiting on OpenProcess() handle not implemented yet");
 	}
 }
 
@@ -1201,6 +1244,10 @@ void FUnixPlatformProcess::TerminateProc( FProcHandle & ProcessHandle, bool Kill
 		int KillResult = kill(ProcInfo->GetProcessId(), SIGTERM);	// graceful
 		check(KillResult != -1 || errno != EINVAL);
 	}
+	else if (ProcessHandle.Get() != -1)
+	{
+		STUBBED("FUnixPlatformProcess::TerminateProc() : Terminating OpenProcess() handle not implemented");
+	}
 }
 
 /*
@@ -1208,6 +1255,7 @@ void FUnixPlatformProcess::TerminateProc( FProcHandle & ProcessHandle, bool Kill
  *
  * This is a function that halts execution and waits for signals to cause forked processes to be created and continue execution.
  * The parent process will return when GIsRequestingExit is true. SIGRTMIN+1 is used to cause a fork to happen.
+ * Optionally, the parent process will also return if any of the children close with an exit code equal to WAIT_AND_FORK_PARENT_SHUTDOWN_EXIT_CODE if it is set to non-zero.
  * If sigqueue is used, the payload int will be split into the upper and lower uint16 values. The upper value is a "cookie" and the
  *     lower value is an "index". These two values will be used to name the process using the pattern DS-<cookie>-<index>. This name
  *     can be used to uniquely discover the process that was spawned.
@@ -1221,6 +1269,9 @@ FGenericPlatformProcess::EWaitAndForkResult FUnixPlatformProcess::WaitAndFork()
 #define WAIT_AND_FORK_QUEUE_LENGTH 4096
 #define WAIT_AND_FORK_PARENT_SLEEP_DURATION 10
 #define WAIT_AND_FORK_CHILD_SPAWN_DELAY 0.125
+#ifndef WAIT_AND_FORK_PARENT_SHUTDOWN_EXIT_CODE
+	#define WAIT_AND_FORK_PARENT_SHUTDOWN_EXIT_CODE 0
+#endif
 
 	// Only works in -nothreading mode for now (probably best this way)
 	if (FPlatformProcess::SupportsMultithreading())
@@ -1403,7 +1454,8 @@ FGenericPlatformProcess::EWaitAndForkResult FUnixPlatformProcess::WaitAndFork()
 			{
 				const FPidAndSignal& ChildPidAndSignal = AllChildren[ChildIdx];
 
-				pid_t WaitResult = waitpid(ChildPidAndSignal.Pid, nullptr, WNOHANG);
+				int32 Status = 0;
+				pid_t WaitResult = waitpid(ChildPidAndSignal.Pid, &Status, WNOHANG);
 				if (WaitResult == -1)
 				{
 					int32 ErrNo = errno;
@@ -1411,7 +1463,13 @@ FGenericPlatformProcess::EWaitAndForkResult FUnixPlatformProcess::WaitAndFork()
 				}
 				else if (WaitResult != 0)
 				{
-					if (NumForks > 0 && ChildPidAndSignal.SignalValue > 0 && ChildPidAndSignal.SignalValue <= NumForks)
+					int32 ExitCode = WIFEXITED(Status) ? WEXITSTATUS(Status) : 0;
+					if (ExitCode != 0 && ExitCode == WAIT_AND_FORK_PARENT_SHUTDOWN_EXIT_CODE)
+					{
+						UE_LOG(LogHAL, Log, TEXT("[Parent] WaitAndFork child %d exited with return code %d, indicating that the parent process should shut down. Shutting down..."), ChildPidAndSignal.Pid, WAIT_AND_FORK_PARENT_SHUTDOWN_EXIT_CODE);
+						GIsRequestingExit = true;
+					}
+					else if (NumForks > 0 && ChildPidAndSignal.SignalValue > 0 && ChildPidAndSignal.SignalValue <= NumForks)
 					{
 						UE_LOG(LogHAL, Log, TEXT("[Parent] WaitAndFork child %d missing. This was NumForks child %d. Relaunching..."), ChildPidAndSignal.Pid, ChildPidAndSignal.SignalValue);
 						WaitAndForkSignalQueue.Enqueue(ChildPidAndSignal.SignalValue);
@@ -1442,6 +1500,11 @@ uint32 FUnixPlatformProcess::GetCurrentProcessId()
 	return getpid();
 }
 
+uint32 FUnixPlatformProcess::GetCurrentCoreNumber()
+{
+	return sched_getcpu();
+}
+
 void FUnixPlatformProcess::SetCurrentWorkingDirectoryToBaseDir()
 {
 	FPlatformMisc::CacheLaunchDir();
@@ -1464,7 +1527,16 @@ bool FUnixPlatformProcess::GetProcReturnCode(FProcHandle& ProcHandle, int32* Ret
 	}
 
 	FProcState * ProcInfo = ProcHandle.GetProcessInfo();
-	return ProcInfo ? ProcInfo->GetReturnCode(ReturnCode) : false;
+	if (ProcInfo)
+	{
+		return ProcInfo->GetReturnCode(ReturnCode);
+	}
+	else if (ProcHandle.Get() != -1)
+	{
+		STUBBED("FUnixPlatformProcess::GetProcReturnCode() : Return code of OpenProcess() handle not implemented yet");
+	}
+
+	return false;
 }
 
 bool FUnixPlatformProcess::Daemonize()

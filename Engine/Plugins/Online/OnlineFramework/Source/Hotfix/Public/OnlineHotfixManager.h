@@ -276,6 +276,9 @@ protected:
 		return FPaths::ProjectPersistentDownloadDir();
 	}
 
+	/** Notify used by CheckAvailability() */
+	virtual void OnHotfixAvailablityCheck(const TArray<FCloudFileHeader>& PendingChangedFiles, const TArray<FCloudFileHeader>& PendingRemoveFiles);
+
 	/** Finds the header associated with the file name */
 	FCloudFileHeader* GetFileHeaderFromDLName(const FString& FileName);
 
@@ -283,7 +286,7 @@ protected:
 	void UpdateProgress(uint32 FileCount, uint64 UpdateSize);
 
 	/** Called after any hotfixes are applied to apply last-second changes to certain asset types from .ini file data */
-	void PatchAssetsFromIniFiles();
+	virtual void PatchAssetsFromIniFiles();
 	
 	/** Used in PatchAssetsFromIniFiles to hotfix only a row in a table. */
 	void HotfixRowUpdate(UObject* Asset, const FString& AssetPath, const FString& RowName, const FString& ColumnName, const FString& NewValue, TArray<FString>& ProblemStrings);

@@ -31,6 +31,8 @@ UPendingNetGame::UPendingNetGame(const FObjectInitializer& ObjectInitializer)
 
 void UPendingNetGame::InitNetDriver()
 {
+	LLM_SCOPE(ELLMTag::Networking);
+
 	if (!GDisallowNetworkTravel)
 	{
 		NETWORK_PROFILER(GNetworkProfiler.TrackSessionChange(true, URL));
@@ -148,7 +150,7 @@ void UPendingNetGame::LoadMapCompleted(UEngine* Engine, FWorldContext& Context, 
 	else
 	{
 		// Show connecting message, cause precaching to occur.
-		Engine->TransitionType = TT_Connecting;
+		Engine->TransitionType = ETransitionType::Connecting;
 
 		Engine->RedrawViewports(false);
 

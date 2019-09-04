@@ -179,8 +179,8 @@ class ENGINE_API UParticleModuleLocationBoneSocket : public UParticleModuleLocat
 	bool GetBoneInfoForSourceIndex(FModuleLocationBoneSocketInstancePayload* InstancePayload, USkeletalMeshComponent* SourceComponent, int32 SourceIndex, FMatrix& OutBoneMatrix, FVector& OutOffset)const;
 	
 	/** Selects the next socket or bone index to spawn from. */
-	int32 SelectNextSpawnIndex(FModuleLocationBoneSocketInstancePayload* InstancePayload, USkeletalMeshComponent* SourceComponent);
-	void RegeneratePreSelectedIndices(FModuleLocationBoneSocketInstancePayload* InstancePayload, USkeletalMeshComponent* SourceComponent);
+	int32 SelectNextSpawnIndex(FModuleLocationBoneSocketInstancePayload* InstancePayload, USkeletalMeshComponent* SourceComponent, FRandomStream& InRandomStream);
+	void RegeneratePreSelectedIndices(FModuleLocationBoneSocketInstancePayload* InstancePayload, USkeletalMeshComponent* SourceComponent, FRandomStream& InRandomStream);
 
 	void UpdatePrevBoneLocationsAndVelocities(FModuleLocationBoneSocketInstancePayload* InstancePayload, USkeletalMeshComponent* SourceComponent, float DeltaTime);
 
@@ -188,6 +188,9 @@ class ENGINE_API UParticleModuleLocationBoneSocket : public UParticleModuleLocat
 	FORCEINLINE bool InheritingBoneVelocity()const { return bInheritBoneVelocity && !bUpdatePositionEachFrame; }
 
 	void SetSourceIndexMode();
+
+	/** Validate that all LOD levels will not have issues with indexing into SourceLocations */
+	static void ValidateLODLevels(UParticleEmitter* Emitter, int32 iModule);
 };
 
 /** ModuleLocationBoneSocket instance payload */

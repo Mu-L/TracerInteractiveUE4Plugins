@@ -23,13 +23,14 @@ class FXmppPrivateChatStrophe
 public:
 	// FXmppPrivateChatStrophe
 	FXmppPrivateChatStrophe(FXmppConnectionStrophe& InConnectionManager);
-	virtual ~FXmppPrivateChatStrophe() = default;
+	virtual ~FXmppPrivateChatStrophe();
 
 	// XMPP Thread
-	void OnDisconnect();
 	bool ReceiveStanza(const FStropheStanza& IncomingStanza);
 
 	// Game Thread
+	void OnDisconnect();
+	void OnReconnect();
 
 	// IXmppChat
 	virtual bool SendChat(const FXmppUserJid& RecipientId, const FString& Message) override;
@@ -40,6 +41,9 @@ public:
 
 protected:
 	void OnChatReceived(TUniquePtr<FXmppChatMessage>&& Chat);
+
+	/** Remove pending messages and engine KeepAwake calls */
+	void CleanupMessages();
 
 protected:
 	/** Connection manager controls sending data to XMPP thread */
@@ -53,6 +57,9 @@ protected:
 
 	/** Delegate for game to listen to Chat Messages */
 	FOnXmppChatReceived OnChatReceivedDelegate;
+
+	/* Engine Tick Requester name */
+	const static FName TickRequesterId;
 };
 
 #endif

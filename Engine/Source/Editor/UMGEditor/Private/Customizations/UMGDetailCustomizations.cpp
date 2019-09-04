@@ -25,6 +25,8 @@
 #include "Components/PanelSlot.h"
 #include "Details/SPropertyBinding.h"
 #include "Widgets/Layout/SWidgetSwitcher.h"
+#include "IDetailsView.h"
+#include "IDetailPropertyExtensionHandler.h"
 
 #define LOCTEXT_NAMESPACE "UMG"
 
@@ -307,6 +309,7 @@ void FBlueprintWidgetCustomization::CustomizeDetails( IDetailLayoutBuilder& Deta
 		}
 	}
 
+	PerformAccessibilityCustomization(DetailLayout);
 	PerformBindingCustomization(DetailLayout);
 }
 
@@ -340,6 +343,70 @@ void FBlueprintWidgetCustomization::PerformBindingCustomization(IDetailLayoutBui
 			}
 		}
 	}
+}
+
+void FBlueprintWidgetCustomization::PerformAccessibilityCustomization(IDetailLayoutBuilder& DetailLayout)
+{
+	// We have to add these properties even though we're not customizing to preserve UI ordering
+	DetailLayout.EditCategory("Accessibility").AddProperty("bOverrideAccessibleDefaults");
+	DetailLayout.EditCategory("Accessibility").AddProperty("bCanChildrenBeAccessible");
+	CustomizeAccessibilityProperty(DetailLayout, "AccessibleBehavior", "AccessibleText");
+	CustomizeAccessibilityProperty(DetailLayout, "AccessibleSummaryBehavior", "AccessibleSummaryText");
+}
+
+void FBlueprintWidgetCustomization::CustomizeAccessibilityProperty(IDetailLayoutBuilder& DetailLayout, const FName& BehaviorPropertyName, const FName& TextPropertyName)
+{
+	// Treat AccessibleBehavior as the "base" property for the row, and then add the AccessibleText binding to the end of it.
+	TSharedRef<IPropertyHandle> AccessibleBehaviorPropertyHandle = DetailLayout.GetProperty(BehaviorPropertyName);
+	IDetailPropertyRow& AccessibilityRow = DetailLayout.EditCategory("Accessibility").AddProperty(AccessibleBehaviorPropertyHandle);
+
+	TSharedRef<IPropertyHandle> AccessibleTextPropertyHandle = DetailLayout.GetProperty(TextPropertyName);
+	// Make sure the old AccessibleText properties are hidden so we don't get duplicate widgets
+	DetailLayout.HideProperty(AccessibleTextPropertyHandle);
+
+	TSharedRef<SHorizontalBox> CustomTextLayout = SNew(SHorizontalBox)
+	.Visibility(TAttribute<EVisibility>::Create([AccessibleBehaviorPropertyHandle]() -> EVisibility
+	{
+		uint8 Behavior = 0;
+		AccessibleBehaviorPropertyHandle->GetValue(Behavior);
+		return (ESlateAccessibleBehavior)Behavior == ESlateAccessibleBehavior::Custom ? EVisibility::Visible : EVisibility::Hidden;
+	}))
+	+ SHorizontalBox::Slot()
+	.Padding(FMargin(4.0f, 0.0f))
+	[
+		AccessibleTextPropertyHandle->CreatePropertyValueWidget()
+	];
+
+	TSharedRef<SWidget> ExtensionWidget = const_cast<IDetailsView*>(DetailLayout.GetDetailsView())->GetExtensionHandler()->GenerateExtensionWidget(UWidget::StaticClass(), AccessibleTextPropertyHandle);
+	ensure(ExtensionWidget != SNullWidget::NullWidget);
+	CustomTextLayout->AddSlot()
+	.AutoWidth()
+	[
+		ExtensionWidget
+	];
+
+	TSharedPtr<SWidget> AccessibleBehaviorNameWidget, AccessibleBehaviorValueWidget;
+	AccessibilityRow.GetDefaultWidgets(AccessibleBehaviorNameWidget, AccessibleBehaviorValueWidget);
+
+	AccessibilityRow.CustomWidget()
+	.NameContent()
+	[
+		AccessibleBehaviorNameWidget.ToSharedRef()
+	]
+	.ValueContent()
+	.HAlign(HAlign_Fill)
+	[
+		SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot()
+		.AutoWidth()
+		[
+			AccessibleBehaviorValueWidget.ToSharedRef()
+		]
+		+ SHorizontalBox::Slot()
+		[
+			CustomTextLayout
+		]
+	];
 }
 
 #undef LOCTEXT_NAMESPACE

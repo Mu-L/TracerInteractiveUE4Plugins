@@ -1437,7 +1437,7 @@ void ApplyViewModeOverrides(
 		{
 			int32 lodColorationIndex = FMath::Clamp((int32)Mesh.VisualizeLODIndex, 0, GEngine->LODColorationColors.Num() - 1);
 	
-			bool bLit = Mesh.MaterialRenderProxy->GetMaterial(FeatureLevel)->GetShadingModel() != MSM_Unlit;
+			bool bLit = Mesh.MaterialRenderProxy->GetMaterial(FeatureLevel)->GetShadingModels().IsLit();
 			const UMaterial* LODColorationMaterial = (bLit && EngineShowFlags.Lighting) ? GEngine->LevelColorationLitMaterial : GEngine->LevelColorationUnlitMaterial;
 
 			auto LODColorationMaterialInstance = new FColoredMaterialRenderProxy(
@@ -1455,7 +1455,7 @@ void ApplyViewModeOverrides(
 		{
 			int32 hlodColorationIndex = FMath::Clamp((int32)Mesh.VisualizeHLODIndex, 0, GEngine->HLODColorationColors.Num() - 1);
 
-			bool bLit = Mesh.MaterialRenderProxy->GetMaterial(FeatureLevel)->GetShadingModel() != MSM_Unlit;
+			bool bLit = Mesh.MaterialRenderProxy->GetMaterial(FeatureLevel)->GetShadingModels().IsLit();
 			const UMaterial* HLODColorationMaterial = (bLit && EngineShowFlags.Lighting) ? GEngine->LevelColorationLitMaterial : GEngine->LevelColorationUnlitMaterial;
 
 			auto HLODColorationMaterialInstance = new FColoredMaterialRenderProxy(
@@ -1470,7 +1470,7 @@ void ApplyViewModeOverrides(
 	else if (!EngineShowFlags.Materials)
 	{
 		// Don't render unlit translucency when in 'lighting only' viewmode.
-		if (Mesh.MaterialRenderProxy->GetMaterial(FeatureLevel)->GetShadingModel() != MSM_Unlit
+		if (Mesh.MaterialRenderProxy->GetMaterial(FeatureLevel)->GetShadingModels().IsLit()
 			// Don't render translucency in 'lighting only', since the viewmode works by overriding with an opaque material
 			// This would cause a mismatch of the material's blend mode with the primitive's view relevance,
 			// And make faint particles block the view
@@ -1618,33 +1618,6 @@ void ApplyViewModeOverrides(
 #endif
 }
 
-void ClampUVs(FVector2D* UVs, int32 NumUVs)
-{
-	const float FudgeFactor = 0.1f;
-	FVector2D Bias(0.0f,0.0f);
-
-	float MinU = UVs[0].X;
-	float MinV = UVs[0].Y;
-	for (int32 i = 1; i < NumUVs; ++i)
-	{
-		MinU = FMath::Min(MinU,UVs[i].X);
-		MinV = FMath::Min(MinU,UVs[i].Y);
-	}
-
-	if (MinU < -FudgeFactor || MinU > (1.0f+FudgeFactor))
-	{
-		Bias.X = FMath::FloorToFloat(MinU);
-	}
-	if (MinV < -FudgeFactor || MinV > (1.0f+FudgeFactor))
-	{
-		Bias.Y = FMath::FloorToFloat(MinV);
-	}
-
-	for (int32 i = 0; i < NumUVs; i++)
-	{
-		UVs[i] += Bias;
-	}
-}
 
 bool IsUVOutOfBounds(FVector2D UV)
 {
@@ -1698,9 +1671,6 @@ void DrawUVsInternal(FViewport* InViewport, FCanvas* InCanvas, int32 InTextYPos,
 					bOutOfBounds[Corner] = IsUVOutOfBounds(UVs[Corner]);
 				}
 
-				// Clamp the UV triangle to the [0,1] range (with some fudge).
-				ClampUVs(UVs, 3);
-
 				for (int32 Edge = 0; Edge < 3; Edge++)
 				{
 					int32 Corner1 = Edge;
@@ -1724,7 +1694,6 @@ void DrawUVsInternal(FViewport* InViewport, FCanvas* InCanvas, int32 InTextYPos,
 					FVector2D UVs[2];
 					UVs[0] = (SelectedEdgeTexCoords[UVIndex]);
 					UVs[1] = (SelectedEdgeTexCoords[UVIndex + 1]);
-					ClampUVs(UVs, 2);
 
 					LineItem.Draw(InCanvas, UVs[0] * UVBoxScale + UVBoxOrigin, UVs[1] * UVBoxScale + UVBoxOrigin);
 				}

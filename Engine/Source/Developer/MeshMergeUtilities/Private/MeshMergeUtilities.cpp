@@ -1044,10 +1044,13 @@ float FMeshMergeUtilities::FlattenEmissivescale(TArray<struct FFlattenMaterial>&
 			{
 				for (FColor& Sample : Material.GetPropertySamples(EFlattenMaterialProperties::Emissive))
 				{
-					Sample.R = Sample.R * Multiplier;
-					Sample.G = Sample.G * Multiplier;
-					Sample.B = Sample.B * Multiplier;
-					Sample.A = Sample.A * Multiplier;
+					if (Sample != FColor::Magenta)
+					{
+						Sample.R = Sample.R * Multiplier;
+						Sample.G = Sample.G * Multiplier;
+						Sample.B = Sample.B * Multiplier;
+						Sample.A = Sample.A * Multiplier;
+					}
 				}
 			}
 		}
@@ -1299,7 +1302,7 @@ void FMeshMergeUtilities::CreateProxyMesh(const TArray<UStaticMeshComponent*>& I
 					TVertexInstanceAttributesRef<FVector2D> VertexInstanceUVs = MeshSettings.RawMeshDescription->VertexInstanceAttributes().GetAttributesRef<FVector2D>(MeshAttribute::VertexInstance::TextureCoordinate);
 					// If we already have lightmap uvs generated or the lightmap coordinate index != 0 and available we can reuse those instead of having to generate new ones
 					if (InMeshProxySettings.bReuseMeshLightmapUVs
-						&& (ComponentsToMerge[MeshIndex]->GetStaticMesh()->SourceModels[0].BuildSettings.bGenerateLightmapUVs
+						&& (ComponentsToMerge[MeshIndex]->GetStaticMesh()->GetSourceModel(0).BuildSettings.bGenerateLightmapUVs
 							|| (ComponentsToMerge[MeshIndex]->GetStaticMesh()->LightMapCoordinateIndex != 0 && VertexInstanceUVs.GetNumElements() > 0 && VertexInstanceUVs.GetNumIndices() > ComponentsToMerge[MeshIndex]->GetStaticMesh()->LightMapCoordinateIndex)))
 					{
 						MeshSettings.CustomTextureCoordinates.Reset(VertexInstanceUVs.GetNumElements());
@@ -1764,17 +1767,18 @@ void FMeshMergeUtilities::MergeComponentsToStaticMesh(const TArray<UPrimitiveCom
 			else
 			{
 				StaticMeshComponentsToMerge.Add(MeshComponent);
+			}
 
-				// Save the pivot and asset package name of the first mesh, will later be used for creating merged mesh asset 
-				if (bFirstMesh)
-				{
-					// Mesh component pivot point
-					MergedAssetPivot = InSettings.bPivotPointAtZero ? FVector::ZeroVector : MeshComponent->GetComponentTransform().GetLocation();
-					// Source mesh asset package name
-					MergedAssetPackageName = MeshComponent->GetStaticMesh()->GetOutermost()->GetName();
+			// Save the pivot and asset package name of the first mesh, will later be used for creating merged mesh asset 
+			if (bFirstMesh)
+			{
+				// Mesh component pivot point
+				MergedAssetPivot = InSettings.bPivotPointAtZero ? FVector::ZeroVector : MeshComponent->GetComponentTransform().GetLocation();
 
-					bFirstMesh = false;
-				}
+				// Source mesh asset package name
+				MergedAssetPackageName = MeshComponent->GetStaticMesh()->GetOutermost()->GetName();
+
+				bFirstMesh = false;
 			}
 		}
 	}
@@ -1861,30 +1865,23 @@ void FMeshMergeUtilities::MergeComponentsToStaticMesh(const TArray<UPrimitiveCom
 			// Determine LOD to use for merging, either user specified or calculated index and ensure we clamp to the maximum LOD index for this adapter 
 			const int32 LODIndex = [&]()
 			{
+				int32 LowestDetailLOD = Adapter.GetNumberOfLODs() - 1;
+				if (Component->bUseMaxLODAsImposter && !InSettings.bIncludeImposters)
+				{
+					LowestDetailLOD = FMath::Max(0, LowestDetailLOD - 1);
+				}
+
 				switch (InSettings.LODSelectionType)
 				{
 				case EMeshLODSelectionType::SpecificLOD:
-					return FMath::Min(Adapter.GetNumberOfLODs() - 1, InSettings.SpecificLOD);
+					return FMath::Min(LowestDetailLOD, InSettings.SpecificLOD);
+
 				case EMeshLODSelectionType::CalculateLOD:
-				  {
-					  int32 Min = Adapter.GetNumberOfLODs() - 1;
-					  if (Component->bUseMaxLODAsImposter && !InSettings.bIncludeImposters)
-					  {
-						  Min = FMath::Max(0, Min - 1);
-					  }
-					  return FMath::Min(Min, Utilities->GetLODLevelForScreenSize(Component, FMath::Clamp(ScreenSize, 0.0f, 1.0f)));
-				  }
-					
-				default:
+					return FMath::Min(LowestDetailLOD, Utilities->GetLODLevelForScreenSize(Component, FMath::Clamp(ScreenSize, 0.0f, 1.0f)));
+
 				case EMeshLODSelectionType::LowestDetailLOD:
-				  {
-					  if (Component->bUseMaxLODAsImposter && (!InSettings.bIncludeImposters))
-					  {						
-						  return FMath::Max(0, Adapter.GetNumberOfLODs() - 2);											
-					  }
-  
-					  return Adapter.GetNumberOfLODs() - 1;
-				  }					
+				default:
+					return LowestDetailLOD;
 				}
 			}();
 
@@ -1947,7 +1944,7 @@ void FMeshMergeUtilities::MergeComponentsToStaticMesh(const TArray<UPrimitiveCom
 	FMaterialUtilities::DetermineMaterialImportance(UniqueMaterials, MaterialImportanceValues);
 
 	// If the user wants to merge materials into a single one
-	if (bMergeMaterialData)
+	if (bMergeMaterialData && UniqueMaterials.Num() != 0)
 	{
 		UMaterialOptions* MaterialOptions = PopulateMaterialOptions(InSettings.MaterialSettings);
 		// Check each material to see if the shader actually uses vertex data and collect flags
@@ -2462,14 +2459,16 @@ void FMeshMergeUtilities::MergeComponentsToStaticMesh(const TArray<UPrimitiveCom
 			StaticMesh->LightMapCoordinateIndex = LightMapUVChannel;
 		}
 
+		const bool bContainsImposters = ImposterComponents.Num() > 0;
 		TArray<UMaterialInterface*> ImposterMaterials;
 		FBox ImposterBounds(EForceInit::ForceInit);
 		for (int32 LODIndex = 0; LODIndex < MergedRawMeshes.Num(); ++LODIndex)
 		{
 			FMeshDescription& MergedMeshLOD = MergedRawMeshes[LODIndex];
-			if (MergedMeshLOD.Vertices().Num() > 0)
+			if (MergedMeshLOD.Vertices().Num() > 0 || bContainsImposters)
 			{
 				FStaticMeshSourceModel& SrcModel = StaticMesh->AddSourceModel();
+
 				// Don't allow the engine to recalculate normals
 				SrcModel.BuildSettings.bRecomputeNormals = false;
 				SrcModel.BuildSettings.bRecomputeTangents = false;
@@ -2485,7 +2484,6 @@ void FMeshMergeUtilities::MergeComponentsToStaticMesh(const TArray<UPrimitiveCom
 					SrcModel.BuildSettings.DistanceFieldResolutionScale = 0.0f;
 				}
 
-				const bool bContainsImposters = ImposterComponents.Num() > 0;
 				if (bContainsImposters)
 				{
 					// Merge imposter meshes to rawmesh
@@ -2500,6 +2498,7 @@ void FMeshMergeUtilities::MergeComponentsToStaticMesh(const TArray<UPrimitiveCom
 						}
 					}
 				}
+
 				FMeshDescription* MeshDescription = StaticMesh->CreateMeshDescription(LODIndex);
 				*MeshDescription = MergedMeshLOD;
 				StaticMesh->CommitMeshDescription(LODIndex);
@@ -2574,13 +2573,20 @@ void FMeshMergeUtilities::MergeComponentsToStaticMesh(const TArray<UPrimitiveCom
 			}
 		}
 
-		StaticMesh->SectionInfoMap.CopyFrom(SectionInfoMap);
-		StaticMesh->OriginalSectionInfoMap.CopyFrom(SectionInfoMap);
+		StaticMesh->GetSectionInfoMap().CopyFrom(SectionInfoMap);
+		StaticMesh->GetOriginalSectionInfoMap().CopyFrom(SectionInfoMap);
 
 		//Set the Imported version before calling the build
 		StaticMesh->ImportVersion = EImportStaticMeshVersion::LastVersion;
 		StaticMesh->LightMapResolution = InSettings.bComputedLightMapResolution ? DataTracker.GetLightMapDimension() : InSettings.TargetLightMapResolution;
 
+#if WITH_EDITOR
+		//If we are running the automation test
+		if (GIsAutomationTesting)
+		{
+			StaticMesh->BuildCacheAutomationTestGuid = FGuid::NewGuid();
+		}
+#endif
 		StaticMesh->Build(bSilent);
 
 		if (ImposterBounds.IsValid)
@@ -2597,6 +2603,12 @@ void FMeshMergeUtilities::MergeComponentsToStaticMesh(const TArray<UPrimitiveCom
 		OutAssetsToSync.Add(StaticMesh);
 		OutMergedActorLocation = MergedAssetPivot;
 	}
+}
+
+void FMeshMergeUtilities::ExtractImposterToRawMesh(const UStaticMeshComponent* InImposterComponent, FMeshDescription& InImposterMesh) const
+{
+	check(InImposterComponent->bUseMaxLODAsImposter);
+	FMeshMergeHelpers::ExtractImposterToRawMesh(InImposterComponent, InImposterMesh);
 }
 
 void FMeshMergeUtilities::CreateMergedRawMeshes(FMeshMergeDataTracker& InDataTracker, const FMeshMergingSettings& InSettings, const TArray<UStaticMeshComponent*>& InStaticMeshComponentsToMerge, const TArray<UMaterialInterface*>& InUniqueMaterials, const TMap<UMaterialInterface*, UMaterialInterface*>& InCollapsedMaterialMap, const TMultiMap<FMeshLODKey, MaterialRemapPair>& InOutputMaterialsMap, bool bInMergeAllLODs, bool bInMergeMaterialData, const FVector& InMergedAssetPivot, TArray<FMeshDescription>& OutMergedRawMeshes) const
@@ -2665,7 +2677,8 @@ void FMeshMergeUtilities::CreateMergedRawMeshes(FMeshMergeDataTracker& InDataTra
 
 									// Note that at this point UniqueIndex is NOT a material index, but a unique section index!
 								}
-								else
+								
+								if(UniqueIndex == INDEX_NONE)
 								{
 									UniqueIndex = SourcePolygonGroupID.GetValue();
 								}
@@ -2984,37 +2997,37 @@ void FMeshMergeUtilities::MergeComponentsToInstances(const TArray<UPrimitiveComp
 
 					for(const FComponentEntry& ComponentEntry : ActorEntry.ComponentEntries)
 					{
-						auto AddInstancedStaticMeshComponent = [](AActor* InActor)
+						UInstancedStaticMeshComponent* NewComponent = nullptr;
+
+						NewComponent = (UInstancedStaticMeshComponent*)ActorEntry.MergedActor->FindComponentByClass(InSettings.ISMComponentToUse.Get());
+
+						if (NewComponent && NewComponent->PerInstanceSMData.Num() > 0)
 						{
-							// Check if we have a usable (empty) ISMC first
-							if(UInstancedStaticMeshComponent* ExistingComponent = InActor->FindComponentByClass<UInstancedStaticMeshComponent>())
-							{
-								if(ExistingComponent->PerInstanceSMData.Num() == 0)
-								{
-									return ExistingComponent;
-								}
-							}
+							NewComponent = nullptr;
+						}
+
+						if (NewComponent == nullptr)
+						{
+							NewComponent = NewObject<UInstancedStaticMeshComponent>(ActorEntry.MergedActor, InSettings.ISMComponentToUse.Get());
 						
-							UInstancedStaticMeshComponent* NewComponent = NewObject<UInstancedStaticMeshComponent>(InActor);
-							if(InActor->GetRootComponent())
+							if (ActorEntry.MergedActor->GetRootComponent())
 							{
 								// Attach to root if we already have one
-								NewComponent->AttachToComponent(InActor->GetRootComponent(), FAttachmentTransformRules::KeepRelativeTransform);
+								NewComponent->AttachToComponent(ActorEntry.MergedActor->GetRootComponent(), FAttachmentTransformRules::KeepRelativeTransform);
 							}
 							else
 							{
 								// Make a new root if we dont have a root already
-								InActor->SetRootComponent(NewComponent);
+								ActorEntry.MergedActor->SetRootComponent(NewComponent);
 							}
 
 							// Take 'instanced' ownership so it persists with this actor
-							InActor->RemoveOwnedComponent(NewComponent);
+							ActorEntry.MergedActor->RemoveOwnedComponent(NewComponent);
 							NewComponent->CreationMethod = EComponentCreationMethod::Instance;
-							InActor->AddOwnedComponent(NewComponent);
-							return NewComponent;
-						};
+							ActorEntry.MergedActor->AddOwnedComponent(NewComponent);
 
-						UInstancedStaticMeshComponent* NewComponent = AddInstancedStaticMeshComponent(ActorEntry.MergedActor);
+						}
+
 						NewComponent->SetStaticMesh(ComponentEntry.StaticMesh);
 						for(int32 MaterialIndex = 0; MaterialIndex < ComponentEntry.Materials.Num(); ++MaterialIndex)
 						{

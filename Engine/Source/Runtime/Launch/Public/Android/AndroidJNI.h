@@ -14,6 +14,7 @@ DECLARE_MULTICAST_DELEGATE_SixParams(FOnActivityResult, JNIEnv *, jobject, jobje
 
 DECLARE_MULTICAST_DELEGATE_ThreeParams(FOnSafetyNetAttestationResult, bool, const FString&, int32);
 
+DECLARE_MULTICAST_DELEGATE_TwoParams(FOnRouteServiceIntent, const FString&, const FString&);
 
 // Define all the Java classes/methods that the game will need to access to
 class FJavaWrapper
@@ -51,12 +52,13 @@ public:
 	static jmethodID AndroidThunkJava_GetMetaDataLong;
 	static jmethodID AndroidThunkJava_GetMetaDataFloat;
 	static jmethodID AndroidThunkJava_GetMetaDataString;
-	static jmethodID AndroidThunkJava_IsGearVRApplication;
+	static jmethodID AndroidThunkJava_IsOculusMobileApplication;
 	static jmethodID AndroidThunkJava_ShowHiddenAlertDialog;
 	static jmethodID AndroidThunkJava_LocalNotificationScheduleAtTime;
 	static jmethodID AndroidThunkJava_LocalNotificationClearAll;
+	static jmethodID AndroidThunkJava_LocalNotificationExists;
 	static jmethodID AndroidThunkJava_LocalNotificationGetLaunchNotification;
-	//static jmethodID AndroidThunkJava_LocalNotificationDestroyIfExists; - This is not needed yet but will be soon so just leaving commented out for now
+	static jmethodID AndroidThunkJava_LocalNotificationDestroyIfExists;
 	static jmethodID AndroidThunkJava_GetNetworkConnectionType;
 	static jmethodID AndroidThunkJava_GetAndroidId;
 	static jmethodID AndroidThunkJava_ShareURL;
@@ -72,6 +74,7 @@ public:
 
 	static jmethodID AndroidThunkCpp_VirtualInputIgnoreClick;
 	static jmethodID AndroidThunkCpp_IsVirtuaKeyboardShown;
+	static jmethodID AndroidThunkCpp_IsWebViewShown;
 
 	// InputDeviceInfo member field ids
 	static jclass InputDeviceInfoClass;
@@ -136,6 +139,7 @@ public:
 	 * Helper wrapper functions around the JNIEnv versions with NULL/error handling
 	 */
 	static jclass FindClass(JNIEnv* Env, const ANSICHAR* ClassName, bool bIsOptional);
+	static jclass FindClassGlobalRef(JNIEnv* Env, const ANSICHAR* ClassName, bool bIsOptional);
 	static jmethodID FindMethod(JNIEnv* Env, jclass Class, const ANSICHAR* MethodName, const ANSICHAR* MethodSignature, bool bIsOptional);
 	static jmethodID FindStaticMethod(JNIEnv* Env, jclass Class, const ANSICHAR* MethodName, const ANSICHAR* MethodSignature, bool bIsOptional);
 	static jfieldID FindField(JNIEnv* Env, jclass Class, const ANSICHAR* FieldName, const ANSICHAR* FieldType, bool bIsOptional);
@@ -155,11 +159,17 @@ public:
 	// Delegate that can be registered to that is called when an SafetyNet Attestation is finished
 	static FOnSafetyNetAttestationResult OnSafetyNetAttestationResultDelegate;
 
+	// Delegate that can be registered to be called when a service intent is received
+	static FOnRouteServiceIntent OnRouteServiceIntentDelegate;
+
 private:
 
 	/** Find GooglePlay "game services" classes and methods */
 	static void FindGooglePlayMethods(JNIEnv* Env);
 	/** Find GooglePlay billing classes and methods */
 	static void FindGooglePlayBillingMethods(JNIEnv* Env);
+
+	// Setup communication with wrapper apps
+	static void SetupEmbeddedCommunication(JNIEnv* Env);
 };
 #endif

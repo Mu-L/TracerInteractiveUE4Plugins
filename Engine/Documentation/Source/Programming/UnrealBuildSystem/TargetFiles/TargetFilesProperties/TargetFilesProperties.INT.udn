@@ -2,7 +2,7 @@ Availability: NoPublish
 Title: Build Configuration Properties Page
 Crumbs:
 Description: This is a procedurally generated markdown page.
-Version: 4.21
+Version: 4.23
 
 ### Read-Only Properties
 
@@ -38,9 +38,13 @@ $ UndecoratedConfiguration (UnrealTargetConfiguration): Specifies the configurat
 
 $ bBuildAllPlugins (Boolean): Build all the plugins that we can find, even if they're not enabled. This is particularly useful for content-only projects, where you're building the UE4Editor target but running it with a game that enables a plugin.
 
+$ bBuildAllModules (Boolean): Build all the modules that are valid for this target type. Used for CIS and making installed engine builds.
+
 $ AdditionalPlugins (List&lt;String&gt;): A list of additional plugins which need to be included in this target. This allows referencing non-optional plugin modules which cannot be disabled, and allows building against specific modules in program targets which do not fit the categories in ModuleHostType.
 
-$ ExcludePlugins (List&lt;String&gt;): List of plugins to be excluded from this target. Note that the project file may still reference them, so they should be marked as optional to avoid failing to find them at runtime.
+$ EnablePlugins (List&lt;String&gt;): Additional plugins that should be included for this target.
+
+$ DisablePlugins (List&lt;String&gt;): List of plugins to be disabled for this target. Note that the project file may still reference them, so they should be marked as optional to avoid failing to find them at runtime.
 
 $ PakSigningKeysFile (String): Path to the set of pak signing keys to embed in the executable.
 
@@ -48,13 +52,21 @@ $ SolutionDirectory (String): Allows a Program Target to specify it's own soluti
 
 $ bBuildInSolutionByDefault (Nullable&lt;Boolean&gt;): Whether the target should be included in the default solution build configuration
 
-$ bOutputToEngineBinaries (Boolean): Output the executable to the engine binaries folder.
-
 $ bShouldCompileAsDLL (Boolean): Whether this target should be compiled as a DLL.  Requires LinkType to be set to TargetLinkType.Monolithic.
 
 $ ExeBinariesSubFolder (String): Subfolder to place executables in, relative to the default location.
 
 $ GeneratedCodeVersion (EGeneratedCodeVersion): Allow target module to override UHT code generation version.
+
+$ bEnableMeshEditor (Boolean): Whether to enable the mesh editor.
+
+$ bCompileChaos (Boolean): Whether to compile the Chaos physics plugin.
+
+$ bUseChaos (Boolean): Whether to use the Chaos physics interface. This overrides the physx flags to disable APEX and NvCloth
+
+$ bCompileImmediatePhysics (Boolean): Whether to include the immediate mode physics interface. This overrides the physx flags to disable APEX and NvCloth
+
+$ bCustomSceneQueryStructure (Boolean): Whether scene query acceleration is done by UE4. The physx scene query structure is still created, but we do not use it.
 
 $ bCompilePhysX (Boolean): Whether to include PhysX support.
 
@@ -66,23 +78,15 @@ $ bCompileICU (Boolean): Whether to include ICU unicode/i18n support in Core.
 
 $ bCompileCEF3 (Boolean): Whether to compile CEF3 support.
 
-$ bBuildEditor (Boolean): Whether to compile the editor or not. Only desktop platforms (Windows or Mac) will use this, other platforms force this to false.
-
 $ bBuildRequiresCookedData (Boolean): Whether to compile code related to building assets. Consoles generally cannot build assets. Desktop platforms generally can.
 
 $ bBuildWithEditorOnlyData (Boolean): Whether to compile WITH_EDITORONLY_DATA disabled. Only Windows will use this, other platforms force this to false.
-
-$ bBuildDeveloperTools (Boolean): Whether to compile the developer tools.
 
 $ bForceBuildTargetPlatforms (Boolean): Whether to force compiling the target platform modules, even if they wouldn't normally be built.
 
 $ bForceBuildShaderFormats (Boolean): Whether to force compiling shader format modules, even if they wouldn't normally be built.
 
-$ bCompileSimplygon (Boolean): Whether we should compile in support for Simplygon or not.
-
-$ bCompileSimplygonSSF (Boolean): Whether we should compile in support for Simplygon's SSF library or not.
-
-$ bCompileLeanAndMeanUE (Boolean): Whether to compile lean and mean version of UE.
+$ bCompileCustomSQLitePlatform (Boolean): Whether we should compile SQLite using the custom "Unreal" platform (true), or using the native platform (false).
 
 $ bUseCacheFreedOSAllocs (Boolean): Whether to utilize cache freed OS allocs with MallocBinned
 
@@ -90,11 +94,9 @@ $ bCompileAgainstEngine (Boolean): Enabled for all builds that include the engin
 
 $ bCompileAgainstCoreUObject (Boolean): Enabled for all builds that include the CoreUObject project.  Disabled only when building standalone apps that only link with Core.
 
-$ bIncludeADO (Boolean): If true, include ADO database support in core.
+$ bCompileAgainstApplicationCore (Boolean): Enabled for builds that need to initialize the ApplicationCore module. Command line utilities do not normally need this.
 
 $ bCompileRecast (Boolean): Whether to compile Recast navmesh generation.
-
-$ bCompileSpeedTree (Boolean): Whether to compile SpeedTree support.
 
 $ bForceEnableExceptions (Boolean): Enable exceptions for all modules.
 
@@ -112,7 +114,11 @@ $ bCompileWithPluginSupport (Boolean): Whether to include plugin support.
 
 $ bIncludePluginsForTargetPlatforms (Boolean): Whether to allow plugins which support all target platforms.
 
+$ bCompileWithAccessibilitySupport (Boolean): Whether to allow accessibility code in both Slate and the OS layer.
+
 $ bWithPerfCounters (Boolean): Whether to include PerfCounters support.
+
+$ bUseDebugLiveCodingConsole (Boolean): Whether to enable support for live coding
 
 $ bUseLoggingInShipping (Boolean): Whether to turn on logging for test/shipping builds.
 
@@ -144,11 +150,11 @@ $ bHasExports (Boolean): Whether the final executable should export symbols.
 
 $ bPrecompile (Boolean): Make static libraries for all engine modules as intermediates for this target.
 
-$ bUsePrecompiled (Boolean): Use existing static libraries for all engine modules in this target.
-
 $ bEnableOSX109Support (Boolean): Whether we should compile with support for OS X 10.9 Mavericks. Used for some tools that we need to be compatible with this version of OS X.
 
 $ bIsBuildingConsoleApplication (Boolean): True if this is a console application that's being built.
+
+$ bBuildAdditionalConsoleApp (Boolean): If true, creates an additional console application. Hack for Windows, where it's not possible to conditionally inherit a parent's console Window depending on how the application is invoked; you have to link the same executable with a different subsystem setting.
 
 $ bDisableSymbolCache (Boolean): True if debug symbols that are cached for some platforms should not be created.
 
@@ -161,6 +167,10 @@ $ bUseAdaptiveUnityBuild (Boolean): Use a heuristic to determine which files are
 $ bAdaptiveUnityDisablesOptimizations (Boolean): Disable optimization for files that are in the adaptive non-unity working set.
 
 $ bAdaptiveUnityDisablesPCH (Boolean): Disables force-included PCHs for files that are in the adaptive non-unity working set.
+
+$ bAdaptiveUnityCreatesDedicatedPCH (Boolean): Creates a dedicated PCH for each source file in the working set, allowing faster iteration on cpp-only changes.
+
+$ bAdaptiveUnityEnablesEditAndContinue (Boolean): Creates a dedicated PCH for each source file in the working set, allowing faster iteration on cpp-only changes.
 
 $ MinGameModuleSourceFilesForUnityBuild (Int32): The number of source files in a game module before unity build will be activated for that module.  This allows small game modules to have faster iterative compile times for single files, at the expense of slower full rebuild times.  This setting can be overridden by the bFasterWithoutUnity option in a module's Build.cs file.
 
@@ -202,11 +212,9 @@ $ bPGOOptimize (Boolean): Whether to optimize this build with Profile Guided Opt
 
 $ bAllowASLRInShipping (Boolean): Whether to allow the use of ASLR (address space layout randomization) if supported. Only applies to shipping builds.
 
-$ bSupportEditAndContinue (Boolean): Whether to support edit and continue.  Only works on Microsoft compilers in 32-bit compiles.
+$ bSupportEditAndContinue (Boolean): Whether to support edit and continue.  Only works on Microsoft compilers.
 
 $ bOmitFramePointers (Boolean): Whether to omit frame pointers or not. Disabling is useful for e.g. memory profiling on the PC.
-
-$ bStripSymbolsOnIOS (Boolean): Whether to strip iOS symbols or not (implied by bGeneratedSYMFile).
 
 $ bUseMallocProfiler (Boolean): If true, then enable memory profiling in the build (defines USE_MALLOC_PROFILER=1 and forces bOmitFramePointers=false).
 
@@ -228,10 +236,6 @@ $ BundleVersion (String): Bundle version for Mac apps.
 
 $ bDeployAfterCompile (Boolean): Whether to deploy the executable after compilation on platforms that require deployment.
 
-$ bCreateStubIPA (Boolean): If true, then a stub IPA will be generated when compiling is done (minimal files needed for a valid IPA).
-
-$ bCopyAppBundleBackToDevice (Boolean): If true, then a stub IPA will be generated when compiling is done (minimal files needed for a valid IPA).
-
 $ bAllowRemotelyCompiledPCHs (Boolean): When enabled, allows XGE to compile pre-compiled header files on remote machines.  Otherwise, PCHs are always generated locally.
 
 $ bCheckSystemHeadersForModification (Boolean): Whether headers in system paths should be checked for modification when determining outdated actions.
@@ -244,13 +248,21 @@ $ bFlushBuildDirOnRemoteMac (Boolean): Whether to clean Builds directory on a re
 
 $ bPrintToolChainTimingInfo (Boolean): Whether to write detailed timing info from the compiler and linker.
 
-$ bHideSymbolsByDefault (Boolean): Whether to hide symbols by default on POSIX platforms
+$ bParseTimingInfoForTracing (Boolean): Whether to parse timing data into a tracing file compatible with chrome://tracing.
+
+$ bPublicSymbolsByDefault (Boolean): Whether to expose all symbols as public by default on POSIX platforms
 
 $ ToolChainName (String): Allows overriding the toolchain to be created for this target. This must match the name of a class declared in the UnrealBuildTool assembly.
 
-$ bAllowGeneratedIniWhenCooked (Boolean): Whether to load generated ini files in cooked build
+$ bDisableUnverifiedCertificates (Boolean): Whether to allow engine configuration to determine if we can load unverified certificates.
+
+$ bAllowGeneratedIniWhenCooked (Boolean): Whether to load generated ini files in cooked build, (GameUserSettings.ini loaded either way)
+
+$ bAllowNonUFSIniWhenCooked (Boolean): Whether to load non-ufs ini files in cooked build, (GameUserSettings.ini loaded either way)
 
 $ bLegacyPublicIncludePaths (Boolean): Add all the public folders as include paths for the compile environment.
+
+$ CppStandard (CppStandardVersion): Which C++ stanard to use for compiling this target
 
 $ BuildVersion (String): The build version string
 
@@ -258,16 +270,26 @@ $ GlobalDefinitions (List&lt;String&gt;): Macros to define globally across the w
 
 $ ProjectDefinitions (List&lt;String&gt;): Macros to define across all macros in the project.
 
+$ ExportPublicHeader (String): Specifies the path to write a header containing public definitions for this target. Useful when building a DLL to be consumed by external build processes.
+
 $ ExtraModuleNames (List&lt;String&gt;): List of additional modules to be compiled into the target.
 
-$ BuildEnvironment (TargetBuildEnvironment): Specifies the build environment for this target. See TargetBuildEnvironment for more information on the available options.
+$ ManifestFileNames (List&lt;FileReference&gt;): Path to a manifest to output for this target
+
+$ DependencyListFileNames (List&lt;FileReference&gt;): Path to a list of dependencies for this target, when precompiling
+
+$ bOverrideBuildEnvironment (Boolean): Whether to ignore violations to the shared build environment (eg. editor targets modifying definitions)
 
 $ PreBuildSteps (List&lt;String&gt;): Specifies a list of steps which should be executed before this target is built, in the context of the host platform's shell. The following variables will be expanded before execution: $(EngineDir), $(ProjectDir), $(TargetName), $(TargetPlatform), $(TargetConfiguration), $(TargetType), $(ProjectFile).
 
 $ PostBuildSteps (List&lt;String&gt;): Specifies a list of steps which should be executed after this target is built, in the context of the host platform's shell. The following variables will be expanded before execution: $(EngineDir), $(ProjectDir), $(TargetName), $(TargetPlatform), $(TargetConfiguration), $(TargetType), $(ProjectFile).
 
+$ AdditionalBuildProducts (List&lt;String&gt;): Specifies additional build products produced as part of this target.
+
 $ AdditionalCompilerArguments (String): Additional arguments to pass to the compiler
 
 $ AdditionalLinkerArguments (String): Additional arguments to pass to the linker
+
+$ GeneratedProjectName (String): When generating project files, specifies the name of the project file to use when there are multiple targets of the same type.
 
 

@@ -8,7 +8,7 @@
 #include "LandscapeProxy.h"
 #include "Editor/LandscapeEditor/Private/LandscapeEdMode.h"
 #include "LandscapeFileFormatInterface.h"
-#include "LandscapeBPCustomBrush.h"
+#include "LandscapeBlueprintBrush.h"
 
 #include "LandscapeEditorObject.generated.h"
 
@@ -29,8 +29,11 @@ enum class ELandscapeToolFlattenMode : int8
 	/** Flatten may only lower values, values below the clicked point will be left unchanged */
 	Lower = 2,
 
+	/** Flatten to closest specific terrace interval at the clicked point */
+	Interval = 3,
+
 	/** Flatten to specific terrace height intervals */
-	Terrace = 3
+	Terrace = 4
 };
 
 UENUM()
@@ -248,7 +251,7 @@ class ULandscapeEditorObject : public UObject
 	// Common Tool Settings:
 
 	// Strength of the tool. If you're using a pen/tablet with pressure-sensing, the pressure used affects the strength of the tool.
-	UPROPERTY(Category="Tool Settings", EditAnywhere, NonTransactional, meta=(ShowForTools="Paint,Sculpt,Smooth,Flatten,Erosion,HydraErosion,Noise,Mask,CopyPaste", ClampMin="0", ClampMax="10", UIMin="0", UIMax="1"))
+	UPROPERTY(Category="Tool Settings", EditAnywhere, NonTransactional, meta=(ShowForTools="Paint,Sculpt,Erase,Smooth,Flatten,Erosion,HydraErosion,Noise,Mask,CopyPaste", ClampMin="0", ClampMax="10", UIMin="0", UIMax="1"))
 	float ToolStrength;
 
 	// Enable to make tools blend towards a target value
@@ -262,6 +265,9 @@ class ULandscapeEditorObject : public UObject
 	// I have no idea what this is for but it's used by the noise and erosion tools, and isn't exposed to the UI
 	UPROPERTY(NonTransactional)
 	float MaximumValueRadius;
+
+	UPROPERTY(Category="Tool Settings", EditAnywhere, NonTransactional, meta=(ShowForTools="Flatten,Smooth,Erosion,HydraErosion,Ramp", ShowForTargetTypes="Heightmap", ShowForLandscapeLayerSystem))
+	bool bCombinedLayersOperation;
 
 	// Flatten Tool:
 
@@ -445,10 +451,10 @@ class ULandscapeEditorObject : public UObject
 	UPROPERTY(Category="Tool Settings", EditAnywhere, NonTransactional, meta=(DisplayName="Smoothing Width", ShowForTools="Mirror", ClampMin="0", UIMin="0", UIMax="20"))
 	int32 MirrorSmoothingWidth;
 
-	// BP Custom Tool
+	// Blueprint Brush Tool
 
-	UPROPERTY(Category = "Tool Settings", EditAnywhere, Transient, meta = (DisplayName = "Blueprint Brush", ShowForTools = "BPCustom"))
-	TSubclassOf<ALandscapeBlueprintCustomBrush> BlueprintCustomBrush;
+	UPROPERTY(Category = "Tool Settings", EditAnywhere, Transient, meta = (DisplayName = "Blueprint Brush", ShowForTools = "BlueprintBrush"))
+	TSubclassOf<ALandscapeBlueprintBrush> BlueprintBrush;
 
 	// Resize Landscape Tool
 
@@ -520,6 +526,8 @@ private:
 	UPROPERTY(NonTransactional)
 	TArray<uint16> ImportLandscape_Data;
 public:
+	UPROPERTY(Category = "New Landscape", EditAnywhere, NonTransactional, meta = (DisplayName= "Enable Layer Support", ShowForTools= "NewLandscape"))
+	bool bCanHaveLayersContent = false;
 
 	// Whether the imported alpha maps are to be interpreted as "layered" or "additive" (UE4 uses additive internally)
 	UPROPERTY(Category="New Landscape", EditAnywhere, NonTransactional, meta=(DisplayName="Layer Alphamap Type", ShowForTools="NewLandscape"))
@@ -605,6 +613,9 @@ public:
 
 	UPROPERTY(Category = "Target Layers", EditAnywhere)
 	bool ShowUnusedLayers;	
+
+	UPROPERTY(Transient)
+	int32 CurrentLayerIndex;
 
 #if WITH_EDITOR
 	//~ Begin UObject Interface

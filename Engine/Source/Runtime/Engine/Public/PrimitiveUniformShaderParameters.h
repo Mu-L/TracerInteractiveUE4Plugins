@@ -5,6 +5,7 @@
 
 #include "CoreMinimal.h"
 #include "Engine/EngineTypes.h"
+#include "SceneTypes.h"
 #include "RenderResource.h"
 #include "ShaderParameters.h"
 #include "UniformBuffer.h"
@@ -13,6 +14,7 @@
 /** 
  * The uniform shader parameters associated with a primitive. 
  * Note: Must match FPrimitiveSceneData in shaders.
+ * Note 2: Try to keep this 16 byte aligned. i.e |Matrix4x4|Vector3,float|Vector3,float|Vector4|  _NOT_  |Vector3,(waste padding)|Vector3,(waste padding)|Vector3. Or at least mark out padding if it can't be avoided.
  */
 BEGIN_GLOBAL_SHADER_PARAMETER_STRUCT(FPrimitiveUniformShaderParameters,ENGINE_API)
 	SHADER_PARAMETER(FMatrix,LocalToWorld)		// always needed
@@ -28,14 +30,19 @@ BEGIN_GLOBAL_SHADER_PARAMETER_STRUCT(FPrimitiveUniformShaderParameters,ENGINE_AP
 	SHADER_PARAMETER_EX(float,DecalReceiverMask,EShaderPrecisionModifier::Half)
 	SHADER_PARAMETER_EX(float,PerObjectGBufferData,EShaderPrecisionModifier::Half)		// 0..1, 2 bits, bDistanceFieldRepresentation, bHeightfieldRepresentation
 	SHADER_PARAMETER_EX(float,UseVolumetricLightmapShadowFromStationaryLights,EShaderPrecisionModifier::Half)		
-	SHADER_PARAMETER_EX(float,UseEditorDepthTest,EShaderPrecisionModifier::Half)
+	SHADER_PARAMETER_EX(float,DrawsVelocity,EShaderPrecisionModifier::Half)
 	SHADER_PARAMETER_EX(FVector4,ObjectOrientation,EShaderPrecisionModifier::Half)
 	SHADER_PARAMETER_EX(FVector4,NonUniformScale,EShaderPrecisionModifier::Half)
 	SHADER_PARAMETER(FVector, LocalObjectBoundsMin)		// This is used in a custom material function (ObjectLocalBounds.uasset)
-	SHADER_PARAMETER(FVector, LocalObjectBoundsMax)		// This is used in a custom material function (ObjectLocalBounds.uasset)
 	SHADER_PARAMETER(uint32,LightingChannelMask)
+	SHADER_PARAMETER(FVector, LocalObjectBoundsMax)		// This is used in a custom material function (ObjectLocalBounds.uasset)
 	SHADER_PARAMETER(uint32,LightmapDataIndex)
+	SHADER_PARAMETER(FVector, PreSkinnedLocalBoundsMin)	// Local space min bounds, pre-skinning
 	SHADER_PARAMETER(int32, SingleCaptureIndex)
+	SHADER_PARAMETER(FVector, PreSkinnedLocalBoundsMax)	// Local space max bounds, pre-skinning
+    SHADER_PARAMETER(uint32, OutputVelocity)
+	SHADER_PARAMETER_ARRAY(FVector4, CustomPrimitiveData, [FCustomPrimitiveData::NumCustomPrimitiveDataFloat4s]) // Custom data per primitive that can be accessed through material expression parameters and modified through UStaticMeshComponent
+
 END_GLOBAL_SHADER_PARAMETER_STRUCT()
 
 /** Initializes the primitive uniform shader parameters. */
@@ -45,16 +52,19 @@ inline FPrimitiveUniformShaderParameters GetPrimitiveUniformShaderParameters(
 	FVector ActorPosition,
 	const FBoxSphereBounds& WorldBounds,
 	const FBoxSphereBounds& LocalBounds,
+	const FBoxSphereBounds& PreSkinnedLocalBounds,
 	bool bReceivesDecals,
 	bool bHasDistanceFieldRepresentation,
 	bool bHasCapsuleRepresentation,
 	bool bUseSingleSampleShadowFromStationaryLights,
 	bool bUseVolumetricLightmap,
-	bool bUseEditorDepthTest,
+	bool bDrawsVelocity,
 	uint32 LightingChannelMask,
 	float LpvBiasMultiplier,
 	uint32 LightmapDataIndex,
-	int32 SingleCaptureIndex
+	int32 SingleCaptureIndex,
+	bool bOutputVelocity,
+	const FCustomPrimitiveData* CustomPrimitiveData
 )
 {
 	FPrimitiveUniformShaderParameters Result;
@@ -66,6 +76,8 @@ inline FPrimitiveUniformShaderParameters GetPrimitiveUniformShaderParameters(
 	Result.ObjectBounds = WorldBounds.BoxExtent;
 	Result.LocalObjectBoundsMin = LocalBounds.GetBoxExtrema(0); // 0 == minimum
 	Result.LocalObjectBoundsMax = LocalBounds.GetBoxExtrema(1); // 1 == maximum
+	Result.PreSkinnedLocalBoundsMin = PreSkinnedLocalBounds.GetBoxExtrema(0); // 0 == minimum
+	Result.PreSkinnedLocalBoundsMax = PreSkinnedLocalBounds.GetBoxExtrema(1); // 1 == maximum
 	Result.ObjectOrientation = LocalToWorld.GetUnitAxis( EAxis::Z );
 	Result.ActorWorldPosition = ActorPosition;
 	Result.LightingChannelMask = LightingChannelMask;
@@ -91,24 +103,61 @@ inline FPrimitiveUniformShaderParameters GetPrimitiveUniformShaderParameters(
 	Result.PerObjectGBufferData = (2 * (int32)bHasCapsuleRepresentation + (int32)bHasDistanceFieldRepresentation) / 3.0f;
 	Result.UseSingleSampleShadowFromStationaryLights = bUseSingleSampleShadowFromStationaryLights ? 1.0f : 0.0f;
 	Result.UseVolumetricLightmapShadowFromStationaryLights = bUseVolumetricLightmap && bUseSingleSampleShadowFromStationaryLights ? 1.0f : 0.0f;
-	Result.UseEditorDepthTest = bUseEditorDepthTest ? 1 : 0;
+	Result.DrawsVelocity = bDrawsVelocity ? 1 : 0;
 	Result.LightmapDataIndex = LightmapDataIndex;
 	Result.SingleCaptureIndex = SingleCaptureIndex;
+	Result.OutputVelocity = (bOutputVelocity) ? 1 : 0;
+
+	// Clear to 0
+	FMemory::Memzero(Result.CustomPrimitiveData);
+
+	// If this primitive has custom primitive data, set it
+	if (CustomPrimitiveData)
+	{
+		// Copy at most up to the max supported number of dwords for safety
+		FMemory::Memcpy(&Result.CustomPrimitiveData, CustomPrimitiveData->Data.GetData(), CustomPrimitiveData->Data.GetTypeSize() * FMath::Min(CustomPrimitiveData->Data.Num(), FCustomPrimitiveData::NumCustomPrimitiveDataFloats));
+	}
 	return Result;
+}
+
+/** Initializes the primitive uniform shader parameters. Pre-skinned local bounds default to LocalBounds */
+inline FPrimitiveUniformShaderParameters GetPrimitiveUniformShaderParameters(
+	const FMatrix& LocalToWorld,
+	const FMatrix& PreviousLocalToWorld,
+	FVector ActorPosition,
+	const FBoxSphereBounds& WorldBounds,
+	const FBoxSphereBounds& LocalBounds,
+	bool bReceivesDecals,
+	bool bHasDistanceFieldRepresentation,
+	bool bHasCapsuleRepresentation,
+	bool bUseSingleSampleShadowFromStationaryLights,
+	bool bUseVolumetricLightmap,
+	bool bDrawsVelocity,
+	uint32 LightingChannelMask,
+	float LpvBiasMultiplier,
+	uint32 LightmapDataIndex,
+	int32 SingleCaptureIndex,
+    bool bOutputVelocity
+)
+{
+	// Pass through call
+	return GetPrimitiveUniformShaderParameters(LocalToWorld, PreviousLocalToWorld, ActorPosition, WorldBounds, LocalBounds, LocalBounds, bReceivesDecals, bHasDistanceFieldRepresentation, bHasCapsuleRepresentation, 
+		bUseSingleSampleShadowFromStationaryLights, bUseVolumetricLightmap, bDrawsVelocity, LightingChannelMask, LpvBiasMultiplier, LightmapDataIndex, SingleCaptureIndex, bOutputVelocity, nullptr);
 }
 
 inline TUniformBufferRef<FPrimitiveUniformShaderParameters> CreatePrimitiveUniformBufferImmediate(
 	const FMatrix& LocalToWorld,
 	const FBoxSphereBounds& WorldBounds,
 	const FBoxSphereBounds& LocalBounds,
+	const FBoxSphereBounds& PreSkinnedLocalBounds,
 	bool bReceivesDecals,
-	bool bUseEditorDepthTest,
+	bool bDrawsVelocity,
 	float LpvBiasMultiplier = 1.0f
 	)
 {
 	check(IsInRenderingThread());
 	return TUniformBufferRef<FPrimitiveUniformShaderParameters>::CreateUniformBufferImmediate(
-		GetPrimitiveUniformShaderParameters(LocalToWorld, LocalToWorld, WorldBounds.Origin, WorldBounds, LocalBounds, bReceivesDecals, false, false, false, false, bUseEditorDepthTest, GetDefaultLightingChannelMask(), LpvBiasMultiplier, INDEX_NONE, INDEX_NONE),
+		GetPrimitiveUniformShaderParameters(LocalToWorld, LocalToWorld, WorldBounds.Origin, WorldBounds, LocalBounds, PreSkinnedLocalBounds, bReceivesDecals, false, false, false, false, bDrawsVelocity, GetDefaultLightingChannelMask(), LpvBiasMultiplier, INDEX_NONE, INDEX_NONE, false, nullptr),
 		UniformBuffer_MultiFrame
 		);
 }
@@ -128,11 +177,12 @@ inline FPrimitiveUniformShaderParameters GetIdentityPrimitiveParameters()
 		false,
 		false,
 		false,
-		true,
+		/* bDrawsVelocity = */ true,
 		GetDefaultLightingChannelMask(),
 		1.0f,		// LPV bias
 		INDEX_NONE,
-		INDEX_NONE
+		INDEX_NONE,
+		false
 	);
 }
 
@@ -156,7 +206,7 @@ extern ENGINE_API TGlobalResource<FIdentityPrimitiveUniformBuffer> GIdentityPrim
 struct FPrimitiveSceneShaderData
 {
 	// Must match usf
-	enum { PrimitiveDataStrideInFloat4s = 26 };
+	enum { PrimitiveDataStrideInFloat4s = 35 };
 
 	FVector4 Data[PrimitiveDataStrideInFloat4s];
 
@@ -175,7 +225,7 @@ struct FPrimitiveSceneShaderData
 	ENGINE_API void Setup(const FPrimitiveUniformShaderParameters& PrimitiveUniformShaderParameters);
 };
 
-class FSinglePrimitiveStructuredBuffer : public FRenderResource
+class ENGINE_VTABLE FSinglePrimitiveStructuredBuffer : public FRenderResource
 {
 public:
 

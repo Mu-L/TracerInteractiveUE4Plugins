@@ -13,11 +13,52 @@
 
 #include "InstancedFoliageActor.generated.h"
 
+// Custom serialization version for all packages containing Instance Foliage
+struct FFoliageCustomVersion
+{
+	enum Type
+	{
+		// Before any version changes were made in the plugin
+		BeforeCustomVersionWasAdded = 0,
+		// Converted to use HierarchicalInstancedStaticMeshComponent
+		FoliageUsingHierarchicalISMC = 1,
+		// Changed Component to not RF_Transactional
+		HierarchicalISMCNonTransactional = 2,
+		// Added FoliageTypeUpdateGuid
+		AddedFoliageTypeUpdateGuid = 3,
+		// Use a GUID to determine whic procedural actor spawned us
+		ProceduralGuid = 4,
+		// Support for cross-level bases 
+		CrossLevelBase = 5,
+		// FoliageType for details customization
+		FoliageTypeCustomization = 6,
+		// FoliageType for details customization continued
+		FoliageTypeCustomizationScaling = 7,
+		// FoliageType procedural scale and shade settings updated
+		FoliageTypeProceduralScaleAndShade = 8,
+		// Added FoliageHISMC and blueprint support
+		FoliageHISMCBlueprints = 9,
+		// Added Mobility setting to UFoliageType
+		AddedMobility = 10,
+		// Make sure that foliage has FoliageHISMC class
+		FoliageUsingFoliageISMC = 11,
+		// Foliage Actor Support
+		FoliageActorSupport = 12,
+		// Foliage Actor (No weak ptr)
+		FoliageActorSupportNoWeakPtr = 13,
+		// -----<new versions can be added above this line>-------------------------------------------------
+		VersionPlusOne,
+		LatestVersion = VersionPlusOne - 1
+	};
+
+	// The GUID for this custom version number
+	const static FGuid GUID;
+
+private:
+	FFoliageCustomVersion() {}
+};
+
 class UProceduralFoliageComponent;
-struct FDesiredFoliageInstance;
-struct FFoliageInstance;
-struct FFoliageInstancePlacementInfo;
-struct FFoliageMeshInfo;
 
 // Function for filtering out hit components during FoliageTrace
 typedef TFunction<bool(const UPrimitiveComponent*)> FFoliageTraceFilterFunc;
@@ -33,7 +74,7 @@ public:
 	FFoliageInstanceBaseCache InstanceBaseCache;
 #endif// WITH_EDITORONLY_DATA
 
-	TMap<UFoliageType*, TUniqueObj<FFoliageMeshInfo>> FoliageMeshes;
+	TMap<UFoliageType*, TUniqueObj<FFoliageInfo>> FoliageInfos;
 
 public:
 	//~ Begin UObject Interface.
@@ -46,6 +87,8 @@ public:
 	// we don't want to have our components automatically destroyed by the Blueprint code
 	virtual void RerunConstructionScripts() override {}
 	virtual bool IsLevelBoundsRelevant() const override { return false; }
+
+	FOLIAGE_API static bool IsOwnedByFoliage(const AActor* InActor);
 protected:
 	// Default InternalTakeRadialDamage behavior finds and scales damage for the closest component which isn't appropriate for foliage.
 	virtual float InternalTakeRadialDamage(float Damage, struct FRadialDamageEvent const& RadialDamageEvent, class AController* EventInstigator, AActor* DamageCauser) override;
@@ -55,17 +98,21 @@ public:
 	virtual void BeginDestroy() override;
 	virtual void Destroyed() override;
 	FOLIAGE_API void CleanupDeletedFoliageType();
+
+	// Delegate type for selection change events
+	DECLARE_MULTICAST_DELEGATE_TwoParams(FOnSelectionChanged, bool, const TArray<AActor*>&);
+	FOLIAGE_API static FOnSelectionChanged SelectionChanged;
 #endif
 	//~ End AActor Interface.
 
 
-	// Performs a reverse lookup from a mesh to a local foliage type (i.e. the foliage type owned exclusively by this IFA)
-	FOLIAGE_API UFoliageType* GetLocalFoliageTypeForMesh(const UStaticMesh* InMesh, FFoliageMeshInfo** OutMeshInfo = nullptr);
+	// Performs a reverse lookup from a source object to a local foliage type (i.e. the foliage type owned exclusively by this IFA)
+	FOLIAGE_API UFoliageType* GetLocalFoliageTypeForSource(const UObject* InSource, FFoliageInfo** OutMeshInfo = nullptr);
 	
-	// Performs a reverse lookup from a mesh to all the foliage types that are currently using that mesh (includes assets and blueprint classes)
-	FOLIAGE_API void GetAllFoliageTypesForMesh(const UStaticMesh* InMesh, TArray<const UFoliageType*>& OutFoliageTypes);
+	// Performs a reverse lookup from a source object to all the foliage types that are currently using that object (includes assets and blueprint classes)
+	FOLIAGE_API void GetAllFoliageTypesForSource(const UObject* InSource, TArray<const UFoliageType*>& OutFoliageTypes);
 	
-	FOLIAGE_API FFoliageMeshInfo* FindFoliageTypeOfClass(TSubclassOf<UFoliageType_InstancedStaticMesh> Class);
+	FOLIAGE_API FFoliageInfo* FindFoliageTypeOfClass(TSubclassOf<UFoliageType_InstancedStaticMesh> Class);
 
 	// Finds the number of instances overlapping with the sphere. 
 	FOLIAGE_API int32 GetOverlappingSphereCount(const UFoliageType* FoliageType, const FSphere& Sphere) const;
@@ -78,10 +125,10 @@ public:
 	FOLIAGE_API void GetOverlappingMeshCounts(const FSphere& Sphere, TMap<UStaticMesh*, int32>& OutCounts) const;
 
 	// Finds a mesh entry
-	FOLIAGE_API FFoliageMeshInfo* FindMesh(const UFoliageType* InType);
+	FOLIAGE_API FFoliageInfo* FindInfo(const UFoliageType* InType);
 
 	// Finds a mesh entry
-	FOLIAGE_API const FFoliageMeshInfo* FindMesh(const UFoliageType* InType) const;
+	FOLIAGE_API const FFoliageInfo* FindInfo(const UFoliageType* InType) const;
 
 	/**
 	* Get the instanced foliage actor for the current streaming level.
@@ -148,12 +195,12 @@ public:
 	bool ContainsInstancesFromProceduralFoliageComponent(const UProceduralFoliageComponent* ProceduralFoliageComponent);
 
 	// Finds a mesh entry or adds it if it doesn't already exist
-	FOLIAGE_API FFoliageMeshInfo* FindOrAddMesh(UFoliageType* InType);
+	FOLIAGE_API FFoliageInfo* FindOrAddMesh(UFoliageType* InType);
 
-	FOLIAGE_API UFoliageType* AddFoliageType(const UFoliageType* InType, FFoliageMeshInfo** OutInfo = nullptr);
+	FOLIAGE_API UFoliageType* AddFoliageType(const UFoliageType* InType, FFoliageInfo** OutInfo = nullptr);
 	// Add a new static mesh.
-	FOLIAGE_API FFoliageMeshInfo* AddMesh(UStaticMesh* InMesh, UFoliageType** OutSettings = nullptr, const UFoliageType_InstancedStaticMesh* DefaultSettings = nullptr);
-	FOLIAGE_API FFoliageMeshInfo* AddMesh(UFoliageType* InType);
+	FOLIAGE_API FFoliageInfo* AddMesh(UStaticMesh* InMesh, UFoliageType** OutSettings = nullptr, const UFoliageType_InstancedStaticMesh* DefaultSettings = nullptr);
+	FOLIAGE_API FFoliageInfo* AddMesh(UFoliageType* InType);
 
 	// Remove the FoliageType from the list, and all its instances.
 	FOLIAGE_API void RemoveFoliageType(UFoliageType** InFoliageType, int32 Num);
@@ -161,17 +208,20 @@ public:
 	// Select an individual instance.
 	FOLIAGE_API void SelectInstance(UInstancedStaticMeshComponent* InComponent, int32 InComponentInstanceIndex, bool bToggle);
 
+	// Select an individual instance.
+	FOLIAGE_API void SelectInstance(AActor* InActor, bool bToggle);
+
 	// Whether actor has selected instances
 	FOLIAGE_API bool HasSelectedInstances() const;
 
 	// Will return all the foliage type used by currently selected instances
-	FOLIAGE_API TMap<UFoliageType*, FFoliageMeshInfo*> GetSelectedInstancesFoliageType();
+	FOLIAGE_API TMap<UFoliageType*, FFoliageInfo*> GetSelectedInstancesFoliageType();
 
 	// Will return all the foliage type used
-	FOLIAGE_API TMap<UFoliageType*, FFoliageMeshInfo*> GetAllInstancesFoliageType();
+	FOLIAGE_API TMap<UFoliageType*, FFoliageInfo*> GetAllInstancesFoliageType();
 
-	// Propagate the selected instances to the actual render components
-	FOLIAGE_API void ApplySelectionToComponents(bool bApply);
+	// Propagate the selected instances to the actual foliage implementation
+	FOLIAGE_API void ApplySelection(bool bApply);
 
 	// Returns the location for the widget
 	FOLIAGE_API bool GetSelectionLocation(FVector& OutLocation) const;
@@ -180,8 +230,8 @@ public:
 	static FOLIAGE_API bool HasFoliageAttached(UActorComponent* InComponent);
 
 	/* Called to notify InstancedFoliageActor that a UFoliageType has been modified */
-	void NotifyFoliageTypeChanged(UFoliageType* FoliageType, bool bMeshChanged);
-	void NotifyFoliageTypeWillChange(UFoliageType* FoliageType, bool bMeshChanged);
+	void NotifyFoliageTypeChanged(UFoliageType* FoliageType, bool bSourceChanged);
+	void NotifyFoliageTypeWillChange(UFoliageType* FoliageType);
 
 	DECLARE_EVENT_OneParam(AInstancedFoliageActor, FOnFoliageTypeMeshChanged, UFoliageType*);
 	FOnFoliageTypeMeshChanged& OnFoliageTypeMeshChanged() { return OnFoliageTypeMeshChangedEvent; }
@@ -194,21 +244,25 @@ private:
 #if WITH_EDITORONLY_DATA
 	// Deprecated data, will be converted and cleaned up in PostLoad
 	TMap<UFoliageType*, TUniqueObj<struct FFoliageMeshInfo_Deprecated>> FoliageMeshes_Deprecated;
+	TMap<UFoliageType*, TUniqueObj<struct FFoliageMeshInfo_Deprecated2>> FoliageMeshes_Deprecated2;
 #endif//WITH_EDITORONLY_DATA
 	
 #if WITH_EDITOR
+	void ClearSelection();
 	void OnLevelActorMoved(AActor* InActor);
 	void OnLevelActorDeleted(AActor* InActor);
+	void OnApplyLevelTransform(const FTransform& InTransform);
 	void OnPostApplyLevelOffset(ULevel* InLevel, UWorld* InWorld, const FVector& InOffset, bool bWorldShift);
 
 	// Move instances to a foliage actor in target level
-	FOLIAGE_API void MoveInstancesToLevel(ULevel* InTargetLevel, TSet<int32>& InInstanceList, FFoliageMeshInfo* InCurrentMeshInfo, UFoliageType* InFoliageType);
+	FOLIAGE_API void MoveInstancesToLevel(ULevel* InTargetLevel, TSet<int32>& InInstanceList, FFoliageInfo* InCurrentMeshInfo, UFoliageType* InFoliageType);
 #endif
 private:
 #if WITH_EDITOR
 	FDelegateHandle OnLevelActorMovedDelegateHandle;
 	FDelegateHandle OnLevelActorDeletedDelegateHandle;
 	FDelegateHandle OnPostApplyLevelOffsetDelegateHandle;
+	FDelegateHandle OnApplyLevelTransformDelegateHandle;
 
 	FOnFoliageTypeMeshChanged OnFoliageTypeMeshChangedEvent;
 #endif

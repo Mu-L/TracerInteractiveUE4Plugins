@@ -3,6 +3,7 @@
 /*=============================================================================
 D3D12View.h: D3D12 Resource Views
 =============================================================================*/
+#pragma once
 
 enum ViewSubresourceSubsetFlags
 {
@@ -648,20 +649,20 @@ public:
 	TD3D12ViewDescriptorHandle(FD3D12Device* InParentDevice)
 		: FD3D12DeviceChild(InParentDevice)
 	{
-		// Allocate descriptor slot
-		FD3D12Device* Device = GetParentDevice();
-		FD3D12OfflineDescriptorManager& DescriptorAllocator = Device->template GetViewDescriptorAllocator<TDesc>();
-		Handle = DescriptorAllocator.AllocateHeapSlot(Index);
-		check(Handle.ptr != 0);
+		Handle.ptr = 0;
+		AllocateDescriptorSlot();
 	}
 
 	~TD3D12ViewDescriptorHandle()
 	{
-		// Free descriptor slot
-		FD3D12Device* Device = GetParentDevice();
-		FD3D12OfflineDescriptorManager& DescriptorAllocator = Device->template GetViewDescriptorAllocator<TDesc>();
-		DescriptorAllocator.FreeHeapSlot(Handle, Index);
-		Handle.ptr = 0;
+		FreeDescriptorSlot();
+	}
+
+	void SetParentDevice(FD3D12Device* InParent)
+	{
+		check(!Parent && !Handle.ptr);
+		FD3D12DeviceChild::SetParentDevice(InParent);
+		AllocateDescriptorSlot();
 	}
 
 	void CreateView(const TDesc& Desc, ID3D12Resource* Resource)
@@ -684,6 +685,30 @@ public:
 
 	inline const CD3DX12_CPU_DESCRIPTOR_HANDLE& GetHandle() const { return Handle; }
 	inline uint32 GetIndex() const { return Index; }
+
+private:
+	void AllocateDescriptorSlot()
+	{
+		if (Parent)
+		{
+			FD3D12Device* Device = GetParentDevice();
+			FD3D12OfflineDescriptorManager& DescriptorAllocator = Device->template GetViewDescriptorAllocator<TDesc>();
+			Handle = DescriptorAllocator.AllocateHeapSlot(Index);
+			check(Handle.ptr != 0);
+		}
+	}
+
+	void FreeDescriptorSlot()
+	{
+		if (Parent)
+		{
+			FD3D12Device* Device = GetParentDevice();
+			FD3D12OfflineDescriptorManager& DescriptorAllocator = Device->template GetViewDescriptorAllocator<TDesc>();
+			DescriptorAllocator.FreeHeapSlot(Handle, Index);
+			Handle.ptr = 0;
+		}
+		check(!Handle.ptr);
+	}
 };
 
 typedef TD3D12ViewDescriptorHandle<D3D12_SHADER_RESOURCE_VIEW_DESC>		FD3D12DescriptorHandleSRV;
@@ -765,13 +790,19 @@ protected:
 
 public:
 	inline FD3D12Device*					GetParentDevice()			const { return Descriptor.GetParentDevice(); }
-	inline const TDesc&						GetDesc()					const { check(bInitialized); return Desc; }
-	inline CD3DX12_CPU_DESCRIPTOR_HANDLE	GetView()					const { check(bInitialized); return Descriptor.GetHandle(); }
-	inline uint32							GetDescriptorHeapIndex()	const { check(bInitialized); return Descriptor.GetIndex(); }
-	inline FD3D12Resource*					GetResource()				const { check(bInitialized); return ResourceLocation->GetResource(); }
-	inline FD3D12ResourceLocation*			GetResourceLocation()		const { check(bInitialized); return ResourceLocation; }
-	inline FD3D12ResidencyHandle*			GetResidencyHandle()		const { check(bInitialized); return ResidencyHandle; }
-	inline const CViewSubresourceSubset&	GetViewSubresourceSubset()	const { check(bInitialized); return ViewSubresourceSubset; }
+	inline FD3D12Device*					GetParentDevice_Unsafe()	const { return Descriptor.GetParentDevice_Unsafe(); }
+	inline const TDesc&						GetDesc()					const { checkf(bInitialized, TEXT("Uninitialized D3D12View size %d"), (uint32)sizeof(TDesc)); return Desc; }
+	inline CD3DX12_CPU_DESCRIPTOR_HANDLE	GetView()					const { checkf(bInitialized, TEXT("Uninitialized D3D12View size %d"), (uint32)sizeof(TDesc)); return Descriptor.GetHandle(); }
+	inline uint32							GetDescriptorHeapIndex()	const { checkf(bInitialized, TEXT("Uninitialized D3D12View size %d"), (uint32)sizeof(TDesc)); return Descriptor.GetIndex(); }
+	inline FD3D12Resource*					GetResource()				const { checkf(bInitialized, TEXT("Uninitialized D3D12View size %d"), (uint32)sizeof(TDesc)); return ResourceLocation->GetResource(); }
+	inline FD3D12ResourceLocation*			GetResourceLocation()		const { checkf(bInitialized, TEXT("Uninitialized D3D12View size %d"), (uint32)sizeof(TDesc)); return ResourceLocation; }
+	inline FD3D12ResidencyHandle*			GetResidencyHandle()		const { checkf(bInitialized, TEXT("Uninitialized D3D12View size %d"), (uint32)sizeof(TDesc)); return ResidencyHandle; }
+	inline const CViewSubresourceSubset&	GetViewSubresourceSubset()	const { checkf(bInitialized, TEXT("Uninitialized D3D12View size %d"), (uint32)sizeof(TDesc)); return ViewSubresourceSubset; }
+
+	void SetParentDevice(FD3D12Device* InParent)
+	{
+		Descriptor.SetParentDevice(InParent);
+	}
 
 	template< class T >
 	inline bool DoesNotOverlap(const FD3D12View< T >& Other) const
@@ -824,6 +855,18 @@ public:
 #endif
 
 		CreateView(InDesc, InResourceLocation);
+	}
+
+	void Initialize(FD3D12Device* InParent, D3D12_SHADER_RESOURCE_VIEW_DESC& InDesc, FD3D12ResourceLocation& InResourceLocation, uint32 InStride, bool InSkipFastClearFinalize = false)
+	{
+		if (!this->GetParentDevice_Unsafe())
+		{
+			// This is a null SRV created without viewing on any resource
+			// We need to set its device and allocate a descriptor slot before moving forward
+			this->SetParentDevice(InParent);
+		}
+		check(GetParentDevice() == InParent);
+		Initialize(InDesc, InResourceLocation, InStride, InSkipFastClearFinalize);
 	}
 
 	void Rename(FD3D12ResourceLocation& InResourceLocation)

@@ -9,18 +9,36 @@
 /////////////////////////////////////////////////////
 // USlider
 
+static FSliderStyle* DefaultSliderStyle = nullptr;
+
 USlider::USlider(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
+	MinValue = 0.0f;
+	MaxValue = 1.0f;
 	Orientation = EOrientation::Orient_Horizontal;
 	SliderBarColor = FLinearColor::White;
 	SliderHandleColor = FLinearColor::White;
 	StepSize = 0.01f;
-	SSlider::FArguments Defaults;
-	WidgetStyle = *Defaults._Style;
 	IsFocusable = true;
 	MouseUsesStep = false;
 	RequiresControllerLock = true;
+
+	if (DefaultSliderStyle == nullptr)
+	{
+		// HACK: THIS SHOULD NOT COME FROM CORESTYLE AND SHOULD INSTEAD BE DEFINED BY ENGINE TEXTURES/PROJECT SETTINGS
+		DefaultSliderStyle = new FSliderStyle(FCoreStyle::Get().GetWidgetStyle<FSliderStyle>("Slider"));
+
+		// Unlink UMG default colors from the editor settings colors.
+		DefaultSliderStyle->UnlinkColors();
+	}
+
+	WidgetStyle = *DefaultSliderStyle;
+
+#if WITH_EDITORONLY_DATA
+	AccessibleBehavior = ESlateAccessibleBehavior::Summary;
+	bCanChildrenBeAccessible = false;
+#endif
 }
 
 TSharedRef<SWidget> USlider::RebuildWidget()
@@ -49,6 +67,7 @@ void USlider::SynchronizeProperties()
 	MySlider->SetSliderBarColor(SliderBarColor);
 	MySlider->SetSliderHandleColor(SliderHandleColor);
 	MySlider->SetValue(ValueBinding);
+	MySlider->SetMinAndMaxValues(MinValue, MaxValue);
 	MySlider->SetLocked(Locked);
 	MySlider->SetIndentHandle(IndentHandle);
 	MySlider->SetStepSize(StepSize);
@@ -96,12 +115,50 @@ float USlider::GetValue() const
 	return Value;
 }
 
+float USlider::GetNormalizedValue() const
+{
+	if (MySlider.IsValid())
+	{
+		return MySlider->GetNormalizedValue();
+	}
+
+	if (MinValue == MaxValue)
+	{
+		return 1.0f;
+	}
+	else
+	{
+		return (Value - MinValue) / (MaxValue - MinValue);
+	}
+}
+
 void USlider::SetValue(float InValue)
 {
 	Value = InValue;
 	if ( MySlider.IsValid() )
 	{
 		MySlider->SetValue(InValue);
+	}
+}
+
+void USlider::SetMinValue(float InValue)
+{
+	MinValue = InValue;
+	if (MySlider.IsValid())
+	{
+		// Because SSlider clamps min/max values upon setting them,
+		// we have to send both values together to ensure that they
+		// don't get out of sync.
+		MySlider->SetMinAndMaxValues(MinValue, MaxValue);
+	}
+}
+
+void USlider::SetMaxValue(float InValue)
+{
+	MaxValue = InValue;
+	if (MySlider.IsValid())
+	{
+		MySlider->SetMinAndMaxValues(MinValue, MaxValue);
 	}
 }
 
@@ -150,6 +207,12 @@ void USlider::SetSliderBarColor(FLinearColor InValue)
 	}
 }
 
+#if WITH_ACCESSIBILITY
+TSharedPtr<SWidget> USlider::GetAccessibleWidget() const
+{
+	return MySlider;
+}
+#endif
 
 #if WITH_EDITOR
 

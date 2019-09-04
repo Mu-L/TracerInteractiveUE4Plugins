@@ -108,8 +108,6 @@ void UUnrealEdEngine::Init(IEngineLoop* InEngineLoop)
 
 	// Register for notification of volume changes
 	AVolume::GetOnVolumeShapeChangedDelegate().AddStatic(&FBSPOps::HandleVolumeShapeChanged);
-	//
-	InitBuilderBrush( GWorld );
 
 	// Iterate over all always fully loaded packages and load them.
 	if (!IsRunningCommandlet())
@@ -186,6 +184,12 @@ void UUnrealEdEngine::Init(IEngineLoop* InEngineLoop)
 			CookServer = NewObject<UCookOnTheFlyServer>();
 			CookServer->Initialize(ECookMode::CookByTheBookFromTheEditor, BaseCookingFlags);
 		}
+	}
+
+	if (FParse::Param(FCommandLine::Get(), TEXT("nomcp")))
+	{
+		// If our editor has nomcp, pass it through to any subprocesses.
+		FCommandLine::AddToSubprocessCommandline(TEXT(" -nomcp"));
 	}
 
 	bPivotMovedIndependently = false;

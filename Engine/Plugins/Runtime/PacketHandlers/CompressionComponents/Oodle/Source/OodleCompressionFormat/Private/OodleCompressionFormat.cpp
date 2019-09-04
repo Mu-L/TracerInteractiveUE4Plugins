@@ -4,6 +4,7 @@
 #include "Misc/Compression.h"
 #include "Misc/ICompressionFormat.h"
 #include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #if HAS_OODLE_SDK
 #include "oodle2.h"
 #endif
@@ -130,7 +131,7 @@ class FOodleCompressionFormatModuleInterface : public IModuleInterface
 		OodleLZ_Compressor UsedCompressor = MethodMap.FindRef(Method);
 		OodleLZ_CompressionLevel UsedLevel = LevelMap.FindRef(Level);
 
-		UE_LOG(OodleCompression, Display, TEXT("Oodle Compressing with %s, level %s, SpaceSpeed tradeoff %d"), **MethodMap.FindKey(UsedCompressor), **LevelMap.FindKey(UsedLevel), SpaceSpeedTradeoff, *GEngineIni);
+		UE_LOG(OodleCompression, Display, TEXT("Oodle initializing compressor with %s, level %s, SpaceSpeed tradeoff %d"), **MethodMap.FindKey(UsedCompressor), **LevelMap.FindKey(UsedLevel), SpaceSpeedTradeoff, *GEngineIni);
 
 		CompressionFormat = new FOodleCustomCompressor(MethodMap.FindRef(Method), LevelMap.FindRef(Level), SpaceSpeedTradeoff);
 

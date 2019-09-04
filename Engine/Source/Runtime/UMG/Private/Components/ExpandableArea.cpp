@@ -14,18 +14,39 @@
 static const FName HeaderName(TEXT("Header"));
 static const FName BodyName(TEXT("Body"));
 
+static FExpandableAreaStyle* DefaultExpandableAreaStyle = nullptr;
+static FSlateBrush* DefaultExpandableAreaBorderBrush = nullptr;
+
 UExpandableArea::UExpandableArea(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 	, bIsExpanded(false)
 {
 	bIsVariable = true;
 
-	SExpandableArea::FArguments ExpandableDefaults;
-	Style       = *ExpandableDefaults._Style;
-	BorderColor = ExpandableDefaults._BorderBackgroundColor.Get( FLinearColor::White );
-	BorderBrush = *ExpandableDefaults._BorderImage.Get( FStyleDefaults::GetNoBrush() );
-	AreaPadding = ExpandableDefaults._Padding.Get();
-	HeaderPadding = ExpandableDefaults._HeaderPadding.Get();
+	if (DefaultExpandableAreaStyle == nullptr)
+	{
+		// HACK: THIS SHOULD NOT COME FROM CORESTYLE AND SHOULD INSTEAD BE DEFINED BY ENGINE TEXTURES/PROJECT SETTINGS
+		DefaultExpandableAreaStyle = new FExpandableAreaStyle(FCoreStyle::Get().GetWidgetStyle<FExpandableAreaStyle>("ExpandableArea"));
+
+		// Unlink UMG default colors from the editor settings colors.
+		DefaultExpandableAreaStyle->UnlinkColors();
+	}
+
+	if (DefaultExpandableAreaBorderBrush == nullptr)
+	{
+		// HACK: THIS SHOULD NOT COME FROM CORESTYLE AND SHOULD INSTEAD BE DEFINED BY ENGINE TEXTURES/PROJECT SETTINGS
+		DefaultExpandableAreaBorderBrush = new FSlateBrush(*FCoreStyle::Get().GetBrush("ExpandableArea.Border"));
+
+		// Unlink UMG default colors from the editor settings colors.
+		DefaultExpandableAreaBorderBrush->UnlinkColors();
+	}
+
+	Style = *DefaultExpandableAreaStyle;
+	BorderBrush = *DefaultExpandableAreaBorderBrush;
+
+	BorderColor = FLinearColor::White;
+	AreaPadding = FMargin(1);
+	HeaderPadding = FMargin(4.0f, 2.0f);
 }
 
 bool UExpandableArea::GetIsExpanded() const

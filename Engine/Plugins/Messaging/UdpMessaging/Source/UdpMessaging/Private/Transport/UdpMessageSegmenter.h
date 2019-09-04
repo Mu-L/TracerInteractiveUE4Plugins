@@ -159,6 +159,7 @@ public:
 	 * Marks the specified segments for retransmission.
 	 *
 	 * @param Segments The data segments to retransmit.
+	 * @note this function is kept for legacy reasons to be used with FRetransmitChunk which still encodes its segment count on uint16. FRetransmitChunk aren't used in protocol 12 and newer.
 	 */
 	void MarkForRetransmission(const TArray<uint16>& Segments);
 
@@ -175,6 +176,16 @@ public:
 	 * @param CurrentTime the time to update to.
 	 */
 	void UpdateSentTime(const FDateTime& CurrentTime);
+
+	/**
+	 * Checks whether the serialization of the message to segment and send completed. The serialization may be performing asynchronously and can may succeed or fail. The message cannot be segmented
+	 * and sent until it was serialized sucessfully.
+	 * @return true if the message is serialization is done, false if it still serializing.
+	 * @see Initialize()
+	 * @see IsInvalid()
+	 * @see IsInitialized()
+	 */
+	bool IsMessageSerializationDone() const;
 
 private:
 	/** Defines the time interval for sending. */

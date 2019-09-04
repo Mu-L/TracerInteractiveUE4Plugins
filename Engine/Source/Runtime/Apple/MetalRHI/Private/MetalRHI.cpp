@@ -23,14 +23,18 @@
 DEFINE_LOG_CATEGORY(LogMetal)
 
 bool GIsMetalInitialized = false;
-bool GMetalSupportsHeaps = false;
-bool GMetalSupportsIndirectArgumentBuffers = false;
-bool GMetalSupportsTileShaders = false;
-bool GMetalSupportsStoreActionOptions = false;
-bool GMetalSupportsDepthClipMode = false;
-bool GMetalCommandBufferHasStartEndTimeAPI = false;
 
 FMetalBufferFormat GMetalBufferFormats[PF_MAX];
+
+static TAutoConsoleVariable<int32> CVarUseRHIThread(
+													TEXT("r.Metal.IOSRHIThread"),
+													0,
+													TEXT("Controls RHIThread usage for IOS:\n")
+													TEXT("\t0: No RHIThread.\n")
+													TEXT("\t1: Use RHIThread.\n")
+													TEXT("Default is 0."),
+													ECVF_Default | ECVF_RenderThreadSafe
+													);
 
 static void ValidateTargetedRHIFeatureLevelExists(EShaderPlatform Platform)
 {
@@ -69,7 +73,7 @@ static void ValidateTargetedRHIFeatureLevelExists(EShaderPlatform Platform)
 		FMessageDialog::Open(EAppMsgType::Ok, LocalizedMsg, &Title);
 		FPlatformMisc::RequestExit(true);
 		
-		UE_LOG(LogMetal, Fatal, TEXT("Shader platform: %s was not cooked! Please enable this shader platform in the project's target settings."), *LegacyShaderPlatformToShaderFormat(Platform).ToString());
+		METAL_FATAL_ERROR(TEXT("Shader platform: %s was not cooked! Please enable this shader platform in the project's target settings."), *LegacyShaderPlatformToShaderFormat(Platform).ToString());
 	}
 }
 
@@ -150,9 +154,10 @@ FMetalDynamicRHI::FMetalDynamicRHI(ERHIFeatureLevel::Type RequestedFeatureLevel)
 
     bool bProjectSupportsMRTs = false;
     GConfig->GetBool(TEXT("/Script/IOSRuntimeSettings.IOSRuntimeSettings"), TEXT("bSupportsMetalMRT"), bProjectSupportsMRTs, GEngineIni);
-	
+
 	bool const bRequestedMetalMRT = ((RequestedFeatureLevel >= ERHIFeatureLevel::SM4) || (!bRequestedFeatureLevel && FParse::Param(FCommandLine::Get(),TEXT("metalmrt"))));
-	
+	bSupportsRHIThread = FParse::Param(FCommandLine::Get(),TEXT("rhithread"));
+
     // only allow GBuffers, etc on A8s (A7s are just not going to cut it)
     if (bProjectSupportsMRTs && bCanUseWideMRTs && bRequestedMetalMRT)
     {
@@ -164,8 +169,6 @@ FMetalDynamicRHI::FMetalDynamicRHI(ERHIFeatureLevel::Type RequestedFeatureLevel)
         GMaxRHIShaderPlatform = SP_METAL_MRT;
 #endif
 		GMaxRHIFeatureLevel = ERHIFeatureLevel::SM5;
-		
-		bSupportsRHIThread = FParse::Param(FCommandLine::Get(),TEXT("rhithread"));
     }
     else
 	{
@@ -349,23 +352,6 @@ FMetalDynamicRHI::FMetalDynamicRHI(ERHIFeatureLevel::Type RequestedFeatureLevel)
 	
 #endif
 
-	if (FApplePlatformMisc::IsOSAtLeastVersion((uint32[]){10, 13, 0}, (uint32[]){11, 0, 0}, (uint32[]){11, 0, 0}))
-	{
-		GMetalSupportsIndirectArgumentBuffers = true;
-		GMetalSupportsStoreActionOptions = true;
-	}
-	if (!PLATFORM_MAC && FApplePlatformMisc::IsOSAtLeastVersion((uint32[]){0, 0, 0}, (uint32[]){11, 0, 0}, (uint32[]){11, 0, 0}))
-	{
-		GMetalSupportsTileShaders = true;
-	}
-	if (FApplePlatformMisc::IsOSAtLeastVersion((uint32[]){10, 11, 0}, (uint32[]){11, 0, 0}, (uint32[]){11, 0, 0}))
-	{
-		GMetalSupportsDepthClipMode = true;
-	}
-	if (FApplePlatformMisc::IsOSAtLeastVersion((uint32[]){10, 13, 0}, (uint32[]){10, 3, 0}, (uint32[]){10, 3, 0}))
-	{
-		GMetalCommandBufferHasStartEndTimeAPI = true;
-	}
 	
 	GRHISupportsCopyToTextureMultipleMips = true;
 		
@@ -415,13 +401,14 @@ FMetalDynamicRHI::FMetalDynamicRHI(ERHIFeatureLevel::Type RequestedFeatureLevel)
 #else
 		GRHISupportsRHIThread = bSupportsRHIThread;
 #endif
-		GRHISupportsParallelRHIExecute = GRHISupportsRHIThread;
+		GRHISupportsParallelRHIExecute = GRHISupportsRHIThread && ((!IsRHIDeviceIntel() && !IsRHIDeviceNVIDIA()) || FParse::Param(FCommandLine::Get(),TEXT("metalparallel")));
 #endif
-		GSupportsEfficientAsyncCompute = GRHISupportsParallelRHIExecute && (IsRHIDeviceAMD() || PLATFORM_IOS); // Only AMD currently support async. compute and it requires parallel execution to be useful.
+		GSupportsEfficientAsyncCompute = GRHISupportsParallelRHIExecute && (IsRHIDeviceAMD() || PLATFORM_IOS || FParse::Param(FCommandLine::Get(),TEXT("metalasynccompute"))); // Only AMD currently support async. compute and it requires parallel execution to be useful.
 		GSupportsParallelOcclusionQueries = GRHISupportsRHIThread;
 	}
 	else
 	{
+		GRHISupportsRHIThread = bSupportsRHIThread || (CVarUseRHIThread.GetValueOnAnyThread() > 0);
 		GRHISupportsParallelRHIExecute = false;
 		GSupportsEfficientAsyncCompute = false;
 		GSupportsParallelOcclusionQueries = false;
@@ -590,6 +577,7 @@ FMetalDynamicRHI::FMetalDynamicRHI(ERHIFeatureLevel::Type RequestedFeatureLevel)
 	GMetalBufferFormats[PF_ETC2_RGBA			] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
 	GMetalBufferFormats[PF_R32G32B32A32_UINT	] = { mtlpp::PixelFormat::RGBA32Uint, EMetalBufferFormat::RGBA32Uint };
 	GMetalBufferFormats[PF_R16G16_UINT			] = { mtlpp::PixelFormat::RG16Uint, EMetalBufferFormat::RG16Uint };
+	GMetalBufferFormats[PF_R32G32_UINT			] = { mtlpp::PixelFormat::RG32Uint, EMetalBufferFormat::RG32Uint };
 	GMetalBufferFormats[PF_ASTC_4x4             ] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
 	GMetalBufferFormats[PF_ASTC_6x6             ] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
 	GMetalBufferFormats[PF_ASTC_8x8             ] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
@@ -617,6 +605,7 @@ FMetalDynamicRHI::FMetalDynamicRHI(ERHIFeatureLevel::Type RequestedFeatureLevel)
 	GPixelFormats[PF_G16				].PlatformFormat	= (uint32)mtlpp::PixelFormat::R16Unorm;
 	GPixelFormats[PF_R32G32B32A32_UINT	].PlatformFormat	= (uint32)mtlpp::PixelFormat::RGBA32Uint;
 	GPixelFormats[PF_R16G16_UINT		].PlatformFormat	= (uint32)mtlpp::PixelFormat::RG16Uint;
+	GPixelFormats[PF_R32G32_UINT		].PlatformFormat	= (uint32)mtlpp::PixelFormat::RG32Uint;
 		
 #if PLATFORM_IOS
     GPixelFormats[PF_DXT1				].PlatformFormat	= (uint32)mtlpp::PixelFormat::Invalid;
@@ -667,16 +656,9 @@ FMetalDynamicRHI::FMetalDynamicRHI(ERHIFeatureLevel::Type RequestedFeatureLevel)
 		GPixelFormats[PF_FloatR11G11B10		].Supported			= true;
 	}
 	
-	if (FMetalCommandQueue::SupportsFeature(EMetalFeaturesStencilView) && FMetalCommandQueue::SupportsFeature(EMetalFeaturesCombinedDepthStencil) && !FParse::Param(FCommandLine::Get(),TEXT("metalforceseparatedepthstencil")))
-	{
 		GPixelFormats[PF_DepthStencil		].PlatformFormat	= (uint32)mtlpp::PixelFormat::Depth32Float_Stencil8;
 		GPixelFormats[PF_DepthStencil		].BlockBytes		= 4;
-	}
-	else
-	{
-		GPixelFormats[PF_DepthStencil		].PlatformFormat	= (uint32)mtlpp::PixelFormat::Depth32Float;
-		GPixelFormats[PF_DepthStencil		].BlockBytes		= 4;
-	}
+
 	GPixelFormats[PF_DepthStencil		].Supported			= true;
 	GPixelFormats[PF_ShadowDepth		].PlatformFormat	= (uint32)mtlpp::PixelFormat::Depth32Float;
 	GPixelFormats[PF_ShadowDepth		].BlockBytes		= 4;
@@ -835,12 +817,28 @@ FMetalDynamicRHI::FMetalDynamicRHI(ERHIFeatureLevel::Type RequestedFeatureLevel)
 			NSString* TempDir = [NSString stringWithFormat:@"%@/../C/%@/com.apple.metal", NSTemporaryDirectory(), [NSBundle mainBundle].bundleIdentifier];
 
 			NSError* Err = nil;
-			BOOL bOK = [[NSFileManager defaultManager] removeItemAtPath:TempDir
-						error:&Err];
+			if(![[NSFileManager defaultManager] fileExistsAtPath:TempDir])
+			{
+				[[NSFileManager defaultManager] createDirectoryAtPath:TempDir
+											withIntermediateDirectories:YES
+															 attributes:nil
+																  error:&Err];
+			}
+			
+			NSDirectoryEnumerator<NSString *> * Enum = [[NSFileManager defaultManager] enumeratorAtPath:DstPath];
+			for (NSString* Path in Enum)
+			{
+				[Enum skipDescendents];
 
-			bOK = [[NSFileManager defaultManager] copyItemAtPath:DstPath
-						toPath:TempDir
-						error:&Err];
+				NSString* Dest = [NSString stringWithFormat:@"%@/%@", TempDir, Path];
+				if(![[NSFileManager defaultManager] fileExistsAtPath:Dest])
+				{
+					NSString* Src = [NSString stringWithFormat:@"%@/%@", DstPath, Path];
+					[[NSFileManager defaultManager] copyItemAtPath:Src
+																   toPath:Dest
+																	error:&Err];
+				}
+			}
 		}
 	}
 #endif
@@ -857,17 +855,8 @@ FMetalDynamicRHI::FMetalDynamicRHI(ERHIFeatureLevel::Type RequestedFeatureLevel)
 		ImmediateContext.Profiler->BeginFrame();
 #endif
 		
-		
 	// Notify all initialized FRenderResources that there's a valid RHI device to create their RHI resources for now.
-	for(TLinkedList<FRenderResource*>::TIterator ResourceIt(FRenderResource::GetResourceList());ResourceIt;ResourceIt.Next())
-	{
-		ResourceIt->InitRHI();
-	}
-	// Dynamic resources can have dependencies on static resources (with uniform buffers) and must initialized last!
-	for(TLinkedList<FRenderResource*>::TIterator ResourceIt(FRenderResource::GetResourceList());ResourceIt;ResourceIt.Next())
-	{
-		ResourceIt->InitDynamicRHI();
-	}
+	FRenderResource::InitPreRHIResources();	
 	
 	AsyncComputeContext = GSupportsEfficientAsyncCompute ? new FMetalRHIComputeContext(ImmediateContext.Profiler, new FMetalContext(ImmediateContext.Context->GetDevice(), ImmediateContext.Context->GetCommandQueue(), true)) : nullptr;
 

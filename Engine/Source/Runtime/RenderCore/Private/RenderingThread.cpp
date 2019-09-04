@@ -23,6 +23,7 @@
 #include "RenderResource.h"
 #include "Misc/ScopeLock.h"
 #include "HAL/LowLevelMemTracker.h"
+#include "ProfilingDebugging/MiscTrace.h"
 
 //
 // Globals
@@ -86,6 +87,9 @@ FSuspendRenderingThread::FSuspendRenderingThread( bool bInRecreateThread )
 		SuspendAsyncLoading();
 	}
 
+	// Pause asset streaming to prevent rendercommands from being enqueued.
+	SuspendTextureStreamingRenderTasks();
+
 	bRecreateThread = bInRecreateThread;
 	bUseRenderingThread = GUseThreadedRendering;
 	bWasRenderingThreadRunning = GIsThreadedRendering;
@@ -102,7 +106,6 @@ FSuspendRenderingThread::FSuspendRenderingThread( bool bInRecreateThread )
 		if ( GIsRenderingThreadSuspended.Load(EMemoryOrder::Relaxed) == 0 )
 		{
 			// First tell the render thread to finish up all pending commands and then suspend its activities.
-			
 			// this ensures that async stuff will be completed too
 			FlushRenderingCommands();
 			
@@ -183,6 +186,10 @@ FSuspendRenderingThread::~FSuspendRenderingThread()
 		// Resume the render thread again.
 		--GIsRenderingThreadSuspended;
 	}
+
+	// Resume any asset streaming
+	ResumeTextureStreamingRenderTasks();
+
 	if (IsAsyncLoadingMultithreaded())
 	{
 		ResumeAsyncLoading();
@@ -655,6 +662,9 @@ void StartRenderingThread()
 
 	check(!GRHIThread_InternalUseOnly && !GIsRunningRHIInSeparateThread_InternalUseOnly && !GIsRunningRHIInDedicatedThread_InternalUseOnly && !GIsRunningRHIInTaskThread_InternalUseOnly);
 
+	// Pause asset streaming to prevent rendercommands from being enqueued.
+	SuspendTextureStreamingRenderTasks();
+
 	// Flush GT since render commands issued by threads other than GT are sent to
 	// the main queue of GT when RT is disabled. Without this flush, those commands
 	// will run on GT after RT is enabled
@@ -692,6 +702,7 @@ void StartRenderingThread()
 	GRenderingThreadRunnable = new FRenderingThread();
 
 	GRenderingThread = FRunnableThread::Create(GRenderingThreadRunnable, *BuildRenderingThreadName(ThreadCount), 0, FPlatformAffinity::GetRenderingThreadPriority(), FPlatformAffinity::GetRenderingThreadMask());
+	TRACE_SET_THREAD_GROUP(GRenderingThread->GetThreadID(), "Render");
 
 	// Wait for render thread to have taskgraph bound before we dispatch any tasks for it.
 	((FRenderingThread*)GRenderingThreadRunnable)->TaskGraphBoundSyncEvent->Wait();
@@ -711,6 +722,9 @@ void StartRenderingThread()
 	GRenderingThreadHeartbeat = FRunnableThread::Create(GRenderingThreadRunnableHeartbeat, *FString::Printf(TEXT("RTHeartBeat %d"), ThreadCount), 16 * 1024, TPri_AboveNormal, FPlatformAffinity::GetRTHeartBeatMask());
 
 	ThreadCount++;
+
+	// Update can now resume.
+	ResumeTextureStreamingRenderTasks();
 }
 
 
@@ -740,7 +754,7 @@ void StopRenderingThread()
 		FPendingCleanupObjects* PendingCleanupObjects = GetPendingCleanupObjects();
 
 		// Make sure we're not in the middle of streaming textures.
-		(*GFlushStreamingFunc)();
+		SuspendTextureStreamingRenderTasks();
 
 		// Wait for the rendering thread to finish executing all enqueued commands.
 		FlushRenderingCommands();
@@ -803,6 +817,9 @@ void StopRenderingThread()
 
 		// Delete the pending cleanup objects which were in use by the rendering thread.
 		delete PendingCleanupObjects;
+
+		// Update can now resume with renderthread being the gamethread.
+		ResumeTextureStreamingRenderTasks();
 	}
 
 	check(!GRHIThread_InternalUseOnly);
@@ -1206,9 +1223,9 @@ void FlushRenderingCommands(bool bFlushDeferredDeletes)
 	}
 
 	ENQUEUE_RENDER_COMMAND(FlushPendingDeleteRHIResourcesCmd)(
-		[bFlushDeferredDeletes](FRHICommandList&)
+		[bFlushDeferredDeletes](FRHICommandListImmediate& RHICmdList)
 	{
-		GRHICommandList.GetImmediateCommandList().ImmediateFlush(
+		RHICmdList.ImmediateFlush(
 			bFlushDeferredDeletes ?
 			EImmediateFlushType::FlushRHIThreadFlushResourcesFlushDeferredDeletes :
 			EImmediateFlushType::FlushRHIThreadFlushResources);

@@ -41,18 +41,21 @@ void UNiagaraDataInterfaceColorCurve::PostLoad()
 	{
 		UpdateLUT();
 	}
-#if !UE_BUILD_SHIPPING
 	else
 	{
+
+#if !UE_BUILD_SHIPPING
 		TArray<float> OldLUT = ShaderLUT;
+#endif
 		UpdateLUT();
 
+#if !UE_BUILD_SHIPPING
 		if (!CompareLUTS(OldLUT))
 		{
 			UE_LOG(LogNiagara, Log, TEXT("PostLoad LUT generation is out of sync. Please investigate. %s"), *GetPathName());
 		}
-	}
 #endif
+	}
 }
 
 void UNiagaraDataInterfaceColorCurve::UpdateLUT()
@@ -90,7 +93,12 @@ void UNiagaraDataInterfaceColorCurve::UpdateLUT()
 		ShaderLUT.Add(C.B);
 		ShaderLUT.Add(C.A);
 	}
-	GPUBufferDirty = true;
+
+	check(Proxy);
+
+	// @todo-threadsafety Not the best way to do this. Ideally we'd have a funnel where we can update all this data for all 
+	// interfaces at the same time.
+	Super::PushToRenderThread();
 }
 
 bool UNiagaraDataInterfaceColorCurve::CopyToInternal(UNiagaraDataInterface* Destination) const 

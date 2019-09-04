@@ -26,12 +26,17 @@ PipelineStateCache.cpp: Pipeline state cache implementation.
 
 static inline uint32 GetTypeHash(const FBoundShaderStateInput& Input)
 {
-	return GetTypeHash(Input.VertexDeclarationRHI) ^
-		GetTypeHash(Input.VertexShaderRHI) ^
-		GetTypeHash(Input.PixelShaderRHI) ^
-		GetTypeHash(Input.HullShaderRHI) ^
-		GetTypeHash(Input.DomainShaderRHI) ^
-		GetTypeHash(Input.GeometryShaderRHI);
+	return GetTypeHash(Input.VertexDeclarationRHI)
+		^ GetTypeHash(Input.VertexShaderRHI)
+		^ GetTypeHash(Input.PixelShaderRHI)
+#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
+		^ GetTypeHash(Input.HullShaderRHI)
+		^ GetTypeHash(Input.DomainShaderRHI)
+#endif
+#if PLATFORM_SUPPORTS_GEOMETRY_SHADERS
+		^ GetTypeHash(Input.GeometryShaderRHI)
+#endif
+		;
 }
 
 static inline uint32 GetTypeHash(const FGraphicsPipelineStateInitializer& Initializer)
@@ -40,17 +45,6 @@ static inline uint32 GetTypeHash(const FGraphicsPipelineStateInitializer& Initia
 	return (GetTypeHash(Initializer.BoundShaderState) | (Initializer.NumSamples << 28)) ^ ((uint32)Initializer.PrimitiveType << 24) ^ GetTypeHash(Initializer.BlendState)
 		^ Initializer.RenderTargetsEnabled ^ GetTypeHash(Initializer.RasterizerState) ^ GetTypeHash(Initializer.DepthStencilState);
 }
-
-#if RHI_RAYTRACING
-static inline uint32 GetTypeHash(const FRayTracingPipelineStateInitializer& Initializer)
-{
-	return GetTypeHash(Initializer.MaxPayloadSizeInBytes) ^
-		GetTypeHash(Initializer.bAllowHitGroupIndexing) ^
-		GetTypeHash(Initializer.GetRayGenHash()) ^
-		GetTypeHash(Initializer.GetRayMissHash()) ^
-		GetTypeHash(Initializer.GetHitGroupHash());
-}
-#endif
 
 static TAutoConsoleVariable<int32> GCVarAsyncPipelineCompile(
 	TEXT("r.AsyncPipelineCompile"),
@@ -66,6 +60,15 @@ static TAutoConsoleVariable<int32> CVarPSOEvictionTime(
 	TEXT("Time between checks to remove stale objects from the cache. 0 = no eviction (which may eventually OOM...)"),
 	ECVF_ReadOnly | ECVF_RenderThreadSafe
 );
+
+#if RHI_RAYTRACING
+static TAutoConsoleVariable<int32> CVarRTPSOCacheSize(
+	TEXT("r.RayTracing.PSOCacheSize"),
+	50,
+	TEXT("Number of ray tracing pipelines to keep in the cache (default = 50). Set to 0 to disable eviction.\n"),
+	ECVF_ReadOnly | ECVF_RenderThreadSafe
+);
+#endif // RHI_RAYTRACING
 
 extern void DumpPipelineCacheStats();
 
@@ -94,6 +97,7 @@ static void HandlePipelineCreationFailure(const FGraphicsPipelineStateInitialize
 	{
 		UE_LOG(LogRHI, Error, TEXT("Vertex: %s"), *Init.BoundShaderState.VertexShaderRHI->ShaderName);
 	}
+#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
 	if(Init.BoundShaderState.HullShaderRHI)
 	{
 		UE_LOG(LogRHI, Error, TEXT("Hull: %s"), *Init.BoundShaderState.HullShaderRHI->ShaderName);
@@ -102,10 +106,13 @@ static void HandlePipelineCreationFailure(const FGraphicsPipelineStateInitialize
 	{
 		UE_LOG(LogRHI, Error, TEXT("Domain: %s"), *Init.BoundShaderState.DomainShaderRHI->ShaderName);
 	}
+#endif
+#if PLATFORM_SUPPORTS_GEOMETRY_SHADERS
 	if(Init.BoundShaderState.GeometryShaderRHI)
 	{
 		UE_LOG(LogRHI, Error, TEXT("Geometry: %s"), *Init.BoundShaderState.GeometryShaderRHI->ShaderName);
 	}
+#endif
 	if(Init.BoundShaderState.PixelShaderRHI)
 	{
 		UE_LOG(LogRHI, Error, TEXT("Pixel: %s"), *Init.BoundShaderState.PixelShaderRHI->ShaderName);
@@ -122,7 +129,12 @@ static void HandlePipelineCreationFailure(const FGraphicsPipelineStateInitialize
 	UE_LOG(LogRHI, Error, TEXT("0x%x"), Init.DepthStencilTargetFormat);
 #endif
 	
-	if(!Init.bFromPSOFileCache)
+	if(Init.bFromPSOFileCache)
+	{
+		// Let the cache know so it hopefully won't give out this one again
+		FPipelineFileCache::RegisterPSOCompileFailure(GetTypeHash(Init), Init);
+	}
+	else
 	{
 		UE_LOG(LogRHI, Fatal, TEXT("Shader compilation failures are Fatal."));
 	}
@@ -257,11 +269,34 @@ public:
 		return false;
 	}
 
+	inline void AddHit()
+	{
+		if (LastFrameHit != GFrameCounter)
+		{
+			LastFrameHit = GFrameCounter;
+			HitsAcrossFrames++;
+		}
+
+		FPipelineState::AddHit();
+	}
+
 	FRayTracingPipelineStateRHIRef RHIPipeline;
+
+	uint64 HitsAcrossFrames = 0;
+	uint64 LastFrameHit = 0;
+
 #if PIPELINESTATECACHE_VERIFYTHREADSAFE
 	FThreadSafeCounter InUseCount;
 #endif
 };
+
+//extern RHI_API FRHIRayTracingPipelineState* GetRHIRayTracingPipelineState(FRayTracingPipelineState* PipelineState);
+RHI_API FRHIRayTracingPipelineState* GetRHIRayTracingPipelineState(FRayTracingPipelineState* PipelineState)
+{
+	ensure(PipelineState->RHIPipeline);
+	PipelineState->CompletionEvent = nullptr;
+	return PipelineState->RHIPipeline;
+}
 
 #endif // RHI_RAYTRACING
 
@@ -580,9 +615,7 @@ FAutoConsoleTaskPriority CPrio_FCompilePipelineStateTask(
 // This cache uses a single internal lock and therefore is not designed for highly concurrent operations.
 class FRayTracingPipelineCache
 {
-	// #dxr_todo: This needs to support fully asynchronous, non-blocking pipeline creation with explicit completion query mechanism.
-	// #dxr_todo: Could move this to a separate cpp file.
-	// #dxr_todo: Should support eviction of stale pipelines.
+	// #dxr_todo: UE-72566 Should support eviction of stale pipelines.
 	// #dxr_todo: we will likely also need an explicit ray tracing pipeline sub-object cache to hold closest hit shaders
 
 public:
@@ -600,6 +633,8 @@ public:
 		if (FoundState)
 		{
 			OutCachedState = *FoundState;
+			OutCachedState->AddHit();
+
 			return true;
 		}
 		else
@@ -612,6 +647,7 @@ public:
 	{
 		FScopeLock ScopeLock(&CriticalSection);
 		Cache.Add(Initializer, State);
+		State->AddHit();
 	}
 
 	void Shutdown()
@@ -623,10 +659,74 @@ public:
 		}
 	}
 
+	void Trim(int32 TargetNumEntries)
+	{
+		FScopeLock ScopeLock(&CriticalSection);
+		
+		if (Cache.Num() < TargetNumEntries)
+		{
+			return;
+		}
+
+		struct FEntry
+		{
+			FRayTracingPipelineStateInitializer Key;
+			uint64 LastFrameHit;
+			uint64 HitsAcrossFrames;
+			FRayTracingPipelineState* Pipeline;
+		};
+		TArray<FEntry, TMemStackAllocator<>> Entries;
+		Entries.Reserve(Cache.Num());
+
+		const uint64 CurrentFrame = GFrameCounter;
+		const uint32 NumLatencyFrames = 10;
+
+		// Find all pipelines that were not used in the last 10 frames
+
+		for (const auto& It : Cache)
+		{
+			if (It.Value->LastFrameHit + NumLatencyFrames <= CurrentFrame)
+			{
+				FEntry Entry;
+				Entry.Key = It.Key;
+				Entry.HitsAcrossFrames = It.Value->HitsAcrossFrames;
+				Entry.LastFrameHit = It.Value->LastFrameHit;
+				Entry.Pipeline = It.Value;
+				Entries.Add(Entry);
+			}
+		}
+
+		Entries.Sort([](const FEntry& A, const FEntry& B)
+		{
+			if (A.LastFrameHit == B.LastFrameHit)
+			{
+				return B.HitsAcrossFrames < A.HitsAcrossFrames;
+			}
+			else
+			{
+				return B.LastFrameHit < A.LastFrameHit;
+			}
+		});
+
+		// Remove least useful pipelines
+
+		while (Cache.Num() > TargetNumEntries && Entries.Num())
+		{
+			delete Entries.Last().Pipeline;
+			Cache.Remove(Entries.Last().Key);
+			Entries.Pop(false);
+		}
+
+		LastTrimFrame = CurrentFrame;
+	}
+
+	uint64 GetLastTrimFrame() const { return LastTrimFrame; }
+
 private:
 
 	mutable FCriticalSection CriticalSection;
 	TMap<FRayTracingPipelineStateInitializer, FRayTracingPipelineState*> Cache;
+	uint64 LastTrimFrame = 0;
 };
 
 FRayTracingPipelineCache GRayTracingPipelineCache;
@@ -652,12 +752,16 @@ public:
 			Initializer.BoundShaderState.VertexShaderRHI->AddRef();
 		if (Initializer.BoundShaderState.PixelShaderRHI)
 			Initializer.BoundShaderState.PixelShaderRHI->AddRef();
+#if PLATFORM_SUPPORTS_GEOMETRY_SHADERS
 		if (Initializer.BoundShaderState.GeometryShaderRHI)
 			Initializer.BoundShaderState.GeometryShaderRHI->AddRef();
+#endif
+#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
 		if (Initializer.BoundShaderState.DomainShaderRHI)
 			Initializer.BoundShaderState.DomainShaderRHI->AddRef();
 		if (Initializer.BoundShaderState.HullShaderRHI)
 			Initializer.BoundShaderState.HullShaderRHI->AddRef();
+#endif
 		if (Initializer.BlendState)
 			Initializer.BlendState->AddRef();
 		if (Initializer.RasterizerState)
@@ -679,6 +783,11 @@ public:
 		}
 		else
 		{
+			if (!Initializer.BoundShaderState.VertexShaderRHI)
+			{
+				UE_LOG(LogRHI, Fatal, TEXT("Tried to create a Gfx Pipeline State without Vertex Shader"));
+			}
+
 			FGraphicsPipelineState* GfxPipeline = static_cast<FGraphicsPipelineState*>(Pipeline);
 			GfxPipeline->RHIPipeline = RHICreateGraphicsPipelineState(Initializer);
 			
@@ -693,12 +802,16 @@ public:
 				Initializer.BoundShaderState.VertexShaderRHI->Release();
 			if (Initializer.BoundShaderState.PixelShaderRHI)
 				Initializer.BoundShaderState.PixelShaderRHI->Release();
+#if PLATFORM_SUPPORTS_GEOMETRY_SHADERS
 			if (Initializer.BoundShaderState.GeometryShaderRHI)
 				Initializer.BoundShaderState.GeometryShaderRHI->Release();
+#endif
+#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
 			if (Initializer.BoundShaderState.DomainShaderRHI)
 				Initializer.BoundShaderState.DomainShaderRHI->Release();
 			if (Initializer.BoundShaderState.HullShaderRHI)
 				Initializer.BoundShaderState.HullShaderRHI->Release();
+#endif
 			if (Initializer.BlendState)
 				Initializer.BlendState->Release();
 			if (Initializer.RasterizerState)
@@ -715,7 +828,9 @@ public:
 
 	ENamedThreads::Type GetDesiredThread()
 	{
-		return CPrio_FCompilePipelineStateTask.Get();
+		// On Mac the compilation is handled using external processes, so engine threads have very little work to do
+		// and it's better to leave more CPU time to these extrenal processes and other engine threads.
+		return PLATFORM_MAC ? ENamedThreads::AnyBackgroundThreadNormalTask : CPrio_FCompilePipelineStateTask.Get();
 	}
 };
 
@@ -880,11 +995,101 @@ FComputePipelineState* PipelineStateCache::GetAndOrCreateComputePipelineState(FR
 }
 
 #if RHI_RAYTRACING
-FRHIRayTracingPipelineState* PipelineStateCache::GetAndOrCreateRayTracingPipelineState(const FRayTracingPipelineStateInitializer& Initializer)
+
+class FCompileRayTracingPipelineStateTask
+{
+public:
+
+	UE_NONCOPYABLE(FCompileRayTracingPipelineStateTask)
+
+	FPipelineState* Pipeline;
+
+	FRayTracingPipelineStateInitializer Initializer;
+
+	FCompileRayTracingPipelineStateTask(FPipelineState* InPipeline, const FRayTracingPipelineStateInitializer& InInitializer)
+		: Pipeline(InPipeline)
+		, Initializer(InInitializer)
+	{
+		// Copy all referenced shaders and AddRef them while the task is alive
+
+		RayGenTable   = CopyShaderTable(InInitializer.GetRayGenTable());
+		MissTable     = CopyShaderTable(InInitializer.GetMissTable());
+		HitGroupTable = CopyShaderTable(InInitializer.GetHitGroupTable());
+		CallableTable = CopyShaderTable(InInitializer.GetCallableTable());
+
+		// Point initializer to shader tables owned by this task
+
+		Initializer.SetRayGenShaderTable(RayGenTable, InInitializer.GetRayGenHash());
+		Initializer.SetMissShaderTable(MissTable, InInitializer.GetRayMissHash());
+		Initializer.SetHitGroupTable(HitGroupTable, InInitializer.GetHitGroupHash());
+		Initializer.SetCallableTable(CallableTable, InInitializer.GetCallableHash());
+	}
+
+	static ESubsequentsMode::Type GetSubsequentsMode() { return ESubsequentsMode::TrackSubsequents; }
+
+	void DoTask(ENamedThreads::Type CurrentThread, const FGraphEventRef& MyCompletionGraphEvent)
+	{
+		FRayTracingPipelineState* RayTracingPipeline = static_cast<FRayTracingPipelineState*>(Pipeline);
+		RayTracingPipeline->RHIPipeline = RHICreateRayTracingPipelineState(Initializer);
+
+		// References to shaders no longer need to be held by this task
+
+		ReleaseShaders(CallableTable);
+		ReleaseShaders(HitGroupTable);
+		ReleaseShaders(MissTable);
+		ReleaseShaders(RayGenTable);
+
+		Initializer = FRayTracingPipelineStateInitializer();
+	}
+
+	FORCEINLINE TStatId GetStatId() const
+	{
+		RETURN_QUICK_DECLARE_CYCLE_STAT(FCompileRayTracingPipelineStateTask, STATGROUP_TaskGraphTasks);
+	}
+
+	ENamedThreads::Type GetDesiredThread()
+	{
+		return CPrio_FCompilePipelineStateTask.Get();
+	}
+
+private:
+
+	void AddRefShaders(TArray<FRHIRayTracingShader*>& ShaderTable)
+	{
+		for (FRHIRayTracingShader* Ptr : ShaderTable)
+		{
+			Ptr->AddRef();
+		}
+	}
+
+	void ReleaseShaders(TArray<FRHIRayTracingShader*>& ShaderTable)
+	{
+		for (FRHIRayTracingShader* Ptr : ShaderTable)
+		{
+			Ptr->Release();
+		}
+	}
+
+	TArray<FRHIRayTracingShader*> CopyShaderTable(const TArrayView<FRHIRayTracingShader*>& Source)
+	{
+		TArray<FRHIRayTracingShader*> Result(Source.GetData(), Source.Num());
+		AddRefShaders(Result);
+		return Result;
+	}
+
+	TArray<FRHIRayTracingShader*> RayGenTable;
+	TArray<FRHIRayTracingShader*> MissTable;
+	TArray<FRHIRayTracingShader*> HitGroupTable;
+	TArray<FRHIRayTracingShader*> CallableTable;
+};
+
+FRayTracingPipelineState* PipelineStateCache::GetAndOrCreateRayTracingPipelineState(FRHICommandList& RHICmdList, const FRayTracingPipelineStateInitializer& Initializer)
 {
 	LLM_SCOPE(ELLMTag::PSO);
 
 	check(IsInRenderingThread() || IsInParallelRenderingThread());
+
+	const bool DoAsyncCompile = IsAsyncCompilationAllowed(RHICmdList);
 
 	FRayTracingPipelineState* OutCachedState = nullptr;
 
@@ -892,24 +1097,34 @@ FRHIRayTracingPipelineState* PipelineStateCache::GetAndOrCreateRayTracingPipelin
 
 	if (bWasFound == false)
 	{
-		// #dxr_todo: RT PSO disk caching
-		// #dxr_todo: asynchronous PSO creation
+		// #dxr_todo UE-68235: RT PSO disk caching
+
+		// Remove old pipelines once per frame
+		const int32 TargetCacheSize = CVarRTPSOCacheSize.GetValueOnAnyThread();
+		if (TargetCacheSize > 0 && GRayTracingPipelineCache.GetLastTrimFrame() != GFrameCounter)
+		{
+			GRayTracingPipelineCache.Trim(TargetCacheSize);
+		}
 
 		OutCachedState = new FRayTracingPipelineState();
 
-		OutCachedState->RHIPipeline = RHICreateRayTracingPipelineState(Initializer);
+		if (DoAsyncCompile)
+		{
+			OutCachedState->CompletionEvent = TGraphTask<FCompileRayTracingPipelineStateTask>::CreateTask().ConstructAndDispatchWhenReady(
+				OutCachedState,
+				Initializer);
+
+			RHICmdList.AddDispatchPrerequisite(OutCachedState->CompletionEvent);
+		}
+		else
+		{
+			OutCachedState->RHIPipeline = RHICreateRayTracingPipelineState(Initializer);
+		}
 
 		GRayTracingPipelineCache.Add(Initializer, OutCachedState);
 	}
-	else
-	{
-#if PSO_TRACK_CACHE_STATS
-		OutCachedState->AddHit();
-#endif
-	}
 
-	// return the state pointer
-	return OutCachedState->RHIPipeline;
+	return OutCachedState;
 }
 #endif // RHI_RAYTRACING
 
@@ -930,10 +1145,14 @@ FGraphicsPipelineState* PipelineStateCache::GetAndOrCreateGraphicsPipelineState(
 	{
 		FGraphicsPipelineStateInitializer& HashableInitializer = const_cast<FGraphicsPipelineStateInitializer&>(OriginalInitializer);
 		HashableInitializer.VertexShaderHash = HashableInitializer.BoundShaderState.VertexShaderRHI ? HashableInitializer.BoundShaderState.VertexShaderRHI->GetHash() : FSHAHash();
+#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
 		HashableInitializer.HullShaderHash = HashableInitializer.BoundShaderState.HullShaderRHI ? HashableInitializer.BoundShaderState.HullShaderRHI->GetHash() : FSHAHash();
 		HashableInitializer.DomainShaderHash = HashableInitializer.BoundShaderState.DomainShaderRHI ? HashableInitializer.BoundShaderState.DomainShaderRHI->GetHash() : FSHAHash();
+#endif
 		HashableInitializer.PixelShaderHash = HashableInitializer.BoundShaderState.PixelShaderRHI ? HashableInitializer.BoundShaderState.PixelShaderRHI->GetHash() : FSHAHash();
+#if PLATFORM_SUPPORTS_GEOMETRY_SHADERS
 		HashableInitializer.GeometryShaderHash = HashableInitializer.BoundShaderState.GeometryShaderRHI ? HashableInitializer.BoundShaderState.GeometryShaderRHI->GetHash() : FSHAHash();
+#endif
 	}
 	
 	FGraphicsPipelineStateInitializer NewInitializer;

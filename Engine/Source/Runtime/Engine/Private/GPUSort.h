@@ -15,20 +15,25 @@
 struct FGPUSortBuffers
 {
 	/** Shader resource views for vertex buffers containing the keys. */
-	FShaderResourceViewRHIParamRef RemoteKeySRVs[2];
+	FRHIShaderResourceView* RemoteKeySRVs[2];
 	/** Unordered access views for vertex buffers containing the keys. */
-	FUnorderedAccessViewRHIParamRef RemoteKeyUAVs[2];
+	FRHIUnorderedAccessView* RemoteKeyUAVs[2];
 
 	/** Shader resource views for vertex buffers containing the values. */
-	FShaderResourceViewRHIParamRef RemoteValueSRVs[2];
+	FRHIShaderResourceView* RemoteValueSRVs[2];
 	/** Unordered access views for vertex buffers containing the values. */
-	FUnorderedAccessViewRHIParamRef RemoteValueUAVs[2];
+	FRHIUnorderedAccessView* RemoteValueUAVs[2];
 
 	/** Default constructor. */
 	FGPUSortBuffers()
 	{
 	}
 };
+
+/**
+ * Get the number of passes we will need to make in order to sort
+ */
+int32 GetGPUSortPassCount(uint32 KeyMask);
 
 /**
  * Sort a buffer on the GPU.
@@ -39,7 +44,7 @@ struct FGPUSortBuffers
  * @param Count - How many items in the buffer need to be sorted.
  * @returns The index of the buffer containing sorted results.
  */
-int32 SortGPUBuffers(FRHICommandListImmediate& RHICmdList, FGPUSortBuffers SortBuffers, int32 BufferIndex, uint32 KeyMask, int32 Count, ERHIFeatureLevel::Type FeatureLevel);
+ENGINE_API int32 SortGPUBuffers(FRHICommandListImmediate& RHICmdList, FGPUSortBuffers SortBuffers, int32 BufferIndex, uint32 KeyMask, int32 Count, ERHIFeatureLevel::Type FeatureLevel);
 
 /**
  * GPU sorting tests.

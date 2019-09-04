@@ -18,10 +18,12 @@ class UNiagaraNodeCustomHlsl;
 class UNiagaraNodeAssignment;
 class UNiagaraNodeParameterMapSet;
 class FNiagaraSystemViewModel;
+class UNiagaraEmitter;
 class FNiagaraEmitterViewModel;
 class UNiagaraStackEditorData;
 class UNiagaraStackEntry;
 class UNiagaraStackErrorItem;
+class FCompileConstantResolver;
 
 namespace FNiagaraStackGraphUtilities
 {
@@ -42,6 +44,8 @@ namespace FNiagaraStackGraphUtilities
 	UNiagaraNodeFunctionCall* GetNextModuleNode(UNiagaraNodeFunctionCall& CurrentNode);
 
 	UNiagaraNodeOutput* GetEmitterOutputNodeForStackNode(UNiagaraNode& StackNode);
+
+	const UNiagaraNodeOutput* GetEmitterOutputNodeForStackNode(const UNiagaraNode& StackNode);
 
 	UNiagaraNodeInput* GetEmitterInputNodeForStackNode(UNiagaraNode& StackNode);
 
@@ -73,6 +77,10 @@ namespace FNiagaraStackGraphUtilities
 	};
 
 	void GetStackFunctionInputPins(UNiagaraNodeFunctionCall& FunctionCallNode, TArray<const UEdGraphPin*>& OutInputPins, ENiagaraGetStackFunctionInputPinsOptions Options = ENiagaraGetStackFunctionInputPinsOptions::AllInputs, bool bIgnoreDisabled = false);
+
+	void GetStackFunctionInputPins(UNiagaraNodeFunctionCall& FunctionCallNode, TArray<const UEdGraphPin*>& OutInputPins, TSet<const UEdGraphPin*>& OutHiddenPins, FCompileConstantResolver ConstantResolver, ENiagaraGetStackFunctionInputPinsOptions Options = ENiagaraGetStackFunctionInputPinsOptions::AllInputs, bool bIgnoreDisabled = false);
+
+	void GetStackFunctionStaticSwitchPins(UNiagaraNodeFunctionCall& FunctionCallNode, TArray<UEdGraphPin*>& OutInputPins, TSet<UEdGraphPin*>& OutHiddenPins);
 
 	UNiagaraNodeParameterMapSet* GetStackFunctionOverrideNode(UNiagaraNodeFunctionCall& FunctionCallNode);
 
@@ -115,8 +123,6 @@ namespace FNiagaraStackGraphUtilities
 	bool ValidateGraphForOutput(UNiagaraGraph& NiagaraGraph, ENiagaraScriptUsage ScriptUsage, FGuid ScriptUsageId, FText& ErrorMessage);
 
 	UNiagaraNodeOutput* ResetGraphForOutput(UNiagaraGraph& NiagaraGraph, ENiagaraScriptUsage ScriptUsage, FGuid ScriptUsageId, const FGuid& PreferredOutputNodeGuid = FGuid(), const FGuid& PreferredInputNodeGuid = FGuid());
-
-	const UNiagaraEmitter* GetBaseEmitter(UNiagaraEmitter& Emitter, UNiagaraSystem& OwningSystem);
 
 	bool IsRapidIterationType(const FNiagaraTypeDefinition& InputType);
 
@@ -166,4 +172,6 @@ namespace FNiagaraStackGraphUtilities
 	/** Whether a parameter is allowed to be used in a certain execution category. 
 		Used to check if parameter can be dropped on a module or funciton stack entry. */
 	NIAGARAEDITOR_API bool ParameterAllowedInExecutionCategory(const FName InParameterName, const FName ExecutionCategory);
+
+	void RebuildEmitterNodes(UNiagaraSystem& System);
 }

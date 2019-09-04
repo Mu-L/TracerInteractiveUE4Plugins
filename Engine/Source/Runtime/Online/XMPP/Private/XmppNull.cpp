@@ -35,7 +35,7 @@ public:
 		return UserJid;
 	}
 	virtual FOnXmppLoginComplete& OnLoginComplete() override { return OnXmppLoginCompleteDelegate; }
-	virtual FOnXmppLogingChanged& OnLoginChanged() override { return OnXmppLogingChangedDelegate; }
+	virtual FOnXmppLoginChanged& OnLoginChanged() override { return OnXmppLoginChangedDelegate; }
 	virtual FOnXmppLogoutComplete& OnLogoutComplete() override { return OnXmppLogoutCompleteDelegate; }
 
 	virtual IXmppPresencePtr Presence() override { return NULL; }
@@ -43,6 +43,8 @@ public:
 	virtual IXmppMessagesPtr Messages() override { return NULL; }
 	virtual IXmppMultiUserChatPtr MultiUserChat() override { return NULL; }
 	virtual IXmppChatPtr PrivateChat() override { return NULL; }
+
+	virtual void DumpState() const override {}
 
 	// FXmppConnectionNull
 
@@ -56,7 +58,7 @@ private:
 
 	// completion delegates
 	FOnXmppLoginComplete OnXmppLoginCompleteDelegate;
-	FOnXmppLogingChanged OnXmppLogingChangedDelegate;
+	FOnXmppLoginChanged OnXmppLoginChangedDelegate;
 	FOnXmppLogoutComplete OnXmppLogoutCompleteDelegate;	
 };
 

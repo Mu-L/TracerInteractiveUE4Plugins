@@ -18,6 +18,7 @@
 #include "AnimationEditorPreviewScene.h"
 #include "SEditorViewport.h"
 #include "PersonaModule.h"
+#include "SNameComboBox.h"
 
 class SAnimationEditorViewportTabBody;
 class FUICommandList_Pinnable;
@@ -415,6 +416,11 @@ private:
 	bool CanUseFixedBounds() const;
 	bool IsUsingFixedBounds() const;
 
+	/** Called to toggle 'pre-skinned' option to preview */
+	void UsePreSkinnedBounds();
+	bool CanUsePreSkinnedBounds() const;
+	bool IsUsingPreSkinnedBounds() const;
+
 	/** Called by UV channel combo box on selection change */
 	void ComboBoxSelectionChanged( TSharedPtr<FString> NewSelection, ESelectInfo::Type SelectInfo );
 
@@ -423,6 +429,12 @@ private:
 
 	/** Populates choices for UV Channel combo box */
 	void PopulateUVChoices();
+
+	/** Populates choices for Skin Weight Profile combo box for each lod based on current preview asset */
+	void PopulateSkinWeightProfileNames();
+
+	/** Checks if Skin Weight Profile selection is still valid and otherwise resets it, called through PostCache from currenty Preview Skeletal Mesh */
+	void UpdateSkinWeightSelection(USkeletalMesh* InSkeletalMesh);
 
 	void AnimChanged(UAnimationAsset* AnimAsset);
 
@@ -546,6 +558,11 @@ private:
 	/** Num UV Channels at each LOD of Preview Mesh */
 	TArray<int32> NumUVChannels;
 
+public:
+	/** Skin Weight Profile Selector */
+	TSharedPtr<SNameComboBox> SkinWeightCombo;
+	TArray<TSharedPtr<FName>> SkinWeightProfileNames;
+
 	/** Box that contains scrub panel */
 	TSharedPtr<SVerticalBox> ScrubPanelContainer;
 
@@ -560,6 +577,9 @@ private:
 
 	/** Min LOD notification */
 	TWeakPtr<SWidget> WeakMinLODNotification;
+
+	/** Min LOD notification */
+	TWeakPtr<SWidget> WeakSkinWeightPreviewNotification;
 
 	/** Current LOD selection*/
 	int32 LODSelection;
@@ -588,4 +608,7 @@ private:
 
 	/** Add a notification to tell the user a min LOD is being applied */
 	void AddMinLODNotification();
+
+	/** Add a notification to tell the user a Skin Weight Profile is being previewed */
+	void AddSkinWeightProfileNotification();
 };

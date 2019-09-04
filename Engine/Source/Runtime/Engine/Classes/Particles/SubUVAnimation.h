@@ -52,7 +52,7 @@ enum EOpacitySourceMode
 	OSM_BlueChannel
 };
 
-class FSubUVDerivedData
+class ENGINE_API FSubUVDerivedData
 {
 public:
 	TArray<FVector2D> BoundingGeometry;
@@ -193,7 +193,7 @@ public:
 		return &DerivedData.BoundingGeometry[FrameIndex * GetNumBoundingVertices()];
 	}
 
-	inline FShaderResourceViewRHIParamRef GetBoundingGeometrySRV() const
+	inline FRHIShaderResourceView* GetBoundingGeometrySRV() const
 	{
 		return BoundingGeometryBuffer->ShaderResourceView;
 	}

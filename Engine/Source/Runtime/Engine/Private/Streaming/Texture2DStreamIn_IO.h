@@ -30,7 +30,7 @@ protected:
 	// Cancel / destroy each requests created in SetIORequests()
 	void ClearIORequests(const FContext& Context);
 	// Set the IO callback used for streaming the mips.
-	void SetAsyncFileCallback(const FContext& Context);
+	void SetAsyncFileCallback();
 
 	// Cancel all IO requests.
 	void CancelIORequests();
@@ -47,10 +47,10 @@ private:
 		void DoWork();
 		FORCEINLINE TStatId GetStatId() const
 		{
-			RETURN_QUICK_DECLARE_CYCLE_STAT(FCancelIORequestsTask, STATGROUP_ThreadPoolAsyncTasks);
+			RETURN_QUICK_DECLARE_CYCLE_STAT(FCancelIORequestsTask_Texture, STATGROUP_ThreadPoolAsyncTasks);
 		}
 	protected:
-		FTexture2DStreamIn_IO* PendingUpdate;
+		TRefCountPtr<FTexture2DStreamIn_IO> PendingUpdate;
 	};
 
 	typedef FAutoDeleteAsyncTask<FCancelIORequestsTask> FAsyncCancelIORequestsTask;
@@ -68,7 +68,5 @@ private:
 
 	IAsyncReadFileHandle* IOFileHandle;
 	FAsyncFileCallBack AsyncFileCallBack;
-
-
 };
 

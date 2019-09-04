@@ -159,7 +159,7 @@ namespace Gauntlet
 
 	public class IOSDeviceFactory : IDeviceFactory
 	{
-		public bool CanSupportPlatform(UnrealTargetPlatform Platform)
+		public bool CanSupportPlatform(UnrealTargetPlatform? Platform)
 		{
 			return Platform == UnrealTargetPlatform.IOS;
 		}
@@ -591,9 +591,10 @@ namespace Gauntlet
 		}
 
 		public void PopulateDirectoryMappings(string ProjectDir)
-        {
-            LocalDirectoryMappings.Add(EIntendedBaseCopyDirectory.Binaries, Path.Combine(ProjectDir, "Binaries"));
-            LocalDirectoryMappings.Add(EIntendedBaseCopyDirectory.Config, Path.Combine(ProjectDir, "Config"));
+		{
+			LocalDirectoryMappings.Add(EIntendedBaseCopyDirectory.Build, Path.Combine(ProjectDir, "Build"));
+			LocalDirectoryMappings.Add(EIntendedBaseCopyDirectory.Binaries, Path.Combine(ProjectDir, "Binaries"));
+			LocalDirectoryMappings.Add(EIntendedBaseCopyDirectory.Config, Path.Combine(ProjectDir, "Config"));
             LocalDirectoryMappings.Add(EIntendedBaseCopyDirectory.Content, Path.Combine(ProjectDir, "Content"));
             LocalDirectoryMappings.Add(EIntendedBaseCopyDirectory.Demos, Path.Combine(ProjectDir, "Demos"));
             LocalDirectoryMappings.Add(EIntendedBaseCopyDirectory.Profiling, Path.Combine(ProjectDir, "Profiling"));
@@ -601,7 +602,7 @@ namespace Gauntlet
         }
 
 
-		public UnrealTargetPlatform Platform { get { return UnrealTargetPlatform.IOS; } }
+		public UnrealTargetPlatform? Platform { get { return UnrealTargetPlatform.IOS; } }
 
 		/// <summary>
 		/// Temp path we use to push/pull things from the device
@@ -625,7 +626,50 @@ namespace Gauntlet
 		public bool IsOn { get { return true; } }
 		public bool PowerOn() { return true; }
 		public bool PowerOff() { return true; }
-		public bool Reboot() { return true; }
+		
+		public bool Reboot() 
+		{ 
+			const string Cmd = "/usr/local/bin/idevicediagnostics";
+			if (!File.Exists(Cmd))
+			{
+				Log.Verbose("Rebooting iOS device requires idevicediagnostics binary");
+				return true;
+			}
+
+			var Result = IOSBuild.ExecuteCommand(Cmd, string.Format("restart -u {0}", DeviceName));
+			if (Result.ExitCode != 0)
+			{
+				Log.Warning(string.Format("Failed to reboot iOS device {0}, restart command failed", DeviceName));
+				return true;
+			}
+
+			// initial wait 20 seconds
+			Thread.Sleep(20 * 1000);
+
+			const int WaitPeriod = 10;
+			int WaitTime = 120;
+			bool rebooted = false;
+			do
+			{
+				Result = IOSBuild.ExecuteCommand(Cmd, string.Format("diagnostics WiFi -u {0}", DeviceName));
+				if (Result.ExitCode == 0)
+				{
+					rebooted = true;
+					break;
+				}
+				
+				Thread.Sleep(WaitPeriod * 1000);
+				WaitTime -= WaitPeriod;
+
+			} while (WaitTime > 0);
+
+			if (!rebooted) 
+			{
+				Log.Warning("Failed to reboot iOS device {0}, device didn't come back after restart", DeviceName);
+			}
+
+			return true; 
+		}
 
 		static Dictionary<string, bool> ConnectedDevices = new Dictionary<string, bool>();
 		bool Connected = false;
@@ -696,7 +740,7 @@ namespace Gauntlet
 				return new List<string>();
 			}
 
-			MatchCollection DeviceMatches = Regex.Matches(Result.Output, @"(.?)Found\ ([a-z0-9]{40})");
+			MatchCollection DeviceMatches = Regex.Matches(Result.Output, @"(.?)Found\ ([a-z0-9]{40}|[A-Z0-9]{8}-[A-Z0-9]{16})");
 
 			return DeviceMatches.Cast<Match>().Select<Match, string>(
 				M => M.Groups[2].ToString()
@@ -709,7 +753,7 @@ namespace Gauntlet
 		void KillZombies()
 		{
 
-			if (ZombiesKilled)
+			if (Globals.IsWorker || ZombiesKilled)
 			{
 				return;
 			}
@@ -723,7 +767,13 @@ namespace Gauntlet
 		}
 		
 		// Gauntlet cache folder for tracking device/ipa state
-		string GauntletAppCache { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Personal), ".gauntletappcache");} }
+		string GauntletAppCache
+		{
+			get
+			{	
+				return Path.Combine(Globals.TempDir, string.Format("IOSAppCache{0}", Globals.WorkerID == -1 ? "" : Globals.WorkerID.ToString()));
+			}
+		}
 
 		// path to locally extracted (and possibly resigned) app bundle
 		// Note: ios-deploy works with app bundles, which requires the IPA be unzipped for deployment (this will allow us to resign in the future as well)

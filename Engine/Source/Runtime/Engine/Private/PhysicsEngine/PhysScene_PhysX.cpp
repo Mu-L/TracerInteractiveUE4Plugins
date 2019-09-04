@@ -20,7 +20,10 @@
 #include "PhysicsPublic.h"
 #include "CustomPhysXPayload.h"
 #include "HAL/LowLevelMemTracker.h"
-#include "Physics/SQAccelerator.h"
+
+#include "PhysicsInterfaceDeclaresCore.h"
+#if !WITH_CHAOS_NEEDS_TO_BE_FIXED
+#include "SQAccelerator.h"
 
 #if WITH_PHYSX
 #include "PhysXPublic.h"
@@ -36,6 +39,7 @@
 #include "PhysicsEngine/ConstraintInstance.h"
 #include "PhysicsReplication.h"
 #include "ProfilingDebugging/CsvProfiler.h"
+#include "PhysTestSerializer.h"
 
 /** Physics stats **/
 
@@ -425,6 +429,9 @@ static FAutoConsoleCommandWithWorldAndArgs GSetPhysXTreeRebuildRate(TEXT("p.Phys
 FPhysScene_PhysX::FPhysScene_PhysX(const AWorldSettings* Settings)
 #if WITH_CUSTOM_SQ_STRUCTURE
 	: SQAccelerator(nullptr)
+#if WITH_PHYSX
+	, PhysXSQAccelerator(nullptr)
+#endif
 #endif 
 {
 	LineBatcher = NULL;
@@ -509,15 +516,16 @@ void FPhysScene_PhysX::AddActorsToPhysXScene_AssumesLocked(const TArray<FPhysics
 		}
 	}
 
-#if WITH_CUSTOM_SQ_STRUCTURE
-	for (const FPhysicsActorHandle& ActorRef : InActors)
-	{
-		if (PxRigidActor* RigidActor = ActorRef.SyncActor)
-		{
-			RigidActorToSQEntries.Add(RigidActor, SQAccelerator->AddEntry(RigidActor));
-		}
-	}
-#endif
+	/** Disabled the following case until we have a good broadphase. Right now using FPhysXSQAccelerator to just query the scene */
+//#if WITH_CUSTOM_SQ_STRUCTURE
+//	for (const FPhysicsActorHandle& ActorRef : InActors)
+//	{
+//		if (PxRigidActor* RigidActor = ActorRef.SyncActor)
+//		{
+//			RigidActorToSQEntries.Add(RigidActor, SQAccelerator->AddEntry(RigidActor));
+//		}
+//	}
+//#endif
 }
 
 ISQAccelerator* FPhysScene_PhysX::GetSQAccelerator() const
@@ -771,17 +779,19 @@ void FPhysScene_PhysX::ClearTorques_AssumesLocked(FBodyInstance* BodyInstance, b
 void FPhysScene_PhysX::RemoveBodyInstanceFromPendingLists_AssumesLocked(FBodyInstance* BodyInstance)
 {
 #if WITH_PHYSX
-#if WITH_CUSTOM_SQ_STRUCTURE
-	if (PxRigidActor* RigidActor = BodyInstance->GetPhysicsActorHandle().SyncActor)
-	{
-		FSQAcceleratorEntry* Entry = nullptr;
-		RigidActorToSQEntries.RemoveAndCopyValue(RigidActor, Entry);
-		if (Entry)
-		{
-			SQAccelerator->RemoveEntry(Entry);
-		}
-	}
-#endif
+
+	/** Disabled the following case until we have a good broadphase. Right now using FPhysXSQAccelerator to just query the scene */
+//#if WITH_CUSTOM_SQ_STRUCTURE
+//	if (PxRigidActor* RigidActor = BodyInstance->GetPhysicsActorHandle().SyncActor)
+//	{
+//		FSQAcceleratorEntry* Entry = nullptr;
+//		RigidActorToSQEntries.RemoveAndCopyValue(RigidActor, Entry);
+//		if (Entry)
+//		{
+//			SQAccelerator->RemoveEntry(Entry);
+//		}
+//	}
+//#endif
 
 
 	if (FPhysicsInterface_PhysX::IsRigidBody(BodyInstance->GetPhysicsActorHandle()))
@@ -953,7 +963,14 @@ void FPhysScene_PhysX::MarkForPreSimKinematicUpdate(USkeletalMeshComponent* InSk
 		if (InSkelComp->bDeferredKinematicUpdate)
 		{
 			TPair<USkeletalMeshComponent*, FDeferredKinematicUpdateInfo>* FoundItem = DeferredKinematicUpdateSkelMeshes.FindByPredicate([InSkelComp](const TPair<USkeletalMeshComponent*, FDeferredKinematicUpdateInfo>& InItem) { return InSkelComp == InItem.Key; });
-			check(FoundItem != nullptr); // If the bool was set, we must be in the array!
+			if (!ensure(FoundItem != nullptr))// If the bool was set, we must be in the array!
+			{
+				FDeferredKinematicUpdateInfo Info;
+				Info.TeleportType = InTeleport;
+				Info.bNeedsSkinning = bNeedsSkinning;
+				DeferredKinematicUpdateSkelMeshes.Emplace(InSkelComp, Info);
+				return;
+			}
 
 			FDeferredKinematicUpdateInfo& Info = FoundItem->Value;
 
@@ -992,7 +1009,7 @@ void FPhysScene_PhysX::ClearPreSimKinematicUpdate(USkeletalMeshComponent* InSkel
 		// Remove from map
 		int32 NumRemoved = DeferredKinematicUpdateSkelMeshes.RemoveAll([InSkelComp](const TPair<USkeletalMeshComponent*, FDeferredKinematicUpdateInfo>& InItem) { return InSkelComp == InItem.Key; });
 
-		check(NumRemoved == 1); // Should be in array if flag was set!
+		ensure(NumRemoved == 1); // Should be in array if flag was set!
 
 		// Clear flag
 		InSkelComp->bDeferredKinematicUpdate = false;
@@ -1009,7 +1026,7 @@ void FPhysScene_PhysX::UpdateKinematicsOnDeferredSkelMeshes()
 		USkeletalMeshComponent* SkelComp = DeferredKinematicUpdate.Key;
 		const FDeferredKinematicUpdateInfo& Info = DeferredKinematicUpdate.Value;
 
-		check(SkelComp->bDeferredKinematicUpdate); // Should be true if in map!
+		ensure(SkelComp->bDeferredKinematicUpdate); // Should be true if in map!
 
 		// Perform kinematic updates
 		SkelComp->UpdateKinematicBonesToAnim(SkelComp->GetComponentSpaceTransforms(), Info.TeleportType, Info.bNeedsSkinning, EAllowKinematicDeferral::DisallowDeferral);
@@ -1085,14 +1102,6 @@ void FPhysScene_PhysX::TickPhysScene(FGraphEventRef& InOutCompletionEvent)
 	apex::Scene* ApexScene = GetApexScene();
 	const bool bSimulateScene = ApexScene && UseDelta > 0.f;
 #endif
-#endif
-
-	// Replicate physics
-#if WITH_PHYSX
-	if (bSimulateScene && PhysicsReplication)
-	{
-		PhysicsReplication->Tick(AveragedFrameTime);
-	}
 #endif
 
 	// Replicate physics
@@ -1500,6 +1509,7 @@ void FPhysScene_PhysX::StartFrame()
 	check(!PhysicsSceneCompletion.GetReference()); // this should have been cleared
 	if (FinishPrerequisites.Num())
 	{
+		// #BG Not sure this is needed anymore without async scene
 		if (FinishPrerequisites.Num() > 1)  // we don't need to create a new task if we only have one prerequisite
 		{
 			DECLARE_CYCLE_STAT(TEXT("FNullGraphTask.ProcessPhysScene_Join"),
@@ -1964,7 +1974,7 @@ void FPhysScene_PhysX::InitPhysScene(const AWorldSettings* Settings)
 		}
 
 		// Must have at least one and no more than 256 regions, subdivision is num^2 so only up to 16
-		NumSubdivisions = FMath::Clamp<uint32>(NumSubdivisions, 1, 16);
+		NumSubdivisions = FMath::Clamp<uint32>(NumSubdivisions, 1, BroadphaseSettings.bUseMBPOuterBounds ? 15 : 16);
 
 		const FBox& Bounds = BroadphaseSettings.MBPBounds;
 		PxBounds3 MbpBounds(U2PVector(Bounds.Min), U2PVector(Bounds.Max));
@@ -1984,6 +1994,100 @@ void FPhysScene_PhysX::InitPhysScene(const AWorldSettings* Settings)
 
 			PScene->addBroadPhaseRegion(NewRegion);
 		}
+			
+		if (BroadphaseSettings.bUseMBPOuterBounds)
+		{
+			const FBox& OuterBounds = BroadphaseSettings.MBPOuterBounds;
+			if (!(OuterBounds.Min.X >= Bounds.Min.X || OuterBounds.Min.Y >= Bounds.Min.Y ||
+				OuterBounds.Max.X <= Bounds.Max.X || OuterBounds.Max.Y <= Bounds.Max.Y))
+			{
+				{
+					//outer 1
+					const FBox LeftBounds(FVector(Bounds.Min.X, OuterBounds.Min.Y, Bounds.Min.Z), FVector(OuterBounds.Max.X, Bounds.Min.Y, Bounds.Max.Z));
+					PxBounds3 MbpLeftBounds(U2PVector(LeftBounds.Min), U2PVector(LeftBounds.Max));
+
+					// Storage for generated regions, the generation function will create num^2 regions
+					TArray<PxBounds3> GeneratedRegionsLeft;
+					GeneratedRegionsLeft.AddZeroed(1);
+
+					// Final parameter is up axis (2 == Z for Unreal Engine)
+					PxBroadPhaseExt::createRegionsFromWorldBounds(GeneratedRegionsLeft.GetData(), MbpLeftBounds, 1, 2);
+
+					for (const PxBounds3& Region : GeneratedRegionsLeft)
+					{
+						PxBroadPhaseRegion NewRegion;
+						NewRegion.bounds = Region;
+						NewRegion.userData = nullptr; // No need to track back to an Unreal instance at the moment
+
+						PScene->addBroadPhaseRegion(NewRegion);
+					}
+				}
+				{
+					//outer 2
+					const FBox RightBounds(FVector(OuterBounds.Min.X, Bounds.Max.Y, Bounds.Min.Z), FVector(Bounds.Max.X, OuterBounds.Max.Y, Bounds.Max.Z));
+					PxBounds3 MbpRightBounds(U2PVector(RightBounds.Min), U2PVector(RightBounds.Max));
+
+					// Storage for generated regions, the generation function will create num^2 regions
+					TArray<PxBounds3> GeneratedRegionsRight;
+					GeneratedRegionsRight.AddZeroed(1);
+
+					// Final parameter is up axis (2 == Z for Unreal Engine)
+					PxBroadPhaseExt::createRegionsFromWorldBounds(GeneratedRegionsRight.GetData(), MbpRightBounds, 1, 2);
+
+					for (const PxBounds3& Region : GeneratedRegionsRight)
+					{
+						PxBroadPhaseRegion NewRegion;
+						NewRegion.bounds = Region;
+						NewRegion.userData = nullptr; // No need to track back to an Unreal instance at the moment
+
+						PScene->addBroadPhaseRegion(NewRegion);
+					}
+				}
+				{
+					//outer 3
+					const FBox TopBounds(FVector(Bounds.Max.X, Bounds.Min.Y, Bounds.Min.Z), FVector(OuterBounds.Max.X, OuterBounds.Max.Y, Bounds.Max.Z));
+					PxBounds3 MbpTopBounds(U2PVector(TopBounds.Min), U2PVector(TopBounds.Max));
+
+					// Storage for generated regions, the generation function will create num^2 regions
+					TArray<PxBounds3> GeneratedRegionsTop;
+					GeneratedRegionsTop.AddZeroed(1);
+
+					// Final parameter is up axis (2 == Z for Unreal Engine)
+					PxBroadPhaseExt::createRegionsFromWorldBounds(GeneratedRegionsTop.GetData(), MbpTopBounds, 1, 2);
+
+					for (const PxBounds3& Region : GeneratedRegionsTop)
+					{
+						PxBroadPhaseRegion NewRegion;
+						NewRegion.bounds = Region;
+						NewRegion.userData = nullptr; // No need to track back to an Unreal instance at the moment
+
+						PScene->addBroadPhaseRegion(NewRegion);
+					}
+				}
+				{
+					//outer 4
+					const FBox BottomBounds(FVector(OuterBounds.Min.X, OuterBounds.Min.Y, Bounds.Min.Z), FVector(Bounds.Min.X, Bounds.Max.Y, Bounds.Max.Z));
+					PxBounds3 MbpBottomBounds(U2PVector(BottomBounds.Min), U2PVector(BottomBounds.Max));
+
+					// Storage for generated regions, the generation function will create num^2 regions
+					TArray<PxBounds3> GeneratedRegionsBottom;
+					GeneratedRegionsBottom.AddZeroed(1);
+
+					// Final parameter is up axis (2 == Z for Unreal Engine)
+					PxBroadPhaseExt::createRegionsFromWorldBounds(GeneratedRegionsBottom.GetData(), MbpBottomBounds, 1, 2);
+
+					for (const PxBounds3& Region : GeneratedRegionsBottom)
+					{
+						PxBroadPhaseRegion NewRegion;
+						NewRegion.bounds = Region;
+						NewRegion.userData = nullptr; // No need to track back to an Unreal instance at the moment
+
+						PScene->addBroadPhaseRegion(NewRegion);
+					}
+				}
+			}
+		}
+		
 	}
 
 #if WITH_APEX
@@ -2030,9 +2134,16 @@ void FPhysScene_PhysX::InitPhysScene(const AWorldSettings* Settings)
 #endif
 
 #if WITH_CUSTOM_SQ_STRUCTURE
-	SQAccelerator = new FSQAccelerator();
 	SQAcceleratorUnion = new FSQAcceleratorUnion();
-	SQAcceleratorUnion->AddSQAccelerator(SQAccelerator);
+	
+	/** Disabled the following case until we have a good broadphase. Right now using FPhysXSQAccelerator to just query the scene */
+	//SQAccelerator = new FSQAccelerator();
+	//SQAcceleratorUnion->AddSQAccelerator(SQAccelerator);
+
+#if WITH_PHYSX && !WITH_CHAOS
+	PhysXSQAccelerator = new FPhysXSQAccelerator(PScene);
+	SQAcceleratorUnion->AddSQAccelerator(PhysXSQAccelerator);
+#endif
 #endif
 
 #if WITH_CHAOS
@@ -2049,8 +2160,14 @@ void FPhysScene_PhysX::TermPhysScene()
 #if WITH_CUSTOM_SQ_STRUCTURE
 	delete SQAcceleratorUnion;
 	SQAcceleratorUnion = nullptr;
-	delete SQAccelerator;
-	SQAccelerator = nullptr;
+
+	/** Disabled the following case until we have a good broadphase. Right now using FPhysXSQAccelerator to just query the scene */
+	//delete SQAccelerator;
+	//SQAccelerator = nullptr;
+#if WITH_PHYSX
+	delete PhysXSQAccelerator;
+	PhysXSQAccelerator = nullptr;
+#endif
 #endif
 
 #if WITH_PHYSX
@@ -2131,6 +2248,13 @@ void ListAwakeRigidBodiesFromScene(bool bIncludeKinematic, PxScene* PhysXScene, 
 		}
 	}
 }
+
+void FPhysScene_PhysX::SerializeForTesting(FArchive& Ar)
+{
+	FPhysTestSerializer Serializer;
+	Serializer.SetPhysicsData(*GetPxScene());
+	Serializer.Serialize(Ar);
+}
 #endif // WITH_PHYSX
 
 /** Util to list to log all currently awake rigid bodies */
@@ -2170,6 +2294,8 @@ int32 FPhysScene::GetNumAwakeBodies()
 }
 #endif
 
-#endif
+#endif // WITH_PHYSX
 
-#endif
+#endif // !WITH_CHAOS_NEEDS_TO_BE_FIXED
+
+#endif //  !WITH_CHAOS && !WITH_IMMEDIATE_PHYSX && !PHYSICS_INTERFACE_LLIMMEDIATE

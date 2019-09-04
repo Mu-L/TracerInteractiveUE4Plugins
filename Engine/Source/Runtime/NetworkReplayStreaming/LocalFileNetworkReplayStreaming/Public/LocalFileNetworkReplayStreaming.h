@@ -121,15 +121,15 @@ struct FLocalFileReplayInfo
 class LOCALFILENETWORKREPLAYSTREAMING_API FLocalFileStreamFArchive : public FArchive
 {
 public:
-	FLocalFileStreamFArchive() : Pos( 0 ), bAtEndOfReplay( false ) {}
+	FLocalFileStreamFArchive() : Pos(0), bAtEndOfReplay(false) {}
 
-	virtual void	Serialize( void* V, int64 Length ) override;
+	virtual void	Serialize(void* V, int64 Length) override;
 	virtual int64	Tell() override;
 	virtual int64	TotalSize() override;
-	virtual void	Seek( int64 InPos ) override;
+	virtual void	Seek(int64 InPos) override;
 	virtual bool	AtEnd() override;
 
-	TArray< uint8 >	Buffer;
+	TArray<uint8>	Buffer;
 	int32			Pos;
 	bool			bAtEndOfReplay;
 };
@@ -373,8 +373,8 @@ public:
 
 	virtual bool GetCachedRequest() override
 	{
-		FCachedFileRequest* CachedRequest = this->Streamer->RequestCache.Find(CacheKey);
-		if (CachedRequest != nullptr)
+		TSharedPtr<FCachedFileRequest> CachedRequest = this->Streamer->RequestCache.FindRef(CacheKey);
+		if (CachedRequest.IsValid())
 		{
 			// If we have this response in the cache, process it now
 			CachedRequest->LastAccessTime = FPlatformTime::Seconds();
@@ -398,16 +398,16 @@ public:
 	virtual ~FLocalFileNetworkReplayStreamer();
 
 	/** INetworkReplayStreamer implementation */
-	virtual void StartStreaming(const FString& CustomName, const FString& FriendlyName, const TArray< FString >& UserNames, bool bRecord, const FNetworkReplayVersion& ReplayVersion, const FStartStreamingCallback& Delegate) override;
-	virtual void StartStreaming(const FString& CustomName, const FString& FriendlyName, const TArray< int32 >& UserIndices, bool bRecord, const FNetworkReplayVersion& ReplayVersion, const FStartStreamingCallback& Delegate) override;
+	virtual void StartStreaming(const FStartStreamingParameters& Params, const FStartStreamingCallback& Delegate) override;
 	virtual void StopStreaming() override;
 	virtual FArchive* GetHeaderArchive() override;
 	virtual FArchive* GetStreamingArchive() override;
 	virtual FArchive* GetCheckpointArchive() override;
 	virtual void FlushCheckpoint(const uint32 TimeInMS) override;
-	virtual void GotoCheckpointIndex(const int32 CheckpointIndex, const FGotoCallback& Delegate) override;
-	virtual void GotoTimeInMS(const uint32 TimeInMS, const FGotoCallback& Delegate) override;
+	virtual void GotoCheckpointIndex(const int32 CheckpointIndex, const FGotoCallback& Delegate, EReplayCheckpointType CheckpointType) override;
+	virtual void GotoTimeInMS(const uint32 TimeInMS, const FGotoCallback& Delegate, EReplayCheckpointType CheckpointType) override;
 	virtual void UpdateTotalDemoTime(uint32 TimeInMS) override;
+	virtual void UpdatePlaybackTime(uint32 TimeInMS) override {}
 	virtual uint32 GetTotalDemoTime() const override { return CurrentReplayInfo.LengthInMS; }
 	virtual bool IsDataAvailable() const override;
 	virtual void SetHighPriorityTimeRange(const uint32 StartTimeInMS, const uint32 EndTimeInMS) override;
@@ -416,10 +416,7 @@ public:
 	virtual bool IsLive() const override;
 	virtual void DeleteFinishedStream(const FString& StreamName, const FDeleteFinishedStreamCallback& Delegate) override;
 	virtual void DeleteFinishedStream( const FString& StreamName, const int32 UserIndex, const FDeleteFinishedStreamCallback& Delegate ) override;
-	virtual void EnumerateStreams(const FNetworkReplayVersion& ReplayVersion, const FString& UserString, const FString& MetaString, const FEnumerateStreamsCallback& Delegate) override;
-	virtual void EnumerateStreams(const FNetworkReplayVersion& InReplayVersion, const FString& UserString, const FString& MetaString, const TArray< FString >& ExtraParms, const FEnumerateStreamsCallback& Delegate) override;
 	virtual void EnumerateStreams( const FNetworkReplayVersion& InReplayVersion, const int32 UserIndex, const FString& MetaString, const TArray< FString >& ExtraParms, const FEnumerateStreamsCallback& Delegate ) override;
-	virtual void EnumerateRecentStreams(const FNetworkReplayVersion& ReplayVersion, const FString& RecentViewer, const FEnumerateStreamsCallback& Delegate) override;
 	virtual void EnumerateRecentStreams( const FNetworkReplayVersion& ReplayVersion, const int32 UserIndex, const FEnumerateStreamsCallback& Delegate ) override;
 	virtual ENetworkReplayError::Type GetLastError() const override;
 	virtual void AddUserToReplay(const FString& UserString) override;
@@ -431,6 +428,9 @@ public:
 	virtual void RequestEventData(const FString& EventID, const FRequestEventDataCallback& Delegate) override;
 	virtual void RequestEventData(const FString& ReplayName, const FString& EventID, const FRequestEventDataCallback& Delegate) override;
 	virtual void RequestEventData(const FString& ReplayName, const FString& EventId, const int32 UserIndex, const FRequestEventDataCallback& Delegate) override;
+	virtual void RequestEventGroupData(const FString& Group, const FRequestEventGroupDataCallback& Delegate) override;
+	virtual void RequestEventGroupData(const FString& ReplayName, const FString& Group, const FRequestEventGroupDataCallback& Delegate) override;
+	virtual void RequestEventGroupData(const FString& ReplayName, const FString& Group, const int32 UserIndex, const FRequestEventGroupDataCallback& Delegate) override;
 	virtual void SearchEvents(const FString& EventGroup, const FSearchEventsCallback& Delegate) override;
 	virtual void KeepReplay(const FString& ReplayName, const bool bKeep, const FKeepReplayCallback& Delegate) override;
 	virtual void KeepReplay(const FString& ReplayName, const bool bKeep, const int32 UserIndex, const FKeepReplayCallback& Delegate) override;
@@ -438,10 +438,14 @@ public:
 	virtual void RenameReplayFriendlyName(const FString& ReplayName, const FString& NewFriendlyName, const int32 UserIndex, const FRenameReplayCallback& Delegate) override;
 	virtual void RenameReplay(const FString& ReplayName, const FString& NewName, const FRenameReplayCallback& Delegate) override;
 	virtual void RenameReplay(const FString& ReplayName, const FString& NewName, const int32 UserIndex, const FRenameReplayCallback& Delegate) override;
-	virtual FString	GetReplayID() const override { return TEXT(""); }
+	virtual FString	GetReplayID() const override { return CurrentStreamName; }
 	virtual void SetTimeBufferHintSeconds(const float InTimeBufferHintSeconds) override {}
 	virtual void RefreshHeader() override;
 	virtual void DownloadHeader(const FDownloadHeaderCallback& Delegate) override;
+
+	virtual bool IsCheckpointTypeSupported(EReplayCheckpointType CheckpointType) const override;
+
+	virtual const int32 GetUserIndexFromUserString(const FString& UserString) override;
 
 	virtual bool SupportsCompression() const { return false; }
 	virtual int32 GetDecompressedSize(FArchive& InCompressed) const { return 0; }
@@ -511,20 +515,14 @@ public:
 	}
 
 	/** Map of chunk index to cached value */
-	TMap<int32, FCachedFileRequest> RequestCache;
+	TMap<int32, TSharedPtr<FCachedFileRequest>> RequestCache;
+
+	/** Map of checkpoint index to cached value */
+	TMap<int32, TSharedPtr<FCachedFileRequest>> DeltaCheckpointCache;
 
 protected:
 
-	static const FString GetUserStringFromUserIndex(const int32 UserIndex);
-	static const void GetUserStringsFromUserIndices(const TArray<int32>& UserIndices, TArray<FString>& OutUserStrings);
-
-	static const int32 GetUserIndexFromUserString(const FString& UserString);
-	static const void GetUserIndicesFromUserStrings(const TArray<FString>& UserStrings, TArray<int32>& OutUserIndices);
-
-	void StartStreaming_Internal(const FString& CustomName, const FString& FriendlyName, const TArray<int32>& UserIndices, bool bRecord, const FNetworkReplayVersion& ReplayVersion, const FStartStreamingCallback& Delegate);
 	void DeleteFinishedStream_Internal(const FString& StreamName, const int32 UserIndex, const FDeleteFinishedStreamCallback& Delegate);
-	void EnumerateStreams_Internal(const FNetworkReplayVersion& InReplayVersion, const int32 UserIndex, const FString& MetaString, const TArray< FString >& ExtraParms, const FEnumerateStreamsCallback& Delegate);
-	void EnumerateRecentStreams_Internal(const FNetworkReplayVersion& ReplayVersion, const int32 UserIndex, const FEnumerateStreamsCallback& Delegate);
 	void EnumerateEvents_Internal(const FString& ReplayName, const FString& Group, const int32 UserIndex, const FEnumerateEventsCallback& Delegate);
 	void RequestEventData_Internal(const FString& ReplayName, const FString& EventId, const int32 UserIndex, const FRequestEventDataCallback& Delegate);
 	void KeepReplay_Internal(const FString& ReplayName, const bool bKeep, const int32 UserIndex, const FKeepReplayCallback& Delegate);
@@ -632,12 +630,19 @@ protected:
 
 public:
 	static const FString& GetDefaultDemoSavePath();
+
+	static const uint32 FileMagic;
+	static const uint32 MaxFriendlyNameLen;
+	static const uint32 LatestVersion;
 };
 
 class LOCALFILENETWORKREPLAYSTREAMING_API FLocalFileNetworkReplayStreamingFactory : public INetworkReplayStreamingFactory, public FTickableGameObject
 {
 public:
-	virtual TSharedPtr<INetworkReplayStreamer> CreateReplayStreamer();
+	virtual void ShutdownModule() override;
+
+	virtual TSharedPtr<INetworkReplayStreamer> CreateReplayStreamer() override;
+	virtual void Flush() override;
 
 	/** FTickableGameObject */
 	virtual void Tick(float DeltaTime) override;
@@ -646,5 +651,7 @@ public:
 	bool IsTickableWhenPaused() const override { return true; }
 
 protected:
+	bool HasAnyPendingRequests() const;
+
 	TArray<TSharedPtr<FLocalFileNetworkReplayStreamer>> LocalFileStreamers;
 };

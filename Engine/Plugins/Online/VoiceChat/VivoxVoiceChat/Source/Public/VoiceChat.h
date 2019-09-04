@@ -60,6 +60,22 @@ enum class EVoiceChatTransmitMode
 	Channel
 };
 
+struct FVoiceChatCallStats
+{
+	/** Call length in seconds */
+	double CallLength;
+	/** Minimum measured network latency in seconds. Zero if no measurements made */
+	double LatencyMinMeasuredSeconds;
+	/** Maximum measured network latency in seconds. Zero if no measurements made */
+	double LatencyMaxMeasuredSeconds;
+	/** Average measured network latency in seconds. Zero if no measurements made */
+	double LatencyAverageMeasuredSeconds;
+	/** Total number of packets, both received and lost */
+	int PacketsNumTotal;
+	/** Total number of lost packets */
+	int PacketsNumLost;
+};
+
 DECLARE_DELEGATE_OneParam(FOnVoiceChatConnectCompleteDelegate, const FVoiceChatResult& /* Result */);
 DECLARE_DELEGATE_OneParam(FOnVoiceChatDisconnectCompleteDelegate, const FVoiceChatResult& /* Result */);
 DECLARE_DELEGATE_TwoParams(FOnVoiceChatLoginCompleteDelegate, const FString& /* PlayerName */, const FVoiceChatResult& /* Result */);
@@ -68,8 +84,13 @@ DECLARE_DELEGATE_TwoParams(FOnVoiceChatChannelJoinCompleteDelegate, const FStrin
 DECLARE_DELEGATE_TwoParams(FOnVoiceChatChannelLeaveCompleteDelegate, const FString& /* ChannelName */, const FVoiceChatResult& /* Result */);
 
 DECLARE_MULTICAST_DELEGATE(FOnVoiceChatAvailableAudioDevicesChangedDelegate);
-DECLARE_MULTICAST_DELEGATE_OneParam(FOnVoiceChatDisconnectedDelegate, const FVoiceChatResult& /* Reason */);
 DECLARE_MULTICAST_DELEGATE(FOnVoiceChatReconnectedDelegate);
+DECLARE_MULTICAST_DELEGATE(FOnVoiceChatConnectedDelegate);
+DECLARE_MULTICAST_DELEGATE_OneParam(FOnVoiceChatDisconnectedDelegate, const FVoiceChatResult& /* Reason */);
+DECLARE_MULTICAST_DELEGATE_OneParam(FOnVoiceChatLoggedInDelegate, const FString& /* PlayerName */);
+DECLARE_MULTICAST_DELEGATE_OneParam(FOnVoiceChatLoggedOutDelegate, const FString& /* PlayerName */);
+DECLARE_MULTICAST_DELEGATE_OneParam(FOnVoiceChatCallStatsUpdatedDelegate, const FVoiceChatCallStats& /* CallStats */);
+DECLARE_MULTICAST_DELEGATE_OneParam(FOnVoiceChatChannelJoinedDelegate, const FString& /* ChannelName */);
 DECLARE_MULTICAST_DELEGATE_TwoParams(FOnVoiceChatChannelExitedDelegate, const FString& /* ChannelName */, const FVoiceChatResult& /* Reason */);
 DECLARE_MULTICAST_DELEGATE_TwoParams(FOnVoiceChatPlayerAddedDelegate, const FString& /* ChannelName */, const FString& /* PlayerName */);
 DECLARE_MULTICAST_DELEGATE_TwoParams(FOnVoiceChatPlayerRemovedDelegate, const FString& /* ChannelName */, const FString& /* PlayerName */);
@@ -252,7 +273,12 @@ public:
 	virtual bool IsConnected() const = 0;
 
 	/**
-	 * Delegate triggered when we are unexpectedly disconnected from voice chat
+	 * Delegate triggered when we are connected to voice chat
+	 */
+	virtual FOnVoiceChatConnectedDelegate& OnVoiceChatConnected() = 0;
+
+	/**
+	 * Delegate triggered when we are disconnected from voice chat
 	 */
 	virtual FOnVoiceChatDisconnectedDelegate& OnVoiceChatDisconnected() = 0;
 
@@ -295,6 +321,16 @@ public:
 	virtual bool IsLoggedIn() const = 0;
 
 	/**
+	 * Delegate triggered when we are logged in to voice chat
+	 */
+	virtual FOnVoiceChatLoggedInDelegate& OnVoiceChatLoggedIn() = 0;
+
+	/**
+	 * Delegate triggered when we are logged out from voice chat
+	 */
+	virtual FOnVoiceChatLoggedOutDelegate& OnVoiceChatLoggedOut() = 0;
+
+	/**
 	 * Get the player name used to log in
 	 *
 	 * @return player name used to log in
@@ -335,9 +371,19 @@ public:
 	virtual void LeaveChannel(const FString& ChannelName, const FOnVoiceChatChannelLeaveCompleteDelegate& Delegate) = 0;
 
 	/**
-	 * Delegate triggered when we unexpectedly leave a voice channel
+	 * Delegate triggered when we join a voice channel
+	 */
+	virtual FOnVoiceChatChannelJoinedDelegate& OnVoiceChatChannelJoined() = 0;
+
+	/**
+	 * Delegate triggered when we leave a voice channel
 	 */
 	virtual FOnVoiceChatChannelExitedDelegate& OnVoiceChatChannelExited() = 0;
+
+	/**
+	 * Delegate triggered when a call is ended, providing the stats for the call.
+	 */
+	virtual FOnVoiceChatCallStatsUpdatedDelegate& OnVoiceChatCallStatsUpdated() = 0;
 
 	/**
 	 * Set the 3d position of the player

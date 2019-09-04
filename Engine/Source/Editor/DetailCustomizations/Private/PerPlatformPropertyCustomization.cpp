@@ -14,6 +14,7 @@
 #include "PropertyHandle.h"
 #include "DetailLayoutBuilder.h"
 #include "SPerPlatformPropertiesWidget.h"
+#include "PlatformInfo.h"
 #include "ScopedTransaction.h"
 #include "IPropertyUtilities.h"
 #include "UObject/MetaData.h"
@@ -91,6 +92,13 @@ TSharedRef<SWidget> FPerPlatformPropertyCustomization<PerPlatformType>::GetWidge
 			{
 				EditProperty->SetInstanceMetaData(*It.Key.ToString(), *It.Value);
 			}
+		}
+
+		// Copy instance metadata as well
+		const TMap<FName, FString>* InstanceSourceMap = StructPropertyHandle->GetInstanceMetaDataMap();		
+		for (const auto& It : *InstanceSourceMap)
+		{
+			EditProperty->SetInstanceMetaData(*It.Key.ToString(), *It.Value);
 		}
 	}
 

@@ -77,6 +77,8 @@ public:
 		LightParameters.SoftSourceRadius = SoftSourceRadius;
 		LightParameters.SourceLength = SourceLength;
 		LightParameters.SourceTexture = GWhiteTexture->TextureRHI;
+		LightParameters.RectLightBarnCosAngle = 0.0f;
+		LightParameters.RectLightBarnLength = -2.0f;
 	}
 
 	// FLightSceneInfo interface.
@@ -268,9 +270,25 @@ void USpotLightComponent::SetLightBrightness(float InBrightness)
 //	}
 //}
 
+static bool IsSpotLightSupported(const USpotLightComponent* InLight)
+{
+	if (GMaxRHIFeatureLevel <= ERHIFeatureLevel::ES3_1 && InLight->IsMovable())
+	{
+		// if project does not support dynamic point/spot lights on mobile do not add them to the renderer 
+		static auto* CVarPointLights = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.MobileNumDynamicPointLights"));
+		const bool bPointLights = CVarPointLights->GetValueOnAnyThread() > 0;
+		return bPointLights;
+	}
+	return true;
+}
+
 FLightSceneProxy* USpotLightComponent::CreateSceneProxy() const
 {
-	return new FSpotLightSceneProxy(this);
+	if (IsSpotLightSupported(this))
+	{
+		return new FSpotLightSceneProxy(this);
+	}
+	return nullptr;
 }
 
 FSphere USpotLightComponent::GetBoundingSphere() const

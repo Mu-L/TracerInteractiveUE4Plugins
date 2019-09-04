@@ -40,6 +40,7 @@
 #include "Framework/Application/SlateApplication.h"
 #include "Widgets/Input/SNumericEntryBox.h"
 #include "LandscapeDataAccess.h"
+#include "Settings/EditorExperimentalSettings.h"
 
 #define LOCTEXT_NAMESPACE "LandscapeEditor.NewLandscape"
 
@@ -87,6 +88,16 @@ void FLandscapeEditorDetailCustomization_NewLandscape::CustomizeDetails(IDetailL
 		]
 	];
 
+	TSharedRef<IPropertyHandle> PropertyHandle_CanHaveLayersContent = DetailBuilder.GetProperty(GET_MEMBER_NAME_CHECKED(ULandscapeEditorObject, bCanHaveLayersContent));
+	if (GetMutableDefault<UEditorExperimentalSettings>()->bLandscapeLayerSystem)
+	{
+		NewLandscapeCategory.AddProperty(PropertyHandle_CanHaveLayersContent);
+	}
+	else
+	{
+		DetailBuilder.HideProperty(PropertyHandle_CanHaveLayersContent);
+	}
+	
 	TSharedRef<IPropertyHandle> PropertyHandle_HeightmapFilename = DetailBuilder.GetProperty(GET_MEMBER_NAME_CHECKED(ULandscapeEditorObject, ImportLandscape_HeightmapFilename));
 	TSharedRef<IPropertyHandle> PropertyHandle_HeightmapImportResult = DetailBuilder.GetProperty(GET_MEMBER_NAME_CHECKED(ULandscapeEditorObject, ImportLandscape_HeightmapImportResult));
 	TSharedRef<IPropertyHandle> PropertyHandle_HeightmapErrorMessage = DetailBuilder.GetProperty(GET_MEMBER_NAME_CHECKED(ULandscapeEditorObject, ImportLandscape_HeightmapErrorMessage));
@@ -215,6 +226,10 @@ void FLandscapeEditorDetailCustomization_NewLandscape::CustomizeDetails(IDetailL
 		.OnXCommitted_Static(&SetPropertyValue<float>, PropertyHandle_Location_X)
 		.OnYCommitted_Static(&SetPropertyValue<float>, PropertyHandle_Location_Y)
 		.OnZCommitted_Static(&SetPropertyValue<float>, PropertyHandle_Location_Z)
+		.OnXChanged_Lambda([=](float NewValue) { ensure(PropertyHandle_Location_X->SetValue(NewValue, EPropertyValueSetFlags::InteractiveChange) == FPropertyAccess::Success); })
+		.OnYChanged_Lambda([=](float NewValue) { ensure(PropertyHandle_Location_Y->SetValue(NewValue, EPropertyValueSetFlags::InteractiveChange) == FPropertyAccess::Success); })
+		.OnZChanged_Lambda([=](float NewValue) { ensure(PropertyHandle_Location_Z->SetValue(NewValue, EPropertyValueSetFlags::InteractiveChange) == FPropertyAccess::Success); })
+		.AllowSpin(true)
 	];
 
 	TSharedRef<IPropertyHandle> PropertyHandle_Rotation = DetailBuilder.GetProperty(GET_MEMBER_NAME_CHECKED(ULandscapeEditorObject, NewLandscape_Rotation));
@@ -240,6 +255,7 @@ void FLandscapeEditorDetailCustomization_NewLandscape::CustomizeDetails(IDetailL
 		.Yaw_Static(&GetOptionalPropertyValue<float>, PropertyHandle_Rotation_Yaw)
 		.OnYawCommitted_Static(&SetPropertyValue<float>, PropertyHandle_Rotation_Yaw) // not allowed to roll or pitch landscape
 		.OnYawChanged_Lambda([=](float NewValue){ ensure(PropertyHandle_Rotation_Yaw->SetValue(NewValue, EPropertyValueSetFlags::InteractiveChange) == FPropertyAccess::Success); })
+		.AllowSpin(true)
 	];
 
 	TSharedRef<IPropertyHandle> PropertyHandle_Scale = DetailBuilder.GetProperty(GET_MEMBER_NAME_CHECKED(ULandscapeEditorObject, NewLandscape_Scale));
@@ -265,6 +281,10 @@ void FLandscapeEditorDetailCustomization_NewLandscape::CustomizeDetails(IDetailL
 		.OnXCommitted_Static(&SetScale, PropertyHandle_Scale_X)
 		.OnYCommitted_Static(&SetScale, PropertyHandle_Scale_Y)
 		.OnZCommitted_Static(&SetScale, PropertyHandle_Scale_Z)
+		.OnXChanged_Lambda([=](float NewValue) { ensure(PropertyHandle_Scale_X->SetValue(NewValue, EPropertyValueSetFlags::InteractiveChange) == FPropertyAccess::Success); })
+		.OnYChanged_Lambda([=](float NewValue) { ensure(PropertyHandle_Scale_Y->SetValue(NewValue, EPropertyValueSetFlags::InteractiveChange) == FPropertyAccess::Success); })
+		.OnZChanged_Lambda([=](float NewValue) { ensure(PropertyHandle_Scale_Z->SetValue(NewValue, EPropertyValueSetFlags::InteractiveChange) == FPropertyAccess::Success); })
+		.AllowSpin(true)
 	];
 
 	TSharedRef<IPropertyHandle> PropertyHandle_QuadsPerSection = DetailBuilder.GetProperty(GET_MEMBER_NAME_CHECKED(ULandscapeEditorObject, NewLandscape_QuadsPerSection));
@@ -392,8 +412,24 @@ void FLandscapeEditorDetailCustomization_NewLandscape::CustomizeDetails(IDetailL
 			//.MinSliderValue(TAttribute<TOptional<int32> >(this, &FLandscapeEditorDetailCustomization_NewLandscape::GetMinLandscapeResolution))
 			//.MaxSliderValue(TAttribute<TOptional<int32> >(this, &FLandscapeEditorDetailCustomization_NewLandscape::GetMaxLandscapeResolution))
 			.Value(this, &FLandscapeEditorDetailCustomization_NewLandscape::GetLandscapeResolutionX)
-			.OnValueChanged(this, &FLandscapeEditorDetailCustomization_NewLandscape::OnChangeLandscapeResolutionX)
-			.OnValueCommitted(this, &FLandscapeEditorDetailCustomization_NewLandscape::OnCommitLandscapeResolutionX)
+			.OnValueChanged_Lambda([=](int32 NewValue)
+			{
+				OnChangeLandscapeResolutionX(NewValue, false);
+			})
+			.OnValueCommitted_Lambda([=](int32 NewValue, ETextCommit::Type)
+			{
+				OnChangeLandscapeResolutionX(NewValue, true);
+			})
+			.OnBeginSliderMovement_Lambda([=]()
+			{
+				bUsingSlider = true;
+				GEditor->BeginTransaction(LOCTEXT("ChangeResolutionX_Transaction", "Change Landscape Resolution X"));
+			})
+			.OnEndSliderMovement_Lambda([=](double)
+			{
+				GEditor->EndTransaction();
+				bUsingSlider = false;
+			})
 		]
 		+ SHorizontalBox::Slot()
 		.AutoWidth()
@@ -418,8 +454,24 @@ void FLandscapeEditorDetailCustomization_NewLandscape::CustomizeDetails(IDetailL
 			//.MinSliderValue(TAttribute<TOptional<int32> >(this, &FLandscapeEditorDetailCustomization_NewLandscape::GetMinLandscapeResolution))
 			//.MaxSliderValue(TAttribute<TOptional<int32> >(this, &FLandscapeEditorDetailCustomization_NewLandscape::GetMaxLandscapeResolution))
 			.Value(this, &FLandscapeEditorDetailCustomization_NewLandscape::GetLandscapeResolutionY)
-			.OnValueChanged(this, &FLandscapeEditorDetailCustomization_NewLandscape::OnChangeLandscapeResolutionY)
-			.OnValueCommitted(this, &FLandscapeEditorDetailCustomization_NewLandscape::OnCommitLandscapeResolutionY)
+			.OnValueChanged_Lambda([=](int32 NewValue)
+			{
+				OnChangeLandscapeResolutionY(NewValue, false);
+			})
+			.OnValueCommitted_Lambda([=](int32 NewValue, ETextCommit::Type)
+			{
+				OnChangeLandscapeResolutionY(NewValue, true);
+			})
+			.OnBeginSliderMovement_Lambda([=]()
+			{
+				bUsingSlider = true;
+				GEditor->BeginTransaction(LOCTEXT("ChangeResolutionY_Transaction", "Change Landscape Resolution Y"));
+			})
+			.OnEndSliderMovement_Lambda([=](double)
+			{
+				GEditor->EndTransaction();
+				bUsingSlider = false;
+			})
 		]
 	];
 
@@ -617,37 +669,21 @@ TOptional<int32> FLandscapeEditorDetailCustomization_NewLandscape::GetLandscapeR
 	return 0;
 }
 
-void FLandscapeEditorDetailCustomization_NewLandscape::OnChangeLandscapeResolutionX(int32 NewValue)
+void FLandscapeEditorDetailCustomization_NewLandscape::OnChangeLandscapeResolutionX(int32 NewValue, bool bCommit)
 {
 	FEdModeLandscape* LandscapeEdMode = GetEditorMode();
 	if (LandscapeEdMode != nullptr)
 	{
 		int32 NewComponentCountX = LandscapeEdMode->UISettings->CalcComponentsCount(NewValue);
-		if (NewComponentCountX != LandscapeEdMode->UISettings->NewLandscape_ComponentCount.X)
+		if (NewComponentCountX == LandscapeEdMode->UISettings->NewLandscape_ComponentCount.X)
 		{
-			if (!GEditor->IsTransactionActive())
-			{
-				GEditor->BeginTransaction(LOCTEXT("ChangeResolutionX_Transaction", "Change Landscape Resolution X"));
-			}
-
-			LandscapeEdMode->UISettings->Modify();
-			LandscapeEdMode->UISettings->NewLandscape_ComponentCount.X = NewComponentCountX;
+			return;
 		}
-	}
-}
 
-void FLandscapeEditorDetailCustomization_NewLandscape::OnCommitLandscapeResolutionX(int32 NewValue, ETextCommit::Type CommitInfo)
-{
-	FEdModeLandscape* LandscapeEdMode = GetEditorMode();
-	if (LandscapeEdMode != nullptr)
-	{
-		if (!GEditor->IsTransactionActive())
-		{
-			GEditor->BeginTransaction(LOCTEXT("ChangeResolutionX_Transaction", "Change Landscape Resolution X"));
-		}
+		FScopedTransaction Transaction(LOCTEXT("ChangeResolutionX_Transaction", "Change Landscape Resolution X"), !bUsingSlider && bCommit);
+		
 		LandscapeEdMode->UISettings->Modify();
-		LandscapeEdMode->UISettings->NewLandscape_ComponentCount.X = LandscapeEdMode->UISettings->CalcComponentsCount(NewValue);
-		GEditor->EndTransaction();
+		LandscapeEdMode->UISettings->NewLandscape_ComponentCount.X = NewComponentCountX;
 	}
 }
 
@@ -662,37 +698,21 @@ TOptional<int32> FLandscapeEditorDetailCustomization_NewLandscape::GetLandscapeR
 	return 0;
 }
 
-void FLandscapeEditorDetailCustomization_NewLandscape::OnChangeLandscapeResolutionY(int32 NewValue)
+void FLandscapeEditorDetailCustomization_NewLandscape::OnChangeLandscapeResolutionY(int32 NewValue, bool bCommit)
 {
 	FEdModeLandscape* LandscapeEdMode = GetEditorMode();
 	if (LandscapeEdMode != nullptr)
 	{
 		int32 NewComponentCountY = LandscapeEdMode->UISettings->CalcComponentsCount(NewValue);
-		if (NewComponentCountY != LandscapeEdMode->UISettings->NewLandscape_ComponentCount.Y)
+		if (NewComponentCountY == LandscapeEdMode->UISettings->NewLandscape_ComponentCount.Y)
 		{
-			if (!GEditor->IsTransactionActive())
-			{
-				GEditor->BeginTransaction(LOCTEXT("ChangeResolutionY_Transaction", "Change Landscape Resolution Y"));
-			}
-			
-			LandscapeEdMode->UISettings->Modify();
-			LandscapeEdMode->UISettings->NewLandscape_ComponentCount.Y = NewComponentCountY;
+			return;
 		}
-	}
-}
 
-void FLandscapeEditorDetailCustomization_NewLandscape::OnCommitLandscapeResolutionY(int32 NewValue, ETextCommit::Type CommitInfo)
-{
-	FEdModeLandscape* LandscapeEdMode = GetEditorMode();
-	if (LandscapeEdMode != nullptr)
-	{
-		if (!GEditor->IsTransactionActive())
-		{
-			GEditor->BeginTransaction(LOCTEXT("ChangeResolutionY_Transaction", "Change Landscape Resolution Y"));
-		}
+		FScopedTransaction Transaction(LOCTEXT("ChangeResolutionX_Transaction", "Change Landscape Resolution X"), !bUsingSlider && bCommit);
+	
 		LandscapeEdMode->UISettings->Modify();
-		LandscapeEdMode->UISettings->NewLandscape_ComponentCount.Y = LandscapeEdMode->UISettings->CalcComponentsCount(NewValue);
-		GEditor->EndTransaction();
+		LandscapeEdMode->UISettings->NewLandscape_ComponentCount.Y = NewComponentCountY;
 	}
 }
 
@@ -784,32 +804,34 @@ FReply FLandscapeEditorDetailCustomization_NewLandscape::OnCreateButtonClicked()
 		LandscapeEdMode->GetWorld() != nullptr && 
 		LandscapeEdMode->GetWorld()->GetCurrentLevel()->bIsVisible)
 	{
-		const int32 ComponentCountX = LandscapeEdMode->UISettings->NewLandscape_ComponentCount.X;
-		const int32 ComponentCountY = LandscapeEdMode->UISettings->NewLandscape_ComponentCount.Y;
-		const int32 QuadsPerComponent = LandscapeEdMode->UISettings->NewLandscape_SectionsPerComponent * LandscapeEdMode->UISettings->NewLandscape_QuadsPerSection;
+		ULandscapeEditorObject* UISettings = LandscapeEdMode->UISettings;
+		const int32 ComponentCountX = UISettings->NewLandscape_ComponentCount.X;
+		const int32 ComponentCountY = UISettings->NewLandscape_ComponentCount.Y;
+		const int32 QuadsPerComponent = UISettings->NewLandscape_SectionsPerComponent * UISettings->NewLandscape_QuadsPerSection;
 		const int32 SizeX = ComponentCountX * QuadsPerComponent + 1;
 		const int32 SizeY = ComponentCountY * QuadsPerComponent + 1;
 
-		TOptional< TArray< FLandscapeImportLayerInfo > > ImportLayers = FNewLandscapeUtils::CreateImportLayersInfo( LandscapeEdMode->UISettings, LandscapeEdMode->NewLandscapePreviewMode );
+		TOptional< TArray< FLandscapeImportLayerInfo > > MaterialImportLayers = FNewLandscapeUtils::CreateImportLayersInfo(UISettings, LandscapeEdMode->NewLandscapePreviewMode );
 
-		if ( !ImportLayers )
+		if ( !MaterialImportLayers)
 		{
 			return FReply::Handled();
 		}
 
-		TArray<uint16> Data = FNewLandscapeUtils::ComputeHeightData( LandscapeEdMode->UISettings, ImportLayers.GetValue(), LandscapeEdMode->NewLandscapePreviewMode );
+		TMap<FGuid, TArray<uint16>> HeightDataPerLayers;
+		TMap<FGuid, TArray<FLandscapeImportLayerInfo>> MaterialLayerDataPerLayers;
+
+		MaterialLayerDataPerLayers.Add(FGuid(), MaterialImportLayers.GetValue());
+		HeightDataPerLayers.Add(FGuid(), FNewLandscapeUtils::ComputeHeightData(UISettings, MaterialImportLayers.GetValue(), LandscapeEdMode->NewLandscapePreviewMode));
 
 		FScopedTransaction Transaction(LOCTEXT("Undo", "Creating New Landscape"));
 
-		const FVector Offset = FTransform(LandscapeEdMode->UISettings->NewLandscape_Rotation, FVector::ZeroVector,
-			LandscapeEdMode->UISettings->NewLandscape_Scale).TransformVector(FVector(-ComponentCountX * QuadsPerComponent / 2, -ComponentCountY * QuadsPerComponent / 2, 0));
+		const FVector Offset = FTransform(UISettings->NewLandscape_Rotation, FVector::ZeroVector, UISettings->NewLandscape_Scale).TransformVector(FVector(-ComponentCountX * QuadsPerComponent / 2, -ComponentCountY * QuadsPerComponent / 2, 0));
 		
-		ALandscape* Landscape = LandscapeEdMode->GetWorld()->SpawnActor<ALandscape>(LandscapeEdMode->UISettings->NewLandscape_Location + Offset, LandscapeEdMode->UISettings->NewLandscape_Rotation);
-		Landscape->LandscapeMaterial = LandscapeEdMode->UISettings->NewLandscape_Material.Get();
-		Landscape->SetActorRelativeScale3D(LandscapeEdMode->UISettings->NewLandscape_Scale);
-
-		Landscape->Import(FGuid::NewGuid(), 0, 0, SizeX-1, SizeY-1, LandscapeEdMode->UISettings->NewLandscape_SectionsPerComponent, LandscapeEdMode->UISettings->NewLandscape_QuadsPerSection, Data.GetData(),
-			nullptr, ImportLayers.GetValue(), LandscapeEdMode->UISettings->ImportLandscape_AlphamapType);
+		ALandscape* Landscape = LandscapeEdMode->GetWorld()->SpawnActor<ALandscape>(UISettings->NewLandscape_Location + Offset, UISettings->NewLandscape_Rotation);
+		Landscape->bCanHaveLayersContent = UISettings->bCanHaveLayersContent;
+		Landscape->LandscapeMaterial = UISettings->NewLandscape_Material.Get();
+		Landscape->SetActorRelativeScale3D(UISettings->NewLandscape_Scale);
 
 		// automatically calculate a lighting LOD that won't crash lightmass (hopefully)
 		// < 2048x2048 -> LOD0
@@ -820,14 +842,18 @@ FReply FLandscapeEditorDetailCustomization_NewLandscape::OnCreateButtonClicked()
 
 		if (LandscapeEdMode->NewLandscapePreviewMode == ENewLandscapePreviewMode::ImportLandscape)
 		{
-			Landscape->ReimportHeightmapFilePath = LandscapeEdMode->UISettings->ImportLandscape_HeightmapFilename;
+			Landscape->ReimportHeightmapFilePath = UISettings->ImportLandscape_HeightmapFilename;
 		}
 
-		ULandscapeInfo* LandscapeInfo = Landscape->CreateLandscapeInfo();
+		Landscape->Import(FGuid::NewGuid(), 0, 0, SizeX - 1, SizeY - 1, UISettings->NewLandscape_SectionsPerComponent, UISettings->NewLandscape_QuadsPerSection, HeightDataPerLayers, nullptr, MaterialLayerDataPerLayers, UISettings->ImportLandscape_AlphamapType);
+
+		ULandscapeInfo* LandscapeInfo = Landscape->GetLandscapeInfo();
+		check(LandscapeInfo);
+
 		LandscapeInfo->UpdateLayerInfoMap(Landscape);
 
 		// Import doesn't fill in the LayerInfo for layers with no data, do that now
-		const TArray<FLandscapeImportLayer>& ImportLandscapeLayersList = LandscapeEdMode->UISettings->ImportLandscape_Layers;
+		const TArray<FLandscapeImportLayer>& ImportLandscapeLayersList = UISettings->ImportLandscape_Layers;
 		for (int32 i = 0; i < ImportLandscapeLayersList.Num(); i++)
 		{
 			if (ImportLandscapeLayersList[i].LayerInfo != nullptr)
@@ -851,15 +877,14 @@ FReply FLandscapeEditorDetailCustomization_NewLandscape::OnCreateButtonClicked()
 		}
 
 		LandscapeEdMode->UpdateLandscapeList();
-		LandscapeEdMode->CurrentToolTarget.LandscapeInfo = LandscapeInfo;
+		LandscapeEdMode->SetLandscapeInfo(LandscapeInfo);
 		LandscapeEdMode->CurrentToolTarget.TargetType = ELandscapeToolTargetType::Heightmap;
-		LandscapeEdMode->CurrentToolTarget.LayerInfo = nullptr;
-		LandscapeEdMode->CurrentToolTarget.LayerName = NAME_None;
+		LandscapeEdMode->SetCurrentTargetLayer(NAME_None, nullptr);
 		LandscapeEdMode->UpdateTargetList();
 
 		LandscapeEdMode->SetCurrentTool("Select"); // change tool so switching back to the manage mode doesn't give "New Landscape" again
 		LandscapeEdMode->SetCurrentTool("Sculpt"); // change to sculpting mode and tool
-		LandscapeEdMode->SetCurrentProceduralLayer(0);
+		LandscapeEdMode->SetCurrentLayer(0);
 
 		if (LandscapeEdMode->CurrentToolTarget.LandscapeInfo.IsValid())
 		{
@@ -905,9 +930,14 @@ bool FLandscapeEditorDetailCustomization_NewLandscape::GetImportButtonIsEnabled(
 	FEdModeLandscape* LandscapeEdMode = GetEditorMode();
 	if (LandscapeEdMode != nullptr)
 	{
+		bool bAllSourceFilePathsEmpty = true;
 		if (LandscapeEdMode->UISettings->ImportLandscape_HeightmapImportResult == ELandscapeImportResult::Error)
 		{
 			return false;
+		}
+		else if (!LandscapeEdMode->UISettings->ImportLandscape_HeightmapFilename.IsEmpty())
+		{
+			bAllSourceFilePathsEmpty = false;
 		}
 
 		for (int32 i = 0; i < LandscapeEdMode->UISettings->ImportLandscape_Layers.Num(); ++i)
@@ -916,9 +946,13 @@ bool FLandscapeEditorDetailCustomization_NewLandscape::GetImportButtonIsEnabled(
 			{
 				return false;
 			}
+			else if (!LandscapeEdMode->UISettings->ImportLandscape_Layers[i].SourceFilePath.IsEmpty())
+			{
+				bAllSourceFilePathsEmpty = false;
+			}
 		}
 
-		return true;
+		return !bAllSourceFilePathsEmpty;
 	}
 	return false;
 }

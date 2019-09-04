@@ -59,7 +59,11 @@ void FTexture2DStreamIn_IO::SetIOFilename(const FContext& Context)
 
 		if (MipIndex == PendingFirstMip)
 		{
+#if !TEXTURE2DMIPMAP_USE_COMPACT_BULKDATA
 			IOFilename = MipMap.BulkData.GetFilename();
+#else
+			verify(Context.Texture->GetMipDataFilename(MipIndex, IOFilename));
+#endif
 
 			if (GEventDrivenLoaderEnabled)
 			{
@@ -72,12 +76,14 @@ void FTexture2DStreamIn_IO::SetIOFilename(const FContext& Context)
 				}
 			}
 		}
+#if !TEXTURE2DMIPMAP_USE_COMPACT_BULKDATA
 		else if (IOFilename != MipMap.BulkData.GetFilename())
 		{
 			UE_LOG(LogTexture, Error, TEXT("All of the streaming mips must be stored in the same file %s %s."), *IOFilename, *MipMap.BulkData.GetFilename());
 			IOFilename.Reset();
 			break;
 		}
+#endif
 	}
 
 	if (IOFilename.IsEmpty())
@@ -88,7 +94,7 @@ void FTexture2DStreamIn_IO::SetIOFilename(const FContext& Context)
 
 void FTexture2DStreamIn_IO::SetIORequests(const FContext& Context)
 {
-	SetAsyncFileCallback(Context);
+	SetAsyncFileCallback();
 
 	check(!IOFileHandle);
 	IOFileHandle = FPlatformFileManager::Get().GetPlatformFile().OpenAsyncRead(*IOFilename);
@@ -163,9 +169,9 @@ void FTexture2DStreamIn_IO::ClearIORequests(const FContext& Context)
 	}
 }
 
-void FTexture2DStreamIn_IO::SetAsyncFileCallback(const FContext& Context)
+void FTexture2DStreamIn_IO::SetAsyncFileCallback()
 {
-	AsyncFileCallBack = [this, Context](bool bWasCancelled, IAsyncReadRequest* Req)
+	AsyncFileCallBack = [this](bool bWasCancelled, IAsyncReadRequest* Req)
 	{
 		// At this point task synchronization would hold the number of pending requests.
 		TaskSynchronization.Decrement();
@@ -177,15 +183,15 @@ void FTexture2DStreamIn_IO::SetAsyncFileCallback(const FContext& Context)
 
 #if !UE_BUILD_SHIPPING
 		// On some platforms the IO is too fast to test cancelation requests timing issues.
-		if (FTextureStreamingSettings::ExtraIOLatency > 0 && TaskSynchronization.GetValue() == 0)
+		if (FRenderAssetStreamingSettings::ExtraIOLatency > 0 && TaskSynchronization.GetValue() == 0)
 		{
-			FPlatformProcess::Sleep(FTextureStreamingSettings::ExtraIOLatency * .001f); // Slow down the streaming.
+			FPlatformProcess::Sleep(FRenderAssetStreamingSettings::ExtraIOLatency * .001f); // Slow down the streaming.
 		}
 #endif
 
 		// The tick here is intended to schedule the success or cancel callback.
 		// Using TT_None ensure gets which could create a dead lock.
-		Tick(Context.Texture, FTexture2DUpdate::TT_None);
+		Tick(FTexture2DUpdate::TT_None);
 	};
 }
 
@@ -200,7 +206,6 @@ void FTexture2DStreamIn_IO::Abort()
 		{
 			// Prevent the update from being considered done before this is finished.
 			// By checking that it was not already cancelled, we make sure this doesn't get called twice.
-			FPlatformAtomics::InterlockedIncrement(&ScheduledTaskCount);
 			(new FAsyncCancelIORequestsTask(this))->StartBackgroundTask();
 		}
 	}
@@ -211,8 +216,7 @@ void FTexture2DStreamIn_IO::FCancelIORequestsTask::DoWork()
 	check(PendingUpdate);
 	// Acquire the lock of this object in order to cancel any pending IO.
 	// If the object is currently being ticked, wait.
-	PendingUpdate->DoLock();
+	const ETaskState PreviousTaskState = PendingUpdate->DoLock();
 	PendingUpdate->CancelIORequests();
-	PendingUpdate->DoUnlock();
-	FPlatformAtomics::InterlockedDecrement(&PendingUpdate->ScheduledTaskCount);
+	PendingUpdate->DoUnlock(PreviousTaskState);
 }

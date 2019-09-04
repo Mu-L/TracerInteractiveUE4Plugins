@@ -8,6 +8,7 @@
 #include "Engine/MaterialMerging.h"
 #include "GameFramework/Actor.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/InstancedStaticMeshComponent.h"
 #include "LODActor.generated.h"
 
 class UStaticMesh;
@@ -34,6 +35,10 @@ private:
 	// disable display of this component
 	UPROPERTY(Category=LODActor, VisibleAnywhere)
 	UStaticMeshComponent* StaticMeshComponent;
+
+	/** Imposters to be rendered as instanced static meshes */
+	UPROPERTY(Category=LODActor, VisibleAnywhere)
+	TMap<const UMaterialInterface*, UInstancedStaticMeshComponent*> ImpostersStaticMeshComponents;
 
 	/** The mesh proxy used to display this LOD */
 	UPROPERTY(Category=LODActor, VisibleAnywhere)
@@ -70,6 +75,7 @@ public:
 	virtual FBox GetComponentsBoundingBox(bool bNonColliding = false) const override;
 	virtual void PostRegisterAllComponents() override;
 	virtual void Tick(float DeltaSeconds) override;	
+	virtual bool IsLevelBoundsRelevant() const override { return false; }
 	//~ End AActor Interface
 
 	/** Forces the mesh into view by setting the MinDrawDistance to zero (this pops the mesh into view, no fading)*/
@@ -79,6 +85,9 @@ public:
 
 	/** Sets StaticMesh and IsPreviewActor to true if InStaticMesh equals nullptr */
 	void SetStaticMesh(UStaticMesh* InStaticMesh);
+
+	/** Add imposters instances to this LODActor. */
+	void SetupImposters(UMaterialInterface* InImposterMaterial, UStaticMesh* InStaticMesh, const TArray<FTransform>& InTransforms);
 
 	/** Sets the LOD draw distance and updates the Static Mesh Component's min drawing distance */
 	void SetDrawDistance(float InDistance);
@@ -98,12 +107,15 @@ public:
 	const bool IsBuilt(bool bInForce = false) const;
 #endif
 
+	/** Returns whether or not this LODActor has valid SubActors and whether or not their contained Primitive Components are linked (LODParentPrimitive) to StaticMeshComponent*/
+	const bool HasValidLODChildren() const;
+
 #if WITH_EDITOR
 	/** Force this actor to appear unbuilt (zeros-out key) */
 	void ForceUnbuilt();
 
 	/**
-	* Adds InAcor to the SubActors array and set its LODParent to this
+	* Adds InActor to the SubActors array and set its LODParent to this
 	* @param InActor - Actor to add
 	*/
 	void AddSubActor(AActor* InActor);
@@ -113,7 +125,6 @@ public:
 	* @param InActor - Actor to remove
 	*/
 	const bool RemoveSubActor(AActor* InActor);
-
 
 	/**
 	 * Determines whether or not this LODActor has valid SubActors and can be built
@@ -168,6 +179,9 @@ public:
 
 	virtual void PreSave(const class ITargetPlatform* TargetPlatform) override;
 #endif // WITH_EDITOR	
+
+	
+
 	//~ End UObject Interface.	
 public:
 #if WITH_EDITORONLY_DATA
@@ -211,6 +225,9 @@ public:
 	/** Returns StaticMeshComponent subobject **/
 	UStaticMeshComponent* GetStaticMeshComponent() const { return StaticMeshComponent; }
 
+	/** Returns instanced static mesh components that represents the imposters found in this LODActor. */
+	TArray<UInstancedStaticMeshComponent*> GetImpostersStaticMeshComponents() const { TArray<UInstancedStaticMeshComponent*> ISM; ImpostersStaticMeshComponents.GenerateValueArray(ISM); return ISM; }
+
 private:
 	// Called when CVars are changed to check to see if the maximum HLOD level value has changed
 	static void OnCVarsChanged();
@@ -220,9 +237,31 @@ private:
 	// Updates the transition distance according to values (if) set in r.HLOD.DistanceOverride
 	void UpdateOverrideTransitionDistance();
 
-
 	// Called to make sure autoregistration/manual registration state matches based on the LOD override cvar and this actor's lod level
 	void UpdateRegistrationToMatchMaximumLODLevel();
+
+	// Setup a LOD static mesh component.
+	void SetupComponent(UStaticMeshComponent* InComponent);
+
+	// Utility methods to act on all static mesh components owned by this actor.
+	void SetComponentsMinDrawDistance(float InMinDrawDistance, bool bInMarkRenderStateDirty);
+	void RegisterMeshComponents();
+	void UnregisterMeshComponents();
+
+#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+	// Get/Create the LOD instanced static mesh component for a given imposter material.
+	UInstancedStaticMeshComponent* GetLODComponentForMaterial(const UMaterialInterface* InMaterial) const;
+	UInstancedStaticMeshComponent* GetOrCreateLODComponentForMaterial(const UMaterialInterface* InMaterial);
+
+	// Get/Create the LOD static mesh component to use for a given actor.
+	UStaticMeshComponent* GetLODComponentForActor(const AActor* InActor, bool bFallbackToDefault = true) const;
+	UStaticMeshComponent* GetOrCreateLODComponentForActor(const AActor* InActor);
+
+public:
+	// Get the imposter material (if any) of an actor or SMC
+	UMaterialInterface* GetImposterMaterial(const AActor* InActor) const;
+	UMaterialInterface* GetImposterMaterial(const UStaticMeshComponent* InComponent) const;
+#endif
 
 private:
  	// Have we already tried to register components? (a cache to avoid having to query the owning world when the global HLOD max level setting is changed)

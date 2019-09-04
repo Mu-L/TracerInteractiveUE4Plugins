@@ -856,9 +856,6 @@ public:
 		return CurrentTest;
 	}
 
-	bool GetTreatWarningsAsErrors() const;
-	void SetTreatWarningsAsErrors(TOptional<bool> bTreatWarningsAsErrors);
-
 	void NotifyScreenshotComparisonComplete(const FAutomationScreenshotCompareResults& CompareResults);
 	void NotifyTestDataRetrieved(bool bWasNew, const FString& JsonData);
 	void NotifyPerformanceDataRetrieved(bool bSuccess, const FString& ErrorMessage);
@@ -1003,7 +1000,6 @@ public:
 	 */
 	FAutomationTestBase( const FString& InName, const bool bInComplexTask )
 		: bComplexTask( bInComplexTask )
-		, bSuppressLogs( false )
 		, TestName( InName )
 	{
 		// Register the newly created automation test into the automation testing framework
@@ -1043,6 +1039,14 @@ public:
 	 * @param	InError	Error message to add to this test
 	 */
 	virtual void AddError( const FString& InError, int32 StackOffset = 0 );
+
+	/**
+	 * Adds an error message to this test if the condition is false
+	 *
+	 * @param   bCondition The condition to validate.
+	 * @param   InError	   Error message to add to this test
+	 */
+	virtual void AddErrorIfFalse( bool bCondition, const FString& InError, int32 StackOffset = 0 );
 
 	/**
 	 * Adds an error message to this test
@@ -1165,14 +1169,28 @@ public:
 	}
 
 	/**
-	 * Used to suppress / unsuppress logs.
+	 * If true logs will not be included in test events
 	 *
-	 * @param bNewValue - True if you want to suppress logs.  False to unsuppress.
+	 * @return true to suppress logs
 	 */
-	void SetSuppressLogs(bool bNewValue)
+	virtual bool SuppressLogs()
 	{
-		bSuppressLogs = bNewValue;
+		return false;
 	}
+
+	/**
+	 * If true (and SuppressLogs=false) then LogErrors will be treated as test errors
+	 *
+	 * @return true to make errors errors
+	 */
+	virtual bool TreatLogErrorsAsErrors() { return true; }
+
+	/**
+	 * If true (and SuppressLogs=false) then LogWarnings will be treated as test errors
+	 *
+	 * @return true to make warnings errors
+	 */
+	virtual bool TreatLogWarningsAsErrors() { return false; }
 
 	/**
 	 * Enqueues a new latent command.
@@ -1223,7 +1241,9 @@ public:
 public:
 
 	void TestEqual(const TCHAR* What, int32 Actual, int32 Expected);
+	void TestEqual(const TCHAR* What, int64 Actual, int64 Expected);
 	void TestEqual(const TCHAR* What, float Actual, float Expected, float Tolerance = KINDA_SMALL_NUMBER);
+	void TestEqual(const TCHAR* What, double Actual, double Expected, double Tolerance = KINDA_SMALL_NUMBER);
 	void TestEqual(const TCHAR* What, FVector Actual, FVector Expected, float Tolerance = KINDA_SMALL_NUMBER);
 	void TestEqual(const TCHAR* What, FColor Actual, FColor Expected);
 	void TestEqual(const TCHAR* What, const TCHAR* A, const TCHAR* B);
@@ -1235,6 +1255,11 @@ public:
 	}
 
 	void TestEqual(const FString& What, float Actual, float Expected, float Tolerance = KINDA_SMALL_NUMBER)
+	{
+		TestEqual(*What, Actual, Expected, Tolerance);
+	}
+
+	void TestEqual(const FString& What, double Actual, double Expected, double Tolerance = KINDA_SMALL_NUMBER)
 	{
 		TestEqual(*What, Actual, Expected, Tolerance);
 	}
@@ -1858,7 +1883,7 @@ private:
 					return true;
 				}
 
-				Future = Async<void>(Execution, [this]() {
+				Future = Async(Execution, [this]() {
 					Predicate(FDoneDelegate::CreateRaw(this, &FAsyncUntilDoneLatentCommand::Done));
 				});
 
@@ -1932,7 +1957,7 @@ private:
 					return true;
 				}
 
-				Future = Async<void>(Execution, [this]() {
+				Future = Async(Execution, [this]() {
 					Predicate();
 					bDone = true;
 				});
@@ -3057,7 +3082,7 @@ public:
 
 	virtual bool Update() override
 	{
-		float NewTime = FPlatformTime::Seconds();
+		double NewTime = FPlatformTime::Seconds();
 		if ( NewTime - StartTime >= Delay )
 		{
 			Callback();

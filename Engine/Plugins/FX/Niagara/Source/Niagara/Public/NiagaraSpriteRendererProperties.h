@@ -6,8 +6,8 @@
 #include "UObject/ObjectMacros.h"
 #include "NiagaraCommon.h"
 #include "NiagaraRendererProperties.h"
+#include "Particles/SubUVAnimation.h"
 #include "NiagaraSpriteRendererProperties.generated.h"
-
 
 /** This enum decides how a sprite particle will orient its "up" axis. Must keep these in sync with NiagaraSpriteVertexFactory.ush*/
 UENUM()
@@ -47,24 +47,32 @@ public:
 
 	UNiagaraSpriteRendererProperties();
 
+	//UObject Interface
+	virtual void PostLoad() override;
 	virtual void PostInitProperties() override;
+	virtual void Serialize(FStructuredArchive::FRecord Record) override;
+#if WITH_EDITORONLY_DATA
+	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;
+#endif // WITH_EDITORONLY_DATA
+	//UObject Interface END
 
 	static void InitCDOPropertiesAfterModuleStartup();
 
-	//~ UNiagaraRendererProperties interface
-	virtual NiagaraRenderer* CreateEmitterRenderer(ERHIFeatureLevel::Type FeatureLevel) override;
+	//UNiagaraRendererProperties interface
+	virtual FNiagaraRenderer* CreateEmitterRenderer(ERHIFeatureLevel::Type FeatureLevel, const FNiagaraEmitterInstance* Emitter) override;
+	virtual class FNiagaraBoundsCalculator* CreateBoundsCalculator() override;
 	virtual void GetUsedMaterials(TArray<UMaterialInterface*>& OutMaterials) const override;
 	virtual bool IsSimTargetSupported(ENiagaraSimTarget InSimTarget) const override { return true; };
-#if WITH_EDITORONLY_DATA
-	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;
+#if WITH_EDITOR
 	virtual bool IsMaterialValidForRenderer(UMaterial* Material, FText& InvalidMessage) override;
 	virtual void FixMaterial(UMaterial* Material) override;
 	virtual const TArray<FNiagaraVariable>& GetRequiredAttributes() override;
 	virtual const TArray<FNiagaraVariable>& GetOptionalAttributes() override;
-#endif // WITH_EDITORONLY_DATA
+#endif
+	//UNiagaraMaterialRendererProperties interface END
 
-	// TODO: once we support cutouts, need to change this
-	virtual uint32 GetNumIndicesPerInstance() { return 6; }
+	int32 GetNumCutoutVertexPerSubimage() const;
+	virtual uint32 GetNumIndicesPerInstance() const;
 
 	/** The material used to render the particle. Note that it must have the Use with Niagara Sprites flag checked.*/
 	UPROPERTY(EditAnywhere, Category = "Sprite Rendering")
@@ -182,11 +190,44 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Bindings")
 	FNiagaraVariableAttributeBinding NormalizedAgeBinding;
 
-	UPROPERTY(Transient)
-	int32 SyncId;
-
 	void InitBindings();
+
+#if WITH_EDITORONLY_DATA
+
+	/** Use the cutout texture from the material opacity mask, or if none exist, from the material opacity.	*/
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Cutout")
+	bool bUseMaterialCutoutTexture;
+
+	/** Texture to generate bounding geometry from.	*/
+	UPROPERTY(EditAnywhere, Category="Cutout", meta = (EditCondition = "!bUseMaterialCutoutTexture"))
+	UTexture2D* CutoutTexture;
+	
+	/**
+	* More bounding vertices results in reduced overdraw, but adds more triangle overhead.
+	* The eight vertex mode is best used when the SubUV texture has a lot of space to cut out that is not captured by the four vertex version,
+	* and when the particles using the texture will be few and large.
+	*/
+	UPROPERTY(EditAnywhere, Category= "Cutout")
+	TEnumAsByte<enum ESubUVBoundingVertexCount> BoundingMode;
+
+	UPROPERTY(EditAnywhere, Category="Cutout")
+	TEnumAsByte<enum EOpacitySourceMode> OpacitySourceMode;
+	
+	/**
+	* Alpha channel values larger than the threshold are considered occupied and will be contained in the bounding geometry.
+	* Raising this threshold slightly can reduce overdraw in particles using this animation asset.
+	*/
+	UPROPERTY(EditAnywhere, Category="Cutout", meta=(UIMin = "0", UIMax = "1"))
+	float AlphaThreshold;
+
+	void UpdateCutoutTexture();
+	void CacheDerivedData();
+#endif
+
+	const TArray<FVector2D>& GetCutoutData() const { return DerivedData.BoundingGeometry; }
+
+private:
+
+	/** Derived data for this asset, generated off of SubUVTexture. */
+	FSubUVDerivedData DerivedData;
 };
-
-
-

@@ -3,18 +3,23 @@
 #include "Components/ScrollBox.h"
 #include "Containers/Ticker.h"
 #include "Components/ScrollBoxSlot.h"
+#include "UObject/EditorObjectVersion.h"
 
 #define LOCTEXT_NAMESPACE "UMG"
 
 /////////////////////////////////////////////////////
 // UScrollBox
 
+static FScrollBoxStyle* DefaultScrollBoxStyle = nullptr;
+static FScrollBarStyle* DefaultScrollBoxBarStyle = nullptr;
+
 UScrollBox::UScrollBox(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 	, Orientation(Orient_Vertical)
 	, ScrollBarVisibility(ESlateVisibility::Visible)
 	, ConsumeMouseWheel(EConsumeMouseWheel::WhenScrollingPossible)
-	, ScrollbarThickness(5.0f, 5.0f)
+	, ScrollbarThickness(9.0f, 9.0f)
+	, ScrollbarPadding(2.0f)
 	, AlwaysShowScrollbar(false)
 	, AlwaysShowScrollbarTrack(false)
 	, AllowOverscroll(true)
@@ -23,12 +28,30 @@ UScrollBox::UScrollBox(const FObjectInitializer& ObjectInitializer)
 {
 	bIsVariable = false;
 
-	SScrollBox::FArguments Defaults;
-	Visibility = UWidget::ConvertRuntimeToSerializedVisibility(Defaults._Visibility.Get());
+	Visibility = ESlateVisibility::Visible;
 	Clipping = EWidgetClipping::ClipToBounds;
 
-	WidgetStyle = *Defaults._Style;
-	WidgetBarStyle = *Defaults._ScrollBarStyle;
+	if (DefaultScrollBoxStyle == nullptr)
+	{
+		// HACK: THIS SHOULD NOT COME FROM CORESTYLE AND SHOULD INSTEAD BE DEFINED BY ENGINE TEXTURES/PROJECT SETTINGS
+		DefaultScrollBoxStyle = new FScrollBoxStyle(FCoreStyle::Get().GetWidgetStyle<FScrollBoxStyle>("ScrollBox"));
+
+		// Unlink UMG default colors from the editor settings colors.
+		DefaultScrollBoxStyle->UnlinkColors();
+	}
+
+	if (DefaultScrollBoxBarStyle == nullptr)
+	{
+		// HACK: THIS SHOULD NOT COME FROM CORESTYLE AND SHOULD INSTEAD BE DEFINED BY ENGINE TEXTURES/PROJECT SETTINGS
+		DefaultScrollBoxBarStyle = new FScrollBarStyle(FCoreStyle::Get().GetWidgetStyle<FScrollBarStyle>("ScrollBar"));
+
+		// Unlink UMG default colors from the editor settings colors.
+		DefaultScrollBoxBarStyle->UnlinkColors();
+	}
+	
+	WidgetStyle = *DefaultScrollBoxStyle;
+	WidgetBarStyle = *DefaultScrollBoxBarStyle;
+
 	bAllowRightClickDragScrolling = true;
 }
 
@@ -97,6 +120,7 @@ void UScrollBox::SynchronizeProperties()
 	MyScrollBox->SetOrientation(Orientation);
 	MyScrollBox->SetScrollBarVisibility(UWidget::ConvertSerializedVisibilityToRuntime(ScrollBarVisibility));
 	MyScrollBox->SetScrollBarThickness(ScrollbarThickness);
+	MyScrollBox->SetScrollBarPadding(ScrollbarPadding);
 	MyScrollBox->SetScrollBarAlwaysVisible(AlwaysShowScrollbar);
 	MyScrollBox->SetScrollBarTrackAlwaysVisible(AlwaysShowScrollbarTrack);
 	MyScrollBox->SetAllowOverscroll(AllowOverscroll ? EAllowOverscroll::Yes : EAllowOverscroll::No);
@@ -109,6 +133,16 @@ float UScrollBox::GetScrollOffset() const
 	if ( MyScrollBox.IsValid() )
 	{
 		return MyScrollBox->GetScrollOffset();
+	}
+
+	return 0;
+}
+
+float UScrollBox::GetScrollOffsetOfEnd() const
+{
+	if (MyScrollBox.IsValid())
+	{
+		return MyScrollBox->GetScrollOffsetOfEnd();
 	}
 
 	return 0;
@@ -166,6 +200,28 @@ void UScrollBox::ScrollWidgetIntoView(UWidget* WidgetToFind, bool AnimateScroll,
 	}
 }
 
+#if WITH_EDITORONLY_DATA
+
+void UScrollBox::Serialize(FArchive& Ar)
+{
+	Ar.UsingCustomVersion(FEditorObjectVersion::GUID);
+	
+	const bool bDeprecateThickness = Ar.IsLoading() && Ar.CustomVer(FEditorObjectVersion::GUID) < FEditorObjectVersion::ScrollBarThicknessChange;
+	if (bDeprecateThickness)
+	{
+		// Set ScrollbarThickness property to previous default value.
+		ScrollbarThickness.Set(5.0f, 5.0f);
+	}
+
+	Super::Serialize(Ar);
+
+	if (bDeprecateThickness)
+	{
+		// Implicit padding of 2 was removed, so ScrollbarThickness value must be incremented by 4.
+		ScrollbarThickness += FVector2D(4.0f, 4.0f);
+	}
+}
+
 void UScrollBox::PostLoad()
 {
 	Super::PostLoad();
@@ -195,6 +251,8 @@ void UScrollBox::PostLoad()
 		}
 	}
 }
+
+#endif // if WITH_EDITORONLY_DATA
 
 void UScrollBox::SetConsumeMouseWheel(EConsumeMouseWheel NewConsumeMouseWheel)
 {
@@ -243,6 +301,16 @@ void UScrollBox::SetScrollbarThickness(const FVector2D& NewScrollbarThickness)
 	}
 }
 
+void UScrollBox::SetScrollbarPadding(const FMargin& NewScrollbarPadding)
+{
+	ScrollbarPadding = NewScrollbarPadding;
+
+	if (MyScrollBox.IsValid())
+	{
+		MyScrollBox->SetScrollBarPadding(ScrollbarPadding);
+	}
+}
+
 void UScrollBox::SetAlwaysShowScrollbar(bool NewAlwaysShowScrollbar)
 {
 	AlwaysShowScrollbar = NewAlwaysShowScrollbar;
@@ -260,6 +328,14 @@ void UScrollBox::SetAllowOverscroll(bool NewAllowOverscroll)
 	if (MyScrollBox.IsValid())
 	{
 		MyScrollBox->SetAllowOverscroll(AllowOverscroll ? EAllowOverscroll::Yes : EAllowOverscroll::No);
+	}
+}
+
+void UScrollBox::EndInertialScrolling()
+{
+	if (MyScrollBox.IsValid())
+	{
+		MyScrollBox->EndInertialScrolling();
 	}
 }
 

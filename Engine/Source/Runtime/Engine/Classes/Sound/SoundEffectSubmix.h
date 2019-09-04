@@ -10,7 +10,7 @@
 class FSoundEffectSubmix;
 
 
-/** This is here to make sure users don't mix up source and submix effects in the editor. Asset sorting, drag-n-drop, etc. */
+/** Preset of a submix effect that can be shared between sounds. */
 UCLASS(config = Engine, hidecategories = Object, abstract, editinlinenew, BlueprintType)
 class ENGINE_API USoundEffectSubmixPreset : public USoundEffectPreset
 {
@@ -90,6 +90,9 @@ public:
 
 	/** Process the input block of audio. Called on audio thread. */
 	virtual void OnProcessAudio(const FSoundEffectSubmixInputData& InData, FSoundEffectSubmixOutputData& OutData) {};
+
+	/** Allow effects to supply a drylevel. */
+	virtual float GetDryLevel() const { return 0.0f; }
 
 	/** Processes audio in the submix effect. */
 	void ProcessAudio(FSoundEffectSubmixInputData& InData, FSoundEffectSubmixOutputData& OutData);

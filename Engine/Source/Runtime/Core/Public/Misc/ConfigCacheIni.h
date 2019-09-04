@@ -39,7 +39,16 @@ public:
 		ExpandValueInternal();
 	}
 
-	FConfigValue(FString InValue)
+	FConfigValue(const FString& InValue)
+		: SavedValue(InValue)
+#if CONFIG_REMEMBER_ACCESS_PATTERN 
+		, bRead(false)
+#endif
+	{
+		ExpandValueInternal();
+	}
+
+	FConfigValue(FString&& InValue)
 		: SavedValue(MoveTemp(InValue))
 #if CONFIG_REMEMBER_ACCESS_PATTERN 
 		, bRead(false)
@@ -48,14 +57,46 @@ public:
 		ExpandValueInternal();
 	}
 
-	FConfigValue( const FConfigValue& InConfigValue ) 
-		: SavedValue( InConfigValue.SavedValue )
-		, ExpandedValue( InConfigValue.ExpandedValue )
+	FConfigValue(const FConfigValue& InConfigValue)
+		: SavedValue(InConfigValue.SavedValue)
+		, ExpandedValue(InConfigValue.ExpandedValue)
 #if CONFIG_REMEMBER_ACCESS_PATTERN 
-		, bRead( InConfigValue.bRead )
+		, bRead(InConfigValue.bRead)
 #endif
 	{
 		// shouldn't need to expand value it's assumed that the other FConfigValue has done this already
+	}
+
+	FConfigValue(FConfigValue&& InConfigValue)
+		: SavedValue(MoveTemp(InConfigValue.SavedValue))
+		, ExpandedValue(MoveTemp(InConfigValue.ExpandedValue))
+#if CONFIG_REMEMBER_ACCESS_PATTERN 
+		, bRead(InConfigValue.bRead)
+#endif
+	{
+		// shouldn't need to expand value it's assumed that the other FConfigValue has done this already
+	}
+
+	FConfigValue& operator=(FConfigValue&& RHS)
+	{
+		SavedValue = MoveTemp(RHS.SavedValue);
+		ExpandedValue = MoveTemp(RHS.ExpandedValue);
+#if CONFIG_REMEMBER_ACCESS_PATTERN 
+		bRead = RHS.bRead;
+#endif
+
+		return *this;
+	}
+
+	FConfigValue& operator=(const FConfigValue& RHS)
+	{
+		SavedValue = RHS.SavedValue;
+		ExpandedValue = RHS.ExpandedValue;
+#if CONFIG_REMEMBER_ACCESS_PATTERN 
+		bRead = RHS.bRead;
+#endif
+
+		return *this;
 	}
 
 	// Returns the ini setting with any macros expanded out
@@ -153,13 +194,7 @@ public:
 
 private:
 	/** Internal version of ExpandValue that expands SavedValue into ExpandedValue, or produces an empty ExpandedValue if no expansion occurred. */
-	void ExpandValueInternal()
-	{
-		if (!ExpandValue(SavedValue, ExpandedValue))
-		{
-			ExpandedValue.Empty();
-		}
-	}
+	CORE_API void ExpandValueInternal();
 
 	FString SavedValue;
 	FString ExpandedValue;
@@ -186,7 +221,7 @@ public:
 	bool operator!=( const FConfigSection& Other ) const;
 
 	// process the '+' and '.' commands, takingf into account ArrayOfStruct unique keys
-	void CORE_API HandleAddCommand(FName Key, const FString& Value, bool bAppendValueIfNotArrayOfStructsKeyUsed);
+	void CORE_API HandleAddCommand(FName Key, FString&& Value, bool bAppendValueIfNotArrayOfStructsKeyUsed);
 
 	template<typename Allocator> 
 	void MultiFind(const FName Key, TArray<FConfigValue, Allocator>& OutValues, const bool bMaintainOrder = false) const
@@ -245,63 +280,8 @@ struct FConfigCommandlineOverride
 };
 #endif // ALLOW_INI_OVERRIDE_FROM_COMMANDLINE
 
-// Possible entries in a config hierarchy
-enum class EConfigFileHierarchy : uint8
-{
-	// Engine/Config/Base.ini
-	AbsoluteBase = 0,
 
-	// Engine/Config/*.ini
-	EngineDirBase,
-	// Engine/Config/Platform/BasePlatform* ini
-	EngineDir_BasePlatformParent,
-	EngineDir_BasePlatform,
-	// Engine/Config/NotForLicensees/*.ini
-	EngineDirBase_NotForLicensees,
-	// Engine/Config/NoRedist/*.ini -Not supported at this time.
-	EngineDirBase_NoRedist,
-
-	// Game/Config/*.ini
-	GameDirDefault,
-	// Game/Config/DedicatedServer*.ini
-	GameDirDedicatedServer,
-	// Game/Config/NotForLicensees/*.ini
-	GameDirDefault_NotForLicensees,
-	// Game/Config/NoRedist*.ini
-	GameDirDefault_NoRedist,
-
-
-	// Engine/Config/PlatformName/PlatformName*.ini
-	EngineDir_PlatformParent,
-	EngineDir_Platform,
-	// Engine/Config/NotForLicensees/PlatformName/PlatformName*.ini
-	EngineDir_PlatformParent_NotForLicensees,
-	EngineDir_Platform_NotForLicensees,
-	// Engine/Config/NoRedist/PlatformName/PlatformName*.ini
-	EngineDir_PlatformParent_NoRedist,
-	EngineDir_Platform_NoRedist,
-
-	// Game/Config/PlatformName/PlatformName*.ini
-	GameDir_PlatformParent,
-	GameDir_Platform,
-	// Game/Config/NotForLicensees/PlatformName/PlatformName*.ini
-	GameDir_PlatformParent_NotForLicensees,
-	GameDir_Platform_NotForLicensees,
-	// Game/Config/NoRedist/PlatformName/PlatformName*.ini
-	GameDir_PlatformParent_NoRedist,
-	GameDir_Platform_NoRedist,
-
-	// <UserSettingsDir|AppData>/Unreal Engine/Engine/Config/User*.ini
-	UserSettingsDir_EngineDir_User,
-	// <UserDir|Documents>/Unreal Engine/Engine/Config/User*.ini
-	UserDir_User,
-	// Game/Config/User*.ini
-	GameDir_User,
-
-	// Number of config files in hierarchy.
-	NumHierarchyFiles,
-};
-typedef TMap<EConfigFileHierarchy, FIniFilename> FConfigFileHierarchy;
+typedef TMap<int32, FIniFilename> FConfigFileHierarchy;
 
 // One config file.
 
@@ -315,6 +295,10 @@ public:
 
 	// The collection of source files which were used to generate this file.
 	FConfigFileHierarchy SourceIniHierarchy;
+
+	// Locations where this file may have come from - used to merge with non-standard ini locations
+	FString SourceEngineConfigDir;
+	FString SourceProjectConfigDir;
 
 	/** The untainted config file which contains the coalesced base/default options. I.e. No Saved/ options*/
 	FConfigFile* SourceConfigFile;
@@ -424,7 +408,7 @@ private:
 	 * @param SectionName - The section name the array property is being written to
 	 * @param PropertyName - The property name of the array
 	 */
-	void ProcessPropertyAndWriteForDefaults(EConfigFileHierarchy IniCombineThreshold, const TArray<FConfigValue>& InCompletePropertyToProcess, FString& OutText, const FString& SectionName, const FString& PropertyName);
+	void ProcessPropertyAndWriteForDefaults(int32 IniCombineThreshold, const TArray<FConfigValue>& InCompletePropertyToProcess, FString& OutText, const FString& SectionName, const FString& PropertyName);
 
 };
 
@@ -916,3 +900,18 @@ CORE_API void ReapplyRecordedCVarSettingsFromIni();
  * Helper function to clean up ini history
  */
 CORE_API void DeleteRecordedCVarSettingsFromIni();
+
+/**
+ * Helper function to start recording config reads
+ */
+CORE_API void RecordConfigReadsFromIni();
+
+/**
+ * Helper function to dump config reads to csv after RecordConfigReadsFromIni was called
+ */
+CORE_API void DumpRecordedConfigReadsFromIni();
+
+/**
+ * Helper function to clean up config read history
+ */
+CORE_API void DeleteRecordedConfigReadsFromIni();

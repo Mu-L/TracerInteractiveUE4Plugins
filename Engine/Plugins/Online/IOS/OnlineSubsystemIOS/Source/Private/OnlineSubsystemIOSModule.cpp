@@ -1,7 +1,9 @@
 // Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
 
-#include "OnlineSubsystemIOSPrivatePCH.h"
+#include "OnlineSubsystemIOSModule.h"
 #include "HttpModule.h"
+#include "OnlineSubsystem.h"
+#include "OnlineSubsystemIOS.h"
 
 IMPLEMENT_MODULE( FOnlineSubsystemIOSModule, OnlineSubsystemIOS );
 
@@ -64,6 +66,8 @@ FOnlineSubsystemIOSPtr FOnlineFactoryIOS::IOSSingleton = NULL;
 
 void FOnlineSubsystemIOSModule::StartupModule()
 {
+	SCOPED_BOOT_TIMING("FOnlineSubsystemIOSModule::StartupModule");
+
 	UE_LOG_ONLINE(Display, TEXT("FOnlineSubsystemIOSModule::StartupModule()"));
 
 	FHttpModule::Get();

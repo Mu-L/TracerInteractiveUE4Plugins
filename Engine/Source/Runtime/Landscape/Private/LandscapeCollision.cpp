@@ -46,7 +46,7 @@
 #include "Physics/PhysicsInterfaceUtils.h"
 
 #if WITH_EDITOR && WITH_PHYSX
-	#include "Physics/IPhysXCooking.h"
+	#include "IPhysXCooking.h"
 #endif
 
 using namespace PhysicsInterfaceTypes;
@@ -197,15 +197,18 @@ void ULandscapeHeightfieldCollisionComponent::OnCreatePhysicsState()
 			// Make transform for this landscape component PxActor
 			FTransform LandscapeComponentTransform = GetComponentToWorld();
 			FMatrix LandscapeComponentMatrix = LandscapeComponentTransform.ToMatrixWithScale();
+			FTransform LandscapeShapeTM = FTransform::Identity;
+
+			// Get the scale to give to PhysX
+			FVector LandscapeScale = LandscapeComponentMatrix.ExtractScaling();
+
 			bool bIsMirrored = LandscapeComponentMatrix.Determinant() < 0.f;
 			if (!bIsMirrored)
 			{
 				// Unreal and PhysX have opposite handedness, so we need to translate the origin and rearrange the data
-				LandscapeComponentMatrix = FTranslationMatrix(FVector(CollisionSizeQuads*CollisionScale, 0, 0)) * LandscapeComponentMatrix;
+				LandscapeShapeTM.SetTranslation(FVector(-CollisionSizeQuads*CollisionScale*LandscapeScale.X, 0, 0));
 			}
 
-			// Get the scale to give to PhysX
-			FVector LandscapeScale = LandscapeComponentMatrix.ExtractScaling();
 
 			// Reorder the axes
 			FVector TerrainX = LandscapeComponentMatrix.GetScaledAxis(EAxis::X);
@@ -230,6 +233,7 @@ void ULandscapeHeightfieldCollisionComponent::OnCreatePhysicsState()
 				// Create the sync scene actor
 				PxRigidStatic* HeightFieldActorSync = GPhysXSDK->createRigidStatic(PhysXLandscapeComponentTransform);
 				PxShape* HeightFieldShapeSync = GPhysXSDK->createShape(LandscapeComponentGeom, HeightfieldRef->UsedPhysicalMaterialArray.GetData(), HeightfieldRef->UsedPhysicalMaterialArray.Num(), true);
+				HeightFieldShapeSync->setLocalPose(U2PTransform(LandscapeShapeTM));
 				check(HeightFieldShapeSync);
 
 				// Setup filtering
@@ -255,6 +259,7 @@ void ULandscapeHeightfieldCollisionComponent::OnCreatePhysicsState()
 					PxHeightFieldGeometry LandscapeComponentGeomSimple(HeightfieldRef->RBHeightfieldSimple, PxMeshGeometryFlags(), LandscapeScale.Z * LANDSCAPE_ZSCALE, LandscapeScale.Y * SimpleCollisionScale, LandscapeScale.X * SimpleCollisionScale);
 					check(LandscapeComponentGeomSimple.isValid());
 					PxShape* HeightFieldShapeSimpleSync = GPhysXSDK->createShape(LandscapeComponentGeomSimple, HeightfieldRef->UsedPhysicalMaterialArray.GetData(), HeightfieldRef->UsedPhysicalMaterialArray.Num(), true);
+					HeightFieldShapeSimpleSync->setLocalPose(U2PTransform(LandscapeShapeTM));
 					check(HeightFieldShapeSimpleSync);
 
 					// Setup filtering
@@ -287,6 +292,7 @@ void ULandscapeHeightfieldCollisionComponent::OnCreatePhysicsState()
 						FPhysicsMaterialHandle_PhysX MaterialHandle = GEngine->DefaultPhysMaterial->GetPhysicsMaterial();
 						PxMaterial* PDefaultMat = MaterialHandle.Material;
 						PxShape* HeightFieldEdShapeSync = GPhysXSDK->createShape(LandscapeComponentGeomEd, &PDefaultMat, 1, true);
+						HeightFieldEdShapeSync->setLocalPose(U2PTransform(LandscapeShapeTM));
 						check(HeightFieldEdShapeSync);
 
 						FCollisionResponseContainer CollisionResponse;
@@ -709,11 +715,13 @@ bool ULandscapeMeshCollisionComponent::CookCollisionData(const FName& Format, bo
 	TArray<uint16>			MaterialIndices;
 
 	const int32 CollisionSizeVerts = CollisionSizeQuads + 1;
+	const int32 SimpleCollisionSizeVerts = SimpleCollisionSizeQuads > 0 ? SimpleCollisionSizeQuads + 1 : 0;
 	const int32 NumVerts = FMath::Square(CollisionSizeVerts);
+	const int32 NumSimpleVerts = FMath::Square(SimpleCollisionSizeVerts);
 
 	const uint16* Heights = (const uint16*)CollisionHeightData.LockReadOnly();
 	const uint16* XYOffsets = (const uint16*)CollisionXYOffsetData.LockReadOnly();
-	check(CollisionHeightData.GetElementCount() == NumVerts);
+	check(CollisionHeightData.GetElementCount() == NumVerts + NumSimpleVerts);
 	check(CollisionXYOffsetData.GetElementCount() == NumVerts * 2);
 
 	const uint8* DominantLayers = nullptr;
@@ -1077,6 +1085,28 @@ void ULandscapeMeshCollisionComponent::DestroyComponent(bool bPromoteChildren/*=
 }
 
 #if WITH_EDITOR
+uint32 ULandscapeHeightfieldCollisionComponent::ComputeCollisionHash() const
+{
+	uint32 Hash = 0;
+		
+	Hash = HashCombine(GetTypeHash(SimpleCollisionSizeQuads), Hash);
+	Hash = HashCombine(GetTypeHash(CollisionSizeQuads), Hash);
+	Hash = HashCombine(GetTypeHash(CollisionScale), Hash);
+
+	FTransform ComponentTransform = GetComponentToWorld();
+	Hash = FCrc::MemCrc32(&ComponentTransform, sizeof(ComponentTransform));
+
+	const void* HeightBuffer = CollisionHeightData.LockReadOnly();
+	Hash = FCrc::MemCrc32(HeightBuffer, CollisionHeightData.GetBulkDataSize(), Hash);
+	CollisionHeightData.Unlock();
+
+	const void* DominantBuffer = DominantLayerData.LockReadOnly();
+	Hash = FCrc::MemCrc32(DominantBuffer, DominantLayerData.GetBulkDataSize(), Hash);
+	DominantLayerData.Unlock();
+
+	return Hash;
+}
+
 void ULandscapeHeightfieldCollisionComponent::UpdateHeightfieldRegion(int32 ComponentX1, int32 ComponentY1, int32 ComponentX2, int32 ComponentY2)
 {
 #if WITH_PHYSX
@@ -1213,18 +1243,32 @@ void ULandscapeMeshCollisionComponent::BeginDestroy()
 	Super::BeginDestroy();
 }
 
-void ULandscapeHeightfieldCollisionComponent::RecreateCollision()
+bool ULandscapeHeightfieldCollisionComponent::RecreateCollision()
 {
 	if (!HasAnyFlags(RF_ClassDefaultObject))
 	{
+#if WITH_EDITOR
+		uint32 NewHash = ComputeCollisionHash();
+		if (bPhysicsStateCreated && NewHash == CollisionHash && CollisionHash != 0 && bEnableCollisionHashOptim)
+		{
+			return false;
+		}
+		CollisionHash = NewHash;
+#endif
 		HeightfieldRef = NULL;
 		HeightfieldGuid = FGuid();
 
 		RecreatePhysicsState();
 	}
+	return true;
 }
 
 #if WITH_EDITORONLY_DATA
+void ULandscapeHeightfieldCollisionComponent::SnapFoliageInstances()
+{
+	SnapFoliageInstances(FBox(FVector(-WORLD_MAX), FVector(WORLD_MAX)));
+}
+
 void ULandscapeHeightfieldCollisionComponent::SnapFoliageInstances(const FBox& InInstanceBox)
 {
 	UWorld* ComponentWorld = GetWorld();
@@ -1237,11 +1281,11 @@ void ULandscapeHeightfieldCollisionComponent::SnapFoliageInstances(const FBox& I
 			continue;
 		}
 			
-		for (auto& MeshPair : IFA->FoliageMeshes)
+		for (auto& Pair : IFA->FoliageInfos)
 		{
 			// Find the per-mesh info matching the mesh.
-			UFoliageType* Settings = MeshPair.Key;
-			FFoliageMeshInfo& MeshInfo = *MeshPair.Value;
+			UFoliageType* Settings = Pair.Key;
+			FFoliageInfo& MeshInfo = *Pair.Value;
 			
 			const auto* InstanceSet = MeshInfo.ComponentHash.Find(BaseId);
 			if (InstanceSet)
@@ -1251,7 +1295,7 @@ void ULandscapeHeightfieldCollisionComponent::SnapFoliageInstances(const FBox& I
 
 				bool bFirst = true;
 				TArray<int32> InstancesToRemove;
-				TSet<UHierarchicalInstancedStaticMeshComponent*> AffectedFoliageComponets;
+				TSet<UHierarchicalInstancedStaticMeshComponent*> AffectedFoliageComponents;
 
 				for (int32 InstanceIndex : *InstanceSet)
 				{
@@ -1310,13 +1354,9 @@ void ULandscapeHeightfieldCollisionComponent::SnapFoliageInstances(const FBox& I
 
 									// Todo: add do validation with other parameters such as max/min height etc.
 
-									check(MeshInfo.Component);
-									MeshInfo.Component->Modify();
-									MeshInfo.Component->UpdateInstanceTransform(InstanceIndex, Instance.GetInstanceWorldTransform(), true, false);
+									MeshInfo.SetInstanceWorldTransform(InstanceIndex, Instance.GetInstanceWorldTransform(), false);
 									// Re-add the new instance location to the hash
 									MeshInfo.InstanceHash->InsertInstance(Instance.Location, InstanceIndex);
-
-									MeshInfo.Component->MarkRenderStateDirty();
 								}
 								break;
 							}
@@ -1328,14 +1368,18 @@ void ULandscapeHeightfieldCollisionComponent::SnapFoliageInstances(const FBox& I
 							InstancesToRemove.Add(InstanceIndex);
 						}
 
-						AffectedFoliageComponets.Add(MeshInfo.Component);
+						if (MeshInfo.GetComponent() != nullptr)
+						{
+							AffectedFoliageComponents.Add(MeshInfo.GetComponent());
+						}
+						
 					}
 				}
 
 				// Remove any unused instances
 				MeshInfo.RemoveInstances(IFA, InstancesToRemove, true);
 
-				for (UHierarchicalInstancedStaticMeshComponent* FoliageComp : AffectedFoliageComponets)
+				for (UHierarchicalInstancedStaticMeshComponent* FoliageComp : AffectedFoliageComponents)
 				{
 					FoliageComp->InvalidateLightingCache();
 				}
@@ -1345,7 +1389,7 @@ void ULandscapeHeightfieldCollisionComponent::SnapFoliageInstances(const FBox& I
 }
 #endif // WITH_EDITORONLY_DATA
 
-void ULandscapeMeshCollisionComponent::RecreateCollision()
+bool ULandscapeMeshCollisionComponent::RecreateCollision()
 {
 	if (!HasAnyFlags(RF_ClassDefaultObject))
 	{
@@ -1353,7 +1397,7 @@ void ULandscapeMeshCollisionComponent::RecreateCollision()
 		MeshGuid = FGuid();
 	}
 
-	Super::RecreateCollision();
+	return Super::RecreateCollision();
 }
 
 void ULandscapeHeightfieldCollisionComponent::Serialize(FArchive& Ar)
@@ -1454,10 +1498,14 @@ void ULandscapeMeshCollisionComponent::Serialize(FArchive& Ar)
 void ULandscapeHeightfieldCollisionComponent::PostEditImport()
 {
 	Super::PostEditImport();
-	// Reinitialize physics after paste
-	if (CollisionSizeQuads > 0)
+
+	if (!GetLandscapeProxy()->HasLayersContent())
 	{
-		RecreateCollision();
+		// Reinitialize physics after paste
+		if (CollisionSizeQuads > 0)
+		{
+			RecreateCollision();
+		}
 	}
 }
 
@@ -1465,13 +1513,17 @@ void ULandscapeHeightfieldCollisionComponent::PostEditUndo()
 {
 	Super::PostEditUndo();
 
-	// Reinitialize physics after undo
-	if (CollisionSizeQuads > 0)
+    // Landscape Layers are updates are delayed and done in  ALandscape::TickLayers
+	if (!GetLandscapeProxy()->HasLayersContent())
 	{
-		RecreateCollision();
-	}
+		// Reinitialize physics after undo
+		if (CollisionSizeQuads > 0)
+		{
+			RecreateCollision();
+		}
 
-	FNavigationSystem::UpdateComponentData(*this);
+		FNavigationSystem::UpdateComponentData(*this);
+	}
 }
 
 bool ULandscapeHeightfieldCollisionComponent::ComponentIsTouchingSelectionBox(const FBox& InSelBBox, const FEngineShowFlags& ShowFlags, const bool bConsiderOnlyBSP, const bool bMustEncompassEntireComponent) const
@@ -1845,9 +1897,12 @@ void ULandscapeHeightfieldCollisionComponent::ExportCustomProperties(FOutputDevi
 		return;
 	}
 
-	uint16* Heights = (uint16*)CollisionHeightData.Lock(LOCK_READ_ONLY);
-	int32 NumHeights = FMath::Square(CollisionSizeQuads + 1);
+	int32 CollisionSizeVerts = CollisionSizeQuads + 1;
+	int32 SimpleCollisionSizeVerts = SimpleCollisionSizeQuads > 0 ? SimpleCollisionSizeQuads + 1 : 0;
+	int32 NumHeights = FMath::Square(CollisionSizeVerts) + FMath::Square(SimpleCollisionSizeVerts);
 	check(CollisionHeightData.GetElementCount() == NumHeights);
+
+	uint16* Heights = (uint16*)CollisionHeightData.Lock(LOCK_READ_ONLY);
 
 	Out.Logf(TEXT("%sCustomProperties CollisionHeightData "), FCString::Spc(Indent));
 	for (int32 i = 0; i < NumHeights; i++)
@@ -1880,7 +1935,9 @@ void ULandscapeHeightfieldCollisionComponent::ImportCustomProperties(const TCHAR
 {
 	if (FParse::Command(&SourceText, TEXT("CollisionHeightData")))
 	{
-		int32 NumHeights = FMath::Square(CollisionSizeQuads + 1);
+		int32 CollisionSizeVerts = CollisionSizeQuads + 1;
+		int32 SimpleCollisionSizeVerts = SimpleCollisionSizeQuads > 0 ? SimpleCollisionSizeQuads + 1 : 0;
+		int32 NumHeights = FMath::Square(CollisionSizeVerts) + FMath::Square(SimpleCollisionSizeVerts);
 
 		CollisionHeightData.Lock(LOCK_READ_WRITE);
 		uint16* Heights = (uint16*)CollisionHeightData.Realloc(NumHeights);
@@ -1964,7 +2021,9 @@ void ULandscapeMeshCollisionComponent::ImportCustomProperties(const TCHAR* Sourc
 {
 	if (FParse::Command(&SourceText, TEXT("CollisionHeightData")))
 	{
-		int32 NumHeights = FMath::Square(CollisionSizeQuads + 1);
+		int32 CollisionSizeVerts = CollisionSizeQuads + 1;
+		int32 SimpleCollisionSizeVerts = SimpleCollisionSizeQuads > 0 ? SimpleCollisionSizeQuads + 1 : 0;
+		int32 NumHeights = FMath::Square(CollisionSizeVerts) + FMath::Square(SimpleCollisionSizeVerts);
 
 		CollisionHeightData.Lock(LOCK_READ_WRITE);
 		uint16* Heights = (uint16*)CollisionHeightData.Realloc(NumHeights);

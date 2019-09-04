@@ -197,7 +197,10 @@ private:
 	int32 LastCookedPackagesCount = 0;
 	double LastProgressDisplayTime = 0;
 
-	FString ConvertCookedPathToUncookedPath(const FString& CookedPackageName) const;
+	FName ConvertCookedPathToUncookedPath(
+		const FString& SandboxRootDir, const FString& RelativeRootDir,
+		const FString& SandboxProjectDir, const FString& RelativeProjectDir,
+		const FString& CookedPath, FString& OutUncookedPath) const;
 
 	/** Get dependencies for package */
 	const TArray<FName>& GetFullPackageDependencies(const FName& PackageName) const;
@@ -277,6 +280,11 @@ public:
 	* FExec interface used in the editor
 	*/
 	virtual bool Exec(class UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar) override;
+
+	/**
+	  * UObject interface
+	  */
+	virtual bool IsDestructionThreadSafe() const override { return false; }
 
 	/**
 	 * Dumps cooking stats to the log
@@ -677,6 +685,13 @@ private:
 	void InitializeTargetPlatforms();
 
 	/**
+	* Some content plugins does not support all target platforms.
+	* Build up a map of unsupported packages per platform that can be checked before saving.
+	*/
+	void DiscoverPlatformSpecificNeverCookPackages(
+		const TArray<FName>& TargetPlatformNames, const TArray<FString>& UBTPlatformStrings);
+
+	/**
 	* Clean up the sandbox
 	*/
 	void TermSandbox();
@@ -891,9 +906,9 @@ private:
 	* Returns a map of the uncooked file path matches to the cooked file path for each package which exists
 	*
 	* @param UncookedpathToCookedPath out Map of the uncooked path matched with the cooked package which exists
-	* @param SandboxPath path to search for cooked packages in
+	* @param SandboxRootDir root dir to search for cooked packages in
 	*/
-	void GetAllCookedFiles(TMap<FName, FName>& UncookedPathToCookedPath, const FString& SandboxPath);
+	void GetAllCookedFiles(TMap<FName, FName>& UncookedPathToCookedPath, const FString& SandboxRootDir);
 
 	/** Generates asset registry */
 	void GenerateAssetRegistry();

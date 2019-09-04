@@ -78,12 +78,16 @@ class ENGINE_API ULightComponentBase : public USceneComponent
 	uint32 bCastVolumetricShadow : 1;
 
 	/** Whether the light shadows are computed with shadow-mapping or ray-tracing (when available). */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Light, AdvancedDisplay)
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Light, meta = (DisplayName = "Cast Ray Tracing Shadow"), AdvancedDisplay)
 	uint32 bCastRaytracedShadow : 1;
 
 	/** Whether the light affects objects in reflections, when ray-traced reflection is enabled. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Light, AdvancedDisplay)
 	uint32 bAffectReflection : 1;
+
+	/** Whether the light affects objects in reflections, when ray-traced global illumination is enabled. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Light, AdvancedDisplay)
+	uint32 bAffectGlobalIllumination : 1;
 
 	/** 
 	 * Scales the indirect lighting contribution from this light. 
@@ -131,6 +135,9 @@ class ENGINE_API ULightComponentBase : public USceneComponent
 
 	UFUNCTION(BlueprintCallable, Category = "Rendering|Components|Light")
 	void SetAffectReflection(bool bNewValue);
+
+	UFUNCTION(BlueprintCallable, Category = "Rendering|Components|Light")
+	void SetAffectGlobalIllumination(bool bNewValue);
 
 	UFUNCTION(BlueprintCallable, Category = "Rendering|Components|Light")
 	void SetCastRaytracedShadow(bool bNewValue);
@@ -200,6 +207,9 @@ class ENGINE_API ULightComponentBase : public USceneComponent
 	bool HasStaticShadowing() const;
 
 #if WITH_EDITOR
+	/** UObject Interface */
+	virtual void PostLoad() override;
+
 	/** UActorComponent Interface */
 	virtual void OnRegister() override;
 	virtual bool CanEditChange(const UProperty* InProperty) const override;

@@ -90,6 +90,11 @@ public:
 		ContentBorder->SetContent(InContent);
 	}
 
+	virtual const FSlateBrush* GetBorder() const
+	{
+		return nullptr;
+	}
+
 private:
 	TSharedPtr<SBorder> ContentBorder;
 };
@@ -294,7 +299,8 @@ void SGraphActionMenu::Construct( const FArguments& InArgs, bool bIsReadOnly/* =
 		.OnGetChildren(this, &SGraphActionMenu::OnGetChildrenForCategory)
 		.SelectionMode(ESelectionMode::Single)
 		.OnItemScrolledIntoView(this, &SGraphActionMenu::OnItemScrolledIntoView)
-		.OnSetExpansionRecursive(this, &SGraphActionMenu::OnSetExpansionRecursive);
+		.OnSetExpansionRecursive(this, &SGraphActionMenu::OnSetExpansionRecursive)
+		.HighlightParentNodesForSelection(true);
 
 
 	this->ChildSlot
@@ -1355,6 +1361,11 @@ void SGraphActionMenu::AddReferencedObjects( FReferenceCollector& Collector )
 			Action.Actions[ActionIndex]->AddReferencedObjects(Collector);
 		}
 	}
+}
+
+FString SGraphActionMenu::GetReferencerName() const
+{
+	return TEXT("SGraphActionMenu");
 }
 
 bool SGraphActionMenu::HandleSelection( TSharedPtr< FGraphActionNode > &InSelectedItem, ESelectInfo::Type InSelectionType )

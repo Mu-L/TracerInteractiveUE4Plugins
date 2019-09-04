@@ -1,116 +1,54 @@
-﻿// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
 
 #pragma once
-#include "IDetailPropertyRow.h"
-#include "NiagaraMetaDataCollectionViewModel.h"
-#include "NiagaraMetaDataViewModel.h"
-#include "IDetailChildrenBuilder.h"
-#include "UObject/StructOnScope.h"
-#include "IDetailGroup.h"
-#include "NiagaraEditorModule.h"
-#include "Modules/ModuleManager.h"
 
+#include "IDetailCustomNodeBuilder.h"
+#include "NiagaraTypes.h"
+#include "NiagaraMetaDataCustomNodeBuilder.generated.h"
 
-#define LOCTEXT_NAMESPACE "NiagaraMetaDataCustomNodeBuilder"
+class UNiagaraGraph;
+class FDetailWidgetRow;
+class IDetailChildrenBuilder;
 
-class FNiagaraMetaDataCustomNodeBuilder : public IDetailCustomNodeBuilder
+USTRUCT()
+struct FNiagaraVariableMetaDataContainer
+{
+	GENERATED_BODY();
+
+	UPROPERTY(EditAnywhere, Category=MetaData)
+	FNiagaraVariableMetaData MetaData;
+};
+
+class FNiagaraMetaDataCustomNodeBuilder : public IDetailCustomNodeBuilder, public TSharedFromThis<FNiagaraMetaDataCustomNodeBuilder>
 {
 public:
-	FNiagaraMetaDataCustomNodeBuilder(TSharedRef<FNiagaraMetaDataCollectionViewModel> InViewModel)
-		: ViewModel(InViewModel)
-	{
-		ViewModel->OnCollectionChanged().AddRaw(this, &FNiagaraMetaDataCustomNodeBuilder::OnCollectionViewModelChanged);
-	}
+	FNiagaraMetaDataCustomNodeBuilder();
+	
+	void Initialize(UNiagaraGraph* InScriptGraph);
 
-	~FNiagaraMetaDataCustomNodeBuilder()
-	{
-		ViewModel->OnCollectionChanged().RemoveAll(this);
-	}
+	~FNiagaraMetaDataCustomNodeBuilder();
 
-	virtual void SetOnRebuildChildren(FSimpleDelegate InOnRegenerateChildren) override
-	{
-		OnRebuildChildren = InOnRegenerateChildren;
-	}
+	virtual void SetOnRebuildChildren(FSimpleDelegate InOnRegenerateChildren) override;
 
 	virtual void GenerateHeaderRowContent(FDetailWidgetRow& NodeRow) {}
 	virtual void Tick(float DeltaTime) override {}
 	virtual bool RequiresTick() const override { return false; }
-	virtual bool InitiallyCollapsed() const { return false; }
+	virtual bool InitiallyCollapsed() const { return true; }
 	
-	virtual FName GetName() const  override
-	{
-		static const FName NiagaraMetadataCustomNodeBuilder("NiagaraMetadataCustomNodeBuilder");
-		return NiagaraMetadataCustomNodeBuilder;
-	}
+	virtual FName GetName() const  override;
 
-	virtual void GenerateChildContent(IDetailChildrenBuilder& ChildrenBuilder) override
-	{
-		const TArray<TSharedRef<FNiagaraMetaDataViewModel>>& VariableModels = ViewModel->GetVariableModels();
+	virtual void GenerateChildContent(IDetailChildrenBuilder& ChildrenBuilder) override;
 
-		FNiagaraEditorModule& NiagaraEditorModule = FModuleManager::GetModuleChecked<FNiagaraEditorModule>("NiagaraEditor");
-
-		for (const TSharedRef<FNiagaraMetaDataViewModel>& MetadataViewModel : VariableModels)
-		{
-			IDetailGroup& MetaDataGroup = ChildrenBuilder.AddGroup(MetadataViewModel->GetName(), FText::FromName(MetadataViewModel->GetName()));
-			MetaDataGroup.ToggleExpansion(true);
-			TSharedRef<FStructOnScope> StructData = MetadataViewModel->GetValueStruct();
-			
-			IDetailPropertyRow* DescriptionRow = ChildrenBuilder.AddExternalStructureProperty(StructData, FName(TEXT("Description")), "Description");
-
-			if (DescriptionRow)
-			{
-				DescriptionRow->Visibility(EVisibility::Hidden); // hide it here, show it in groups only
-				MetaDataGroup.AddPropertyRow(DescriptionRow->GetPropertyHandle()->AsShared());
-
-				TSharedPtr<IPropertyHandle> PropertyHandle = DescriptionRow->GetPropertyHandle();
-				PropertyHandle->SetOnPropertyValueChanged(FSimpleDelegate::CreateSP(MetadataViewModel, &FNiagaraMetaDataViewModel::NotifyMetaDataChanged));
-			}
-			IDetailPropertyRow* CategoryRow = ChildrenBuilder.AddExternalStructureProperty(StructData, FName(TEXT("CategoryName")), "CategoryName");
-
-			if (CategoryRow)
-			{
-				CategoryRow->Visibility(EVisibility::Hidden); // hide it here, show it in groups only
-				MetaDataGroup.AddPropertyRow(CategoryRow->GetPropertyHandle()->AsShared());
-
-				TSharedPtr<IPropertyHandle> PropertyHandle = CategoryRow->GetPropertyHandle();
-				PropertyHandle->SetOnPropertyValueChanged(FSimpleDelegate::CreateSP(MetadataViewModel, &FNiagaraMetaDataViewModel::NotifyMetaDataChanged));
-			}
-
-			IDetailPropertyRow* SortingRow = ChildrenBuilder.AddExternalStructureProperty(StructData, FName(TEXT("EditorSortPriority")), "EditorSortPriority");
-
-			if (SortingRow)
-			{
-				SortingRow->Visibility(EVisibility::Hidden); // hide it here, show it in groups only
-				MetaDataGroup.AddPropertyRow(SortingRow->GetPropertyHandle()->AsShared());
-
-				TSharedPtr<IPropertyHandle> PropertyHandle = SortingRow->GetPropertyHandle();
-				PropertyHandle->SetOnPropertyValueChanged(FSimpleDelegate::CreateSP(MetadataViewModel, &FNiagaraMetaDataViewModel::NotifyMetaDataChanged));
-			}
-
-			IDetailPropertyRow* MetaDataRow = ChildrenBuilder.AddExternalStructureProperty(StructData, FName(TEXT("PropertyMetaData")), "PropertyMetaData");
-			
-			if (MetaDataRow)
-			{
-				MetaDataRow->ShouldAutoExpand(true);
-				MetaDataRow->Visibility(EVisibility::Hidden);
-				MetaDataGroup.AddPropertyRow(MetaDataRow->GetPropertyHandle()->AsShared());
-
-				TSharedPtr<IPropertyHandle> PropertyHandle = MetaDataRow->GetPropertyHandle();
-				PropertyHandle->SetOnPropertyValueChanged(FSimpleDelegate::CreateSP(MetadataViewModel, &FNiagaraMetaDataViewModel::NotifyMetaDataChanged));
-				PropertyHandle->SetOnChildPropertyValueChanged(FSimpleDelegate::CreateSP(MetadataViewModel, &FNiagaraMetaDataViewModel::NotifyMetaDataChanged));
-			}
-		}
-	}
+	void Rebuild();
 
 private:
-	void OnCollectionViewModelChanged()
-	{
-		OnRebuildChildren.ExecuteIfBound();
-	}
+	void OnGraphChanged(const struct FEdGraphEditAction& Action);
+
+	void MetaDataPropertyHandleChanged(FNiagaraVariable ParameterVariable, TSharedRef<FStructOnScope> MetaDataContainerStruct);
 
 private:
-	TSharedRef<FNiagaraMetaDataCollectionViewModel> ViewModel;
+	TWeakObjectPtr<UNiagaraGraph> ScriptGraph;
+	FDelegateHandle OnGraphChangedHandle;
+	FDelegateHandle OnGraphNeedsRecompileHandle;
 	FSimpleDelegate OnRebuildChildren;
 };
-
-#undef LOCTEXT_NAMESPACE // "NiagaraMetaDataCustomNodeBuilder"

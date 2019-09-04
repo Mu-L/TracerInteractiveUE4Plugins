@@ -35,6 +35,12 @@ struct CORE_API FHistogram
 	/** Inits histogram with the specified bin boundaries, with the final bucket extending to infinity (e.g., passing in 0,5 creates a [0..5) bucket and a [5..infinity) bucket) */
 	void InitFromArray(TArrayView<const double> Thresholds);
 
+	/** Inits histogram with the specified bin boundaries, with the final bucket extending to infinity (e.g., passing in 0,5 creates a [0..5) bucket and a [5..infinity) bucket) */
+	FORCEINLINE void InitFromArray(std::initializer_list<double> Thresholds)
+	{
+		InitFromArray(MakeArrayView(Thresholds));
+	}
+
 	/** Resets measurements, without resetting the configured bins. */
 	void Reset();
 
@@ -67,6 +73,16 @@ struct CORE_API FHistogram
 
 	/** Same as DumpToJsonString but uses a DefaultConvertBinToLabel. */
 	FString DumpToJsonString() const;
+
+	/** 
+	* Returns a string in a Json format: [{"BinName":{"Count":Count,"Sum":Sum}},...]. 
+	* Bucket name is constructed by calling ConvertBinToLabel on the MinValue and UpperBound for each bin. 
+	* Convert function is used to allow the bin range, which is stored as a double, to be printed prettily.
+	*/
+	FString DumpToJsonString2(TFunctionRef<FString (double, double)> ConvertBinToLabel) const;
+
+	/** Same as DumpToJsonString2 but uses a DefaultConvertBinToLabel. */
+	FString DumpToJsonString2() const;
 
 	/** Default stringifier for bins for use with DumpToJsonString. Truncates to int and uses Plus as the suffix for the last bin. ie. [0.0, 3.75, 9.8] -> 0_3, 3_9, 9_Plus */
 	static FString DefaultConvertBinToLabel(double MinValue, double UpperBound);

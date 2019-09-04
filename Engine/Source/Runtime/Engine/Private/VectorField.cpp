@@ -57,15 +57,16 @@ FVectorFieldInstance::~FVectorFieldInstance()
 {
 	if (Resource && bInstancedResource)
 	{
-		FVectorFieldResource* InResource = Resource;
+		FVectorFieldResource* InResource = Resource.GetReference();
+		InResource->AddRef();
 		ENQUEUE_RENDER_COMMAND(FDestroyVectorFieldResourceCommand)(
 			[InResource](FRHICommandList& RHICmdList)
 			{
 				InResource->ReleaseResource();
-				delete InResource;
+				InResource->Release();
 			});
-		Resource = nullptr;
 	}
+	Resource = nullptr;
 }
 
 /**
@@ -75,7 +76,7 @@ FVectorFieldInstance::~FVectorFieldInstance()
  */
 void FVectorFieldInstance::Init(FVectorFieldResource* InResource, bool bInstanced)
 {
-	check(Resource == NULL);
+	check(!Resource);
 	Resource = InResource;
 	bInstancedResource = bInstanced;
 }
@@ -188,12 +189,15 @@ public:
 		InVectorField->SourceData.GetCopy(&VolumeData, /*bDiscardInternalCopy=*/ true);
 	}
 
+protected:
 	/** Destructor. */
 	virtual ~FVectorFieldStaticResource()
 	{
 		FMemory::Free(VolumeData);
 		VolumeData = NULL;
 	}
+
+public:
 
 	/**
 	 * Initialize RHI resources.
@@ -243,19 +247,19 @@ public:
 		ENQUEUE_RENDER_COMMAND(FUpdateStaticVectorFieldCommand)(
 			[Resource, UpdateParams](FRHICommandListImmediate& RHICmdList)
 			{
-					// Free any existing volume data on the resource.
-					FMemory::Free(Resource->VolumeData);
+				// Free any existing volume data on the resource.
+				FMemory::Free(Resource->VolumeData);
 
-					// Update settings on this resource.
-					Resource->SizeX = UpdateParams.SizeX;
-					Resource->SizeY = UpdateParams.SizeY;
-					Resource->SizeZ = UpdateParams.SizeZ;
-					Resource->Intensity = UpdateParams.Intensity;
-					Resource->LocalBounds = UpdateParams.Bounds;
-					Resource->VolumeData = UpdateParams.VolumeData;
+				// Update settings on this resource.
+				Resource->SizeX = UpdateParams.SizeX;
+				Resource->SizeY = UpdateParams.SizeY;
+				Resource->SizeZ = UpdateParams.SizeZ;
+				Resource->Intensity = UpdateParams.Intensity;
+				Resource->LocalBounds = UpdateParams.Bounds;
+				Resource->VolumeData = UpdateParams.VolumeData;
 
-					// Update RHI resources.
-					Resource->UpdateRHI();
+				// Update RHI resources.
+				Resource->UpdateRHI();
 			});
 	}
 
@@ -279,19 +283,21 @@ void UVectorFieldStatic::InitInstance(FVectorFieldInstance* Instance, bool bPrev
 
 void UVectorFieldStatic::InitResource()
 {
-	check(Resource == NULL);
+	check(!Resource);
 
 	// Loads and copies the bulk data into CPUData if bAllowCPUAccess is set, otherwise clear CPUData. 
 	UpdateCPUData();
 
 	Resource = new FVectorFieldStaticResource(this);
+	Resource->AddRef(); // Increment refcount because of UVectorFieldStatic::Resource is not a TRefCountPtr.
+
 	BeginInitResource(Resource);
 }
 
 
 void UVectorFieldStatic::UpdateResource()
 {
-	check(Resource != NULL);
+	check(Resource);
 
 	// Loads and copies the bulk data into CPUData if bAllowCPUAccess is set, otherwise clears CPUData. 
 	UpdateCPUData();
@@ -377,17 +383,18 @@ FRHITexture* UVectorFieldStatic::GetVolumeTextureRef()
 
 void UVectorFieldStatic::ReleaseResource()
 {
-	if ( Resource != NULL )
+	if (Resource)
 	{
-		FRenderResource* InResource = Resource;
+		FVectorFieldResource* InResource = Resource;
 		ENQUEUE_RENDER_COMMAND(ReleaseVectorFieldCommand)(
 			[InResource](FRHICommandList& RHICmdList)
 			{
 				InResource->ReleaseResource();
-				delete InResource;
+				// Decrement the refcount and possibly delete (see refs from FVectorFieldInstance).
+				InResource->Release(); 
 			});
+		Resource = nullptr;
 	}
-	Resource = nullptr;
 }
 
 void UVectorFieldStatic::Serialize(FArchive& Ar)
@@ -801,11 +808,11 @@ public:
 	void SetParameters(
 		FRHICommandList& RHICmdList, 
 		const FCompositeAnimatedVectorFieldUniformBufferRef& UniformBuffer,
-		FTextureRHIParamRef AtlasTextureRHI,
-		FTextureRHIParamRef NoiseVolumeTextureRHI )
+		FRHITexture* AtlasTextureRHI,
+		FRHITexture* NoiseVolumeTextureRHI )
 	{
-		FComputeShaderRHIParamRef ComputeShaderRHI = GetComputeShader();
-		FSamplerStateRHIParamRef SamplerStateLinear = TStaticSamplerState<SF_Bilinear,AM_Clamp,AM_Clamp,AM_Clamp>::GetRHI();
+		FRHIComputeShader* ComputeShaderRHI = GetComputeShader();
+		FRHISamplerState* SamplerStateLinear = TStaticSamplerState<SF_Bilinear,AM_Clamp,AM_Clamp,AM_Clamp>::GetRHI();
 		SetUniformBufferParameter(RHICmdList, ComputeShaderRHI, GetUniformBufferParameter<FCompositeAnimatedVectorFieldUniformParameters>(), UniformBuffer );
 		SetTextureParameter(RHICmdList, ComputeShaderRHI, AtlasTexture, AtlasTextureSampler, SamplerStateLinear, AtlasTextureRHI );
 		SetTextureParameter(RHICmdList, ComputeShaderRHI, NoiseVolumeTexture, NoiseVolumeTextureSampler, SamplerStateLinear, NoiseVolumeTextureRHI );
@@ -814,9 +821,9 @@ public:
 	/**
 	 * Set output buffer for this shader.
 	 */
-	void SetOutput(FRHICommandList& RHICmdList, FUnorderedAccessViewRHIParamRef VolumeTextureUAV)
+	void SetOutput(FRHICommandList& RHICmdList, FRHIUnorderedAccessView* VolumeTextureUAV)
 	{
-		FComputeShaderRHIParamRef ComputeShaderRHI = GetComputeShader();
+		FRHIComputeShader* ComputeShaderRHI = GetComputeShader();
 		if ( OutVolumeTexture.IsBound() )
 		{
 			RHICmdList.SetUAVParameter(ComputeShaderRHI, OutVolumeTexture.GetBaseIndex(), VolumeTextureUAV);
@@ -828,10 +835,10 @@ public:
 	 */
 	void UnbindBuffers(FRHICommandList& RHICmdList)
 	{
-		FComputeShaderRHIParamRef ComputeShaderRHI = GetComputeShader();
+		FRHIComputeShader* ComputeShaderRHI = GetComputeShader();
 		if ( OutVolumeTexture.IsBound() )
 		{
-			RHICmdList.SetUAVParameter(ComputeShaderRHI, OutVolumeTexture.GetBaseIndex(), FUnorderedAccessViewRHIParamRef());
+			RHICmdList.SetUAVParameter(ComputeShaderRHI, OutVolumeTexture.GetBaseIndex(), nullptr);
 		}
 	}
 
@@ -981,7 +988,7 @@ public:
 				FCompositeAnimatedVectorFieldUniformBufferRef::CreateUniformBufferImmediate(Parameters, UniformBuffer_SingleDraw);
 
 			TShaderMapRef<FCompositeAnimatedVectorFieldCS> CompositeCS(GetGlobalShaderMap(GetFeatureLevel()));
-			FTextureRHIParamRef NoiseVolumeTextureRHI = GBlackVolumeTexture->TextureRHI;
+			FRHITexture* NoiseVolumeTextureRHI = GBlackVolumeTexture->TextureRHI;
 			if (AnimatedVectorField->NoiseField && AnimatedVectorField->NoiseField->Resource)
 			{
 				NoiseVolumeTextureRHI = AnimatedVectorField->NoiseField->Resource->VolumeTextureRHI;

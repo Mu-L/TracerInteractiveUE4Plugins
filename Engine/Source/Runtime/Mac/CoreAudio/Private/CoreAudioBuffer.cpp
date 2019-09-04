@@ -18,6 +18,14 @@
  FCoreAudioSoundBuffer.
  ------------------------------------------------------------------------------------*/
 
+static int32 UseResourceTrackingCVar = 1;
+FAutoConsoleVariableRef CVarUseResourceTracking(
+	TEXT("au.mac.UseResourceTracking"),
+	UseResourceTrackingCVar,
+	TEXT("When set to 1, caches compressed audio on initialied buffers to avoid buffer copies..\n")
+	TEXT("0: disabled, 1: enabled"),
+	ECVF_Default);
+
 /** 
  * Constructor
  *
@@ -261,17 +269,18 @@ FCoreAudioSoundBuffer* FCoreAudioSoundBuffer::CreateNativeBuffer( FCoreAudioDevi
 	Buffer->PCMData = Wave->RawPCMData;
 	Buffer->PCMDataSize = Wave->RawPCMDataSize;
 	
-	Wave->RawPCMData = NULL;
-
 	// Keep track of associated resource name.
 	Buffer->InitAudioStreamBasicDescription( kAudioFormatLinearPCM, Wave, true );
 	
     FAudioDeviceManager* AudioDeviceManager = GEngine->GetAudioDeviceManager();
     check(AudioDeviceManager != nullptr);
     
-	AudioDeviceManager->TrackResource( Wave, Buffer );
-	
-	Wave->RemoveAudioResource();
+	if (UseResourceTrackingCVar)
+	{
+		Wave->RawPCMData = NULL;
+		AudioDeviceManager->TrackResource(Wave, Buffer);
+		Wave->RemoveAudioResource();
+	}
 	
 	return( Buffer );
 }

@@ -220,7 +220,7 @@ const FAnimationSharingScalability& UAnimationSharingManager::GetScalabilitySett
 
 void UAnimationSharingManager::SetupPerSkeletonData(const FPerSkeletonAnimationSharingSetup& SkeletonSetup)
 {
-	const USkeleton* Skeleton = SkeletonSetup.Skeleton.LoadSynchronous();
+	const USkeleton* Skeleton = SkeletonSetup.Skeleton;
 	UAnimationSharingStateProcessor* Processor = SkeletonSetup.StateProcessorClass ?SkeletonSetup.StateProcessorClass->GetDefaultObject<UAnimationSharingStateProcessor>() : nullptr;
 	UEnum* StateEnum = Processor ? Processor->GetAnimationStateEnum() : nullptr;
 	if (Skeleton && StateEnum && Processor)
@@ -749,7 +749,7 @@ uint8 UAnimSharingInstance::DetermineStateForActor(uint32 ActorIndex, bool& bSho
 
 bool UAnimSharingInstance::Setup(UAnimationSharingManager* AnimationSharingManager, const FPerSkeletonAnimationSharingSetup& SkeletonSetup, const FAnimationSharingScalability* InScalabilitySettings, uint32 Index)
 {
-	USkeletalMesh* SkeletalMesh = SkeletonSetup.SkeletalMesh.LoadSynchronous();
+	USkeletalMesh* SkeletalMesh = SkeletonSetup.SkeletalMesh;
 	/** Retrieve the state processor to use */
 	if (UAnimationSharingStateProcessor* Processor = SkeletonSetup.StateProcessorClass.GetDefaultObject())
 	{
@@ -846,7 +846,7 @@ void UAnimSharingInstance::SetupState(FPerStateData& StateData, const FAnimation
 	/** Setup overall data and flags */
 	StateData.bIsOnDemand = StateEntry.bOnDemand;
 	StateData.bIsAdditive = StateEntry.bAdditive;
-	StateData.AdditiveAnimationSequence = (StateEntry.bAdditive && StateEntry.AnimationSetups.IsValidIndex(0)) ? StateEntry.AnimationSetups[0].AnimSequence.LoadSynchronous() : nullptr;
+	StateData.AdditiveAnimationSequence = (StateEntry.bAdditive && StateEntry.AnimationSetups.IsValidIndex(0)) ? StateEntry.AnimationSetups[0].AnimSequence : nullptr;
 
 	/** Keep hard reference to animation sequence */
 	if (StateData.AdditiveAnimationSequence)
@@ -890,7 +890,7 @@ void UAnimSharingInstance::SetupState(FPerStateData& StateData, const FAnimation
 		const FAnimationSetup& AnimationSetup = StateEntry.AnimationSetups[SetupIndex];
 		/** User can setup either an AnimBP or AnimationSequence */
 		UClass* AnimBPClass = AnimationSetup.AnimBlueprint.Get();
-		UAnimSequence* AnimSequence = AnimationSetup.AnimSequence.LoadSynchronous();
+		UAnimSequence* AnimSequence = AnimationSetup.AnimSequence;
 		
 		if (AnimBPClass == nullptr && AnimSequence == nullptr)
 		{
@@ -980,7 +980,7 @@ void UAnimSharingInstance::SetupState(FPerStateData& StateData, const FAnimation
 					Components.Add(Component);
 				}
 				else
-				{					
+				{	
 					const FVector SpawnLocation(FVector(NumSetups * SkeletalMeshBounds.X, 0.f, ZOffset));
 					const FName AdditiveComponentName(*(SkeletalMesh->GetName() + TEXT("_") + StateEnum->GetNameStringByIndex(StateEntry.State) + FString::FromInt(InstanceIndex)));
 					USkeletalMeshComponent* AdditiveComponent = NewObject<USkeletalMeshComponent>(SharingActor, AdditiveComponentName);
@@ -994,6 +994,10 @@ void UAnimSharingInstance::SetupState(FPerStateData& StateData, const FAnimation
 					FAdditiveAnimationInstance* AdditiveInstance = new FAdditiveAnimationInstance();
 					AdditiveInstance->Initialise(AdditiveComponent, SkeletonSetup.AdditiveAnimBlueprint.Get());
 					AdditiveInstanceStack.AddInstance(AdditiveInstance);
+					
+					/** Set the current animation length length */
+					StateData.AnimationLengths.Add(AnimSequence->SequenceLength);
+					Components.Add(AdditiveComponent);
 				}
 				
 				++NumSetups;
@@ -1309,6 +1313,9 @@ void UAnimSharingInstance::TickAdditiveInstances()
 	for (int32 InstanceIndex = 0; InstanceIndex < AdditiveInstances.Num(); ++InstanceIndex)
 	{
 		FAdditiveInstance& Instance = AdditiveInstances[InstanceIndex];
+		SetComponentUsage(true, Instance.State, Instance.UsedPerStateComponentIndex);		
+		SetComponentTick(Instance.State, Instance.UsedPerStateComponentIndex);
+
 		if (Instance.bActive)
 		{
 			const float WorldTimeSeconds = GetWorld()->GetTimeSeconds();
@@ -1326,6 +1333,8 @@ void UAnimSharingInstance::TickAdditiveInstances()
 				FreeAdditiveInstance(Instance.AdditiveAnimationInstance);
 				RemoveAdditiveInstance(InstanceIndex);
 				--InstanceIndex;
+
+				SetComponentUsage(false, Instance.State, Instance.UsedPerStateComponentIndex);
 			}
 		}
 		else
@@ -1357,7 +1366,7 @@ void UAnimSharingInstance::TickActorStates()
 			ActorData.bRequiresTick = ActorData.SignificanceValue >= ScalabilitySettings->TickSignificanceValue.Default;
 			for (int32 ComponentIndex : ActorData.ComponentIndices)
 			{
-				if (PerComponentData[ComponentIndex].Component->LastRenderTime > (WorldTime - 1.f))
+				if (PerComponentData[ComponentIndex].Component->GetLastRenderTime() > (WorldTime - 1.f))
 				{
 					PerComponentData[ComponentIndex].Component->bRecentlyRendered = true;
 					ActorData.bRequiresTick = true;
@@ -2025,6 +2034,7 @@ uint32 UAnimSharingInstance::SetupAdditiveInstance(uint8 StateIndex, uint8 FromS
 		const float WorldTimeSeconds = GetWorld()->GetTimeSeconds();
 		Instance.EndTime = WorldTimeSeconds + StateData.AdditiveAnimationSequence->SequenceLength;
 		Instance.State = StateIndex;
+		Instance.UsedPerStateComponentIndex = PerStateData[StateIndex].Components.IndexOfByKey(AnimationInstance->GetComponent());
 
 		InstanceIndex = AdditiveInstances.Num() - 1;
 		AnimationInstance->Setup(Instance.BaseComponent, StateData.AdditiveAnimationSequence);

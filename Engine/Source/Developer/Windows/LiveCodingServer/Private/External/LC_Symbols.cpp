@@ -24,6 +24,11 @@
 #include <algorithm>
 #include <process.h>
 
+#include "Misc/FileHelper.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
+#include "Dom/JsonObject.h"
+
 #include "Windows/AllowWindowsPlatformAtomics.h"
 
 namespace
@@ -280,6 +285,13 @@ namespace
 				LC_ERROR_USER("Cannot load PDB file for module %S. Error: 0x%X", filename, hr);
 			}
 
+			// BEGIN EPIC MOD - Show a warning if we don't have a PDB for this module. Since we only enable Live++ for modules that we built, we should always have a PDB.
+			if (hr == E_PDB_NOT_FOUND)
+			{
+				LC_WARNING_USER("No PDB file found for module %S. If this is a packaged build, make sure that debug files are being staged. Live coding will be disabled for this module.", file::GetFilename(filename).c_str());
+			}
+			// END EPIC MOD
+
 			return nullptr;
 		}
 
@@ -301,7 +313,9 @@ namespace
 			return nullptr;
 		}
 
-		symbols::Provider* provider = new symbols::Provider { diaDataSource, diaSession, globalScope };
+		const file::Attributes& attributes = file::GetAttributes(filename);
+		const uint64_t lastModification = file::GetLastModificationTime(attributes);
+		symbols::Provider* provider = new symbols::Provider { diaDataSource, diaSession, globalScope, lastModification };
 		return provider;
 	}
 
@@ -392,6 +406,112 @@ namespace symbols
 		}
 	}
 
+	// BEGIN EPIC MOD - Static grouping of compilands by unity blobs
+	static CriticalSection g_objFileToCompilandIdCS;
+	static std::unordered_map<std::wstring, uint32_t> g_objFileToCompilandId;
+	static std::unordered_set<std::wstring> g_checkedUnityManifests;
+
+	void ResetCachedUnityManifests()
+	{
+		CriticalSection::ScopedLock lock(&g_objFileToCompilandIdCS);
+		g_checkedUnityManifests.clear();
+	}
+
+	bool TryGetCompilandIdFromUnityManifest(const std::wstring& objFile, uint32_t& compilandId)
+	{
+		std::wstring normalizedObjFile = file::NormalizePath(objFile.c_str());
+		CriticalSection::ScopedLock lock(&g_objFileToCompilandIdCS);
+
+		// Check if it's already cached
+		std::unordered_map<std::wstring, uint32_t>::iterator it = g_objFileToCompilandId.find(normalizedObjFile);
+		if(it == g_objFileToCompilandId.end())
+		{
+			// Read the manifest file
+			std::wstring BaseDir = file::GetDirectory(normalizedObjFile);
+			std::wstring ManifestFile = BaseDir + L"\\LiveCodingInfo.json";
+
+			// If we've already tried to read this string, don't try again
+			if(!g_checkedUnityManifests.insert(ManifestFile).second)
+			{
+				return false;
+			}
+
+			// Read the file to a string
+			FString FileContents;
+			if (!FFileHelper::LoadFileToString(FileContents, ManifestFile.c_str()))
+			{
+				LC_WARNING_USER("%S could not be read", ManifestFile.c_str());
+				return false;
+			}
+
+			// Deserialize a JSON object from the string
+			TSharedPtr< FJsonObject > Object;
+			TSharedRef< TJsonReader<> > Reader = TJsonReaderFactory<>::Create(FileContents);
+			if (!FJsonSerializer::Deserialize(Reader, Object) || !Object.IsValid())
+			{
+				LC_WARNING_USER("%S could not be parsed", ManifestFile.c_str());
+				return false;
+			}
+
+			const TSharedPtr<FJsonObject>* FilesObject;
+			if (!Object->TryGetObjectField(TEXT("RemapUnityFiles"), FilesObject))
+			{
+				LC_WARNING_USER("%S is not a valid manifest file", ManifestFile.c_str());
+				return false;
+			}
+
+			for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : FilesObject->Get()->Values)
+			{
+				std::wstring UnityObjectFile = file::NormalizePath((BaseDir + L"\\" + *Pair.Key).c_str());
+				uint32_t UnityCompilandId = uniqueId::Generate(UnityObjectFile);
+				g_objFileToCompilandId.insert(std::make_pair(UnityObjectFile, UnityCompilandId));
+
+				const FJsonValue* Value = Pair.Value.Get();
+				if (Value->Type != EJson::Array)
+				{
+					LC_WARNING_USER("%S is not a valid manifest file", ManifestFile.c_str());
+					return false;
+				}
+
+				const TArray<TSharedPtr<FJsonValue>>& SourceFileValues = Value->AsArray();
+				for (const TSharedPtr<FJsonValue>& SourceFileValue : SourceFileValues)
+				{
+					if (SourceFileValue->Type != EJson::String)
+					{
+						LC_WARNING_USER("%S is not a valid manifest file", ManifestFile.c_str());
+						return false;
+					}
+
+					std::wstring MemberObjFile = file::NormalizePath((BaseDir + L"\\" + *SourceFileValue->AsString()).c_str());
+					g_objFileToCompilandId.insert(std::make_pair(MemberObjFile, UnityCompilandId));
+				}
+			}
+
+			// Check again for the object file we're interested in
+			it = g_objFileToCompilandId.find(normalizedObjFile);
+			if(it == g_objFileToCompilandId.end())
+			{
+				return false;
+			}
+		}
+
+		compilandId = it->second;
+		return true;
+	}
+
+	uint32_t GetCompilandIdFromPath(const std::wstring& objPath)
+	{
+		uint32 compilandId;
+		if(TryGetCompilandIdFromUnityManifest(objPath, compilandId))
+		{
+			return compilandId;
+		}
+		else
+		{
+			return uniqueId::Generate(file::NormalizePath(objPath.c_str()));
+		}
+	}
+	// END EPIC MOD
 
 	SymbolDB* GatherSymbols(Provider* provider)
 	{
@@ -550,35 +670,6 @@ namespace symbols
 	}
 
 
-	ModuleDB* GatherModules(DiaCompilandDB* diaCompilandDb)
-	{
-		telemetry::Scope telemetryScope("Gathering modules");
-
-		const size_t count = diaCompilandDb->symbols.size();
-
-		ModuleDB* database = new ModuleDB;
-		database->modules.reserve(count);
-
-		for (size_t i = 0u; i < count; ++i)
-		{
-			IDiaSymbol* diaSymbol = diaCompilandDb->symbols[i];
-
-			const dia::SymbolName& compilandPath = dia::GetSymbolName(diaSymbol);
-			const std::wstring& uppercaseCompilandPath = string::ToUpper(compilandPath.GetString());
-
-			const bool isDllPath = string::Contains(uppercaseCompilandPath.c_str(), L".DLL");
-			const bool isImport = string::Contains(uppercaseCompilandPath.c_str(), L"IMPORT:");
-			if (isDllPath && !isImport)
-			{
-				// store the module for now
-				database->modules.emplace_back(compilandPath.GetString());
-			}
-		}
-
-		return database;
-	}
-
-
 	UserDefinedTypesDB* GatherUserDefinedTypes(const DiaCompilandDB* diaCompilandDb, const Compiland* compiland)
 	{
 		telemetry::Scope telemetryScope("Gathering user-defined types");
@@ -613,7 +704,7 @@ namespace symbols
 	}
 
 
-	CompilandDB* GatherCompilands(Provider* provider, const DiaCompilandDB* diaCompilandDb, unsigned int splitAmalgamatedFilesThreshold, uint32_t compilandOptions)
+	CompilandDB* GatherCompilands(const Provider* provider, const DiaCompilandDB* diaCompilandDb, unsigned int splitAmalgamatedFilesThreshold, uint32_t compilandOptions)
 	{
 		telemetry::Scope telemetryScope("Gathering compilands");
 
@@ -840,6 +931,14 @@ namespace symbols
 
 						compilandPath = testPath;
 					}
+
+					// ignore compilands that are newer than the module itself.
+					// we cannot use those for reconstructing symbol information, because they weren't linked into the executable.
+					if (cacheData.lastModificationTime > provider->lastModificationTime)
+					{
+						LC_WARNING_USER("Ignoring compiland %S because it is newer than the module it belongs to.", compilandPath.c_str());
+						continue;
+					}
 				}
 
 				const std::wstring normalizedCompilandPath = file::NormalizePath(compilandPath.c_str());
@@ -899,7 +998,7 @@ namespace symbols
 					envCompilerWorkingDirectory,
 					ImmutableString(""),							// amalgamation .obj path
 					nullptr,										// file indices
-					uniqueId::Generate(normalizedCompilandPath),	// unique ID
+					GetCompilandIdFromPath(normalizedCompilandPath),	// unique ID
 					static_cast<uint32_t>(i),						// dia symbol index
 					Compiland::Type::SINGLE_FILE,					// type of file
 					isPartOfLibrary,								// isPartOfLibrary
@@ -1165,7 +1264,7 @@ namespace symbols
 											// we treat these files as being the amalgamated file.
 											// symbols originally coming from amalgamated files need to have the same
 											// name as symbols from individual files.
-											uniqueId::Generate(normalizedCompilandPath),
+											GetCompilandIdFromPath(normalizedCompilandPath),
 
 											// same for the DIA symbol index, for the same reason
 											static_cast<uint32_t>(i),
@@ -2204,6 +2303,13 @@ namespace symbols
 	bool IsExceptionClauseSymbol(const ImmutableString& symbolName)
 	{
 		return StartsWithPatterns(symbolName.c_str(), symbolPatterns::EXCEPTION_CLAUSE_PATTERNS);
+	}
+
+
+	bool IsExceptionUnwindSymbolForDynamicInitializer(const ImmutableString& symbolName)
+	{
+		return (StartsWithPatterns(symbolName.c_str(), symbolPatterns::EXCEPTION_UNWIND_PATTERNS) &&
+			ContainsPatterns(symbolName.c_str(), symbolPatterns::DYNAMIC_INITIALIZER_PATTERNS));
 	}
 
 

@@ -17,7 +17,7 @@ class FCurveOwnerInterface;
 class FPaintArgs;
 class FSlateWindowElementList;
 
-struct FGradientStopMark
+struct UNREALED_API FGradientStopMark
 {
 public:
 
@@ -42,7 +42,7 @@ public:
 
 };
 
-class SColorGradientEditor : public SLeafWidget
+class UNREALED_API SColorGradientEditor : public SLeafWidget
 {
 public:
 	SLATE_BEGIN_ARGS( SColorGradientEditor ) 

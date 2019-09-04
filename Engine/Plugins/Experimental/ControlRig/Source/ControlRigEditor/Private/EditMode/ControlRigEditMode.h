@@ -7,6 +7,7 @@
 #include "IPersonaEditMode.h"
 #include "ControlRigTrajectoryCache.h"
 #include "ControlUnitProxy.h"
+#include "ControlRigModel.h"
 
 class FEditorViewportClient;
 class FViewport;
@@ -24,9 +25,8 @@ class IMovieScenePlayer;
 struct FRigUnit_Control;
 
 /** Delegate fired when controls are selected */
-DECLARE_MULTICAST_DELEGATE_OneParam(FOnControlsSelected, const TArray<FString>& /*SelectedControlPropertyPaths*/);
-DECLARE_DELEGATE_RetVal_TwoParams(FTransform, FOnGetJointTransform, const FName& /*JointName*/, bool /*bLocal*/);
-DECLARE_DELEGATE_TwoParams(FOnSetJointTransform, const FName& /*JointName*/, const FTransform& /*Transform*/);
+DECLARE_DELEGATE_RetVal_TwoParams(FTransform, FOnGetBoneTransform, const FName& /*BoneName*/, bool /*bLocal*/);
+DECLARE_DELEGATE_TwoParams(FOnSetBoneTransform, const FName& /*BoneName*/, const FTransform& /*Transform*/);
 
 class FControlRigEditMode : public IPersonaEditMode
 {
@@ -95,6 +95,9 @@ public:
 	/** Get the number of selected controls */
 	int32 GetNumSelectedControls() const;
 
+	/** returns all property paths for all selected controls */
+	TArray<FString> GetSelectedControls() const;
+
 	/** Set a control's enabled state */
 	void SetControlEnabled(const FString& InControlPropertyPath, bool bEnabled);
 
@@ -118,9 +121,6 @@ public:
 	/** Refresh our internal object list (they may have changed) */
 	void RefreshObjects();
 
-	/** Delegate fired when controls are selected */
-	FOnControlsSelected& OnControlsSelected() { return OnControlsSelectedDelegate; }
-
 	/** Refresh our trajectory cache */
 	void RefreshTrajectoryCache();
 
@@ -136,10 +136,14 @@ public:
 	/** Helper function - get a rig unit from a proxy and a rig */
 	static FRigUnit_Control* GetRigUnit(const FControlUnitProxy& InProxy, UControlRig* InControlRig, UScriptStruct** OutControlStructPtr = nullptr);
 
-	/** Select Joint */
-	void SelectJoint(const FName& InJoint);
-	FOnGetJointTransform& OnGetJointTransform() { return OnGetJointTransformDelegate; }
-	FOnSetJointTransform& OnSetJointTransform() { return OnSetJointTransformDelegate; }
+	/** Select Bone */
+	void SelectBone(const FName& InBone);
+	FOnGetBoneTransform& OnGetBoneTransform() { return OnGetBoneTransformDelegate; }
+	FOnSetBoneTransform& OnSetBoneTransform() { return OnSetBoneTransformDelegate; }
+
+	UControlRigModel::FModifiedEvent& OnModified();
+	void HandleModelModified(const UControlRigModel* InModel, EControlRigModelNotifType InType, const void* InPayload);
+
 protected:
 	/** Helper function: set ControlRigs array to the details panel */
 	void SetObjects_Internal();
@@ -151,7 +155,7 @@ protected:
 	bool IntersectSelect(bool InSelect, const TFunctionRef<bool(const FControlUnitProxy&, const FTransform&)>& Intersects);
 
 	/** Handle selection internally */
-	void HandleSelectionChanged(const TArray<FString>& InSelectedJoints);
+	void HandleSelectionChanged(const TArray<FString>& InSelectedBones);
 
 	/** Set keys on all selected manipulators */
 	void SetKeysForSelectedManipulators();
@@ -197,10 +201,7 @@ protected:
 	TWeakPtr<ISequencer> WeakSequencer;
 
 	/** As we cannot cycle widget mode during tracking, we defer cycling until after a click with this flag */
-	bool bSelectedJoint;
-
-	/** Delegate fired when controls are selected */
-	FOnControlsSelected OnControlsSelectedDelegate;
+	bool bSelectedBone;
 
 	/** Guard value for selection */
 	bool bSelecting;
@@ -208,7 +209,7 @@ protected:
 	/** Guard value for selection by property path */
 	bool bSelectingByPath;
 
-	/** Cached transform of pivot point for selected Joints */
+	/** Cached transform of pivot point for selected Bones */
 	FTransform PivotTransform;
 
 	/** Command bindings for keyboard shortcuts */
@@ -217,13 +218,15 @@ protected:
 	/** Called from the editor when a blueprint object replacement has occurred */
 	void OnObjectsReplaced(const TMap<UObject*, UObject*>& OldToNewInstanceMap);
 
-	/** Selected Joints */
-	TArray<FName> SelectedJoints;
+	/** Selected Bones */
+	TArray<FName> SelectedBones;
 
-	FOnGetJointTransform OnGetJointTransformDelegate;
-	FOnSetJointTransform OnSetJointTransformDelegate;
+	FOnGetBoneTransform OnGetBoneTransformDelegate;
+	FOnSetBoneTransform OnSetBoneTransformDelegate;
 
-	bool AreJointSelected() const;
+	bool AreBoneSelected() const;
 
-	bool AreJointSelectedAndMovable() const;
+	bool AreBoneSelectedAndMovable() const;
+
+	UControlRigModel::FModifiedEvent _ModifiedEvent;
 };

@@ -10,25 +10,6 @@ using Tools.DotNETCommon;
 
 namespace UnrealBuildTool
 {
-	/// <summary>
-	/// The platforms that may be compilation targets for C++ files.
-	/// </summary>
-	enum CppPlatform
-	{
-		Win32,
-		Win64,
-		Mac,
-		XboxOne,
-		PS4,
-		Android,
-		IOS,
-		HTML5,
-		Linux,
-		TVOS,
-		Switch,
-		Quail,
-		Lumin,
-	}
 
 	/// <summary>
 	/// Compiler configuration. This controls whether to use define debug macros and other compiler settings. Note that optimization level should be based on the bOptimizeCode variable rather than
@@ -93,6 +74,7 @@ namespace UnrealBuildTool
 	{
 		public List<FileItem> ObjectFiles = new List<FileItem>();
 		public List<FileItem> DebugDataFiles = new List<FileItem>();
+		public List<FileItem> GeneratedHeaderFiles = new List<FileItem>();
 		public FileItem PrecompiledHeaderFile = null;
 	}
 
@@ -104,7 +86,7 @@ namespace UnrealBuildTool
 		/// <summary>
 		/// The platform to be compiled/linked for.
 		/// </summary>
-		public readonly CppPlatform Platform;
+		public readonly UnrealTargetPlatform Platform;
 
 		/// <summary>
 		/// The configuration to be compiled/linked for.
@@ -334,6 +316,11 @@ namespace UnrealBuildTool
 		public List<FileItem> ForceIncludeFiles = new List<FileItem>();
 
 		/// <summary>
+		/// List of files that need to be up to date before compile can proceed
+		/// </summary>
+		public List<FileItem> AdditionalPrerequisites = new List<FileItem>();
+
+		/// <summary>
 		/// The C++ preprocessor definitions to use.
 		/// </summary>
 		public List<string> Definitions = new List<string>();
@@ -361,7 +348,7 @@ namespace UnrealBuildTool
 		/// <summary>
 		/// Whether to hide symbols by default
 		/// </summary>
-		public bool bHideSymbolsByDefault;
+		public bool bHideSymbolsByDefault = true;
 
 		/// <summary>
 		/// Which C++ standard to support. May not be compatible with all platforms.
@@ -371,7 +358,7 @@ namespace UnrealBuildTool
 		/// <summary>
 		/// Default constructor.
 		/// </summary>
-        public CppCompileEnvironment(CppPlatform Platform, CppConfiguration Configuration, string Architecture, SourceFileMetadataCache MetadataCache)
+        public CppCompileEnvironment(UnrealTargetPlatform Platform, CppConfiguration Configuration, string Architecture, SourceFileMetadataCache MetadataCache)
 		{
 			this.Platform = Platform;
 			this.Configuration = Configuration;
@@ -433,6 +420,7 @@ namespace UnrealBuildTool
 			SystemIncludePaths = new HashSet<DirectoryReference>(Other.SystemIncludePaths);
 			bCheckSystemHeadersForModification = Other.bCheckSystemHeadersForModification;
 			ForceIncludeFiles.AddRange(Other.ForceIncludeFiles);
+			AdditionalPrerequisites.AddRange(Other.AdditionalPrerequisites);
 			Definitions.AddRange(Other.Definitions);
 			AdditionalArguments = Other.AdditionalArguments;
 			AdditionalFrameworks.AddRange(Other.AdditionalFrameworks);

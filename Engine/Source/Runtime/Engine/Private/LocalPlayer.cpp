@@ -38,6 +38,10 @@
 
 #include "GameDelegates.h"
 
+#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+#include "Engine/DebugCameraController.h"
+#endif
+
 DEFINE_LOG_CATEGORY(LogPlayerManagement);
 
 #if !UE_BUILD_SHIPPING
@@ -117,6 +121,16 @@ UWorld* FLocalPlayerContext::GetWorld() const
 	}
 
 	return GetLocalPlayer()->GetWorld();
+}
+
+UGameInstance* FLocalPlayerContext::GetGameInstance() const
+{
+	if (UWorld* WorldPtr = GetWorld())
+	{
+		return WorldPtr->GetGameInstance();
+	}
+
+	return nullptr;
 }
 
 ULocalPlayer* FLocalPlayerContext::GetLocalPlayer() const
@@ -827,6 +841,8 @@ FSceneView* ULocalPlayer::CalcSceneView( class FSceneViewFamily* ViewFamily,
 
 	View->ViewLocation = OutViewLocation;
 	View->ViewRotation = OutViewRotation;
+	// Pass on the previous view transform from the view info (probably provided by the camera if set)
+	View->PreviousViewTransform = ViewInfo.PreviousViewTransform;
 
 	ViewFamily->Views.Add(View);
 
@@ -855,6 +871,25 @@ FSceneView* ULocalPlayer::CalcSceneView( class FSceneViewFamily* ViewFamily,
 			PlayerController->PlayerCameraManager->UpdatePhotographyPostProcessing(View->FinalPostProcessSettings);
 		}
 
+		if (GEngine->StereoRenderingDevice.IsValid())
+		{
+			FPostProcessSettings StereoDeviceOverridePostProcessinSettings;
+			float BlendWeight = 1.0f;
+			bool StereoSettingsAvailable = GEngine->StereoRenderingDevice->OverrideFinalPostprocessSettings(&StereoDeviceOverridePostProcessinSettings, StereoPass, BlendWeight);
+			if (StereoSettingsAvailable)
+			{
+				View->OverridePostProcessSettings(StereoDeviceOverridePostProcessinSettings, BlendWeight);
+			}
+		}
+
+#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+		ADebugCameraController* DebugCameraController = Cast<ADebugCameraController>(PlayerController);
+		if (DebugCameraController != nullptr)
+		{
+			DebugCameraController->UpdateVisualizeBufferPostProcessing(View->FinalPostProcessSettings);
+		}
+#endif
+
 		View->EndFinalPostprocessSettings(ViewInitOptions);
 	}
 
@@ -868,7 +903,7 @@ FSceneView* ULocalPlayer::CalcSceneView( class FSceneViewFamily* ViewFamily,
 
 bool ULocalPlayer::GetPixelBoundingBox(const FBox& ActorBox, FVector2D& OutLowerLeft, FVector2D& OutUpperRight, const FVector2D* OptionalAllotedSize)
 {
-		//@TODO: CAMERA: This has issues with aspect-ratio constrained cameras
+	//@TODO: CAMERA: This has issues with aspect-ratio constrained cameras
 	if ((ViewportClient != NULL) && (ViewportClient->Viewport != NULL) && (PlayerController != NULL))
 	{
 		// get the projection data
@@ -878,60 +913,7 @@ bool ULocalPlayer::GetPixelBoundingBox(const FBox& ActorBox, FVector2D& OutLower
 			return false;
 		}
 
-		// if we passed in an optional size, use it for the viewrect
-		FIntRect ViewRect = ProjectionData.GetConstrainedViewRect();
-		if (OptionalAllotedSize != NULL)
-		{
-			ViewRect.Min = FIntPoint(0,0);
-			ViewRect.Max = FIntPoint(OptionalAllotedSize->X, OptionalAllotedSize->Y);
-		}
-
-		// transform the box
-		const int32 NumOfVerts = 8;
-		FVector Vertices[NumOfVerts] =
-		{
-			FVector(ActorBox.Min),
-			FVector(ActorBox.Min.X, ActorBox.Min.Y, ActorBox.Max.Z),
-			FVector(ActorBox.Min.X, ActorBox.Max.Y, ActorBox.Min.Z),
-			FVector(ActorBox.Max.X, ActorBox.Min.Y, ActorBox.Min.Z),
-			FVector(ActorBox.Max.X, ActorBox.Max.Y, ActorBox.Min.Z),
-			FVector(ActorBox.Max.X, ActorBox.Min.Y, ActorBox.Max.Z),
-			FVector(ActorBox.Min.X, ActorBox.Max.Y, ActorBox.Max.Z),
-			FVector(ActorBox.Max)
-		};
-
-		// create the view projection matrix
-		const FMatrix ViewProjectionMatrix = ProjectionData.ComputeViewProjectionMatrix();
-
-		int SuccessCount = 0;
-		OutLowerLeft = FVector2D(FLT_MAX, FLT_MAX);
-		OutUpperRight = FVector2D(FLT_MIN, FLT_MIN);
-		for (int i = 0; i < NumOfVerts; ++i)
-		{
-			//grab the point in screen space
-			const FVector4 ScreenPoint = ViewProjectionMatrix.TransformFVector4( FVector4( Vertices[i], 1.0f) );
-
-			if (ScreenPoint.W > 0.0f)
-			{
-				float InvW = 1.0f / ScreenPoint.W;
-				FVector2D PixelPoint = FVector2D( ViewRect.Min.X + (0.5f + ScreenPoint.X * 0.5f * InvW) * ViewRect.Width(),
-												  ViewRect.Min.Y + (0.5f - ScreenPoint.Y * 0.5f * InvW) * ViewRect.Height());
-
-				PixelPoint.X = FMath::Clamp<float>(PixelPoint.X, 0, ViewRect.Width());
-				PixelPoint.Y = FMath::Clamp<float>(PixelPoint.Y, 0, ViewRect.Height());
-
-				OutLowerLeft.X = FMath::Min(OutLowerLeft.X, PixelPoint.X);
-				OutLowerLeft.Y = FMath::Min(OutLowerLeft.Y, PixelPoint.Y);
-
-				OutUpperRight.X = FMath::Max(OutUpperRight.X, PixelPoint.X);
-				OutUpperRight.Y = FMath::Max(OutUpperRight.Y, PixelPoint.Y);
-
-				++SuccessCount;
-			}
-		}
-
-		// make sure we are calculating with more than one point;
-		return SuccessCount >= 2;
+		return ULocalPlayer::GetPixelBoundingBox(ProjectionData, ActorBox, OutLowerLeft, OutUpperRight, OptionalAllotedSize);
 	}
 	else
 	{
@@ -939,10 +921,67 @@ bool ULocalPlayer::GetPixelBoundingBox(const FBox& ActorBox, FVector2D& OutLower
 	}
 }
 
+bool ULocalPlayer::GetPixelBoundingBox(const FSceneViewProjectionData& ProjectionData, const FBox& ActorBox, FVector2D& OutLowerLeft, FVector2D& OutUpperRight, const FVector2D* OptionalAllotedSize)
+{
+	// if we passed in an optional size, use it for the viewrect
+	FIntRect ViewRect = ProjectionData.GetConstrainedViewRect();
+	if (OptionalAllotedSize != NULL)
+	{
+		ViewRect.Min = FIntPoint(0, 0);
+		ViewRect.Max = FIntPoint(OptionalAllotedSize->X, OptionalAllotedSize->Y);
+	}
+
+	// transform the box
+	const int32 NumOfVerts = 8;
+	FVector Vertices[NumOfVerts] =
+	{
+		FVector(ActorBox.Min),
+		FVector(ActorBox.Min.X, ActorBox.Min.Y, ActorBox.Max.Z),
+		FVector(ActorBox.Min.X, ActorBox.Max.Y, ActorBox.Min.Z),
+		FVector(ActorBox.Max.X, ActorBox.Min.Y, ActorBox.Min.Z),
+		FVector(ActorBox.Max.X, ActorBox.Max.Y, ActorBox.Min.Z),
+		FVector(ActorBox.Max.X, ActorBox.Min.Y, ActorBox.Max.Z),
+		FVector(ActorBox.Min.X, ActorBox.Max.Y, ActorBox.Max.Z),
+		FVector(ActorBox.Max)
+	};
+
+	// create the view projection matrix
+	const FMatrix ViewProjectionMatrix = ProjectionData.ComputeViewProjectionMatrix();
+
+	int SuccessCount = 0;
+	OutLowerLeft = FVector2D(FLT_MAX, FLT_MAX);
+	OutUpperRight = FVector2D(FLT_MIN, FLT_MIN);
+	for (int i = 0; i < NumOfVerts; ++i)
+	{
+		//grab the point in screen space
+		const FVector4 ScreenPoint = ViewProjectionMatrix.TransformFVector4(FVector4(Vertices[i], 1.0f));
+
+		if (ScreenPoint.W > 0.0f)
+		{
+			float InvW = 1.0f / ScreenPoint.W;
+			FVector2D PixelPoint = FVector2D(ViewRect.Min.X + (0.5f + ScreenPoint.X * 0.5f * InvW) * ViewRect.Width(),
+				ViewRect.Min.Y + (0.5f - ScreenPoint.Y * 0.5f * InvW) * ViewRect.Height());
+
+			PixelPoint.X = FMath::Clamp<float>(PixelPoint.X, 0, ViewRect.Width());
+			PixelPoint.Y = FMath::Clamp<float>(PixelPoint.Y, 0, ViewRect.Height());
+
+			OutLowerLeft.X = FMath::Min(OutLowerLeft.X, PixelPoint.X);
+			OutLowerLeft.Y = FMath::Min(OutLowerLeft.Y, PixelPoint.Y);
+
+			OutUpperRight.X = FMath::Max(OutUpperRight.X, PixelPoint.X);
+			OutUpperRight.Y = FMath::Max(OutUpperRight.Y, PixelPoint.Y);
+
+			++SuccessCount;
+		}
+	}
+
+	// make sure we are calculating with more than one point;
+	return SuccessCount >= 2;
+}
+
 bool ULocalPlayer::GetPixelPoint(const FVector& InPoint, FVector2D& OutPoint, const FVector2D* OptionalAllotedSize)
 {
 	//@TODO: CAMERA: This has issues with aspect-ratio constrained cameras
-	bool bInFrontOfCamera = true;
 	if ((ViewportClient != NULL) && (ViewportClient->Viewport != NULL) && (PlayerController != NULL))
 	{
 		// get the projection data
@@ -952,33 +991,43 @@ bool ULocalPlayer::GetPixelPoint(const FVector& InPoint, FVector2D& OutPoint, co
 			return false;
 		}
 
-		// if we passed in an optional size, use it for the viewrect
-		FIntRect ViewRect = ProjectionData.GetConstrainedViewRect();
-		if (OptionalAllotedSize != NULL)
-		{
-			ViewRect.Min = FIntPoint(0,0);
-			ViewRect.Max = FIntPoint(OptionalAllotedSize->X, OptionalAllotedSize->Y);
-		}
-
-		// create the view projection matrix
-		const FMatrix ViewProjectionMatrix = ProjectionData.ComputeViewProjectionMatrix();
-
-		//@TODO: CAMERA: Validate this code!
-		// grab the point in screen space
-		FVector4 ScreenPoint = ViewProjectionMatrix.TransformFVector4( FVector4( InPoint, 1.0f) );
-
-		ScreenPoint.W = (ScreenPoint.W == 0) ? KINDA_SMALL_NUMBER : ScreenPoint.W;
-
-		float InvW = 1.0f / ScreenPoint.W;
-		OutPoint = FVector2D(ViewRect.Min.X + (0.5f + ScreenPoint.X * 0.5f * InvW) * ViewRect.Width(),
-				             ViewRect.Min.Y + (0.5f - ScreenPoint.Y * 0.5f * InvW) * ViewRect.Height());
-
-		if (ScreenPoint.W < 0.0f)
-		{
-			bInFrontOfCamera = false;
-			OutPoint = FVector2D(ViewRect.Max) - OutPoint;
-		}
+		return ULocalPlayer::GetPixelPoint(ProjectionData, InPoint, OutPoint, OptionalAllotedSize);
 	}
+
+	return false;
+}
+
+bool ULocalPlayer::GetPixelPoint(const FSceneViewProjectionData& ProjectionData, const FVector& InPoint, FVector2D& OutPoint, const FVector2D* OptionalAllotedSize)
+{
+	bool bInFrontOfCamera = true;
+
+	// if we passed in an optional size, use it for the viewrect
+	FIntRect ViewRect = ProjectionData.GetConstrainedViewRect();
+	if (OptionalAllotedSize != NULL)
+	{
+		ViewRect.Min = FIntPoint(0, 0);
+		ViewRect.Max = FIntPoint(OptionalAllotedSize->X, OptionalAllotedSize->Y);
+	}
+
+	// create the view projection matrix
+	const FMatrix ViewProjectionMatrix = ProjectionData.ComputeViewProjectionMatrix();
+
+	//@TODO: CAMERA: Validate this code!
+	// grab the point in screen space
+	FVector4 ScreenPoint = ViewProjectionMatrix.TransformFVector4(FVector4(InPoint, 1.0f));
+
+	ScreenPoint.W = (ScreenPoint.W == 0) ? KINDA_SMALL_NUMBER : ScreenPoint.W;
+
+	float InvW = 1.0f / ScreenPoint.W;
+	OutPoint = FVector2D(ViewRect.Min.X + (0.5f + ScreenPoint.X * 0.5f * InvW) * ViewRect.Width(),
+		ViewRect.Min.Y + (0.5f - ScreenPoint.Y * 0.5f * InvW) * ViewRect.Height());
+
+	if (ScreenPoint.W < 0.0f)
+	{
+		bInFrontOfCamera = false;
+		OutPoint = FVector2D(ViewRect.Max) - OutPoint;
+	}
+
 	return bInFrontOfCamera;
 }
 
@@ -1089,7 +1138,6 @@ bool ULocalPlayer::GetProjectionData(FViewport* Viewport, EStereoscopicPass Ster
 		// calculate the out rect
 		ProjectionData.SetViewRectangle(FIntRect(X, Y, X + SizeX, Y + SizeY));
 	}
-
 
 	return true;
 }
@@ -1204,7 +1252,7 @@ bool ULocalPlayer::HandleListSkelMeshesCommand( const TCHAR* Cmd, FOutputDevice&
 				check(SkeletalMeshComponent);
 				UWorld* World = SkeletalMeshComponent->GetWorld();
 				check(World);
-				float TimeSinceLastRender = World->GetTimeSeconds() - SkeletalMeshComponent->LastRenderTime;
+				float TimeSinceLastRender = World->GetTimeSeconds() - SkeletalMeshComponent->GetLastRenderTime();
 
 				UE_LOG(LogPlayerManagement, Log, TEXT("%s%2i  Component    : %s"),
 					(TimeSinceLastRender > 0.5) ? TEXT(" ") : TEXT("*"),

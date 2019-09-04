@@ -68,6 +68,12 @@ public:
 		Collector.AddReferencedObject(RenderTarget);
 		Collector.AddReferencedObject(DynamicEffect);
 	}
+
+	virtual FString GetReferencerName() const override
+	{
+		return TEXT("FRetainerWidgetRenderingResources");
+	}
+	
 public:
 	FWidgetRenderer* WidgetRenderer;
 	UTextureRenderTarget2D* RenderTarget;
@@ -88,8 +94,15 @@ SRetainerWidget::SRetainerWidget()
 
 SRetainerWidget::~SRetainerWidget()
 {
+	for ( int32 i = 0; i < NodePool.Num(); i++ )
+	{
+		delete NodePool[i];
+	}
+	NodePool.Empty();
+	
 	if( FSlateApplication::IsInitialized() )
 	{
+		FSlateApplicationBase::Get().OnGlobalInvalidate().RemoveAll( this );
 #if !UE_BUILD_SHIPPING
 		OnRetainerModeChangedDelegate.RemoveAll( this );
 #endif
@@ -117,6 +130,10 @@ void SRetainerWidget::UpdateWidgetRenderer()
 	FWidgetRenderer* WidgetRenderer = RenderingResources->WidgetRenderer;
 
 	WidgetRenderer->SetUseGammaCorrection(bWriteContentInGammaSpace);
+
+	// This will be handled by the main slate rendering pass
+	WidgetRenderer->SetApplyColorDeficiencyCorrection(false);
+
 	WidgetRenderer->SetIsPrepassNeeded(false);
 	WidgetRenderer->SetClearHitTestGrid(false);
 

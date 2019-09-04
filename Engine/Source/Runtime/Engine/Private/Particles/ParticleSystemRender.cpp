@@ -1111,7 +1111,7 @@ void FDynamicSpriteEmitterData::GetDynamicMeshElementsEmitter(const FParticleSys
 						const FMaterial* Material = MaterialResource ? MaterialResource->GetMaterial(FeatureLevel) : nullptr;
 
 						if (Material && 
-							(Material->GetBlendMode() == BLEND_Translucent || Material->GetBlendMode() == BLEND_AlphaComposite ||
+							(Material->GetBlendMode() == BLEND_Translucent || Material->GetBlendMode() == BLEND_AlphaComposite || Material->GetBlendMode() == BLEND_AlphaHoldout ||
 							((SourceData->SortMode == PSORTMODE_Age_OldestFirst) || (SourceData->SortMode == PSORTMODE_Age_NewestFirst)))
 							)
 						{
@@ -1534,7 +1534,8 @@ void FDynamicMeshEmitterData::Init( bool bInSelected,
 FParticleVertexFactoryBase* FDynamicMeshEmitterData::BuildVertexFactory(const FParticleSystemSceneProxy* InOwnerProxy)
 {
 	FParticleVertexFactoryBase* PoolVertexFactory = GParticleVertexFactoryPool.GetParticleVertexFactory(PVFT_Mesh, InOwnerProxy->GetScene().GetFeatureLevel(), this);
-	SetupVertexFactory((FMeshParticleVertexFactory*)PoolVertexFactory, StaticMesh->RenderData->LODResources[GetMeshLODIndexFromProxy(InOwnerProxy)]);
+	const uint32 LODIdx = GetMeshLODIndexFromProxy(InOwnerProxy);
+	SetupVertexFactory((FMeshParticleVertexFactory*)PoolVertexFactory, StaticMesh->RenderData->LODResources[LODIdx], LODIdx);
 	return PoolVertexFactory;
 }
 
@@ -1575,7 +1576,8 @@ public:
 
 uint32 FDynamicMeshEmitterData::GetMeshLODIndexFromProxy(const FParticleSystemSceneProxy *InOwnerProxy) const
 {
-	int FirstAvailableLOD = 0;
+	check(IsInRenderingThread());
+	int FirstAvailableLOD = StaticMesh->RenderData->CurrentFirstLODIdx;
 	for (; FirstAvailableLOD < StaticMesh->RenderData->LODResources.Num(); FirstAvailableLOD++)
 	{
 		if (StaticMesh->RenderData->LODResources[FirstAvailableLOD].GetNumVertices() > 0)
@@ -1603,7 +1605,8 @@ FParticleVertexFactoryBase *FDynamicMeshEmitterData::CreateVertexFactory(ERHIFea
 	FMeshParticleVertexFactory *VertexFactory = ConstructMeshParticleVertexFactory(InFeatureLevel);
 
 	VertexFactory->SetParticleFactoryType(PVFT_Mesh);
-	SetupVertexFactory(VertexFactory, StaticMesh->RenderData->LODResources[GetMeshLODIndexFromProxy(InOwnerProxy)]);
+	const uint32 LODIdx = GetMeshLODIndexFromProxy(InOwnerProxy);
+	SetupVertexFactory(VertexFactory, StaticMesh->RenderData->LODResources[LODIdx], LODIdx);
 
 	const int32 InstanceVertexStride = GetDynamicVertexStride(InFeatureLevel);
 	const int32 DynamicParameterVertexStride = bUsesDynamicParameter ? GetDynamicParameterVertexStride() : 0;
@@ -1813,7 +1816,12 @@ void FDynamicMeshEmitterData::GetDynamicMeshElementsEmitter(const FParticleSyste
 			}
 			check(StaticMesh != nullptr);
 
-			const FStaticMeshLODResources& LODModel = StaticMesh->RenderData->LODResources[GetMeshLODIndexFromProxy(Proxy)];
+			const uint32 ChosenLODIdx = GetMeshLODIndexFromProxy(Proxy);
+			const FStaticMeshLODResources& LODModel = StaticMesh->RenderData->LODResources[ChosenLODIdx];
+			if (ChosenLODIdx != MeshVertexFactory->GetLODIdx())
+			{
+				SetupVertexFactory(MeshVertexFactory, LODModel, ChosenLODIdx);
+			}
 
 			const bool bIsWireframe = AllowDebugViewmodes() && View->Family->EngineShowFlags.Wireframe;
 
@@ -1862,14 +1870,14 @@ void FDynamicMeshEmitterData::GetDynamicMeshElementsEmitter(const FParticleSyste
 
 					if (bIsWireframe)
 					{
-						if (LODModel.WireframeIndexBuffer.IsInitialized()
+						if (LODModel.AdditionalIndexBuffers && LODModel.AdditionalIndexBuffers->WireframeIndexBuffer.IsInitialized()
 							&& !(RHISupportsTessellation(ShaderPlatform) && Mesh.VertexFactory->GetType()->SupportsTessellationShaders()))
 						{
 							Mesh.Type = PT_LineList;
 							Mesh.MaterialRenderProxy = Proxy->GetDeselectedWireframeMatInst();
 							BatchElement.FirstIndex = 0;
-							BatchElement.IndexBuffer = &LODModel.WireframeIndexBuffer;
-							BatchElement.NumPrimitives = LODModel.WireframeIndexBuffer.GetNumIndices() / 2;
+							BatchElement.IndexBuffer = &LODModel.AdditionalIndexBuffers->WireframeIndexBuffer;
+							BatchElement.NumPrimitives = LODModel.AdditionalIndexBuffers->WireframeIndexBuffer.GetNumIndices() / 2;
 
 						}
 						else
@@ -2575,7 +2583,7 @@ void FDynamicMeshEmitterData::GetInstanceData(void* InstanceData, void* DynamicP
 	}
 }
 
-void FDynamicMeshEmitterData::SetupVertexFactory( FMeshParticleVertexFactory* InVertexFactory, FStaticMeshLODResources& LODResources) const
+void FDynamicMeshEmitterData::SetupVertexFactory( FMeshParticleVertexFactory* InVertexFactory, const FStaticMeshLODResources& LODResources, uint32 LODIdx) const
 {
 		FMeshParticleVertexFactory::FDataType Data;
 
@@ -2634,6 +2642,7 @@ void FDynamicMeshEmitterData::SetupVertexFactory( FMeshParticleVertexFactory* In
 
 		Data.bInitialized = true;
 		InVertexFactory->SetData(Data);
+		InVertexFactory->SetLODIdx((uint8)LODIdx);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -5487,8 +5496,8 @@ void FDynamicTrailsEmitterData::Init(bool bInSelected)
 {
 	bSelected = bInSelected;
 
-	check(SourcePointer->ActiveParticleCount < (16 * 1024));	// TTP #33330
-	check(SourcePointer->ParticleStride < (2 * 1024));			// TTP #33330
+	ensure(SourcePointer->ActiveParticleCount < (16 * 1024));	// TTP #33330
+	ensure(SourcePointer->ParticleStride < (2 * 1024));			// TTP #33330
 
 	MaterialResource = SourcePointer->MaterialInterface->GetRenderProxy();
 
@@ -7270,11 +7279,12 @@ void FParticleSystemSceneProxy::UpdateWorldSpacePrimitiveUniformBuffer() const
 			false,
 			UseSingleSampleShadowFromStationaryLights(),
 			GetScene().HasPrecomputedVolumetricLightmap_RenderThread(),
-			UseEditorDepthTest(),
+			DrawsVelocity(),
 			GetLightingChannelMask(),
 			0,
 			INDEX_NONE,
-			INDEX_NONE
+			INDEX_NONE,
+			AlwaysHasVelocity()
 			);
 		WorldSpacePrimitiveUniformBuffer.SetContents(PrimitiveUniformShaderParameters);
 		WorldSpacePrimitiveUniformBuffer.InitResource();

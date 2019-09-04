@@ -24,7 +24,9 @@ static bool IsSupportedPlatform(ITargetPlatform* Platform)
 
 void SDeviceOutputLog::Construct( const FArguments& InArgs )
 {
-	MessagesTextMarshaller = FOutputLogTextLayoutMarshaller::Create(TArray<TSharedPtr<FLogMessage>>(), &Filter);
+	bAutoSelectDevice = InArgs._AutoSelectDevice;
+
+	MessagesTextMarshaller = FOutputLogTextLayoutMarshaller::Create(TArray<TSharedPtr<FOutputLogMessage>>(), &Filter);
 
 	MessagesTextBox = SNew(SMultiLineEditableTextBox)
 		.Style(FEditorStyle::Get(), "Log.TextBox")
@@ -144,10 +146,38 @@ SDeviceOutputLog::~SDeviceOutputLog()
 			Platform->OnDeviceLost().RemoveAll(this);
 		}
 	}
+	CurrentDeviceOutputPtr.Reset();
 }
 
 void SDeviceOutputLog::Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime)
 {
+	// If auto-select is enabled request connecting to the default device and select it
+	if (!CurrentDevicePtr.IsValid() && bAutoSelectDevice)
+	{
+		int32 DefaultDeviceEntryIdx = DeviceList.IndexOfByPredicate([this](const TSharedPtr<FTargetDeviceEntry>& Other) {
+			ITargetDevicePtr PinnedPtr = Other->DeviceWeakPtr.Pin();
+			return PinnedPtr->IsDefault();
+		});
+
+		if (DeviceList.IsValidIndex(DefaultDeviceEntryIdx))
+		{
+			ITargetDevicePtr PinnedPtr = DeviceList[DefaultDeviceEntryIdx]->DeviceWeakPtr.Pin();
+			PinnedPtr->Connect();
+			OnDeviceSelectionChanged(DeviceList[DefaultDeviceEntryIdx]);
+		}
+	}
+
+	// If the device is selected but was not yet connected then the output router would not have been registered
+	if (CurrentDevicePtr.IsValid() && !CurrentDeviceOutputPtr.IsValid())
+	{
+		ITargetDevicePtr PinnedPtr = CurrentDevicePtr->DeviceWeakPtr.Pin();
+		if (PinnedPtr.IsValid() && PinnedPtr->IsConnected())
+		{
+			// It is now connected so register the output router
+			CurrentDeviceOutputPtr = PinnedPtr->CreateDeviceOutputRouter(this);
+		}
+	}
+
 	FScopeLock ScopeLock(&BufferedLinesSynch);
 	if (BufferedLines.Num() > 0)
 	{
@@ -239,6 +269,16 @@ void SDeviceOutputLog::HandleTargetPlatformDeviceDiscovered(ITargetDeviceRef Dis
 	{
 		AddDeviceEntry(DiscoveredDevice);
 	}
+}
+
+ITargetDevicePtr SDeviceOutputLog::GetSelectedTargetDevice() const
+{
+	ITargetDevicePtr PinnedPtr = nullptr;
+	if (CurrentDevicePtr.IsValid())
+	{
+		PinnedPtr = CurrentDevicePtr->DeviceWeakPtr.Pin();
+	}
+	return PinnedPtr;
 }
 
 void SDeviceOutputLog::AddDeviceEntry(ITargetDeviceRef TargetDevice)

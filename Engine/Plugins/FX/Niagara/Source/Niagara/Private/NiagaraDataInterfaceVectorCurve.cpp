@@ -41,17 +41,19 @@ void UNiagaraDataInterfaceVectorCurve::PostLoad()
 	{
 		UpdateLUT();
 	}
-#if !UE_BUILD_SHIPPING
 	else
 	{
+#if !UE_BUILD_SHIPPING
 		TArray<float> OldLUT = ShaderLUT;
+#endif
 		UpdateLUT();
+#if !UE_BUILD_SHIPPING
 		if (!CompareLUTS(OldLUT))
 		{
 			UE_LOG(LogNiagara, Log, TEXT("PostLoad LUT generation is out of sync. Please investigate. %s"), *GetPathName());
 		}
-	}
 #endif
+	}
 }
 
 void UNiagaraDataInterfaceVectorCurve::UpdateLUT()
@@ -85,7 +87,7 @@ void UNiagaraDataInterfaceVectorCurve::UpdateLUT()
 		ShaderLUT.Add(C.Y);
 		ShaderLUT.Add(C.Z);
 	}
-	GPUBufferDirty = true;
+	Super::PushToRenderThread();
 }
 
 bool UNiagaraDataInterfaceVectorCurve::CopyToInternal(UNiagaraDataInterface* Destination) const 

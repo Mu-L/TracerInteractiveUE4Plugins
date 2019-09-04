@@ -8,6 +8,7 @@
 #include "ListView.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSimpleListItemEventDynamic, UObject*, Item);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnListEntryInitializedDynamic, UObject*, Item, UUserWidget*, Widget);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnListItemSelectionChangedDynamic, UObject*, Item, bool, bIsSelected);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnItemIsHoveredChangedDynamic, UObject*, Item, bool, bIsHovered);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnListItemScrolledIntoViewDynamic, UObject*, Item, UUserWidget*, Widget);
@@ -19,7 +20,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnListItemScrolledIntoViewDynamic,
  * The list itself is based on a list of n items, but only creates as many entry widgets as can fit on screen.
  * For example, a scrolling ListView of 200 items with 5 currently visible will only have created 5 entry widgets.
  *
- * To make a widget usable an an entry in a ListView, it must inherit from the IUserObjectListEntry interface.
+ * To make a widget usable as an entry in a ListView, it must inherit from the IUserObjectListEntry interface.
  */
 UCLASS(meta = (EntryInterface = UserObjectListEntry))
 class UMG_API UListView : public UListViewBase, public ITypedUMGListView<UObject*>
@@ -39,6 +40,9 @@ public:
 	{
 		ClearListItems();
 		ListItems.Append(InListItems);
+
+		OnItemsChanged(ListItems, TArray<UObject*>());
+
 		RequestRefresh();
 	}
 
@@ -68,6 +72,10 @@ public:
 	/** Adds an the item to the list */
 	UFUNCTION(BlueprintCallable, Category = ListView)
 	void AddItem(UObject* Item);
+
+	/** Removes an the item from the list */
+	UFUNCTION(BlueprintCallable, Category = ListView)
+	void RemoveItem(UObject* Item);
 
 	/** Returns the item at the given index */
 	UFUNCTION(BlueprintCallable, Category = ListView)
@@ -106,6 +114,8 @@ public:
 	void NavigateToIndex(int32 Index);
 
 protected:
+	virtual void OnItemsChanged(const TArray<UObject*>& AddedItems, const TArray<UObject*>& RemovedItems);
+
 	virtual TSharedRef<STableViewBase> RebuildListWidget() override;
 	virtual void HandleListEntryHovered(UUserWidget& EntryWidget) override;
 	virtual void HandleListEntryUnhovered(UUserWidget& EntryWidget) override;
@@ -127,6 +137,10 @@ protected:
 	TSharedRef<ListViewT<UObject*>> ConstructListView()
 	{
 		MyListView = ITypedUMGListView<UObject*>::ConstructListView<ListViewT>(this, ListItems, bIsFocusable, SelectionMode, bClearSelectionOnClick, ConsumeMouseWheel, bReturnFocusToSelection);
+		if (MyListView)
+		{
+			MyListView->SetOnEntryInitialized(SListView<UObject*>::FOnEntryInitialized::CreateUObject(this, &ThisClass::HandleOnEntryInitializedInternal));
+		}
 		return StaticCastSharedRef<ListViewT<UObject*>>(MyListView.ToSharedRef());
 	}
 
@@ -201,7 +215,13 @@ private:
 	UFUNCTION(BlueprintCallable, Category = ListView, meta = (DisplayName = "Get Selected Item", AllowPrivateAccess = true))
 	UObject* BP_GetSelectedItem() const;
 
+	void HandleOnEntryInitializedInternal(UObject* Item, const TSharedRef<ITableRow>& TableRow);
+
 private:
+	/** Called when a row widget is generated for a list item */
+	UPROPERTY(BlueprintAssignable, Category = Events, meta = (DisplayName = "On Entry Initialized"))
+	FOnListEntryInitializedDynamic BP_OnEntryInitialized;
+
 	UPROPERTY(BlueprintAssignable, Category = Events, meta = (DisplayName = "On Item Clicked"))
 	FSimpleListItemEventDynamic BP_OnItemClicked;
 

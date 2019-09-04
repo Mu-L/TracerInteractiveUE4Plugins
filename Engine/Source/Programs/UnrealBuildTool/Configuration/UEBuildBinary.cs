@@ -31,6 +31,16 @@ namespace UnrealBuildTool
 		/// A static library (.lib or .a)
 		/// </summary>
 		StaticLibrary,
+
+		/// <summary>
+		/// Object files
+		/// </summary>
+		Object,
+
+		/// <summary>
+		/// Precompiled header
+		/// </summary>
+		PrecompiledHeader,
 	}
 
 	/// <summary>
@@ -116,6 +126,7 @@ namespace UnrealBuildTool
 		/// <param name="OutputFilePaths"></param>
 		/// <param name="IntermediateDirectory"></param>
 		/// <param name="bAllowExports"></param>
+		/// <param name="bBuildAdditionalConsoleApp"></param>
 		/// <param name="PrimaryModule"></param>
 		/// <param name="bUsePrecompiled"></param>
 		public UEBuildBinary(
@@ -123,6 +134,7 @@ namespace UnrealBuildTool
 				IEnumerable<FileReference> OutputFilePaths,
 				DirectoryReference IntermediateDirectory,
 				bool bAllowExports,
+				bool bBuildAdditionalConsoleApp,
 				UEBuildModuleCPP PrimaryModule,
 				bool bUsePrecompiled
 			)
@@ -132,6 +144,7 @@ namespace UnrealBuildTool
 			this.OutputFilePaths = new List<FileReference>(OutputFilePaths);
 			this.IntermediateDirectory = IntermediateDirectory;
 			this.bAllowExports = bAllowExports;
+			this.bBuildAdditionalConsoleApp = bBuildAdditionalConsoleApp;
 			this.PrimaryModule = PrimaryModule;
 			this.bUsePrecompiled = bUsePrecompiled;
 			
@@ -190,7 +203,7 @@ namespace UnrealBuildTool
 				// Mark the link environment as cross-referenced.
 				BinaryLinkEnvironment.bIsCrossReferenced = true;
 
-				if (BinaryLinkEnvironment.Platform != CppPlatform.Mac && BinaryLinkEnvironment.Platform != CppPlatform.Linux)
+				if (BinaryLinkEnvironment.Platform != UnrealTargetPlatform.Mac && BinaryLinkEnvironment.Platform != UnrealTargetPlatform.Linux)
 				{
 					// Create the import library.
 					OutputFiles.AddRange(ToolChain.LinkAllFiles(BinaryLinkEnvironment, true, Makefile.Actions));
@@ -310,7 +323,7 @@ namespace UnrealBuildTool
 				foreach (FileReference OutputFilePath in OutputFilePaths)
 				{
 					FileReference LibraryFileName;
-					if (Type == UEBuildBinaryType.StaticLibrary || DependentLinkEnvironment.Platform == CppPlatform.Mac || DependentLinkEnvironment.Platform == CppPlatform.Linux)
+					if (Type == UEBuildBinaryType.StaticLibrary || DependentLinkEnvironment.Platform == UnrealTargetPlatform.Mac || DependentLinkEnvironment.Platform == UnrealTargetPlatform.Linux)
 					{
 						LibraryFileName = OutputFilePath;
 					}
@@ -328,12 +341,12 @@ namespace UnrealBuildTool
 		/// Called to allow the binary to find game modules.
 		/// </summary>
 		/// <returns>The OnlyModule if found, null if not</returns>
-		public List<UEBuildModule> FindGameModules()
+		public List<UEBuildModule> FindHotReloadModules()
 		{
 			List<UEBuildModule> GameModules = new List<UEBuildModule>();
 			foreach (UEBuildModule Module in Modules)
 			{
-				if (!UnrealBuildTool.IsUnderAnEngineDirectory(Module.ModuleDirectory))
+				if(Module.Rules.Context.bCanHotReload)
 				{
 					GameModules.Add(Module);
 				}
@@ -527,7 +540,9 @@ namespace UnrealBuildTool
 			{
 				if (!String.IsNullOrEmpty(DebugExtension) && ToolChain.ShouldAddDebugFileToReceipt(OutputFile, OutputType) && bCreateDebugInfo)
 				{
-					BuildProducts.Add(OutputFile.ChangeExtension(DebugExtension), BuildProductType.SymbolFile);
+					// @todo this could be cleaned up if we replaced Platform.GetDebugExtensions() with ToolChain.GetDebugFiles(OutputFile)
+					// would need care in MacToolchain tho, so too risky for now
+					BuildProducts.Add(ToolChain.GetDebugFile(OutputFile, DebugExtension), BuildProductType.SymbolFile);
 				}
 			}
 		}
@@ -683,6 +698,12 @@ namespace UnrealBuildTool
 					Log.TraceVerbose("Compile module: " + Module.Name);
 					LinkInputFiles = Module.Compile(Target, ToolChain, BinaryCompileEnvironment, WorkingSet, Makefile);
 
+					// Save the module outputs. In monolithic builds, this is just the object files.
+					if (Target.LinkType == TargetLinkType.Monolithic)
+					{
+						Makefile.ModuleNameToOutputItems[Module.Name] = LinkInputFiles.ToArray();
+					}
+
 					// NOTE: Because of 'Shared PCHs', in monolithic builds the same PCH file may appear as a link input
 					// multiple times for a single binary.  We'll check for that here, and only add it once.  This avoids
 					// a linker warning about redundant .obj files. 
@@ -733,7 +754,7 @@ namespace UnrealBuildTool
 			BinaryLinkEnvironment.bIsBuildingLibrary = IsBuildingLibrary(Type);
 
 			// If we don't have any resource file, use the default or compile a custom one for this module
-			if(BinaryLinkEnvironment.Platform == CppPlatform.Win32 || BinaryLinkEnvironment.Platform == CppPlatform.Win64)
+			if(BinaryLinkEnvironment.Platform == UnrealTargetPlatform.Win32 || BinaryLinkEnvironment.Platform == UnrealTargetPlatform.Win64)
 			{
 				// Figure out if this binary has any custom resource files. Hacky check to ignore the resource file in the Launch module, since it contains dialogs that the engine needs and always needs to be included.
 				FileItem[] CustomResourceFiles = BinaryLinkEnvironment.InputFiles.Where(x => x.Location.HasExtension(".res") && !x.Location.FullName.EndsWith("\\Launch\\PCLaunch.rc.res", StringComparison.OrdinalIgnoreCase)).ToArray();

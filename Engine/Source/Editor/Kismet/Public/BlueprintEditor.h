@@ -43,7 +43,31 @@ class UEdGraph;
 class UEdGraphNode;
 class UUserDefinedEnum;
 class UUserDefinedStruct;
+class UBlueprintEditorOptions;
 struct Rect;
+
+/* Enums to use when grouping the blueprint members in the list panel. The order here will determine the order in the list */
+namespace NodeSectionID
+{
+	enum Type
+	{
+		NONE = 0,
+		GRAPH,					// Graph
+		ANIMGRAPH,				// Anim Graph
+		ANIMLAYER,				// Anim Layer
+		FUNCTION,				// Functions
+		FUNCTION_OVERRIDABLE,	// Overridable functions
+		INTERFACE,				// Interface
+		MACRO,					// Macros
+		VARIABLE,				// Variables
+		COMPONENT,				// Components
+		DELEGATE,				// Delegate/Event
+		USER_ENUM,				// User defined enums
+		LOCAL_VARIABLE,			// Local variables
+		USER_STRUCT,			// User defined structs
+		USER_SORTED				// User sorted categories
+	};
+};
 
 /////////////////////////////////////////////////////
 // FCustomDebugObjectEntry - Used to pass a custom debug object override around
@@ -166,7 +190,6 @@ public:
 public:
 	//~ Begin FAssetEditorToolkit Interface
 	virtual bool OnRequestClose() override;
-	virtual void ToolkitBroughtToFront() override;
 	// End of FAssetEditorToolkit 
 
 	//~ Begin IToolkit Interface
@@ -182,10 +205,13 @@ public:
 
 	//~ Begin FGCObject Interface
 	virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
+	virtual FString GetReferencerName() const override;
 	//~ End FGCObject Interface
 
 	//~ Begin IBlueprintEditor Interface
 	virtual void RefreshEditors(ERefreshBlueprintEditorReason::Type Reason = ERefreshBlueprintEditorReason::UnknownReason) override;
+	virtual void RefreshMyBlueprint();
+	virtual void RefreshInspector();
 	virtual void AddToSelection(UEdGraphNode* InNode) override;
 	virtual void JumpToHyperlink(const UObject* ObjectReference, bool bRequestRename = false) override;
 	virtual void JumpToPin(const class UEdGraphPin* Pin) override;
@@ -322,7 +348,7 @@ public:
 	bool InEditingMode() const;
 
 	/** Returns true if able to compile */
-	bool IsCompilingEnabled() const;
+	virtual bool IsCompilingEnabled() const;
 
 	/** Returns true if the parent class is also a Blueprint */
 	bool IsParentClassOfObjectABlueprint(const UBlueprint* Blueprint) const;
@@ -450,7 +476,7 @@ public:
 	FReply OnAddNewVariable_OnClick() { OnAddNewVariable(); return FReply::Handled(); }
 
 	/** Checks if adding a local variable is allowed in the focused graph */
-	bool CanAddNewLocalVariable() const;
+	virtual bool CanAddNewLocalVariable() const;
 
 	/** Adds a new local variable to the focused function graph */
 	void OnAddNewLocalVariable();
@@ -461,7 +487,7 @@ public:
 		CGT_NewVariable,
 		CGT_NewFunctionGraph,
 		CGT_NewMacroGraph,
-		CGT_NewAnimationGraph,
+		CGT_NewAnimationLayer,
 		CGT_NewEventGraph,
 		CGT_NewLocalVariable
 	};
@@ -475,7 +501,8 @@ public:
 	bool AddNewDelegateIsVisible() const;
 
 	// Called to see if the new document menu items is visible for this type
-	bool NewDocument_IsVisibleForType(ECreatedDocumentType GraphType) const;
+	virtual bool IsSectionVisible(NodeSectionID::Type InSectionID) const { return true; }
+	virtual bool NewDocument_IsVisibleForType(ECreatedDocumentType GraphType) const;
 	EVisibility NewDocument_GetVisibilityForType(ECreatedDocumentType GraphType) const
 	{
 		return NewDocument_IsVisibleForType(GraphType) ? EVisibility::Visible : EVisibility::Collapsed;
@@ -554,6 +581,12 @@ public:
 
 	/** Adds to a list of custom objects for debugging beyond what will automatically be found/used */
 	virtual void GetCustomDebugObjects(TArray<FCustomDebugObject>& DebugList) const { }
+
+	/** If returns true only the custom debug list will be used */
+	virtual bool OnlyShowCustomDebugObjects() const { return false; }
+
+	/** Can be overloaded to customize the labels in the debug filter */
+	virtual FString GetCustomDebugObjectLabel(UObject* ObjectBeingDebugged) const { return FString(); }
 
 	/** Called when a node's title is committed for a rename */
 	void OnNodeTitleCommitted(const FText& NewText, ETextCommit::Type CommitInfo, UEdGraphNode* NodeBeingChanged);
@@ -797,7 +830,7 @@ protected:
 	void SelectAllNodes();
 	bool CanSelectAllNodes() const;
 
-	void DeleteSelectedNodes();
+	virtual void DeleteSelectedNodes();
 	bool CanDeleteNodes() const;
 
 	void DeleteSelectedDuplicatableNodes();
@@ -1057,6 +1090,19 @@ private:
 	/** Returns the appropriate check box state representing whether or not the selected nodes are enabled */
 	ECheckBoxState GetEnabledCheckBoxStateForSelectedNodes();
 
+	/** Configuration class used to store editor settings across sessions. */
+	UBlueprintEditorOptions* EditorOptions;
+
+	/**
+	 * Load editor settings from disk (docking state, window pos/size, option state, etc).
+	 */
+	virtual void LoadEditorSettings();
+
+	/**
+	 * Saves editor settings to disk (docking state, window pos/size, option state, etc).
+	 */
+	virtual void SaveEditorSettings();
+
 	/** Attempt to match the given enabled state for currently-selected nodes */
 	ECheckBoxState CheckEnabledStateForSelectedNodes(ENodeEnabledState CheckState);
 
@@ -1065,6 +1111,9 @@ private:
 
 public://@TODO
 	TSharedPtr<FDocumentTracker> DocumentManager;
+	
+	/** Update all nodes' unrelated states when the graph has changed */
+	void UpdateNodesUnrelatedStatesAfterGraphChange();
 
 protected:
 
@@ -1165,6 +1214,35 @@ protected:
 
 	/** The preview actor representing the current preview */
 	mutable TWeakObjectPtr<AActor> PreviewActorPtr;
+
+	/** If true, fade out nodes which are unrelated to the selected nodes automatically. */
+	bool bHideUnrelatedNodes;
+
+	/** Lock the current fade state of each node */
+	bool bLockNodeFadeState;
+
+	/** If a regular node (not a comment node) has been selected */
+	bool bSelectRegularNode;
+
+	/** Focus nodes which are related to the selected nodes */
+	void ResetAllNodesUnrelatedStates();
+	void CollectExecUpstreamNodes(UEdGraphNode* CurrentNode, TArray<UEdGraphNode*>& CollectedNodes);
+	void CollectExecDownstreamNodes(UEdGraphNode* CurrentNode, TArray<UEdGraphNode*>& CollectedNodes);
+	void CollectPureDownstreamNodes(UEdGraphNode* CurrentNode, TArray<UEdGraphNode*>& CollectedNodes);
+	void CollectPureUpstreamNodes(UEdGraphNode* CurrentNode, TArray<UEdGraphNode*>& CollectedNodes);
+	void HideUnrelatedNodes();
+
+public:
+	/** Make nodes which are unrelated to the selected nodes fade out */
+	void ToggleHideUnrelatedNodes();
+	bool IsToggleHideUnrelatedNodesChecked() const;
+
+	/** Make a drop down menu to control the opacity of unrelated nodes */
+	TSharedRef<SWidget> MakeHideUnrelatedNodesOptionsMenu();
+	TOptional<float> HandleUnrelatedNodesOpacityBoxValue() const;
+	void HandleUnrelatedNodesOpacityBoxChanged(float NewOpacity);
+	void OnLockNodeStateCheckStateChanged(ECheckBoxState NewCheckedState);
+
 
 public:
 	//@TODO: To be moved/merged

@@ -68,6 +68,15 @@ bool FDetailLayoutCustomization::HasExternalPropertyRow() const
 	return HasPropertyNode() && PropertyRow->HasExternalProperty();
 }
 
+bool FDetailLayoutCustomization::IsHidden() const
+{
+	return !IsValidCustomization()
+		|| (HasCustomWidget() && WidgetDecl->VisibilityAttr.Get() != EVisibility::Visible)
+		|| (HasPropertyNode() && PropertyRow->GetPropertyVisibility() != EVisibility::Visible);
+		/** Partial revert of CL 7273612 (fix for UE-76064) that caused a bunch of regressions in the details panel (UE-77377,UE-77376,UE-77451). */
+		//|| (HasCustomBuilder() && CustomBuilderRow->AreChildCustomizationsHidden());
+}
+
 TSharedPtr<FPropertyNode> FDetailLayoutCustomization::GetPropertyNode() const
 {
 	return PropertyRow.IsValid() ? PropertyRow->GetPropertyNode() : nullptr;
@@ -138,6 +147,12 @@ FDetailWidgetRow& FDetailCategoryImpl::AddCustomRow(const FText& FilterString, b
 	FDetailLayoutCustomization NewCustomization;
 	NewCustomization.WidgetDecl = MakeShareable(new FDetailWidgetRow);
 	NewCustomization.WidgetDecl->FilterString(FilterString);
+
+	IDetailsViewPrivate* DetailsView = GetDetailsView();
+	if (DetailsView && DetailsView->IsCustomRowVisibilityFiltered() && !GetDetailsView()->IsCustomRowVisible(FName(*FilterString.ToString()), FName(*DisplayName.ToString())))
+	{
+		NewCustomization.WidgetDecl->Visibility(TAttribute<EVisibility>(EVisibility::Collapsed));
+	}
 
 	AddCustomLayout(NewCustomization, bForAdvanced);
 
@@ -311,7 +326,25 @@ IDetailPropertyRow& FDetailCategoryImpl::AddProperty(TSharedPtr<IPropertyHandle>
 
 IDetailPropertyRow* FDetailCategoryImpl::AddExternalObjects(const TArray<UObject*>& Objects, EPropertyLocation::Type Location /*= EPropertyLocation::Default*/)
 {
-	return AddExternalObjectProperty(Objects, NAME_None, Location);
+	FDetailLayoutCustomization NewCustomization;
+
+	FDetailPropertyRow::MakeExternalPropertyRowCustomization(Objects, NAME_None, AsShared(), NewCustomization, true);
+
+	TSharedPtr<FDetailPropertyRow> NewRow = NewCustomization.PropertyRow;
+
+	if (NewRow.IsValid())
+	{
+		bool bForAdvanced = false;
+		if (Location == EPropertyLocation::Advanced)
+		{
+			// Force advanced
+			bForAdvanced = true;
+		}
+
+		AddCustomLayout(NewCustomization, bForAdvanced);
+	}
+
+	return NewRow.Get();
 }
 
 IDetailPropertyRow* FDetailCategoryImpl::AddExternalObjectProperty(const TArray<UObject*>& Objects, FName PropertyName, EPropertyLocation::Type Location)

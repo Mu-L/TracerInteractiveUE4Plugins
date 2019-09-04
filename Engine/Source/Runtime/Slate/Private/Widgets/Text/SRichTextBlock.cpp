@@ -36,10 +36,10 @@ void SRichTextBlock::Construct( const FArguments& InArgs )
 		TSharedPtr<IRichTextMarkupParser> Parser = InArgs._Parser;
 		if ( !Parser.IsValid() )
 		{
-			Parser = FDefaultRichTextMarkupParser::Create();
+			Parser = FDefaultRichTextMarkupParser::GetStaticInstance();
 		}
 
-		TSharedPtr<FRichTextLayoutMarshaller> Marshaller = InArgs._Marshaller;
+		Marshaller = InArgs._Marshaller;
 		if (!Marshaller.IsValid())
 		{
 			Marshaller = FRichTextLayoutMarshaller::Create(Parser, nullptr, InArgs._Decorators, InArgs._DecoratorStyleSet);
@@ -59,13 +59,27 @@ void SRichTextBlock::Construct( const FArguments& InArgs )
 
 int32 SRichTextBlock::OnPaint( const FPaintArgs& Args, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled ) const
 {
+	const FVector2D LastDesiredSize = TextLayoutCache->GetDesiredSize();
+
+	// If we're performing layout caching, it's possible nobody ever called GetDesiredSize(),
+	// which for textblocks is required to be called, since CDS is where it actually generates
+	// a lot for the text layout.
+	if (GSlateLayoutCaching)
+	{
+		GetDesiredSize();
+	}
+
 	// OnPaint will also update the text layout cache if required
 	LayerId = TextLayoutCache->OnPaint(Args, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, ShouldBeEnabled(bParentEnabled));
+
+	const FVector2D NewDesiredSize = TextLayoutCache->GetDesiredSize();
 
 	// HACK: Due to the nature of wrapping and layout, we may have been arranged in a different box than what we were cached with.  Which
 	// might update wrapping, so make sure we always set the desired size to the current size of the text layout, which may have changed
 	// during paint.
-	if (TextLayoutCache->GetDesiredSize().Y > GetDesiredSize().Y)
+	bool bCanWrap = WrapTextAt.Get() > 0 || AutoWrapText.Get();
+
+	if (bCanWrap && !NewDesiredSize.Equals(LastDesiredSize))
 	{
 		const_cast<SRichTextBlock*>(this)->Invalidate(EInvalidateWidget::Layout);
 	}
@@ -164,6 +178,15 @@ void SRichTextBlock::SetMinDesiredWidth(const TAttribute<float>& InMinDesiredWid
 {
 	MinDesiredWidth = InMinDesiredWidth;
 	Invalidate(EInvalidateWidget::LayoutAndVolatility);
+}
+
+void SRichTextBlock::SetDecoratorStyleSet(const ISlateStyle* NewDecoratorStyleSet)
+{
+	if (Marshaller.IsValid())
+	{
+		Marshaller->SetDecoratorStyleSet(NewDecoratorStyleSet);
+		Refresh();
+	}
 }
 
 void SRichTextBlock::Refresh()

@@ -8,9 +8,11 @@
 #include "EngineGlobals.h"
 #include "ScenePrivate.h"
 #include "RendererModule.h"
+#include "PostProcess/PostProcessing.h"
 #include "PostProcess/SceneFilterRendering.h"
 #include "PostProcess/PostProcessCombineLUTs.h"
 #include "PostProcess/PostProcessMobile.h"
+#include "PostProcess/PostProcessing.h"
 #include "ClearQuad.h"
 #include "PipelineStateCache.h"
 
@@ -60,6 +62,7 @@ enum class FTonemapperOutputDevice
 	ACES1000nitScRGB,
 	ACES2000nitScRGB,
 	LinearEXR,
+	LinearNoToneCurve,
 
 	MAX
 };
@@ -75,7 +78,8 @@ static TAutoConsoleVariable<int32> CVarDisplayOutputDevice(
 	TEXT("4: ACES 2000 nit ST-2084 (Dolby PQ) (HDR)\n")
 	TEXT("5: ACES 1000 nit ScRGB (HDR)\n")
 	TEXT("6: ACES 2000 nit ScRGB (HDR)\n")
-	TEXT("7: Linear EXR (HDR)\n"),
+	TEXT("7: Linear EXR (HDR)\n")
+	TEXT("8: Linear final color, no tone curve (HDR)\n"),
 	ECVF_Scalability | ECVF_RenderThreadSafe);
 	
 static TAutoConsoleVariable<int32> CVarHDROutputEnabled(
@@ -122,6 +126,8 @@ class FTonemapperGrainIntensityDim : SHADER_PERMUTATION_BOOL("USE_GRAIN_INTENSIT
 class FTonemapperVignetteDim       : SHADER_PERMUTATION_BOOL("USE_VIGNETTE");
 class FTonemapperSharpenDim        : SHADER_PERMUTATION_BOOL("USE_SHARPEN");
 class FTonemapperGrainJitterDim    : SHADER_PERMUTATION_BOOL("USE_GRAIN_JITTER");
+class FTonemapperSwitchAxis        : SHADER_PERMUTATION_BOOL("NEEDTOSWITCHVERTICLEAXIS");
+class FTonemapperMsaaDim		   : SHADER_PERMUTATION_BOOL("USE_MSAA");
 
 using FCommonDomain = TShaderPermutationDomain<
 	FTonemapperBloomDim,
@@ -129,10 +135,24 @@ using FCommonDomain = TShaderPermutationDomain<
 	FTonemapperGrainIntensityDim,
 	FTonemapperVignetteDim,
 	FTonemapperSharpenDim,
-	FTonemapperGrainJitterDim>;
+	FTonemapperGrainJitterDim,
+	FTonemapperSwitchAxis,
+	FTonemapperMsaaDim>;
 
-FORCEINLINE bool ShouldCompileCommonPermutation(const FCommonDomain& PermutationVector)
+FORCEINLINE_DEBUGGABLE bool ShouldCompileCommonPermutation(const FGlobalShaderPermutationParameters& Parameters, const FCommonDomain& PermutationVector)
 {
+	// Prevent switch axis permutation on platforms that dont require it.
+	if (PermutationVector.Get<FTonemapperSwitchAxis>() && !RHINeedsToSwitchVerticalAxis(Parameters.Platform))
+	{
+		return false;
+	}
+
+	// MSAA pre-resolve step only used on iOS atm
+	if (PermutationVector.Get<FTonemapperMsaaDim>() && !IsMetalMobilePlatform(Parameters.Platform))
+	{
+		return false;
+	}
+
 	// If GammaOnly, don't compile any other dimmension == true.
 	if (PermutationVector.Get<FTonemapperGammaOnlyDim>())
 	{
@@ -140,13 +160,14 @@ FORCEINLINE bool ShouldCompileCommonPermutation(const FCommonDomain& Permutation
 			!PermutationVector.Get<FTonemapperGrainIntensityDim>() &&
 			!PermutationVector.Get<FTonemapperVignetteDim>() &&
 			!PermutationVector.Get<FTonemapperSharpenDim>() &&
-			!PermutationVector.Get<FTonemapperGrainJitterDim>();
+			!PermutationVector.Get<FTonemapperGrainJitterDim>() &&
+			!PermutationVector.Get<FTonemapperMsaaDim>();
 	}
 	return true;
 }
 
 // Common conversion of engine settings into.
-FCommonDomain BuildCommonPermutationDomain(const FViewInfo& View, bool bGammaOnly)
+FCommonDomain BuildCommonPermutationDomain(const FViewInfo& View, bool bGammaOnly, bool bSwitchVerticalAxis)
 {
 	const FSceneViewFamily* Family = View.Family;
 
@@ -166,7 +187,16 @@ FCommonDomain BuildCommonPermutationDomain(const FViewInfo& View, bool bGammaOnl
 	PermutationVector.Set<FTonemapperVignetteDim>(Settings.VignetteIntensity > 0.0f);
 	PermutationVector.Set<FTonemapperBloomDim>(Settings.BloomIntensity > 0.0);
 	PermutationVector.Set<FTonemapperGrainJitterDim>(Settings.GrainJitter > 0.0f);
-	PermutationVector.Set<FTonemapperSharpenDim>(CVarTonemapperSharpen.GetValueOnRenderThread() > 0.0f);
+	PermutationVector.Set<FTonemapperSharpenDim>(CVarTonemapperSharpen.GetValueOnRenderThread() > 0.0f);	
+	PermutationVector.Set<FTonemapperSwitchAxis>(bSwitchVerticalAxis);
+
+	if (IsMetalMobilePlatform(View.GetShaderPlatform()))
+	{
+		static const auto CVarMobileMSAA = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.MobileMSAA"));
+		bool bMSAA = (CVarMobileMSAA ? CVarMobileMSAA->GetValueOnAnyThread() > 1 : false);
+
+		PermutationVector.Set<FTonemapperMsaaDim>(bMSAA);
+	}
 
 	return PermutationVector;
 }
@@ -183,7 +213,7 @@ using FDesktopDomain = TShaderPermutationDomain<
 	FTonemapperGrainQuantizationDim,
 	FTonemapperOutputDeviceDim>;
 
-FDesktopDomain RemapPermutation(FDesktopDomain PermutationVector)
+FDesktopDomain RemapPermutation(FDesktopDomain PermutationVector, ERHIFeatureLevel::Type FeatureLevel)
 {
 	FCommonDomain CommonPermutationVector = PermutationVector.Get<FCommonDomain>();
 
@@ -210,23 +240,33 @@ FDesktopDomain RemapPermutation(FDesktopDomain PermutationVector)
 	// You most likely need Bloom anyway.
 	CommonPermutationVector.Set<FTonemapperBloomDim>(true);
 
-	// Grain quantization is pretty important anyway.
-	PermutationVector.Set<FTonemapperGrainQuantizationDim>(true);
-
+	// Disable grain quantization only for LinearNoToneCurve output device
+	if (PermutationVector.Get<FTonemapperOutputDeviceDim>() == FTonemapperOutputDevice::LinearNoToneCurve)
+		PermutationVector.Set<FTonemapperGrainQuantizationDim>(false);
+	else
+		PermutationVector.Set<FTonemapperGrainQuantizationDim>(true);
+	
+	// Mobile supports only sRGB and LinearNoToneCurve output
+	if (FeatureLevel <= ERHIFeatureLevel::ES3_1 && 
+		PermutationVector.Get<FTonemapperOutputDeviceDim>() != FTonemapperOutputDevice::LinearNoToneCurve)
+	{
+		PermutationVector.Set<FTonemapperOutputDeviceDim>(FTonemapperOutputDevice::sRGB);
+	}
+	
 	PermutationVector.Set<FCommonDomain>(CommonPermutationVector);
 	return PermutationVector;
 }
 
-bool ShouldCompileDesktopPermutation(FDesktopDomain PermutationVector)
+bool ShouldCompileDesktopPermutation(const FGlobalShaderPermutationParameters& Parameters, FDesktopDomain PermutationVector)
 {
 	auto CommonPermutationVector = PermutationVector.Get<FCommonDomain>();
 
-	if (RemapPermutation(PermutationVector) != PermutationVector)
+	if (RemapPermutation(PermutationVector, GetMaxSupportedFeatureLevel(Parameters.Platform)) != PermutationVector)
 	{
 		return false;
 	}
 
-	if (!ShouldCompileCommonPermutation(CommonPermutationVector))
+	if (!ShouldCompileCommonPermutation(Parameters, CommonPermutationVector))
 	{
 		return false;
 	}
@@ -236,7 +276,6 @@ bool ShouldCompileDesktopPermutation(FDesktopDomain PermutationVector)
 		return !PermutationVector.Get<FTonemapperColorFringeDim>() &&
 			!PermutationVector.Get<FTonemapperGrainQuantizationDim>();
 	}
-
 	return true;
 }
 
@@ -677,9 +716,8 @@ public:
 };
 
 
-// Vertex Shader permutations based on bool AutoExposure.
-IMPLEMENT_SHADER_TYPE(template<>, TPostProcessTonemapVS<true>, TEXT("/Engine/Private/PostProcessTonemap.usf"), TEXT("MainVS"), SF_Vertex);
-IMPLEMENT_SHADER_TYPE(template<>, TPostProcessTonemapVS<false>, TEXT("/Engine/Private/PostProcessTonemap.usf"), TEXT("MainVS"), SF_Vertex);
+// Vertex Shader 
+IMPLEMENT_GLOBAL_SHADER(FPostProcessTonemapVS, "/Engine/Private/PostProcessTonemap.usf", "MainVS", SF_Vertex);
 
 
 class FPostProcessTonemapPS : public FGlobalShader
@@ -690,16 +728,17 @@ class FPostProcessTonemapPS : public FGlobalShader
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
 	{
-		if (!IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::ES2))
+		if (!IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::ES3_1))
 		{
 			return false;
 		}
-		return TonemapperPermutation::ShouldCompileDesktopPermutation(FPermutationDomain(Parameters.PermutationId));
+		return TonemapperPermutation::ShouldCompileDesktopPermutation(Parameters, FPermutationDomain(Parameters.PermutationId));
 	}
 
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
-		OutEnvironment.SetDefine(TEXT("USE_VOLUME_LUT"), UseVolumeTextureLUT(Parameters.Platform));
+		const int UseVolumeLut = PipelineVolumeTextureLUTSupportGuaranteedAtRuntime(Parameters.Platform) ? 1 : 0;
+		OutEnvironment.SetDefine(TEXT("USE_VOLUME_LUT"), UseVolumeLut);
 	}
 
 	/** Default constructor. */
@@ -728,13 +767,13 @@ public:
 
 	void SetPS(const FRenderingCompositePassContext& Context)
 	{
-		const FPixelShaderRHIParamRef ShaderRHI = GetPixelShader();
+		FRHIPixelShader* ShaderRHI = GetPixelShader();
 		
 		FGlobalShader::SetParameters<FViewUniformShaderParameters>(Context.RHICmdList, ShaderRHI, Context.View.ViewUniformBuffer);
 
 		{
 			// filtering can cost performance so we use point where possible, we don't want anisotropic sampling
-			FSamplerStateRHIParamRef Filters[] =
+			FRHISamplerState* Filters[] =
 			{
 				TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp, 0, 1>::GetRHI(),		// todo: could be SF_Point if fringe is disabled
 				TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp, 0, 1>::GetRHI(),
@@ -769,14 +808,16 @@ class FPostProcessTonemapCS : public FGlobalShader
 
 		FPermutationDomain PermutationVector(Parameters.PermutationId);
 
-		return TonemapperPermutation::ShouldCompileDesktopPermutation(PermutationVector.Get<TonemapperPermutation::FDesktopDomain>());
+		return TonemapperPermutation::ShouldCompileDesktopPermutation(Parameters, PermutationVector.Get<TonemapperPermutation::FDesktopDomain>());
 	}	
 	
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
 		OutEnvironment.SetDefine(TEXT("THREADGROUP_SIZEX"), GTonemapComputeTileSizeX);
 		OutEnvironment.SetDefine(TEXT("THREADGROUP_SIZEY"), GTonemapComputeTileSizeY);
-		OutEnvironment.SetDefine(TEXT("USE_VOLUME_LUT"), UseVolumeTextureLUT(Parameters.Platform));
+
+		const int UseVolumeLut = PipelineVolumeTextureLUTSupportGuaranteedAtRuntime(Parameters.Platform) ? 1 : 0;
+		OutEnvironment.SetDefine(TEXT("USE_VOLUME_LUT"), UseVolumeLut);
 	}
 
 	/** Default constructor. */
@@ -813,9 +854,9 @@ public:
 	}
 
 	template <typename TRHICmdList>
-	void SetParameters(TRHICmdList& RHICmdList, const FRenderingCompositePassContext& Context, const FIntPoint& DestSize, FUnorderedAccessViewRHIParamRef DestUAV, FTextureRHIParamRef EyeAdaptationTex)
+	void SetParameters(TRHICmdList& RHICmdList, const FRenderingCompositePassContext& Context, const FIntPoint& DestSize, FRHIUnorderedAccessView* DestUAV, FRHITexture* EyeAdaptationTex)
 	{
-		const FComputeShaderRHIParamRef ShaderRHI = GetComputeShader();
+		FRHIComputeShader* ShaderRHI = GetComputeShader();
 		const FPostProcessSettings& Settings = Context.View.FinalPostProcessSettings;
 		const FSceneViewFamily& ViewFamily = *(Context.View.Family);
 
@@ -850,7 +891,7 @@ public:
 		// PS params
 		{
 			// filtering can cost performance so we use point where possible, we don't want anisotropic sampling
-			FSamplerStateRHIParamRef Filters[] =
+			FRHISamplerState* Filters[] =
 			{
 				TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp, 0, 1>::GetRHI(),		// todo: could be SF_Point if fringe is disabled
 				TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp, 0, 1>::GetRHI(),
@@ -867,7 +908,7 @@ public:
 	template <typename TRHICmdList>
 	void UnsetParameters(TRHICmdList& RHICmdList)
 	{
-		const FComputeShaderRHIParamRef ShaderRHI = GetComputeShader();
+		FRHIComputeShader* ShaderRHI = GetComputeShader();
 		OutComputeTex.UnsetUAV(RHICmdList, ShaderRHI);
 	}
 	
@@ -908,18 +949,16 @@ namespace
 namespace PostProcessTonemapUtil
 {
 
-template <bool bVSDoEyeAdaptation>
-static inline void ShaderTransitionResources(const FRenderingCompositePassContext& Context)
+static inline void ShaderTransitionResources(const FRenderingCompositePassContext& Context, const FPostProcessTonemapVS::FPermutationDomain& PermutationVector)
 {
-	typedef TPostProcessTonemapVS<bVSDoEyeAdaptation>				VertexShaderType;
-	TShaderMapRef<VertexShaderType> VertexShader(Context.GetShaderMap());
+	TShaderMapRef<FPostProcessTonemapVS> VertexShader(Context.GetShaderMap(), PermutationVector);
 	VertexShader->TransitionResources(Context);
 }
 
 } // PostProcessTonemapUtil
 
 template <typename TRHICmdList>
-inline void DispatchComputeShader(TRHICmdList& RHICmdList, FRenderingCompositePassContext& Context, const FIntRect& DestRect, FUnorderedAccessViewRHIParamRef DestUAV, const TonemapperPermutation::FDesktopDomain& DesktopPermutationVector, FTextureRHIParamRef EyeAdaptationTex, bool bDoEyeAdaptation)
+inline void DispatchComputeShader(TRHICmdList& RHICmdList, FRenderingCompositePassContext& Context, const FIntRect& DestRect, FRHIUnorderedAccessView* DestUAV, const TonemapperPermutation::FDesktopDomain& DesktopPermutationVector, FRHITexture* EyeAdaptationTex, bool bDoEyeAdaptation)
 {
 	FPostProcessTonemapCS::FPermutationDomain PermutationVector;
 	PermutationVector.Set<TonemapperPermutation::FDesktopDomain>(DesktopPermutationVector);
@@ -971,10 +1010,11 @@ void FRCPassPostProcessTonemap::Process(FRenderingCompositePassContext& Context)
 
 	FSceneRenderTargets& SceneContext = FSceneRenderTargets::Get(Context.RHICmdList);
 
+	bool bNeedsToSwitchVerticalAxis = RHINeedsToSwitchVerticalAxis(GShaderPlatformForFeatureLevel[Context.GetFeatureLevel()]) && ShouldMobilePassFlipVerticalAxis(this);
 	// Generate permutation vector for the desktop tonemapper.
 	TonemapperPermutation::FDesktopDomain DesktopPermutationVector;
 	{
-		TonemapperPermutation::FCommonDomain CommonDomain = TonemapperPermutation::BuildCommonPermutationDomain(View, bDoGammaOnly);
+		TonemapperPermutation::FCommonDomain CommonDomain = TonemapperPermutation::BuildCommonPermutationDomain(View, bDoGammaOnly, bNeedsToSwitchVerticalAxis);
 		DesktopPermutationVector.Set<TonemapperPermutation::FCommonDomain>(CommonDomain);
 
 		if (!CommonDomain.Get<TonemapperPermutation::FTonemapperGammaOnlyDim>())
@@ -989,9 +1029,15 @@ void FRCPassPostProcessTonemap::Process(FRenderingCompositePassContext& Context)
 			DesktopPermutationVector.Set<TonemapperPermutation::FTonemapperColorFringeDim>(View.FinalPostProcessSettings.SceneFringeIntensity > 0.01f);
 		}
 
-		DesktopPermutationVector.Set<TonemapperPermutation::FTonemapperOutputDeviceDim>(GetOutputDeviceValue());
-
-		DesktopPermutationVector = TonemapperPermutation::RemapPermutation(DesktopPermutationVector);
+		if (ViewFamily.SceneCaptureSource == SCS_FinalColorHDR)
+		{
+			DesktopPermutationVector.Set<TonemapperPermutation::FTonemapperOutputDeviceDim>(FTonemapperOutputDevice::LinearNoToneCurve);
+		}
+		else
+		{
+			DesktopPermutationVector.Set<TonemapperPermutation::FTonemapperOutputDeviceDim>(GetOutputDeviceValue());
+		}
+		DesktopPermutationVector = TonemapperPermutation::RemapPermutation(DesktopPermutationVector, Context.GetFeatureLevel());
 	}
 
 	if (bIsComputePass)
@@ -1038,17 +1084,12 @@ void FRCPassPostProcessTonemap::Process(FRenderingCompositePassContext& Context)
 	}
 	else
 	{
+		auto VertexShaderPermutationVector = FPostProcessTonemapVS::BuildPermutationVector(bDoEyeAdaptation, bNeedsToSwitchVerticalAxis);
+
 		WaitForInputPassComputeFences(Context.RHICmdList);
 
 		const EShaderPlatform ShaderPlatform = GShaderPlatformForFeatureLevel[Context.GetFeatureLevel()];
-		if (bDoEyeAdaptation)
-		{
-			PostProcessTonemapUtil::ShaderTransitionResources<true>(Context);
-		}
-		else
-		{
-			PostProcessTonemapUtil::ShaderTransitionResources<false>(Context);
-		}
+		PostProcessTonemapUtil::ShaderTransitionResources(Context, VertexShaderPermutationVector);
 
 		ERenderTargetLoadAction LoadAction = ERenderTargetLoadAction::ELoad;
 
@@ -1078,44 +1119,31 @@ void FRCPassPostProcessTonemap::Process(FRenderingCompositePassContext& Context)
 		Context.RHICmdList.BeginRenderPass(RPInfo, TEXT("Tonemap"));
 		{
 			Context.SetViewportAndCallRHI(DestRect, 0.0f, 1.0f);
-
-			FShader* VertexShader;
+			TShaderMapRef<FPostProcessTonemapVS> VertexShader(Context.GetShaderMap(), VertexShaderPermutationVector);
+			TShaderMapRef<FPostProcessTonemapPS> PixelShader(Context.GetShaderMap(), DesktopPermutationVector);
 			{
 				FGraphicsPipelineStateInitializer GraphicsPSOInit;
 				Context.RHICmdList.ApplyCachedRenderTargets(GraphicsPSOInit);
-				GraphicsPSOInit.BlendState = TStaticBlendState<>::GetRHI();
-				GraphicsPSOInit.RasterizerState = TStaticRasterizerState<>::GetRHI();
-				GraphicsPSOInit.DepthStencilState = TStaticDepthStencilState<false, CF_Always>::GetRHI();
-
-				if (bDoEyeAdaptation)
+				if (Context.View.AntiAliasingMethod == AAM_FXAA || FPostProcessing::HasAlphaChannelSupport())
 				{
-					VertexShader = Context.GetShaderMap()->GetShader<TPostProcessTonemapVS<true>>();
+					// Alpha is used to store luminance for post process AA or as passthrough alpha
+					GraphicsPSOInit.BlendState = TStaticBlendState<>::GetRHI();
 				}
 				else
 				{
-					VertexShader = Context.GetShaderMap()->GetShader<TPostProcessTonemapVS<false>>();
+					// Skip writing to alpha, luminance in the alpha channel is unused in this case. 
+					GraphicsPSOInit.BlendState = TStaticBlendStateWriteMask<CW_RGB>::GetRHI();
 				}
-
-				TShaderMapRef<FPostProcessTonemapPS> PixelShader(Context.GetShaderMap(), DesktopPermutationVector);
-
+				GraphicsPSOInit.RasterizerState = TStaticRasterizerState<>::GetRHI();
+				GraphicsPSOInit.DepthStencilState = TStaticDepthStencilState<false, CF_Always>::GetRHI();
+				
 				GraphicsPSOInit.BoundShaderState.VertexDeclarationRHI = GFilterVertexDeclaration.VertexDeclarationRHI;
-				GraphicsPSOInit.BoundShaderState.VertexShaderRHI = VertexShader->GetVertexShader();
+				GraphicsPSOInit.BoundShaderState.VertexShaderRHI = GETSAFERHISHADER_VERTEX(*VertexShader);
 				GraphicsPSOInit.BoundShaderState.PixelShaderRHI = GETSAFERHISHADER_PIXEL(*PixelShader);
 				GraphicsPSOInit.PrimitiveType = PT_TriangleList;
 
 				SetGraphicsPipelineState(Context.RHICmdList, GraphicsPSOInit);
-
-				if (bDoEyeAdaptation)
-				{
-					TShaderMapRef<TPostProcessTonemapVS<true>> VertexShaderMapRef(Context.GetShaderMap());
-					VertexShaderMapRef->SetVS(Context);
-				}
-				else
-				{
-					TShaderMapRef<TPostProcessTonemapVS<false>> VertexShaderMapRef(Context.GetShaderMap());
-					VertexShaderMapRef->SetVS(Context);
-				}
-
+				VertexShader->SetVS(Context, VertexShaderPermutationVector);
 				PixelShader->SetPS(Context);
 			}
 
@@ -1127,7 +1155,7 @@ void FRCPassPostProcessTonemap::Process(FRenderingCompositePassContext& Context)
 				SrcRect.Width(), SrcRect.Height(),
 				DestRect.Size(),
 				SrcSize,
-				VertexShader,
+				*VertexShader,
 				View.StereoPass,
 				Context.HasHmdMesh(),
 				EDRF_UseTriangleOptimization);
@@ -1165,6 +1193,10 @@ FPooledRenderTargetDesc FRCPassPostProcessTonemap::ComputeOutputDesc(EPassOutput
 	{
 		Ret.Format = PF_A32B32G32R32F;
 	}
+	if (CVarDisplayOutputDevice.GetValueOnRenderThread() == 8)
+	{
+		Ret.Format = PF_FloatRGBA;
+	}
 
 
 	// Mobile needs to override the extent
@@ -1186,7 +1218,6 @@ class FPostProcessTonemapPS_ES2 : public FGlobalShader
 	DECLARE_GLOBAL_SHADER(FPostProcessTonemapPS_ES2);
 
 	// Mobile renderer specific permutation dimensions.
-	class FTonemapperMsaaDim        : SHADER_PERMUTATION_BOOL("USE_MSAA");
 	class FTonemapperDOFDim         : SHADER_PERMUTATION_BOOL("USE_DOF");
 	class FTonemapperLightShaftsDim : SHADER_PERMUTATION_BOOL("USE_LIGHT_SHAFTS");
 	class FTonemapper32BPPHDRDim    : SHADER_PERMUTATION_BOOL("USE_32BPP_HDR");
@@ -1196,7 +1227,6 @@ class FPostProcessTonemapPS_ES2 : public FGlobalShader
 	
 	using FPermutationDomain = TShaderPermutationDomain<
 		TonemapperPermutation::FCommonDomain,
-		FTonemapperMsaaDim,
 		FTonemapperDOFDim,
 		FTonemapperLightShaftsDim,
 		FTonemapper32BPPHDRDim,
@@ -1246,10 +1276,13 @@ class FPostProcessTonemapPS_ES2 : public FGlobalShader
 		EnableIfSet<TonemapperPermutation::FTonemapperVignetteDim>(WantedCommonPermutationVector, RemappedCommonPermutationVector);
  		// Grain intensity permutation
 		EnableIfSet<TonemapperPermutation::FTonemapperGrainIntensityDim>(WantedCommonPermutationVector, RemappedCommonPermutationVector);
+		// Switch Y axis
+		EnableIfSet<TonemapperPermutation::FTonemapperSwitchAxis>(WantedCommonPermutationVector, RemappedCommonPermutationVector);
+ 		// msaa permutation.
+		EnableIfSet<TonemapperPermutation::FTonemapperMsaaDim>(WantedCommonPermutationVector, RemappedCommonPermutationVector);
+
  		// Color matrix
 		EnableIfSet<FTonemapperColorMatrixDim>(WantedPermutationVector, RemappedPermutationVector);
- 		// msaa permutation.
-		EnableIfSet<FTonemapperMsaaDim>(WantedPermutationVector, RemappedPermutationVector);
 
 		// DoF
 		if (WantedPermutationVector.Get<FTonemapperDOFDim>())
@@ -1279,17 +1312,17 @@ class FPostProcessTonemapPS_ES2 : public FGlobalShader
 		{
 			// 32 bpp hdr does not support:
 			RemappedPermutationVector.Set<FTonemapperDOFDim>(false);
-			RemappedPermutationVector.Set<FTonemapperMsaaDim>(false);
 			RemappedPermutationVector.Set<FTonemapperLightShaftsDim>(false);
+			RemappedCommonPermutationVector.Set<TonemapperPermutation::FTonemapperMsaaDim>(false);
 		}
 
 		RemappedPermutationVector.Set<TonemapperPermutation::FCommonDomain>(RemappedCommonPermutationVector);
 		return RemappedPermutationVector;
 	}
 
-	static FPermutationDomain BuildPermutationVector(const FViewInfo& View)
+	static FPermutationDomain BuildPermutationVector(const FViewInfo& View, bool bNeedsToSwitchVerticalAxis)
 	{
-		TonemapperPermutation::FCommonDomain CommonPermutationVector = TonemapperPermutation::BuildCommonPermutationDomain(View, /* bGammaOnly = */ false);
+		TonemapperPermutation::FCommonDomain CommonPermutationVector = TonemapperPermutation::BuildCommonPermutationDomain(View, /* bGammaOnly = */ false, bNeedsToSwitchVerticalAxis);
 
 		FPostProcessTonemapPS_ES2::FPermutationDomain MobilePermutationVector;
 		MobilePermutationVector.Set<TonemapperPermutation::FCommonDomain>(CommonPermutationVector);
@@ -1327,10 +1360,11 @@ class FPostProcessTonemapPS_ES2 : public FGlobalShader
 		}
 
 		static const auto CVarMobileMSAA = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.MobileMSAA"));
-		const EShaderPlatform ShaderPlatform = GShaderPlatformForFeatureLevel[View.GetFeatureLevel()];
-		if ((GSupportsShaderFramebufferFetch && (IsMetalMobilePlatform(ShaderPlatform) || IsVulkanMobilePlatform(ShaderPlatform))) && (CVarMobileMSAA ? CVarMobileMSAA->GetValueOnAnyThread() > 1 : false))
+		const EShaderPlatform ShaderPlatform = View.GetShaderPlatform();
+		if (IsMetalMobilePlatform(ShaderPlatform))
 		{
-			MobilePermutationVector.Set<FTonemapperMsaaDim>(true);
+			bool bMSAA = (CVarMobileMSAA ? CVarMobileMSAA->GetValueOnAnyThread() > 1 : false);
+			CommonPermutationVector.Set<TonemapperPermutation::FTonemapperMsaaDim>(bMSAA);
 		}
 
 		if (bUse32BPPHDR)
@@ -1370,7 +1404,7 @@ class FPostProcessTonemapPS_ES2 : public FGlobalShader
 		FPermutationDomain PermutationVector(Parameters.PermutationId);
 
 		auto CommonPermutationVector = PermutationVector.Get<TonemapperPermutation::FCommonDomain>();
-		if (!TonemapperPermutation::ShouldCompileCommonPermutation(CommonPermutationVector))
+		if (!TonemapperPermutation::ShouldCompileCommonPermutation(Parameters, CommonPermutationVector))
 		{
 			return false;
 		}
@@ -1469,7 +1503,7 @@ public:
 		const FPostProcessSettings& Settings = Context.View.FinalPostProcessSettings;
 		const FSceneViewFamily& ViewFamily = *(Context.View.Family);
 
-		const FPixelShaderRHIParamRef ShaderRHI = GetPixelShader();
+		FRHIPixelShader* ShaderRHI = GetPixelShader();
 		
 		FGlobalShader::SetParameters<FViewUniformShaderParameters>(RHICmdList, ShaderRHI, Context.View.ViewUniformBuffer);
 
@@ -1556,11 +1590,35 @@ class FPostProcessTonemapVS_ES2 : public FGlobalShader
 {
 	DECLARE_GLOBAL_SHADER(FPostProcessTonemapVS_ES2);
 
-	using FPermutationDomain = TShaderPermutationDomain<>;
+	class FTonemapperSwitchAxis : SHADER_PERMUTATION_BOOL("NEEDTOSWITCHVERTICLEAXIS");
+
+	using FPermutationDomain = TShaderPermutationDomain<
+		FTonemapperSwitchAxis
+	>;
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
 	{
+		FPermutationDomain PermutationVector(Parameters.PermutationId);
+
+		// Prevent switch axis permutation on platforms that dont require it.
+		if (PermutationVector.Get<FTonemapperSwitchAxis>() && !RHINeedsToSwitchVerticalAxis(Parameters.Platform))
+		{
+			return false;
+		}
+
 		return !IsConsolePlatform(Parameters.Platform);
+	}
+
+	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
+	{
+		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+	}
+
+	static FPermutationDomain BuildPermutationVector(bool bNeedsToSwitchVerticalAxis)
+	{
+		FPermutationDomain PermutationVector;
+		PermutationVector.Set<FTonemapperSwitchAxis>(bNeedsToSwitchVerticalAxis);
+		return PermutationVector;
 	}
 
 	FPostProcessTonemapVS_ES2() { }
@@ -1584,7 +1642,7 @@ public:
 
 	void SetVS(const FRenderingCompositePassContext& Context)
 	{
-		const FVertexShaderRHIParamRef ShaderRHI = GetVertexShader();
+		FRHIVertexShader* ShaderRHI = GetVertexShader();
 		FGlobalShader::SetParameters<FViewUniformShaderParameters>(Context.RHICmdList, ShaderRHI, Context.View.ViewUniformBuffer);
 
 		PostprocessParameter.SetVS(ShaderRHI, Context, TStaticSamplerState<SF_Bilinear,AM_Clamp,AM_Clamp,AM_Clamp>::GetRHI());
@@ -1673,10 +1731,13 @@ void FRCPassPostProcessTonemapES2::Process(FRenderingCompositePassContext& Conte
 	{
 		Context.SetViewportAndCallRHI(DestRect);
 
-		auto PermutationVector = FPostProcessTonemapPS_ES2::BuildPermutationVector(View);
+		bool bNeedsToSwitchVerticalAxis = RHINeedsToSwitchVerticalAxis(GShaderPlatformForFeatureLevel[Context.GetFeatureLevel()]) && ShouldMobilePassFlipVerticalAxis(this);
 
-		TShaderMapRef<FPostProcessTonemapVS_ES2> VertexShader(Context.GetShaderMap());
-		TShaderMapRef<FPostProcessTonemapPS_ES2> PixelShader(Context.GetShaderMap(), PermutationVector);
+		auto VertexShaderPermutationVector = FPostProcessTonemapVS_ES2::BuildPermutationVector(bNeedsToSwitchVerticalAxis);
+		auto PixelShaderPermutationVector = FPostProcessTonemapPS_ES2::BuildPermutationVector(View, bNeedsToSwitchVerticalAxis);
+
+		TShaderMapRef<FPostProcessTonemapVS_ES2> VertexShader(Context.GetShaderMap(), VertexShaderPermutationVector);
+		TShaderMapRef<FPostProcessTonemapPS_ES2> PixelShader(Context.GetShaderMap(), PixelShaderPermutationVector);
 
 		{
 			FGraphicsPipelineStateInitializer GraphicsPSOInit;
@@ -1695,7 +1756,7 @@ void FRCPassPostProcessTonemapES2::Process(FRenderingCompositePassContext& Conte
 			SetGraphicsPipelineState(Context.RHICmdList, GraphicsPSOInit);
 
 			VertexShader->SetVS(Context);
-			PixelShader->SetPS(Context.RHICmdList, Context, PermutationVector, bSRGBAwareTarget);
+			PixelShader->SetPS(Context.RHICmdList, Context, PixelShaderPermutationVector, bSRGBAwareTarget);
 		}
 
 		DrawRectangle(

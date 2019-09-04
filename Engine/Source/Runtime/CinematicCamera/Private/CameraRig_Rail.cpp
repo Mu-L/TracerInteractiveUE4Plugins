@@ -46,7 +46,6 @@ ACameraRig_Rail::ACameraRig_Rail(const FObjectInitializer& ObjectInitializer)
 			PreviewMesh_Mount->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
 			PreviewMesh_Mount->bHiddenInGame = true;
 			PreviewMesh_Mount->CastShadow = false;
-			PreviewMesh_Mount->PostPhysicsComponentTick.bCanEverTick = false;
 
 			PreviewMesh_Mount->SetupAttachment(RailCameraMount);
 		}
@@ -66,7 +65,6 @@ USplineMeshComponent* ACameraRig_Rail::CreateSplinePreviewSegment()
 		Segment->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
 		Segment->bHiddenInGame = true;
 		Segment->CastShadow = false;
-		Segment->PostPhysicsComponentTick.bCanEverTick = false;
 	 
 		Segment->SetupAttachment(TransformComponent);
 		Segment->RegisterComponent();
@@ -86,6 +84,8 @@ void ACameraRig_Rail::UpdatePreviewMeshes()
 
 			// make sure our preview mesh array is correctly sized and populated
 			{
+				PreviewRailMeshSegments.RemoveAll([](USplineMeshComponent* Segment) { return Segment == nullptr; });
+
 				int32 const NumExistingPreviewMeshes = PreviewRailMeshSegments.Num();
 				if (NumExistingPreviewMeshes > NumNeededPreviewMeshes)
 				{

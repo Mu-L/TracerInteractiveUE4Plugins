@@ -43,7 +43,7 @@ UENUM()
 	IOS_9 = 9 UMETA(Hidden),
 
 	/** iOS 10 */
-	IOS_10 = 10 UMETA(DisplayName = "10.0"),
+	IOS_10 = 10 UMETA(Hidden),
 
 	/** iOS 11 */
 	IOS_11 = 11 UMETA(DisplayName = "11.0"),
@@ -347,6 +347,10 @@ public:
 	// If checked, Bluetooth connected controllers will send input
 	UPROPERTY(GlobalConfig, EditAnywhere, Category = Input, meta = (DisplayName = "Allow MFi (Bluetooth) controllers"))
 	bool bAllowControllers;
+
+	// Disables usage of device motion data. If application does not use motion data disabling it will improve battery life
+	UPROPERTY(GlobalConfig, EditAnywhere, Category = Input, meta = (DisplayName = "Disable Motion Controls"))
+	bool bDisableMotionData;
 	
 	// Supports default portrait orientation. Landscape will not be supported.
 	UPROPERTY(GlobalConfig, EditAnywhere, Category = DeviceOrientations)

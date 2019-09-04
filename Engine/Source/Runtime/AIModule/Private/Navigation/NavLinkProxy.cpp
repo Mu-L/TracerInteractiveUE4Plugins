@@ -26,7 +26,6 @@ ANavLinkProxy::ANavLinkProxy(const FObjectInitializer& ObjectInitializer) : Supe
 
 #if WITH_EDITORONLY_DATA
 	EdRenderComp = CreateDefaultSubobject<UNavLinkRenderingComponent>(TEXT("EdRenderComp"));
-	EdRenderComp->PostPhysicsComponentTick.bCanEverTick = false;
 	EdRenderComp->SetupAttachment(RootComponent);
 #endif // WITH_EDITORONLY_DATA
 
@@ -155,11 +154,6 @@ void ANavLinkProxy::PostLoad()
 	for (FNavigationLink& Link : PointLinks)
 	{
 		Link.InitializeAreaClass();
-	}
-	
-	if (SmartLinkComp)
-	{
-		SmartLinkComp->SetNavigationRelevancy(bSmartLinkIsRelevant);
 	}
 }
 

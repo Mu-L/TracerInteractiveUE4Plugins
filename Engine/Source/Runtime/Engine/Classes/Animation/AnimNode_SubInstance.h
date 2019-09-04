@@ -6,14 +6,19 @@
 #include "UObject/ObjectMacros.h"
 #include "Templates/SubclassOf.h"
 #include "Animation/AnimCurveTypes.h"
-#include "Animation/AnimNodeBase.h"
+#include "Animation/AnimNode_CustomProperty.h"
 #include "Animation/AnimInstance.h"
+#include "Animation/AnimLayerInterface.h"
+
 #include "AnimNode_SubInstance.generated.h"
 
 struct FAnimInstanceProxy;
+class UUserDefinedStruct;
+struct FAnimBlueprintFunction;
+class IAnimClassInterface;
 
 USTRUCT(BlueprintInternalUseOnly)
-struct ENGINE_API FAnimNode_SubInstance : public FAnimNode_Base
+struct ENGINE_API FAnimNode_SubInstance : public FAnimNode_CustomProperty
 {
 	GENERATED_BODY()
 
@@ -22,42 +27,35 @@ public:
 	FAnimNode_SubInstance();
 
 	/** 
-	 *  Input pose for the node, intentionally not accessible because if there's no input
-	 *  Node in the target class we don't want to show this as a pin
+	 *  Input poses for the node, intentionally not accessible because if there's no input
+	 *  nodes in the target class we don't want to show these as pins
 	 */
 	UPROPERTY()
-	FPoseLink InPose;
+	TArray<FPoseLink> InputPoses;
+
+	/** List of input pose names, 1-1 with pose links about, built by the compiler */
+	UPROPERTY()
+	TArray<FName> InputPoseNames;
 
 	/** The class spawned for this sub-instance */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Settings)
+	UPROPERTY(EditAnywhere, Category = Settings)
 	TSubclassOf<UAnimInstance> InstanceClass;
 
 	/** Optional tag used to identify this sub-instance */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Settings)
+	UPROPERTY(EditAnywhere, Category = Settings)
 	FName Tag;
 
-	/** List of source properties to use, 1-1 with Dest names below, built by the compiler */
-	UPROPERTY()
-	TArray<FName> SourcePropertyNames;
+	// The root node of the dynamically-linked graph
+	FAnimNode_Base* LinkedRoot;
 
-	/** List of destination properties to use, 1-1 with Source names above, built by the compiler */
-	UPROPERTY()
-	TArray<FName> DestPropertyNames;
+	/** Dynamically set the anim class of this sub-instance */
+	void SetAnimClass(TSubclassOf<UAnimInstance> InClass, const UAnimInstance* InOwningAnimInstance);
 
-	/** This is the actual instance allocated at runtime that will run */
-	UPROPERTY(Transient)
-	UAnimInstance* InstanceToRun;
+	/** Get the function name we should be linking with when we call DynamicLink/Unlink */
+	virtual FName GetDynamicLinkFunctionName() const;
 
-	/** List of properties on the calling instance to push from */
-	UPROPERTY(Transient)
-	TArray<UProperty*> InstanceProperties;
-
-	/** List of properties on the sub instance to push to, built from name list when initialised */
-	UPROPERTY(Transient)
-	TArray<UProperty*> SubInstanceProperties;
-
-	// Temporary storage for the output of the subinstance, will be copied into output pose.
-	FBlendedHeapCurve BlendedCurve;
+	/** Get the dynamic link target */
+	virtual UAnimInstance* GetDynamicLinkTarget(UAnimInstance* InOwningAnimInstance) const;
 
 	// FAnimNode_Base interface
 	virtual void Initialize_AnyThread(const FAnimationInitializeContext& Context) override;
@@ -70,6 +68,24 @@ protected:
 	virtual void OnInitializeAnimInstance(const FAnimInstanceProxy* InProxy, const UAnimInstance* InAnimInstance) override;
 	// End of FAnimNode_Base interface
 
+	// Re-create the sub instances for this node
+	void ReinitializeSubAnimInstance(const UAnimInstance* InOwningAnimInstance, UAnimInstance* InNewAnimInstance = nullptr);
+
 	// Shutdown the currently running instance
 	void TeardownInstance();
+
+	// Get Target Class
+	virtual UClass* GetTargetClass() const override 
+	{
+		return *InstanceClass;
+	}
+
+	/** Link up pose links dynamically with sub-instance */
+	void DynamicLink(UAnimInstance* InOwningAnimInstance);
+
+	/** Break any pose links dynamically with sub-instance */
+	void DynamicUnlink(UAnimInstance* InOwningAnimInstance);
+
+	/** Helper function for finding function inputs when linking/unlinking */
+	int32 FindFunctionInputIndex(const FAnimBlueprintFunction& AnimBlueprintFunction, const FName& InInputName);
 };

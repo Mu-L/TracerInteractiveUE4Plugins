@@ -35,6 +35,12 @@ struct FSlateGradientStop
 	FVector2D Position;
 	FLinearColor Color;
 
+	/**
+	* Construct a Gradient Stop from a Position and a Color.
+	* @param InPosition - The position in widget space for this stop. Both X and Y are used for a single-axis gradient.
+						  A two stop gradient should go from (0,0), to (Width,Height).
+	* @param InColor	- The color to lerp towards at this stop.
+	*/
 	FSlateGradientStop( const FVector2D& InPosition, const FLinearColor& InColor )
 		: Position(InPosition)
 		, Color(InColor)
@@ -1696,7 +1702,8 @@ private:
 
 		void ClearOwner();
 
-		SLATECORE_API virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
+		virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
+		virtual FString GetReferencerName() const override;
 
 	private:
 		FSlateWindowElementList* Owner;

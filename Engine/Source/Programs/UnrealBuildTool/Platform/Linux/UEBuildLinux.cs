@@ -61,6 +61,12 @@ namespace UnrealBuildTool
 		public bool bEnableUndefinedBehaviorSanitizer = false;
 
 		/// <summary>
+		/// Enables "thin" LTO
+		/// </summary>
+		[CommandLine("-ThinLTO")]
+		public bool bEnableThinLTO = false;
+
+		/// <summary>
 		/// Whether or not to preserve the portable symbol file produced by dump_syms
 		/// </summary>
 		[ConfigFile(ConfigHierarchyType.Engine, "/Script/LinuxPlatform.LinuxTargetSettings")]
@@ -114,6 +120,11 @@ namespace UnrealBuildTool
 			get { return Inner.bEnableUndefinedBehaviorSanitizer; }
 		}
 
+		public bool bEnableThinLTO
+		{
+			get { return Inner.bEnableThinLTO; }
+		}
+
 		#if !__MonoCS__
 		#pragma warning restore CS1591
 		#endif
@@ -139,13 +150,13 @@ namespace UnrealBuildTool
 		/// Constructor
 		/// </summary>
 		public LinuxPlatform(LinuxPlatformSDK InSDK) 
-			: this(UnrealTargetPlatform.Linux, CppPlatform.Linux, InSDK)
+			: this(UnrealTargetPlatform.Linux, InSDK)
 		{
 			SDK = InSDK;
 		}
 
-		public LinuxPlatform(UnrealTargetPlatform UnrealTarget, CppPlatform InCppPlatform, LinuxPlatformSDK InSDK)
-			: base(UnrealTarget, InCppPlatform)
+		public LinuxPlatform(UnrealTargetPlatform UnrealTarget, LinuxPlatformSDK InSDK)
+			: base(UnrealTarget)
 		{
 			SDK = InSDK;
 		}
@@ -233,6 +244,11 @@ namespace UnrealBuildTool
 
 		public override void ValidateTarget(TargetRules Target)
 		{
+			if(Target.LinuxPlatform.bEnableThinLTO)
+			{
+				Target.bAllowLTCG = true;
+			}
+
 			if (Target.bAllowLTCG && Target.LinkType != TargetLinkType.Monolithic)
 			{
 				throw new BuildException("LTO (LTCG) for modular builds is not supported (lld is not currently used for dynamic libraries).");
@@ -281,7 +297,8 @@ namespace UnrealBuildTool
 			// [bschaefer] 2018-08-24: disabling XGE due to a bug where XGE seems to be lower casing folders names that are headers ie. misc/Header.h vs Misc/Header.h
 			// [bschaefer] 2018-10-04: enabling XGE as an update in xgConsole seems to have fixed it for me
 			// [bschaefer] 2018-12-17: disable XGE again, as the same issue before seems to still be happening but intermittently
-			return false; //BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Win64;
+			// [bschaefer] 2019-6-13: enable XGE, as the bug from before is now fixed
+			return BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Win64;
 		}
 
 		public override bool CanUseParallelExecutor()
@@ -302,13 +319,17 @@ namespace UnrealBuildTool
 			if (FileName.StartsWith("lib"))
 			{
 				return IsBuildProductName(FileName, 3, FileName.Length - 3, NamePrefixes, NameSuffixes, ".a")
-					|| IsBuildProductName(FileName, 3, FileName.Length - 3, NamePrefixes, NameSuffixes, ".so");
+					|| IsBuildProductName(FileName, 3, FileName.Length - 3, NamePrefixes, NameSuffixes, ".so")
+					|| IsBuildProductName(FileName, 3, FileName.Length - 3, NamePrefixes, NameSuffixes, ".sym")
+					|| IsBuildProductName(FileName, 3, FileName.Length - 3, NamePrefixes, NameSuffixes, ".debug");
 			}
 			else
 			{
 				return IsBuildProductName(FileName, NamePrefixes, NameSuffixes, "")
 					|| IsBuildProductName(FileName, NamePrefixes, NameSuffixes, ".so")
-					|| IsBuildProductName(FileName, NamePrefixes, NameSuffixes, ".a");
+					|| IsBuildProductName(FileName, NamePrefixes, NameSuffixes, ".a")
+					|| IsBuildProductName(FileName, NamePrefixes, NameSuffixes, ".sym")
+					|| IsBuildProductName(FileName, NamePrefixes, NameSuffixes, ".debug");
 			}
 		}
 
@@ -502,12 +523,6 @@ namespace UnrealBuildTool
 				);
 			}
 
-			// for now only hide by default monolithic builds.
-			if (Target.LinkType == TargetLinkType.Monolithic)
-			{
-				CompileEnvironment.bHideSymbolsByDefault = true;
-			}
-
 			// link with Linux libraries.
 			LinkEnvironment.AdditionalLibraries.Add("pthread");
 
@@ -536,10 +551,9 @@ namespace UnrealBuildTool
 		/// <summary>
 		/// Creates a toolchain instance for the given platform.
 		/// </summary>
-		/// <param name="CppPlatform">The platform to create a toolchain for</param>
 		/// <param name="Target">The target being built</param>
 		/// <returns>New toolchain instance.</returns>
-		public override UEToolChain CreateToolChain(CppPlatform CppPlatform, ReadOnlyTargetRules Target)
+		public override UEToolChain CreateToolChain(ReadOnlyTargetRules Target)
 		{
 			LinuxToolChainOptions Options = LinuxToolChainOptions.None;
 
@@ -554,6 +568,10 @@ namespace UnrealBuildTool
 			if(Target.LinuxPlatform.bEnableUndefinedBehaviorSanitizer)
 			{
 				Options |= LinuxToolChainOptions.EnableUndefinedBehaviorSanitizer;
+			}
+			if(Target.LinuxPlatform.bEnableThinLTO)
+			{
+				Options |= LinuxToolChainOptions.EnableThinLTO;
 			}
 
 			return new LinuxToolChain(Target.Architecture, SDK, Target.LinuxPlatform.bPreservePSYM, Options);
@@ -573,7 +591,7 @@ namespace UnrealBuildTool
 		/// <summary>
 		/// This is the SDK version we support
 		/// </summary>
-		static string ExpectedSDKVersion = "v13_clang-7.0.1-centos7";	// now unified for all the architectures
+		static string ExpectedSDKVersion = "v14_clang-8.0.1-centos7";	// now unified for all the architectures
 
 		/// <summary>
 		/// Platform name (embeds architecture for now)

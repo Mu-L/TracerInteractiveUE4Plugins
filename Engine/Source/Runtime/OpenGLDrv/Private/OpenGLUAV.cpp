@@ -6,9 +6,9 @@
 #include "OpenGLDrv.h"
 #include "OpenGLDrvPrivate.h"
 
-FShaderResourceViewRHIRef FOpenGLDynamicRHI::RHICreateShaderResourceView(FVertexBufferRHIParamRef VertexBufferRHI, uint32 Stride, uint8 Format)
+FShaderResourceViewRHIRef FOpenGLDynamicRHI::RHICreateShaderResourceView(FRHIVertexBuffer* VertexBufferRHI, uint32 Stride, uint8 Format)
 {
-	FShaderResourceViewRHIRef Result = new FOpenGLShaderResourceViewProxy([=, OGLRHI = this](FShaderResourceViewRHIParamRef OwnerRHI)
+	FShaderResourceViewRHIRef Result = new FOpenGLShaderResourceViewProxy([=, OGLRHI = this](FRHIShaderResourceView* OwnerRHI)
 	{ 
 		VERIFY_GL_SCOPE();
 		GLuint TextureID = 0;
@@ -28,10 +28,13 @@ FShaderResourceViewRHIRef FOpenGLDynamicRHI::RHICreateShaderResourceView(FVertex
 
 			const FOpenGLTextureFormat& GLFormat = GOpenGLTextureFormats[Format];
 			FOpenGL::GenTextures(1, &TextureID);
-
+			
 			// Use a texture stage that's not likely to be used for draws, to avoid waiting
-			OGLRHI->CachedSetupTextureStage(OGLRHI->GetContextStateForCurrentContext(), FOpenGL::GetMaxCombinedTextureImageUnits() - 1, GL_TEXTURE_BUFFER, TextureID, -1, 1);
-			FOpenGL::TexBuffer(GL_TEXTURE_BUFFER, GLFormat.InternalFormat[0], VertexBuffer->Resource);
+			if (VertexBuffer)
+			{
+				OGLRHI->CachedSetupTextureStage(OGLRHI->GetContextStateForCurrentContext(), FOpenGL::GetMaxCombinedTextureImageUnits() - 1, GL_TEXTURE_BUFFER, TextureID, -1, 1);
+				FOpenGL::TexBuffer(GL_TEXTURE_BUFFER, GLFormat.InternalFormat[0], VertexBuffer->Resource);
+			}
 		}
 
 		// No need to restore texture stage; leave it like this,
@@ -44,9 +47,39 @@ FShaderResourceViewRHIRef FOpenGLDynamicRHI::RHICreateShaderResourceView(FVertex
 	return Result;
 }
 
-FShaderResourceViewRHIRef FOpenGLDynamicRHI::RHICreateShaderResourceView(FIndexBufferRHIParamRef BufferRHI)
+void FOpenGLDynamicRHI::RHIUpdateShaderResourceView(FRHIShaderResourceView* SRV, FRHIVertexBuffer* VertexBuffer, uint32 Stride, uint8 Format)
 {
-	return new FOpenGLShaderResourceViewProxy([=](FShaderResourceViewRHIParamRef OwnerRHI)
+	if (!FOpenGL::SupportsResourceView())
+	{
+		return;
+	}
+	
+	FOpenGLShaderResourceView* SRVGL = FOpenGLDynamicRHI::ResourceCast(SRV);
+	FOpenGLVertexBuffer* VBGL = FOpenGLDynamicRHI::ResourceCast(VertexBuffer);
+	const FOpenGLTextureFormat& GLFormat = GOpenGLTextureFormats[Format];
+	
+	check(SRVGL);
+	GLuint TextureID = SRVGL->Resource;
+	CachedSetupTextureStage(GetContextStateForCurrentContext(), FOpenGL::GetMaxCombinedTextureImageUnits() - 1, GL_TEXTURE_BUFFER, TextureID, -1, 1);
+	
+	if (!VBGL)
+	{
+		FOpenGL::TexBuffer(GL_TEXTURE_BUFFER, GLFormat.InternalFormat[0], 0);
+		SRVGL->VertexBuffer = nullptr;
+		SRVGL->ModificationVersion = 0;
+	}
+	else
+	{
+		check(SRVGL->Format == Format && SRVGL->Target == GL_TEXTURE_BUFFER);
+		FOpenGL::TexBuffer(GL_TEXTURE_BUFFER, GLFormat.InternalFormat[0], VBGL->Resource);
+		SRVGL->VertexBuffer = VertexBuffer;
+		SRVGL->ModificationVersion = VBGL->ModificationCount;
+	}
+}
+
+FShaderResourceViewRHIRef FOpenGLDynamicRHI::RHICreateShaderResourceView(FRHIIndexBuffer* BufferRHI)
+{
+	return new FOpenGLShaderResourceViewProxy([=](FRHIShaderResourceView* OwnerRHI)
 	{
 		VERIFY_GL_SCOPE();
 		GLuint TextureID = 0;
@@ -74,14 +107,26 @@ FOpenGLShaderResourceView::~FOpenGLShaderResourceView()
 	}
 }
 
-FUnorderedAccessViewRHIRef FOpenGLDynamicRHI::RHICreateUnorderedAccessView(FStructuredBufferRHIParamRef StructuredBufferRHI, bool bUseUAVCounter, bool bAppendBuffer)
+FUnorderedAccessViewRHIRef FOpenGLDynamicRHI::RHICreateUnorderedAccessView(FRHIStructuredBuffer* StructuredBufferRHI, bool bUseUAVCounter, bool bAppendBuffer)
 {
 	FOpenGLStructuredBuffer* StructuredBuffer = ResourceCast(StructuredBufferRHI);
+	// emulate structured buffer of specific size as typed buffer
+	if (GMaxRHIFeatureLevel == ERHIFeatureLevel::ES3_1)
+	{
+		// ES3.1 cross-compiler converts StructuredBuffer<float4> into Buffer<float4> 
+		// only float4 atm
+		check(StructuredBuffer->GetStride() == 16);
+		if (StructuredBuffer->GetStride() == 16)
+		{
+			return new FOpenGLStructuredBufferUnorderedAccessView(this, StructuredBufferRHI, PF_A32B32G32R32F);
+		}
+	}
+	
 	UE_LOG(LogRHI, Fatal,TEXT("%s not implemented yet"),ANSI_TO_TCHAR(__FUNCTION__)); 
 	return new FOpenGLUnorderedAccessView();
 }
 
-FUnorderedAccessViewRHIRef FOpenGLDynamicRHI::RHICreateUnorderedAccessView(FTextureRHIParamRef TextureRHI, uint32 MipLevel)
+FUnorderedAccessViewRHIRef FOpenGLDynamicRHI::RHICreateUnorderedAccessView(FRHITexture* TextureRHI, uint32 MipLevel)
 {
 	FOpenGLTexture* Texture = ResourceCast(TextureRHI);
 	check(Texture->GetFlags() & TexCreate_UAV);
@@ -89,7 +134,7 @@ FUnorderedAccessViewRHIRef FOpenGLDynamicRHI::RHICreateUnorderedAccessView(FText
 }
 
 
-FOpenGLTextureUnorderedAccessView::FOpenGLTextureUnorderedAccessView( FTextureRHIParamRef InTextureRHI):
+FOpenGLTextureUnorderedAccessView::FOpenGLTextureUnorderedAccessView(FRHITexture* InTextureRHI):
 	TextureRHI(InTextureRHI)
 {
 	VERIFY_GL_SCOPE();
@@ -102,7 +147,7 @@ FOpenGLTextureUnorderedAccessView::FOpenGLTextureUnorderedAccessView( FTextureRH
 }
 
 
-FOpenGLVertexBufferUnorderedAccessView::FOpenGLVertexBufferUnorderedAccessView(	FOpenGLDynamicRHI* InOpenGLRHI, FVertexBufferRHIParamRef InVertexBufferRHI, uint8 Format):
+FOpenGLVertexBufferUnorderedAccessView::FOpenGLVertexBufferUnorderedAccessView(	FOpenGLDynamicRHI* InOpenGLRHI, FRHIVertexBuffer* InVertexBufferRHI, uint8 Format):
 	VertexBufferRHI(InVertexBufferRHI),
 	OpenGLRHI(InOpenGLRHI)
 {
@@ -144,21 +189,21 @@ FOpenGLVertexBufferUnorderedAccessView::~FOpenGLVertexBufferUnorderedAccessView(
 }
 
 
-FUnorderedAccessViewRHIRef FOpenGLDynamicRHI::RHICreateUnorderedAccessView(FVertexBufferRHIParamRef VertexBufferRHI,uint8 Format)
+FUnorderedAccessViewRHIRef FOpenGLDynamicRHI::RHICreateUnorderedAccessView(FRHIVertexBuffer* VertexBufferRHI,uint8 Format)
 {
 	FOpenGLVertexBuffer* VertexBuffer = ResourceCast(VertexBufferRHI);
 	return new FOpenGLVertexBufferUnorderedAccessView(this, VertexBufferRHI, Format);
 }
 
-FUnorderedAccessViewRHIRef FOpenGLDynamicRHI::RHICreateUnorderedAccessView(FIndexBufferRHIParamRef IndexBufferRHI, uint8 Format)
+FUnorderedAccessViewRHIRef FOpenGLDynamicRHI::RHICreateUnorderedAccessView(FRHIIndexBuffer* IndexBufferRHI, uint8 Format)
 {
 	checkf(0, TEXT("Not implemented!"));
 	return nullptr;
 }
 
-FShaderResourceViewRHIRef FOpenGLDynamicRHI::RHICreateShaderResourceView(FStructuredBufferRHIParamRef StructuredBufferRHI)
+FShaderResourceViewRHIRef FOpenGLDynamicRHI::RHICreateShaderResourceView(FRHIStructuredBuffer* StructuredBufferRHI)
 {
-	return new FOpenGLShaderResourceViewProxy([=](FShaderResourceViewRHIParamRef OwnerRHI)
+	return new FOpenGLShaderResourceViewProxy([=](FRHIShaderResourceView* OwnerRHI)
 	{
 		VERIFY_GL_SCOPE();
 		GLuint TextureID = 0;
@@ -174,7 +219,7 @@ FShaderResourceViewRHIRef FOpenGLDynamicRHI::RHICreateShaderResourceView(FStruct
 	});
 }
 
-void FOpenGLDynamicRHI::RHIClearTinyUAV(FUnorderedAccessViewRHIParamRef UnorderedAccessViewRHI, const uint32* Values)
+void FOpenGLDynamicRHI::RHIClearTinyUAV(FRHIUnorderedAccessView* UnorderedAccessViewRHI, const uint32* Values)
 {
 	FOpenGLUnorderedAccessView* Texture = ResourceCast(UnorderedAccessViewRHI);
 
@@ -197,4 +242,43 @@ void FOpenGLDynamicRHI::RHIClearTinyUAV(FUnorderedAccessViewRHIParamRef Unordere
 #else
 	UE_LOG(LogRHI, Fatal, TEXT("Only OpenGL4 supports RHIClearUAV."));
 #endif
+}
+
+FOpenGLStructuredBufferUnorderedAccessView::FOpenGLStructuredBufferUnorderedAccessView(FOpenGLDynamicRHI* InOpenGLRHI, FRHIStructuredBuffer* InStructuredBufferRHI, uint8 InFormat)
+	: StructuredBufferRHI(InStructuredBufferRHI)
+	, OpenGLRHI(InOpenGLRHI)
+{
+	VERIFY_GL_SCOPE();
+	FOpenGLStructuredBuffer* InStructuredBuffer = FOpenGLDynamicRHI::ResourceCast(InStructuredBufferRHI);
+	const FOpenGLTextureFormat& GLFormat = GOpenGLTextureFormats[InFormat];
+
+	GLuint TextureID = 0;
+	FOpenGL::GenTextures(1,&TextureID);
+
+	// Use a texture stage that's not likely to be used for draws, to avoid waiting
+	OpenGLRHI->CachedSetupTextureStage(OpenGLRHI->GetContextStateForCurrentContext(), FOpenGL::GetMaxCombinedTextureImageUnits() - 1, GL_TEXTURE_BUFFER, TextureID, -1, 1);
+	FOpenGL::TexBuffer(GL_TEXTURE_BUFFER, GLFormat.InternalFormat[0], InStructuredBuffer->Resource);
+
+	// No need to restore texture stage; leave it like this,
+	// and the next draw will take care of cleaning it up; or
+	// next operation that needs the stage will switch something else in on it.
+
+	this->Resource = TextureID;
+	this->BufferResource = InStructuredBuffer->Resource;
+	this->Format = GLFormat.InternalFormat[0];
+}
+
+uint32 FOpenGLStructuredBufferUnorderedAccessView::GetBufferSize()
+{
+	FOpenGLStructuredBuffer* StructuredBuffer = FOpenGLDynamicRHI::ResourceCast(StructuredBufferRHI.GetReference());
+	return StructuredBuffer->GetSize();
+}
+
+FOpenGLStructuredBufferUnorderedAccessView::~FOpenGLStructuredBufferUnorderedAccessView()
+{
+	if (Resource)
+	{
+		OpenGLRHI->InvalidateTextureResourceInCache( Resource );
+		FOpenGL::DeleteTextures(1, &Resource);
+	}
 }

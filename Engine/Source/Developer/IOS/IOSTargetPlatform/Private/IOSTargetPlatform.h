@@ -78,7 +78,7 @@ public:
 
 	virtual void GetAllDevices( TArray<ITargetDevicePtr>& OutDevices ) const override;
 
-	virtual bool GenerateStreamingInstallManifest(const TMultiMap<FString, int32>& ChunkMap, const TSet<int32>& ChunkIDsInUse) const override
+	virtual bool GenerateStreamingInstallManifest(const TMultiMap<FString, int32>& PakchunkMap, const TSet<int32>& PakchunkIndicesInUse) const override
 	{
 		return true;
 	}
@@ -119,7 +119,7 @@ public:
 		return StaticMeshLODSettings;
 	}
 
-	virtual void GetTextureFormats( const UTexture* Texture, TArray<FName>& OutFormats ) const override;
+	virtual void GetTextureFormats( const UTexture* Texture, TArray< TArray<FName> >& OutFormats) const override;
 
 	virtual void GetAllTextureFormats( TArray<FName>& OutFormats) const override;
 

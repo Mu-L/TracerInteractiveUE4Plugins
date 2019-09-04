@@ -13,6 +13,14 @@
 /** Largest size allowed to carry over into next buffer */
 #define MAX_VOICE_REMAINDER_SIZE 4 * 1024
 
+#if PLATFORM_WINDOWS
+#include "XAudio2Support.h"
+namespace NotificationClient
+{
+	TSharedPtr<FMMNotificationClient> WindowsNotificationClient;
+}
+#endif 
+
 FRemoteTalkerDataImpl::FRemoteTalkerDataImpl() :
 	MaxUncompressedDataSize(0),
 	MaxUncompressedDataQueueSize(0),
@@ -102,6 +110,19 @@ void FRemoteTalkerDataImpl::Reset()
 	if (VoipSynthComponent)
 	{
 		VoipSynthComponent->Stop();
+
+		UAudioComponent* AudioComponent = VoipSynthComponent->GetAudioComponent();
+		if (AudioComponent->IsRegistered())
+		{
+			AudioComponent->UnregisterComponent();
+		}
+
+		//If the UVOIPTalker associated with this is still alive, notify it that this player is done talking.
+		if (UVOIPStatics::IsVOIPTalkerStillAlive(CachedTalkerPtr))
+		{
+			CachedTalkerPtr->OnTalkingEnd();
+		}
+
 		bIsActive = false;
 	}
 
@@ -135,6 +156,9 @@ FVoiceEngineImpl ::FVoiceEngineImpl() :
 	bPendingFinalCapture(false),
 	bIsCapturing(false),
 	SerializeHelper(nullptr)
+#if PLATFORM_WINDOWS
+	, bAudioDeviceChanged(false)
+#endif
 {
 }
 
@@ -149,6 +173,9 @@ FVoiceEngineImpl::FVoiceEngineImpl(IOnlineSubsystem* InSubsystem) :
 	bPendingFinalCapture(false),
 	bIsCapturing(false),
 	SerializeHelper(nullptr)
+#if PLATFORM_WINDOWS
+	, bAudioDeviceChanged(false)
+#endif
 {
 	FCoreUObjectDelegates::PostLoadMapWithWorld.AddRaw(this, &FVoiceEngineImpl::OnPostLoadMap);
 }
@@ -231,12 +258,14 @@ bool FVoiceEngineImpl::Init(int32 MaxLocalTalkers, int32 MaxRemoteTalkers)
 		FVoiceModule& VoiceModule = FVoiceModule::Get();
 		if (VoiceModule.IsVoiceEnabled())
 		{
-			VoiceCapture = VoiceModule.CreateVoiceCapture();
 			VoiceEncoder = VoiceModule.CreateVoiceEncoder();
 
-			bSuccess = VoiceCapture.IsValid() && VoiceEncoder.IsValid();
+			bSuccess = VoiceEncoder.IsValid();
 			if (bSuccess)
 			{
+#if PLATFORM_WINDOWS
+				RegisterDeviceChangedListener();
+#endif
 				CompressedVoiceBuffer.Empty(UVOIPStatics::GetMaxCompressedVoiceDataSize());
 				DecompressedVoiceBuffer.Empty(UVOIPStatics::GetMaxUncompressedVoiceDataSizePerChannel());
 
@@ -317,6 +346,17 @@ uint32 FVoiceEngineImpl::StopLocalVoiceProcessing(uint32 LocalUserNum)
 
 uint32 FVoiceEngineImpl::RegisterLocalTalker(uint32 LocalUserNum)
 {
+	if (!VoiceCapture.IsValid())
+	{
+		VoiceCapture = FVoiceModule::Get().CreateVoiceCapture();
+
+		if (!VoiceCapture.IsValid())
+		{
+			UE_LOG_ONLINE_VOICEENGINE(Error, TEXT("RegisterLocalTalker: Failed to create a Voice Capture Device"));
+			return ONLINE_FAIL;
+		}
+	}
+
 	if (OwningUserIndex == INVALID_INDEX)
 	{
 		OwningUserIndex = LocalUserNum;
@@ -564,23 +604,8 @@ void FVoiceEngineImpl::TickTalkers(float DeltaTime)
 		FRemoteTalkerDataImpl& RemoteData = It.Value();
 		double TimeSince = CurTime - RemoteData.LastSeen;
 
-		if (RemoteData.VoipSynthComponent->IsIdling() && RemoteData.bIsActive)
+		if (RemoteData.VoipSynthComponent && RemoteData.VoipSynthComponent->IsIdling() && RemoteData.bIsActive)
 		{
-			RemoteData.VoipSynthComponent->Stop();
-
-			UAudioComponent* AudioComponent = RemoteData.VoipSynthComponent->GetAudioComponent();
-			if (AudioComponent->IsRegistered())
-			{
-				AudioComponent->UnregisterComponent();
-			}
-
-			//If the UVOIPTalker associated with this is still alive, notify it that this player is done talking.
-			if (UVOIPStatics::IsVOIPTalkerStillAlive(RemoteData.CachedTalkerPtr))
-			{
-				RemoteData.CachedTalkerPtr->OnTalkingEnd();
-			}
-			RemoteData.bIsActive = false;
-
 			RemoteData.Reset();
 		}
 		else if (TimeSince >= UVOIPStatics::GetRemoteTalkerTimeoutDuration())
@@ -600,6 +625,13 @@ void FVoiceEngineImpl::Tick(float DeltaTime)
 	}
 
 	TickTalkers(DeltaTime);
+
+#if PLATFORM_WINDOWS
+	if (bAudioDeviceChanged)
+	{
+		HandleDeviceChange();
+	}
+#endif
 }
 
 void FVoiceEngineImpl::GenerateVoiceData(USoundWaveProcedural* InProceduralWave, int32 SamplesRequired, const FUniqueNetId& TalkerId)
@@ -634,7 +666,7 @@ void FVoiceEngineImpl::OnAudioFinished()
 	for (FRemoteTalkerData::TIterator It(RemoteTalkerBuffers); It; ++It)
 	{
 		FRemoteTalkerDataImpl& RemoteData = It.Value();
-		if (RemoteData.VoipSynthComponent->IsIdling())
+		if (RemoteData.VoipSynthComponent && RemoteData.VoipSynthComponent->IsIdling())
 		{
 			UE_LOG_ONLINE_VOICEENGINE(Log, TEXT("Removing VOIP AudioComponent for Id: %s"), *It.Key().ToDebugString());
 			RemoteData.VoipSynthComponent->Stop();
@@ -766,3 +798,50 @@ void FVoiceEngineImpl::CreateSerializeHelper()
 		SerializeHelper = new FVoiceSerializeHelper(this);
 	}
 }
+
+#if PLATFORM_WINDOWS
+void FVoiceEngineImpl::RegisterDeviceChangedListener()
+{
+	if (!NotificationClient::WindowsNotificationClient.IsValid())
+	{
+		NotificationClient::WindowsNotificationClient = TSharedPtr<FMMNotificationClient>(new FMMNotificationClient);
+	}
+
+	NotificationClient::WindowsNotificationClient->RegisterDeviceChangedListener(this);
+}
+
+void FVoiceEngineImpl::UnregisterDeviceChangedListener()
+{
+	if (NotificationClient::WindowsNotificationClient.IsValid())
+	{
+		NotificationClient::WindowsNotificationClient->UnRegisterDeviceDeviceChangedListener(this);
+	}
+}
+
+void FVoiceEngineImpl::HandleDeviceChange()
+{
+	const double TimeSince = FPlatformTime::Seconds() - TimeDeviceChaned;
+	if (TimeSince >= DeviceChangeDelay)
+	{
+		if (bIsCapturing)
+		{
+			StopLocalVoiceProcessing(OwningUserIndex);
+			StartLocalVoiceProcessing(OwningUserIndex);
+		}
+
+		for (FRemoteTalkerData::TIterator It(RemoteTalkerBuffers); It; ++It)
+		{
+			FRemoteTalkerDataImpl& RemoteData = It.Value();
+			RemoteData.Reset();
+		}
+
+		bAudioDeviceChanged = false;
+	}
+}
+
+void FVoiceEngineImpl::OnDefaultDeviceChanged()
+{
+	bAudioDeviceChanged = true;
+	TimeDeviceChaned = FPlatformTime::Seconds();
+}
+#endif

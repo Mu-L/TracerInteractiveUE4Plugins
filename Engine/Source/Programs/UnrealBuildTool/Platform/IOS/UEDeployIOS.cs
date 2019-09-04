@@ -341,6 +341,7 @@ namespace UnrealBuildTool
 					MinVersion = "9.0";
 					break;
 				case "IOS_10":
+					Log.TraceWarning("IOS 10 is no longer supported in UE4 as of 4.23");
 					MinVersion = "10.0";
 					break;
 				case "IOS_11":
@@ -353,7 +354,7 @@ namespace UnrealBuildTool
 			}
 			else
 			{
-				MinVersion = "9.0";
+				MinVersion = "11.0";
 			}
 
 			// Get Facebook Support details
@@ -1216,7 +1217,7 @@ namespace UnrealBuildTool
 			return PluginExtras;
 		}
 
-		static void SafeFileCopy(FileInfo SourceFile, string DestinationPath, bool bOverwrite)
+		public static void SafeFileCopy(FileInfo SourceFile, string DestinationPath, bool bOverwrite)
 		{
 			FileInfo DI = new FileInfo(DestinationPath);
 			if (DI.Exists && bOverwrite)

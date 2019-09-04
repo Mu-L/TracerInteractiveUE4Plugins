@@ -12,6 +12,7 @@
 #include "Misc/TimeGuard.h"
 #include "ProfilingDebugging/CsvProfiler.h"
 #include "Algo/Transform.h"
+#include "HAL/PlatformStackWalk.h"
 
 DECLARE_CYCLE_STAT(TEXT("SetTimer"), STAT_SetTimer, STATGROUP_Engine);
 DECLARE_CYCLE_STAT(TEXT("SetTimeForNextTick"), STAT_SetTimerForNextTick, STATGROUP_Engine);
@@ -23,18 +24,194 @@ CSV_DECLARE_CATEGORY_MODULE_EXTERN(CORE_API, Basic);
 /** Track the last assigned handle globally */
 uint64 FTimerManager::LastAssignedSerialNumber = 0;
 
+static float DumpTimerLogsThreshold = 0.f;
+static FAutoConsoleVariableRef CVarDumpTimerLogsThreshold(
+	TEXT("TimerManager.DumpTimerLogsThreshold"), DumpTimerLogsThreshold,
+	TEXT("Threshold (in milliseconds) after which we log timer info to try and help track down spikes in the timer code. Disabled when set to 0"),
+	ECVF_Default);
+
+static int32 DumpTimerLogResolveVirtualFunctions = 1;
+static FAutoConsoleVariableRef CVarDumpTimerLogResolveVirtualFunctions(
+	TEXT("TimerManager.DumpTimerLogResolveVirtualFunctions"), DumpTimerLogResolveVirtualFunctions,
+	TEXT("When logging timer info virtual functions will be resolved, if possible."),
+	ECVF_Default);
+
+static int32 DumpTimerLogSymbolNames = 1;
+static FAutoConsoleVariableRef CVarDumpTimerLogSymbolNames(
+	TEXT("TimerManager.DumpTimerLogSymbolNames"), DumpTimerLogSymbolNames,
+	TEXT("When logging timer info, symbol names will be included if set to 1."),
+	ECVF_Default);
+
+static int32 MaxExpiredTimersToLog = 30;
+static FAutoConsoleVariableRef CVarMaxExpiredTimersToLog(
+	TEXT("TimerManager.MaxExpiredTimersToLog"), 
+	MaxExpiredTimersToLog,
+	TEXT("Maximum number of TimerData exceeding the threshold to log in a single frame."));
+
+
+#if UE_ENABLE_TRACKING_TIMER_SOURCES
+static int32 GBuildTimerSourceList = 0;
+static FAutoConsoleVariableRef CVarGBuildTimerSourceList(
+	TEXT("TimerManager.BuildTimerSourceList"), GBuildTimerSourceList,
+	TEXT("When non-zero, tracks which timers expire each frame, dumping them during shutdown or when the flag is changed back to 0.")
+	TEXT("\n  0: Off")
+	TEXT("\n  1: On - Group timers by class (useful to focus on entire systems of things, especially bad spikey frames where we care about aggregates)")
+	TEXT("\n  2: On - Do not group timers by class (useful if individual instances are problematic)"),
+	ECVF_Default);
+
+// Information about a single timer or timer source being tracked
+struct FTimerSourceEntry
+{
+	uint64 TotalCount = 0;
+	double SumApproxRate = 0.0;
+	uint32 LastFrameID = 0;
+	uint32 NumThisFrame = 0;
+	uint32 MaxPerFrame = 0;
+
+	void UpdateEntry(float Rate, uint32 FrameID, int32 CallCount)
+	{
+		TotalCount += CallCount;
+		SumApproxRate += Rate;
+
+		if (LastFrameID != FrameID)
+		{
+			LastFrameID = FrameID;
+			NumThisFrame = 0;
+		}
+		NumThisFrame += CallCount;
+
+		MaxPerFrame = FMath::Max(NumThisFrame, MaxPerFrame);
+	}
+};
+
+// List of information about all timers that have expired during a tracking window
+struct FTimerSourceList
+{
+	TMap<FString, FTimerSourceEntry> Entries;
+	UGameInstance* OwningGameInstance = nullptr;
+
+	// This is similar to FTimerUnifiedDelegate::ToString() but it tries to find the base class / exclude vptr printout info so that timers are collapsed/aggregated better
+	static FString GetPartialDeduplicateDelegateToString(const FTimerUnifiedDelegate& Delegate)
+	{
+		FString FunctionNameStr;
+		FString ObjectNameStr;
+		bool bDynDelegate = false;
+
+		if (Delegate.FuncDelegate.IsBound())
+		{
+			ObjectNameStr = TEXT("NonDynamicDelegate");
+			FName FunctionName;
+#if USE_DELEGATE_TRYGETBOUNDFUNCTIONNAME
+			FunctionName = Delegate.FuncDelegate.TryGetBoundFunctionName();
+#endif
+			if (FunctionName.IsNone())
+			{
+				uint64 ProgramCounter = Delegate.FuncDelegate.GetBoundProgramCounterForTimerManager();
+				if (ProgramCounter != 0)
+				{
+					// Add the function address
+					if (DumpTimerLogSymbolNames)
+					{
+						// Try to resolve the function address to a symbol
+						FProgramCounterSymbolInfo SymbolInfo;
+						FPlatformStackWalk::ProgramCounterToSymbolInfo(ProgramCounter, /*out*/ SymbolInfo);
+						FunctionNameStr = FString::Printf(TEXT("%s [%s:%d]"), ANSI_TO_TCHAR(SymbolInfo.FunctionName), ANSI_TO_TCHAR(SymbolInfo.Filename), SymbolInfo.LineNumber);
+					}
+					else
+					{
+						FunctionNameStr = FString::Printf(TEXT("func: 0x%llx"), ProgramCounter);
+					}
+				}
+				else
+				{
+					FunctionNameStr = TEXT("0x0");
+				}
+			}
+			else
+			{
+				FunctionNameStr = FunctionName.ToString();
+			}
+		}
+		else if (Delegate.FuncDynDelegate.IsBound())
+		{
+			const FName FuncFName = Delegate.FuncDynDelegate.GetFunctionName();
+			FunctionNameStr = FuncFName.ToString();
+			bDynDelegate = true;
+
+			UClass* SourceClass = nullptr;
+			if (const UObject* Object = Delegate.FuncDynDelegate.GetUObject())
+			{
+				SourceClass = Object->GetClass();
+				if (UFunction* Func = SourceClass->FindFunctionByName(FuncFName))
+				{
+					SourceClass = Func->GetOwnerClass();
+				}
+			}
+
+
+			ObjectNameStr = GetPathNameSafe(SourceClass);
+		}
+		else
+		{
+			ObjectNameStr = TEXT("NotBound!");
+			FunctionNameStr = TEXT("NotBound!");
+		}
+
+		return FString::Printf(TEXT("%s,\"%s\""), *ObjectNameStr, *FunctionNameStr);
+	}
+
+	void AddEntry(const FTimerData& Data, int32 CallCount)
+	{
+		Entries.FindOrAdd((GBuildTimerSourceList == 2) ? Data.TimerDelegate.ToString() : GetPartialDeduplicateDelegateToString(Data.TimerDelegate)).UpdateEntry(Data.Rate, GFrameCounter, CallCount);
+	}
+
+	void DumpEntries()
+	{
+		FString AdditionalInfoAboutGameInstance;
+		if (OwningGameInstance != nullptr)
+		{
+			if (FWorldContext* WorldContext = OwningGameInstance->GetWorldContext())
+			{
+				if (WorldContext->RunAsDedicated)
+				{
+					AdditionalInfoAboutGameInstance = TEXT(" (dedicated server)");
+				}
+			}
+		}
+
+		UE_LOG(LogEngine, Log, TEXT("-----------------------"));
+		UE_LOG(LogEngine, Log, TEXT("Listing Expired Timer Stats for OwningGameInstance=%s%s"), *GetPathNameSafe(OwningGameInstance), *AdditionalInfoAboutGameInstance);
+		
+		UE_LOG(LogEngine, Log, TEXT("TotalExpires,RateAvg,PeakInFrame,ObjectOrClass,FunctionName"));
+		Entries.ValueSort([](const FTimerSourceEntry& A, const FTimerSourceEntry& B) { return A.TotalCount > B.TotalCount; });
+		for (const auto& KVP : Entries)
+		{
+			UE_LOG(LogEngine, Log, TEXT("%llu,%.2f,%u,%s"), KVP.Value.TotalCount, KVP.Value.SumApproxRate / KVP.Value.TotalCount, KVP.Value.MaxPerFrame, *KVP.Key);
+		}
+
+		UE_LOG(LogEngine, Log, TEXT("-----------------------"));
+	}
+
+	~FTimerSourceList()
+	{
+		DumpEntries();
+	}
+};
+#endif // UE_ENABLE_TRACKING_TIMER_SOURCES
+
 namespace
 {
 	void DescribeFTimerDataSafely(FOutputDevice& Ar, const FTimerData& Data)
 	{
 		Ar.Logf(
-			TEXT("TimerData %p : bLoop=%s, bRequiresDelegate=%s, Status=%d, Rate=%f, ExpireTime=%f"),
+			TEXT("TimerData %p : bLoop=%s, bRequiresDelegate=%s, Status=%d, Rate=%f, ExpireTime=%f, Delegate=%s"),
 			&Data,
 			Data.bLoop ? TEXT("true") : TEXT("false"),
 			Data.bRequiresDelegate ? TEXT("true") : TEXT("false"),
 			static_cast<int32>(Data.Status),
 			Data.Rate,
-			Data.ExpireTime
+			Data.ExpireTime,
+			*Data.TimerDelegate.ToString()
 		);
 	}
 
@@ -69,7 +246,7 @@ struct FTimerHeapOrder
 	int32 NumTimers;
 };
 
-FTimerManager::FTimerManager()
+FTimerManager::FTimerManager(UGameInstance* GameInstance)
 	: InternalTime(0.0)
 	, LastTickedFrame(static_cast<uint64>(-1))
 	, OwningGameInstance(nullptr)
@@ -78,6 +255,11 @@ FTimerManager::FTimerManager()
 	{
 		// Off by default, renable if needed
 		//FCoreDelegates::OnHandleSystemError.AddRaw(this, &FTimerManager::OnCrash);
+	}
+
+	if (GameInstance)
+	{
+		SetGameInstance(GameInstance);
 	}
 }
 
@@ -132,28 +314,78 @@ void FTimerManager::OnCrash()
 FString FTimerUnifiedDelegate::ToString() const
 {
 	const UObject* Object = nullptr;
-	FName FunctionName = NAME_None;
+	FString FunctionNameStr;
 	bool bDynDelegate = false;
 
 	if (FuncDelegate.IsBound())
 	{
+		FName FunctionName;
 #if USE_DELEGATE_TRYGETBOUNDFUNCTIONNAME
 		FunctionName = FuncDelegate.TryGetBoundFunctionName();
 #endif
+		if (FunctionName.IsNone())
+		{
+			void** VtableAddr = nullptr;
+#if PLATFORM_COMPILER_CLANG || defined(_MSC_VER)
+			// Add the vtable address
+			const void* UserObject = FuncDelegate.GetObjectForTimerManager();
+			if (UserObject)
+			{
+				VtableAddr = *(void***)UserObject;
+				FunctionNameStr = FString::Printf(TEXT("vtbl: %p"), VtableAddr);
+			}
+#endif // PLATFORM_COMPILER_CLANG
+
+			uint64 ProgramCounter = FuncDelegate.GetBoundProgramCounterForTimerManager();
+			if (ProgramCounter != 0)
+			{
+				// Add the function address
+
+#if PLATFORM_COMPILER_CLANG
+				// See if this is a virtual function. Heuristic is that real function addresses are higher than some value, and vtable offsets are lower
+				const uint64 MaxVTableAddressOffset = 32768;
+				if (DumpTimerLogResolveVirtualFunctions && VtableAddr && ProgramCounter > 0 && ProgramCounter < MaxVTableAddressOffset)
+				{
+					// If the ProgramCounter is just an offset to the vtable (virtual member function) then resolve the actual ProgramCounter here.
+					ProgramCounter = (uint64)VtableAddr[ProgramCounter / sizeof(void*)];
+				}
+#endif // PLATFORM_COMPILER_CLANG
+
+				FunctionNameStr += FString::Printf(TEXT(" func: 0x%llx"), ProgramCounter);
+
+				if (DumpTimerLogSymbolNames)
+				{
+					// Try to resolve the function address to a symbol
+					FProgramCounterSymbolInfo SymbolInfo;
+					SymbolInfo.FunctionName[0] = 0;
+					SymbolInfo.Filename[0] = 0;
+					SymbolInfo.LineNumber = 0;
+					FPlatformStackWalk::ProgramCounterToSymbolInfo(ProgramCounter, SymbolInfo);
+					FunctionNameStr += FString::Printf(TEXT(" %s [%s:%d]"), ANSI_TO_TCHAR(SymbolInfo.FunctionName), ANSI_TO_TCHAR(SymbolInfo.Filename), SymbolInfo.LineNumber);
+				}
+			}
+			else
+			{
+				FunctionNameStr = TEXT(" 0x0");
+			}
+		}
+		else
+		{
+			FunctionNameStr = FunctionName.ToString();
+		}
 	}
 	else if (FuncDynDelegate.IsBound())
 	{
 		Object = FuncDynDelegate.GetUObject();
-		FunctionName = FuncDynDelegate.GetFunctionName();
+		FunctionNameStr = FuncDynDelegate.GetFunctionName().ToString();
 		bDynDelegate = true;
 	}
 	else
 	{
-		static FName NotBoundName(TEXT("NotBound!"));
-		FunctionName = NotBoundName;
+		FunctionNameStr = TEXT("NotBound!");
 	}
 
-	return FString::Printf(TEXT("%s,%s,%s"), bDynDelegate ? TEXT("DELEGATE") : TEXT("DYN DELEGATE"), Object == nullptr ? TEXT("NO OBJ") : *Object->GetPathName(), *FunctionName.ToString());
+	return FString::Printf(TEXT("%s,%s,%s"), bDynDelegate ? TEXT("DYN DELEGATE") : TEXT("DELEGATE"), Object == nullptr ? TEXT("NO OBJ") : *Object->GetPathName(), *FunctionNameStr);
 }
 
 // ---------------------------------
@@ -170,6 +402,9 @@ FTimerData& FTimerManager::GetTimer(FTimerHandle const& InHandle)
 
 FTimerData* FTimerManager::FindTimer(FTimerHandle const& InHandle)
 {
+	// not currently threadsafe
+	check(IsInGameThread());
+
 	if (!InHandle.IsValid())
 	{
 		return nullptr;
@@ -267,6 +502,10 @@ void FTimerManager::InternalSetTimer(FTimerHandle& InOutHandle, FTimerUnifiedDel
 
 		InOutHandle = NewTimerHandle;
 	}
+	else
+	{
+		InOutHandle.Invalidate();
+	}
 }
 
 FTimerHandle FTimerManager::InternalSetTimerForNextTick(FTimerUnifiedDelegate&& InDelegate)
@@ -297,7 +536,7 @@ FTimerHandle FTimerManager::InternalSetTimerForNextTick(FTimerUnifiedDelegate&& 
 	return NewTimerHandle;
 }
 
-void FTimerManager::InternalClearTimer(FTimerHandle const& InHandle)
+void FTimerManager::InternalClearTimer(FTimerHandle InHandle)
 {
 	SCOPE_CYCLE_COUNTER(STAT_ClearTimer);
 
@@ -518,7 +757,7 @@ DECLARE_DWORD_COUNTER_STAT(TEXT("TimerManager Heap Size"),STAT_NumHeapEntries,ST
 
 void FTimerManager::Tick(float DeltaTime)
 {
-	CSV_SCOPED_TIMING_STAT_EXCLUSIVE(Tickables);
+	CSV_SCOPED_TIMING_STAT_EXCLUSIVE(TimerManager);
 
 #if DO_TIMEGUARD && 0
 	TArray<FTimerUnifiedDelegate> RunTimerDelegates;
@@ -546,6 +785,25 @@ void FTimerManager::Tick(float DeltaTime)
 		return;
 	}
 
+#if UE_ENABLE_TRACKING_TIMER_SOURCES
+	if ((TimerSourceList == nullptr) != (GBuildTimerSourceList == 0))
+	{
+		if (TimerSourceList == nullptr)
+		{
+			TimerSourceList.Reset(new FTimerSourceList);
+			TimerSourceList->OwningGameInstance = OwningGameInstance;
+		}
+		else
+		{
+			TimerSourceList.Reset();
+		}
+	}
+#endif
+
+	const double StartTime = FPlatformTime::Seconds();
+	bool bDumpTimerLogsThresholdExceeded = false;
+	int32 NbExpiredTimers = 0;
+
 	InternalTime += DeltaTime;
 
 	UWorld* const OwningWorld = OwningGameInstance ? OwningGameInstance->GetWorld() : nullptr;
@@ -570,6 +828,15 @@ void FTimerManager::Tick(float DeltaTime)
 		{
 			// Timer has expired! Fire the delegate, then handle potential looping.
 
+			if (bDumpTimerLogsThresholdExceeded)
+			{
+				++NbExpiredTimers;
+				if (NbExpiredTimers <= MaxExpiredTimersToLog)
+				{
+					DescribeFTimerDataSafely(*GLog, *Top);
+				}
+			}
+
 			// Set the relevant level context for this timer
 			const int32 LevelCollectionIndex = OwningWorld ? OwningWorld->FindCollectionIndexByType(Top->LevelCollection) : INDEX_NONE;
 			
@@ -583,6 +850,14 @@ void FTimerManager::Tick(float DeltaTime)
 			int32 const CallCount = Top->bLoop ? 
 				FMath::TruncToInt( (InternalTime - Top->ExpireTime) / Top->Rate ) + 1
 				: 1;
+
+#if UE_ENABLE_TRACKING_TIMER_SOURCES
+			if (TimerSourceList.IsValid())
+			{
+				//@TODO: The actual call count may be less, e.g., if the delegate clears itself during the loop below
+				TimerSourceList->AddEntry(*Top, CallCount);
+			}
+#endif
 
 			// Now call the function
 			for (int32 CallIdx=0; CallIdx<CallCount; ++CallIdx)
@@ -598,14 +873,36 @@ void FTimerManager::Tick(float DeltaTime)
 				RunTimerDelegates.Add(Top->TimerDelegate);
 #endif
 
-
+				checkf(!WillRemoveTimerAssert(CurrentlyExecutingTimer), TEXT("RemoveTimer(CurrentlyExecutingTimer) - due to fail before Execute()"));
 				Top->TimerDelegate.Execute();
 
 				// Update Top pointer, in case it has been invalidated by the Execute call
 				Top = FindTimer(CurrentlyExecutingTimer);
+				checkf(!Top || !WillRemoveTimerAssert(CurrentlyExecutingTimer), TEXT("RemoveTimer(CurrentlyExecutingTimer) - due to fail after Execute()"));
 				if (!Top || Top->Status != ETimerStatus::Executing)
 				{
 					break;
+				}
+			}
+
+			if (DumpTimerLogsThreshold > 0.f && !bDumpTimerLogsThresholdExceeded)
+			{
+				// help us hunt down outliers that cause our timer manager times to spike.  Recommended that users set meaningful DumpTimerLogsThresholds in appropriate ini files if they are seeing spikes in the timer manager.
+				const double DeltaT = (FPlatformTime::Seconds() - StartTime) * 1000.f;
+				if (DeltaT >= DumpTimerLogsThreshold)
+				{
+					bDumpTimerLogsThresholdExceeded = true;
+                    ++NbExpiredTimers;
+					UE_LOG(LogEngine, Log, TEXT("TimerManager's time threshold of %.2fms exceeded with a deltaT of %.4f, dumping current timer data."), DumpTimerLogsThreshold, DeltaT);
+
+					if (Top)
+					{
+						DescribeFTimerDataSafely(*GLog, *Top);
+					}
+					else
+					{
+						UE_LOG(LogEngine, Log, TEXT("There was no timer data for the first timer after exceeding the time threshold!"));
+					}
 				}
 			}
 
@@ -635,6 +932,11 @@ void FTimerManager::Tick(float DeltaTime)
 		}
 	}
 
+	if (NbExpiredTimers > MaxExpiredTimersToLog)
+	{
+		UE_LOG(LogEngine, Log, TEXT("TimerManager's caught %d Timers exceeding the time threshold. Only the first %d were logged."), NbExpiredTimers, MaxExpiredTimersToLog);
+	}
+
 	// Timer has been ticked.
 	LastTickedFrame = GFrameCounter;
 
@@ -659,8 +961,23 @@ TStatId FTimerManager::GetStatId() const
 	RETURN_QUICK_DECLARE_CYCLE_STAT(FTimerManager, STATGROUP_Tickables);
 }
 
+void FTimerManager::SetGameInstance(UGameInstance* InGameInstance)
+{
+	OwningGameInstance = InGameInstance;
+
+#if UE_ENABLE_TRACKING_TIMER_SOURCES
+	if (TimerSourceList.IsValid())
+	{
+		TimerSourceList->OwningGameInstance = OwningGameInstance;
+	}
+#endif
+}
+
 void FTimerManager::ListTimers() const
 {
+	// not currently threadsafe
+	check(IsInGameThread());
+
 	TArray<const FTimerData*> ValidActiveTimers;
 	ValidActiveTimers.Reserve(ActiveTimerHeap.Num());
 	for (FTimerHandle Handle : ActiveTimerHeap)
@@ -674,24 +991,22 @@ void FTimerManager::ListTimers() const
 	UE_LOG(LogEngine, Log, TEXT("------- %d Active Timers -------"), ValidActiveTimers.Num());
 	for (const FTimerData* Data : ValidActiveTimers)
 	{
-		FString TimerString = Data->TimerDelegate.ToString();
-		UE_LOG(LogEngine, Log, TEXT("%s"), *TimerString);
+		check(Data);
+		DescribeFTimerDataSafely(*GLog, *Data);
 	}
 
 	UE_LOG(LogEngine, Log, TEXT("------- %d Paused Timers -------"), PausedTimerSet.Num());
 	for (FTimerHandle Handle : PausedTimerSet)
 	{
 		const FTimerData& Data = GetTimer(Handle);
-		FString TimerString = Data.TimerDelegate.ToString();
-		UE_LOG(LogEngine, Log, TEXT("%s"), *TimerString);
+		DescribeFTimerDataSafely(*GLog, Data);
 	}
 
 	UE_LOG(LogEngine, Log, TEXT("------- %d Pending Timers -------"), PendingTimerSet.Num());
 	for (FTimerHandle Handle : PendingTimerSet)
 	{
 		const FTimerData& Data = GetTimer(Handle);
-		FString TimerString = Data.TimerDelegate.ToString();
-		UE_LOG(LogEngine, Log, TEXT("%s"), *TimerString);
+		DescribeFTimerDataSafely(*GLog, Data);
 	}
 
 	UE_LOG(LogEngine, Log, TEXT("------- %d Total Timers -------"), PendingTimerSet.Num() + PausedTimerSet.Num() + ValidActiveTimers.Num());
@@ -739,6 +1054,29 @@ void FTimerManager::RemoveTimer(FTimerHandle Handle)
 	}
 
 	Timers.RemoveAt(Handle.GetIndex());
+}
+
+bool FTimerManager::WillRemoveTimerAssert(FTimerHandle Handle) const
+{
+	const FTimerData& Data = GetTimer(Handle);
+
+	// Remove TimerIndicesByObject entry if necessary
+	if (const void* TimerIndicesByObjectKey = Data.TimerIndicesByObjectKey)
+	{
+		const TSet<FTimerHandle>* TimersForObject = ObjectToTimers.Find(TimerIndicesByObjectKey);
+		if (!TimersForObject)
+		{
+			return true;
+		}
+
+		const FTimerHandle* Found = TimersForObject->Find(Handle);
+		if (!Found)
+		{
+			return true;
+		}
+	}
+
+	return false;
 }
 
 FTimerHandle FTimerManager::GenerateHandle(int32 Index)

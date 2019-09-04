@@ -16,7 +16,7 @@ class FMemsetBufferCS : public FGlobalShader
 	
 	static bool ShouldCompilePermutation( const FGlobalShaderPermutationParameters& Parameters )
 	{
-		return IsFeatureLevelSupported( Parameters.Platform, ERHIFeatureLevel::SM5 );
+		return RHISupportsComputeShaders(Parameters.Platform);
 	}
 
 	static void ModifyCompilationEnvironment( const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment )
@@ -63,7 +63,7 @@ void MemsetBuffer(FRHICommandList& RHICmdList, const FRWBufferStructured& DstBuf
 
 	TShaderMapRef< FMemsetBufferCS > ComputeShader( ShaderMap );
 
-	const FComputeShaderRHIParamRef ShaderRHI = ComputeShader->GetComputeShader();
+	FRHIComputeShader* ShaderRHI = ComputeShader->GetComputeShader();
 	RHICmdList.SetComputeShader( ShaderRHI );
 
 	SetShaderValue( RHICmdList, ShaderRHI, ComputeShader->Value, Value );
@@ -85,7 +85,7 @@ class FMemcpyBufferCS : public FGlobalShader
 	
 	static bool ShouldCompilePermutation( const FGlobalShaderPermutationParameters& Parameters )
 	{
-		return IsFeatureLevelSupported( Parameters.Platform, ERHIFeatureLevel::SM5 );
+		return RHISupportsComputeShaders(Parameters.Platform);
 	}
 
 	static void ModifyCompilationEnvironment( const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment )
@@ -133,7 +133,7 @@ void MemcpyBuffer(FRHICommandList& RHICmdList, const FRWBufferStructured& SrcBuf
 
 	TShaderMapRef< FMemcpyBufferCS > ComputeShader( ShaderMap );
 		
-	const FComputeShaderRHIParamRef ShaderRHI = ComputeShader->GetComputeShader();
+	FRHIComputeShader* ShaderRHI = ComputeShader->GetComputeShader();
 	RHICmdList.SetComputeShader( ShaderRHI );
 
 	RHICmdList.TransitionResource(EResourceTransitionAccess::EWritable, EResourceTransitionPipeline::EGfxToCompute, DstBuffer.UAV);
@@ -184,7 +184,7 @@ class FScatterCopyCS : public FGlobalShader
 	
 	static bool ShouldCompilePermutation( const FGlobalShaderPermutationParameters& Parameters )
 	{
-		return IsFeatureLevelSupported( Parameters.Platform, ERHIFeatureLevel::SM5 );
+		return RHISupportsComputeShaders(Parameters.Platform);
 	}
 
 	static void ModifyCompilationEnvironment( const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment )
@@ -268,15 +268,15 @@ void FScatterUploadBuilder::UploadTo(FRHICommandList& RHICmdList, FRWBufferStruc
 {
 	RHIUnlockVertexBuffer(ScatterBuffer.Buffer);
 	RHIUnlockVertexBuffer(UploadBuffer.Buffer);
-	
+
 	ScatterData = nullptr;
 	UploadData = nullptr;
 
 	auto ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
 
 	TShaderMapRef<FScatterCopyCS> ComputeShader(ShaderMap);
-		
-	const FComputeShaderRHIParamRef ShaderRHI = ComputeShader->GetComputeShader();
+
+	FRHIComputeShader* ShaderRHI = ComputeShader->GetComputeShader();
 	RHICmdList.SetComputeShader(ShaderRHI);
 
 	SetShaderValue(RHICmdList, ShaderRHI, ComputeShader->NumScatters, NumScatters);
@@ -300,8 +300,8 @@ void FScatterUploadBuilder::UploadTo_Flush(FRHICommandList& RHICmdList, FRWBuffe
 	auto ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
 
 	TShaderMapRef<FScatterCopyCS> ComputeShader(ShaderMap);
-
-	const FComputeShaderRHIParamRef ShaderRHI = ComputeShader->GetComputeShader();
+		
+	FRHIComputeShader* ShaderRHI = ComputeShader->GetComputeShader();
 	RHICmdList.SetComputeShader(ShaderRHI);
 
 	SetShaderValue(RHICmdList, ShaderRHI, ComputeShader->NumScatters, NumScatters);

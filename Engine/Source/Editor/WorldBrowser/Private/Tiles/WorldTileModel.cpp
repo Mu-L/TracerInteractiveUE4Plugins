@@ -16,7 +16,10 @@
 #include "Engine/WorldComposition.h"
 #include "GameFramework/WorldSettings.h"
 #include "LandscapeInfo.h"
+#include "LandscapeEditorModule.h"
+#include "LandscapeFileFormatInterface.h"
 #include "LandscapeStreamingProxy.h"
+#include "Landscape.h"
 
 
 #define LOCTEXT_NAMESPACE "WorldBrowser"
@@ -30,9 +33,11 @@ FWorldTileModel::FWorldTileModel(FWorldTileCollectionModel& InWorldModel, int32 
 {
 	UWorldComposition* WorldComposition = LevelCollectionModel.GetWorld()->WorldComposition;
 
-	// Tile display details object
-	TileDetails = NewObject<UWorldTileDetails>(GetTransientPackage(), NAME_None, RF_Transient|RF_Transactional);
+	// Tile display details object, don't mark the tile details transaction on creation, its lifespan is controlled through root set
+	TileDetails = NewObject<UWorldTileDetails>(GetTransientPackage(), NAME_None, RF_Transient);
 	TileDetails->AddToRoot();
+	// Mark it transactional afterward so modification on it are undoable.
+	TileDetails->SetFlags(RF_Transactional);
 
 	// Subscribe to tile properties changes
 	// Un-subscribe in dtor if new is added!
@@ -334,15 +339,22 @@ bool FWorldTileModel::IsTiledLandscapeBased() const
 	if (IsLandscapeBased() && !GetLandscape()->ReimportHeightmapFilePath.IsEmpty())
 	{
 		// Check if single landscape actor resolution matches heightmap file size
-		IFileManager& FileManager = IFileManager::Get();
-		const int64 ImportFileSize = FileManager.FileSize(*GetLandscape()->ReimportHeightmapFilePath);
-		
-		FIntRect ComponentsRect = GetLandscape()->GetBoundingRect();
-		int64 LandscapeSamples	= (int64)(ComponentsRect.Width()+1)*(ComponentsRect.Height()+1);
-		// Height samples are 2 bytes wide
-		if (LandscapeSamples*2 == ImportFileSize)
+		ILandscapeEditorModule& LandscapeEditorModule = FModuleManager::GetModuleChecked<ILandscapeEditorModule>("LandscapeEditor");
+		const FString TargetExtension = FPaths::GetExtension(GetLandscape()->ReimportHeightmapFilePath, true);
+		const ILandscapeHeightmapFileFormat* HeightmapFormat = LandscapeEditorModule.GetHeightmapFormatByExtension(*TargetExtension);
+
+		FLandscapeHeightmapInfo HeightmapInfo = HeightmapFormat->Validate(*GetLandscape()->ReimportHeightmapFilePath);
+		if (HeightmapInfo.ResultCode != ELandscapeImportResult::Error)
 		{
-			return true;
+			FIntRect ComponentsRect = GetLandscape()->GetBoundingRect();
+
+			for (FLandscapeFileResolution& PossibleResolution: HeightmapInfo.PossibleResolutions)
+			{
+				if ((PossibleResolution.Width == (ComponentsRect.Width() + 1)) && (PossibleResolution.Height == (ComponentsRect.Height() + 1)))
+				{
+					return true;
+				}
+			}
 		}
 	}
 
@@ -437,12 +449,7 @@ FVector FWorldTileModel::GetLevelCurrentPosition() const
 	return FVector::ZeroVector;
 }
 
-FVector2D FWorldTileModel::GetLandscapeComponentSize() const
-{
-	return LandscapeComponentSize;
-}
-
-void FWorldTileModel::SetLevelPosition(const FIntVector& InPosition)
+void FWorldTileModel::SetLevelPosition(const FIntVector& InPosition, const FIntPoint* InLandscapeSectionOffset)
 {
 	// Parent absolute position
 	TSharedPtr<FWorldTileModel> ParentModel = StaticCastSharedPtr<FWorldTileModel>(GetParent());
@@ -450,6 +457,7 @@ void FWorldTileModel::SetLevelPosition(const FIntVector& InPosition)
 	
 	// Actual offset
 	FIntVector Offset = InPosition - TileDetails->AbsolutePosition;
+	FIntPoint LandscapeOffset = InLandscapeSectionOffset ? *InLandscapeSectionOffset : FIntPoint(Offset.X, Offset.Y);
 
 	TileDetails->Modify();
 	
@@ -489,7 +497,7 @@ void FWorldTileModel::SetLevelPosition(const FIntVector& InPosition)
 
 	if (IsLandscapeBased())
 	{
-		UpdateLandscapeSectionsOffset(FIntPoint(Offset.X, Offset.Y)); // section offset is 2D 
+		UpdateLandscapeSectionsOffset(LandscapeOffset); // section offset is 2D 
 		bool bShowWarnings = true;
 		ULandscapeInfo::RecreateLandscapeInfo(LevelCollectionModel.GetWorld(), bShowWarnings);
 	}
@@ -522,9 +530,6 @@ void FWorldTileModel::Update()
 	if (!IsRootTile())
 	{
 		Landscape = NULL;
-		LandscapeComponentsXY.Empty();
-		LandscapeComponentSize = FVector2D(0.f, 0.f);
-		LandscapeComponentsRectXY = FIntRect(FIntPoint(MAX_int32, MAX_int32), FIntPoint(MIN_int32, MIN_int32));
 		
 		ULevel* Level = GetLevelObject();
 		// Receive tile info from world composition
@@ -691,6 +696,10 @@ void FWorldTileModel::OnLevelAddedToWorld(ULevel* InLevel)
 	FLevelModel::OnLevelAddedToWorld(InLevel);
 
 	EnsureLevelHasBoundsActor();
+
+	// Manually call Update to make sure WorldTileModel is properly initialized (don't rely on Level Bounds changes as it will not be called if bAutoUpdateBounds is set to false).
+	Update();
+
 	LoadedLevel.Get()->LevelBoundsActorUpdated().AddRaw(this, &FWorldTileModel::OnLevelBoundsActorUpdated);
 }
 
@@ -898,7 +907,7 @@ void FWorldTileModel::OnHideInTileViewChanged()
 	OnLevelInfoUpdated();
 }
 
-bool FWorldTileModel::CreateAdjacentLandscapeProxy(ALandscapeProxy* SourceLandscape, const FIntVector& SourceTileOffset, FWorldTileModel::EWorldDirections InWhere)
+bool FWorldTileModel::CreateAdjacentLandscapeProxy(ALandscapeProxy* SourceLandscape, FWorldTileModel::EWorldDirections InWhere)
 {
 	if (!IsLoaded())	
 	{
@@ -910,6 +919,8 @@ bool FWorldTileModel::CreateAdjacentLandscapeProxy(ALandscapeProxy* SourceLandsc
 	FVector SourceLandscapeScale = SourceLandscape->GetRootComponent()->GetComponentToWorld().GetScale3D();
 	FIntRect SourceLandscapeRect = SourceLandscape->GetBoundingRect();
 	FIntPoint SourceLandscapeSize = SourceLandscapeRect.Size();
+	FIntPoint LandscapeSectionOffset = FIntPoint((SourceLandscape->LandscapeSectionOffset.X+SourceLandscapeRect.Min.X)*SourceLandscapeScale.X, 
+												 (SourceLandscape->LandscapeSectionOffset.Y+SourceLandscapeRect.Min.Y)*SourceLandscapeScale.Y);
 
 	FLandscapeImportSettings ImportSettings = {};
 	ImportSettings.LandscapeGuid		= SourceLandscape->GetLandscapeGuid();
@@ -949,15 +960,19 @@ bool FWorldTileModel::CreateAdjacentLandscapeProxy(ALandscapeProxy* SourceLandsc
 		switch (InWhere)
 		{
 		case FWorldTileModel::XNegative:
+			LandscapeSectionOffset += FIntPoint(-SourceLandscapeScale.X*SourceLandscapeSize.X, 0);
 			ProxyOffset += FVector(-SourceLandscapeScale.X*SourceLandscapeSize.X, 0.f, 0.f);
 			break;
 		case FWorldTileModel::XPositive:
+			LandscapeSectionOffset += FIntPoint(+SourceLandscapeScale.X*SourceLandscapeSize.X, 0);
 			ProxyOffset += FVector(+SourceLandscapeScale.X*SourceLandscapeSize.X, 0.f, 0.f);
 			break;
 		case FWorldTileModel::YNegative:
+			LandscapeSectionOffset += FIntPoint(0, -SourceLandscapeScale.Y*SourceLandscapeSize.Y);
 			ProxyOffset += FVector(0.f, -SourceLandscapeScale.Y*SourceLandscapeSize.Y, 0.f);
 			break;
 		case FWorldTileModel::YPositive:
+			LandscapeSectionOffset += FIntPoint(0, +SourceLandscapeScale.Y*SourceLandscapeSize.Y);
 			ProxyOffset += FVector(0.f, +SourceLandscapeScale.Y*SourceLandscapeSize.Y, 0.f);
 			break;
 		}
@@ -966,7 +981,7 @@ bool FWorldTileModel::CreateAdjacentLandscapeProxy(ALandscapeProxy* SourceLandsc
 		FIntVector IntOffset = FIntVector(ProxyOffset) + LevelCollectionModel.GetWorld()->OriginLocation;
 
 		// Move level with landscape proxy to desired position
-		SetLevelPosition(IntOffset);
+		SetLevelPosition(IntOffset, &LandscapeSectionOffset);
 		return true;
 	}
 
@@ -993,18 +1008,15 @@ ALandscapeProxy* FWorldTileModel::ImportLandscapeTile(const FLandscapeImportSett
 	// Cache pointer to landscape in the level model
 	Landscape = LandscapeProxy;
 
+	TMap<FGuid, TArray<uint16>> HeightmapDataPerLayers;
+	TMap<FGuid, TArray<FLandscapeImportLayerInfo>> MaterialLayerDataPerLayer;
+
+	HeightmapDataPerLayers.Add(FGuid(), Settings.HeightData);
+	MaterialLayerDataPerLayer.Add(FGuid(), Settings.ImportLayers);	
+
 	// Create landscape components
-	LandscapeProxy->Import(
-		Settings.LandscapeGuid,
-		0, 0,
-		Settings.SizeX - 1,
-		Settings.SizeY - 1,
-		Settings.SectionsPerComponent,
-		Settings.QuadsPerSection,
-		Settings.HeightData.GetData(),
-		*Settings.HeightmapFilename,
-		Settings.ImportLayers,
-		Settings.ImportLayerType);
+	LandscapeProxy->Import(	Settings.LandscapeGuid, 0, 0, Settings.SizeX - 1, Settings.SizeY - 1, Settings.SectionsPerComponent, Settings.QuadsPerSection, HeightmapDataPerLayers, *Settings.HeightmapFilename,	
+							MaterialLayerDataPerLayer,	Settings.ImportLayerType);
 
 	return LandscapeProxy;
 }

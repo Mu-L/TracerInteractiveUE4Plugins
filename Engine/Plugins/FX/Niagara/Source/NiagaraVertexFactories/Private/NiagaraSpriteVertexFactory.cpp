@@ -5,6 +5,7 @@
 =============================================================================*/
 
 #include "NiagaraSpriteVertexFactory.h"
+#include "NiagaraCutoutVertexBuffer.h"
 #include "ParticleHelper.h"
 #include "ParticleResources.h"
 #include "ShaderParameterUtils.h"
@@ -14,8 +15,6 @@ IMPLEMENT_GLOBAL_SHADER_PARAMETER_STRUCT(FNiagaraSpriteUniformParameters,"Niagar
 IMPLEMENT_GLOBAL_SHADER_PARAMETER_STRUCT(FNiagaraSpriteVFLooseParameters, "NiagaraSpriteVFLooseParameters");
 
 TGlobalResource<FNullDynamicParameterVertexBuffer> GNullNiagaraDynamicParameterVertexBuffer;
-
-TGlobalResource<FNiagaraNullSubUVCutoutVertexBuffer> GFNiagaraNullSubUVCutoutVertexBuffer;
 
 /**
  * Shader parameters for the particle vertex factory.
@@ -79,7 +78,7 @@ public:
 		const FSceneInterface* Scene,
 		const FSceneView* View,
 		const FMeshMaterialShader* Shader,
-		bool bShaderRequiresPositionOnlyStream,
+		const EVertexInputStreamType VertexStreamType,
 		ERHIFeatureLevel::Type FeatureLevel,
 		const FVertexFactory* VertexFactory,
 		const FMeshBatchElement& BatchElement,
@@ -92,7 +91,7 @@ public:
 		ShaderBindings.Add(Shader->GetUniformBufferParameter<FNiagaraSpriteVFLooseParameters>(), SpriteVF->LooseParameterUniformBuffer);
 		
 		ShaderBindings.Add(NumCutoutVerticesPerFrame, SpriteVF->GetNumCutoutVerticesPerFrame());
-		FShaderResourceViewRHIParamRef NullSRV = GFNiagaraNullSubUVCutoutVertexBuffer.VertexBufferSRV;
+		FRHIShaderResourceView* NullSRV = GFNiagaraNullCutoutVertexBuffer.VertexBufferSRV;
 		ShaderBindings.Add(CutoutGeometry, SpriteVF->GetCutoutGeometrySRV() ? SpriteVF->GetCutoutGeometrySRV() : NullSRV);
 
 		ShaderBindings.Add(ParticleAlignmentMode, SpriteVF->GetAlignmentMode());
@@ -133,7 +132,7 @@ public:
 		const FSceneInterface* Scene,
 		const FSceneView* View,
 		const FMeshMaterialShader* Shader,
-		bool bShaderRequiresPositionOnlyStream,
+		const EVertexInputStreamType InputStreamType,
 		ERHIFeatureLevel::Type FeatureLevel,
 		const FVertexFactory* VertexFactory,
 		const FMeshBatchElement& BatchElement,
@@ -155,12 +154,7 @@ public:
 	FVertexDeclarationRHIRef VertexDeclarationRHI;
 
 	// Constructor.
-	FNiagaraSpriteVertexDeclaration(bool bInInstanced, int32 InNumVertsInInstanceBuffer) :
-		bInstanced(bInInstanced),
-		NumVertsInInstanceBuffer(InNumVertsInInstanceBuffer)
-	{
-
-	}
+	FNiagaraSpriteVertexDeclaration() {}
 
 	// Destructor.
 	virtual ~FNiagaraSpriteVertexDeclaration() {}
@@ -190,35 +184,14 @@ public:
 	{
 		VertexDeclarationRHI.SafeRelease();
 	}
-
-private:
-
-	bool bInstanced;
-	int32 NumVertsInInstanceBuffer;
 };
 
 /** The simple element vertex declaration. */
-static TGlobalResource<FNiagaraSpriteVertexDeclaration> GParticleSpriteVertexDeclarationInstanced(true, 4);
-static TGlobalResource<FNiagaraSpriteVertexDeclaration> GParticleSpriteEightVertexDeclarationInstanced(true, 8);
-static TGlobalResource<FNiagaraSpriteVertexDeclaration> GParticleSpriteVertexDeclarationNonInstanced(false, 4);
-static TGlobalResource<FNiagaraSpriteVertexDeclaration> GParticleSpriteEightVertexDeclarationNonInstanced(false, 8);
-
-inline TGlobalResource<FNiagaraSpriteVertexDeclaration>& GetNiagaraSpriteVertexDeclaration(bool SupportsInstancing, int32 NumVertsInInstanceBuffer)
-{
-	check(NumVertsInInstanceBuffer == 4 || NumVertsInInstanceBuffer == 8);
-	if (SupportsInstancing)
-	{
-		return NumVertsInInstanceBuffer == 4 ? GParticleSpriteVertexDeclarationInstanced : GParticleSpriteEightVertexDeclarationInstanced;
-	}
-	else
-	{
-		return NumVertsInInstanceBuffer == 4 ? GParticleSpriteVertexDeclarationNonInstanced : GParticleSpriteEightVertexDeclarationNonInstanced;
-	}
-}
+static TGlobalResource<FNiagaraSpriteVertexDeclaration> GParticleSpriteVertexDeclaration;
 
 bool FNiagaraSpriteVertexFactory::ShouldCompilePermutation(EShaderPlatform Platform, const class FMaterial* Material, const class FShaderType* ShaderType)
 {
-	return (IsFeatureLevelSupported(Platform, ERHIFeatureLevel::SM5) || IsFeatureLevelSupported(Platform, ERHIFeatureLevel::ES3_1)) && (Material->IsUsedWithNiagaraSprites() || Material->IsSpecialEngineMaterial());
+	return (FNiagaraUtilities::SupportsNiagaraRendering(Platform)) && (Material->IsUsedWithNiagaraSprites() || Material->IsSpecialEngineMaterial());
 }
 
 /**
@@ -238,7 +211,7 @@ void FNiagaraSpriteVertexFactory::ModifyCompilationEnvironment(const FVertexFact
 void FNiagaraSpriteVertexFactory::InitRHI()
 {
 	InitStreams();
-	SetDeclaration(GetNiagaraSpriteVertexDeclaration(GRHISupportsInstancing, NumVertsInInstanceBuffer).VertexDeclarationRHI);
+	SetDeclaration(GParticleSpriteVertexDeclaration.VertexDeclarationRHI);
 }
 
 void FNiagaraSpriteVertexFactory::InitStreams()
@@ -249,7 +222,7 @@ void FNiagaraSpriteVertexFactory::InitStreams()
 	if(bInstanced) 
 	{
 		FVertexStream* TexCoordStream = new(Streams) FVertexStream;
-		TexCoordStream->VertexBuffer = &GParticleTexCoordVertexBuffer;
+		TexCoordStream->VertexBuffer = VertexBufferOverride ? VertexBufferOverride : &GParticleTexCoordVertexBuffer;
 		TexCoordStream->Stride = sizeof(FVector2D);
 		TexCoordStream->Offset = 0;
 	}
@@ -284,4 +257,4 @@ FVertexFactoryShaderParameters* FNiagaraSpriteVertexFactory::ConstructShaderPara
 	return NULL;
 }
 
-IMPLEMENT_VERTEX_FACTORY_TYPE(FNiagaraSpriteVertexFactory,"/Engine/Private/NiagaraSpriteVertexFactory.ush",true,false,true,false,false);
+IMPLEMENT_VERTEX_FACTORY_TYPE(FNiagaraSpriteVertexFactory,"/Plugin/FX/Niagara/Private/NiagaraSpriteVertexFactory.ush",true,false,true,false,false);

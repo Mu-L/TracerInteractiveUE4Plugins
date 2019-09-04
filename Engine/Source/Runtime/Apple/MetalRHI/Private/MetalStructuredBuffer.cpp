@@ -35,7 +35,6 @@ FStructuredBufferRHIRef FMetalDynamicRHI::RHICreateStructuredBuffer(uint32 Strid
 	{
 		if (Buffer->GetUsage() & (BUF_Dynamic|BUF_Static))
 		{
-			LLM_SCOPE(ELLMTag::VertexBuffer);
 			SafeReleaseMetalBuffer(Buffer->CPUBuffer);
 			Buffer->CPUBuffer = nil;
 		}
@@ -55,7 +54,7 @@ FStructuredBufferRHIRef FMetalDynamicRHI::RHICreateStructuredBuffer(uint32 Strid
 	}
 }
 
-void* FMetalDynamicRHI::RHILockStructuredBuffer(FStructuredBufferRHIParamRef StructuredBufferRHI,uint32 Offset,uint32 Size,EResourceLockMode LockMode)
+void* FMetalDynamicRHI::RHILockStructuredBuffer(FRHIStructuredBuffer* StructuredBufferRHI,uint32 Offset,uint32 Size,EResourceLockMode LockMode)
 {
 	@autoreleasepool {
 	FMetalStructuredBuffer* StructuredBuffer = ResourceCast(StructuredBufferRHI);
@@ -65,7 +64,7 @@ void* FMetalDynamicRHI::RHILockStructuredBuffer(FStructuredBufferRHIParamRef Str
 	}
 }
 
-void FMetalDynamicRHI::RHIUnlockStructuredBuffer(FStructuredBufferRHIParamRef StructuredBufferRHI)
+void FMetalDynamicRHI::RHIUnlockStructuredBuffer(FRHIStructuredBuffer* StructuredBufferRHI)
 {
 	@autoreleasepool {
 	FMetalStructuredBuffer* StructuredBuffer = ResourceCast(StructuredBufferRHI);
@@ -93,7 +92,6 @@ struct FMetalRHICommandInitialiseStructuredBuffer : public FRHICommand<FMetalRHI
 			GetMetalDeviceContext().AsyncCopyFromBufferToBuffer(Buffer->CPUBuffer, 0, Buffer->Buffer, 0, Buffer->Buffer.GetLength());
 			if (Buffer->GetUsage() & (BUF_Dynamic|BUF_Static))
 			{
-				LLM_SCOPE(ELLMTag::VertexBuffer);
 				SafeReleaseMetalBuffer(Buffer->CPUBuffer);
 			}
 			else
@@ -159,7 +157,6 @@ FStructuredBufferRHIRef FMetalDynamicRHI::CreateStructuredBuffer_RenderThread(cl
 		{
 			if (VertexBuffer->GetUsage() & (BUF_Dynamic|BUF_Static))
 			{
-				LLM_SCOPE(ELLMTag::VertexBuffer);
 				SafeReleaseMetalBuffer(VertexBuffer->CPUBuffer);
 				VertexBuffer->CPUBuffer = nil;
 			}

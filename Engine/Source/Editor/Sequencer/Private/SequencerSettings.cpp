@@ -25,7 +25,7 @@ USequencerSettings::USequencerSettings( const FObjectInitializer& ObjectInitiali
 	bSnapPlayTimeToInterval = true;
 	bSnapPlayTimeToPressedKey = true;
 	bSnapPlayTimeToDraggedKey = true;
-	CurveValueSnapInterval = 10.0f;
+	CurveValueSnapInterval = 0.1f;
 	bSnapCurveValueToInterval = true;
 	bLabelBrowserVisible = false;
 	bShowSelectedNodesOnly = false;
@@ -33,7 +33,10 @@ USequencerSettings::USequencerSettings( const FObjectInitializer& ObjectInitiali
 	ZoomPosition = ESequencerZoomPosition::SZP_CurrentTime;
 	bAutoScrollEnabled = false;
 	bLinkCurveEditorTimeRange = false;
+	bSynchronizeCurveEditorSelection = true;
+	bIsolateCurveEditorToSelection = true;
 	LoopMode = ESequencerLoopMode::SLM_NoLoop;
+	bSnapKeysAndSectionsToPlayRange = false;
 	bKeepCursorInPlayRangeWhileScrubbing = false;
 	bKeepCursorInPlayRange = true;
 	bKeepPlayRangeInSectionBounds = true;
@@ -47,7 +50,7 @@ USequencerSettings::USequencerSettings( const FObjectInitializer& ObjectInitiali
 	bRerunConstructionScripts = true;
 	bVisualizePreAndPostRoll = true;
 	TrajectoryPathCap = 250;
-	CurveVisibility = ECurveEditorCurveVisibility::SelectedCurves;
+	bShowOutlinerInfoColumn = true;
 	FrameNumberDisplayFormat = EFrameNumberDisplayFormats::Seconds;
 }
 
@@ -236,6 +239,20 @@ void USequencerSettings::SetSnapSectionTimesToSections( bool InbSnapSectionTimes
 	if ( bSnapSectionTimesToSections != InbSnapSectionTimesToSections )
 	{
 		bSnapSectionTimesToSections = InbSnapSectionTimesToSections;
+		SaveConfig();
+	}
+}
+
+bool USequencerSettings::GetSnapKeysAndSectionsToPlayRange() const
+{
+	return bSnapKeysAndSectionsToPlayRange;
+}
+
+void USequencerSettings::SetSnapKeysAndSectionsToPlayRange(bool bInSnapKeysAndSectionsToPlayRange)
+{
+	if (bSnapKeysAndSectionsToPlayRange != bInSnapKeysAndSectionsToPlayRange)
+	{
+		bSnapKeysAndSectionsToPlayRange = bInSnapKeysAndSectionsToPlayRange;
 		SaveConfig();
 	}
 }
@@ -468,6 +485,23 @@ void USequencerSettings::SetLinkCurveEditorTimeRange(bool InbLinkCurveEditorTime
 	}
 }
 
+void USequencerSettings::SyncCurveEditorSelection(bool bInSynchronizeCurveEditorSelection)
+{
+	if (bSynchronizeCurveEditorSelection != bInSynchronizeCurveEditorSelection)
+	{
+		bSynchronizeCurveEditorSelection = bInSynchronizeCurveEditorSelection;
+		SaveConfig();
+	}
+}
+
+void USequencerSettings::IsolateCurveEditorToSelection(bool bInIsolateCurveEditorToSelection)
+{
+	if (bIsolateCurveEditorToSelection != bInIsolateCurveEditorToSelection)
+	{
+		bIsolateCurveEditorToSelection = bInIsolateCurveEditorToSelection;
+		SaveConfig();
+	}
+}
 
 uint8 USequencerSettings::GetZeroPadFrames() const
 {
@@ -628,24 +662,18 @@ void USequencerSettings::SetCompileDirectorOnEvaluate(bool bInCompileDirectorOnE
 	}
 }
 
-ECurveEditorCurveVisibility USequencerSettings::GetCurveVisibility() const
+bool USequencerSettings::GetShowOutlinerInfoColumn() const
 {
-	return CurveVisibility;
+	return bShowOutlinerInfoColumn;
 }
 
-void USequencerSettings::SetCurveVisibility(ECurveEditorCurveVisibility InCurveVisibility)
+void USequencerSettings::SetShowOutlinerInfoColumn(bool bInShowOutlinerInfoColumn)
 {
-	if (CurveVisibility != InCurveVisibility)
+	if (bInShowOutlinerInfoColumn != bShowOutlinerInfoColumn)
 	{
-		CurveVisibility = InCurveVisibility;
-		OnCurveEditorCurveVisibilityChanged.Broadcast();
+		bShowOutlinerInfoColumn = bInShowOutlinerInfoColumn;
 		SaveConfig();
 	}
-}
-
-USequencerSettings::FOnCurveEditorCurveVisibilityChanged& USequencerSettings::GetOnCurveEditorCurveVisibilityChanged()
-{
-	return OnCurveEditorCurveVisibilityChanged;
 }
 
 USequencerSettings::FOnLoopStateChanged& USequencerSettings::GetOnLoopStateChanged()

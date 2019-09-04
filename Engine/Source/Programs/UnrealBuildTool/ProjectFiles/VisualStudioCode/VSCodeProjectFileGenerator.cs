@@ -410,7 +410,7 @@ namespace UnrealBuildTool
 
 					if (HostPlatform == UnrealTargetPlatform.Win64)
 					{
-						RawIncludes.AddRange(VCToolChain.GetVCIncludePaths(CppPlatform.Win64, WindowsPlatform.GetDefaultCompiler(null), null).Trim(';').Split(';'));
+						RawIncludes.AddRange(VCToolChain.GetVCIncludePaths(UnrealTargetPlatform.Win64, WindowsPlatform.GetDefaultCompiler(null), null).Trim(';').Split(';'));
 					}
 					else
 					{
@@ -436,10 +436,12 @@ namespace UnrealBuildTool
 							
 						}
 					}
-					
+
 					foreach (string Definition in Project.IntelliSensePreprocessorDefinitions)
 					{
 						string Processed = Definition.Replace("\"", "\\\"");
+						// removing trailing spaces on preprocessor definitions as these can be added as empty defines confusing vscode
+						Processed = Processed.TrimEnd(' ');
 						if (!ProjectData.CombinedPreprocessorDefinitions.Contains(Processed))
 						{
 							ProjectData.CombinedPreprocessorDefinitions.Add(Processed);
@@ -916,26 +918,19 @@ namespace UnrealBuildTool
 			DirectoryReference OutputDirectory = DirectoryReference.Combine(RootDirectory, "Binaries", UBTPlatformName);
 
 			// Get the executable name (minus any platform or config suffixes)
-			string BaseExeName = TargetName;
-			if (!bShouldCompileMonolithic && TargetRulesType != TargetType.Program)
+			string BinaryName;
+			if(Target.TargetRules.BuildEnvironment == TargetBuildEnvironment.Shared && TargetRulesType != TargetType.Program)
 			{
-				// Figure out what the compiled binary will be called so that we can point the IDE to the correct file
-				string TargetConfigurationName = TargetRulesType.ToString();
-				if (TargetConfigurationName != TargetType.Game.ToString() && TargetConfigurationName != TargetType.Program.ToString())
-				{
-					BaseExeName = "UE4" + TargetConfigurationName;
-				}
+				BinaryName = UEBuildTarget.GetAppNameForTargetType(TargetRulesType);
+			}
+			else
+			{
+				BinaryName = TargetName;
 			}
 
 			// Make the output file path
-			string ExecutableFilename = FileReference.Combine(OutputDirectory, BaseExeName).ToString();
-
-			if ((Configuration != UnrealTargetConfiguration.Development) && ((Configuration !=  UnrealTargetConfiguration.DebugGame) || bShouldCompileMonolithic))
-			{
-				ExecutableFilename += "-" + UBTPlatformName + "-" + UBTConfigurationName;
-			}
-			ExecutableFilename += TargetRulesObject.Architecture;
-			ExecutableFilename += BuildPlatform.GetBinaryExtension(UEBuildBinaryType.Executable);
+			string BinaryFileName = UEBuildTarget.MakeBinaryFileName(BinaryName, Platform, Configuration, TargetRulesObject.Architecture, TargetRulesObject.UndecoratedConfiguration, UEBuildBinaryType.Executable);
+			string ExecutableFilename = FileReference.Combine(OutputDirectory, BinaryFileName).FullName;
 
 			// Include the path to the actual executable for a Mac app bundle
 			if (Platform == UnrealTargetPlatform.Mac && !Target.TargetRules.bIsBuildingConsoleApplication)
@@ -1000,22 +995,13 @@ namespace UnrealBuildTool
 							{
 								OutFile.AddField("stopAtEntry", false);
 								OutFile.AddField("externalConsole", true);
+
+								OutFile.AddField("type", "cppvsdbg");
+								OutFile.AddField("visualizerFile", MakeUnquotedPathString(FileReference.Combine(UE4ProjectRoot, "Engine", "Extras", "VisualStudioDebugging", "UE4.natvis"), EPathType.Absolute));
 							}
-
-							switch (HostPlatform)
+							else
 							{
-								case UnrealTargetPlatform.Win64:
-									{
-										OutFile.AddField("type", "cppvsdbg");
-										OutFile.AddField("visualizerFile", MakeUnquotedPathString(FileReference.Combine(UE4ProjectRoot, "Engine", "Extras", "VisualStudioDebugging", "UE4.natvis"), EPathType.Absolute));
-										break;
-									}
-
-								default:
-									{
-										OutFile.AddField("type", "lldb");
-										break;
-									}
+								OutFile.AddField("type", "lldb");
 							}
 						}
 						OutFile.EndObject();
@@ -1198,6 +1184,10 @@ namespace UnrealBuildTool
 					{
 						DirectoryReference ProjDir = Target.TargetFilePath.Directory.GetDirectoryName() == "Source" ? Target.TargetFilePath.Directory.ParentDirectory : Target.TargetFilePath.Directory;
 						GetExcludePathsCPP(ProjDir, PathsToExclude);
+						
+						DirectoryReference PluginRootDir = DirectoryReference.Combine(ProjDir, "Plugins");
+						WriteWorkspaceSettingsFileForPlugins(PluginRootDir, PathsToExclude);
+
 						bFoundTarget = true;
 					}
 				}
@@ -1225,6 +1215,26 @@ namespace UnrealBuildTool
 			OutFile.Write(FileReference.Combine(VSCodeDir, "settings.json"));
 		}
 
+		private void WriteWorkspaceSettingsFileForPlugins(DirectoryReference PluginBaseDir, List<string> PathsToExclude)
+		{
+			if (DirectoryReference.Exists(PluginBaseDir))
+			{
+				foreach (DirectoryReference SubDir in DirectoryReference.EnumerateDirectories(PluginBaseDir, "*", SearchOption.TopDirectoryOnly))
+				{
+					string[] UPluginFiles = Directory.GetFiles(SubDir.ToString(), "*.uplugin");
+					if (UPluginFiles.Length == 1)
+					{
+						DirectoryReference PluginDir = SubDir;
+						GetExcludePathsCPP(PluginDir, PathsToExclude);
+					}
+					else
+					{
+						WriteWorkspaceSettingsFileForPlugins(SubDir, PathsToExclude);
+					}
+				}
+			}
+		}
+		
 		private void WriteWorkspaceFile(ProjectData ProjectData)
 		{
 			JsonFile WorkspaceFile = new JsonFile();
@@ -1233,20 +1243,26 @@ namespace UnrealBuildTool
 			{
 				WorkspaceFile.BeginArray("folders");
 				{
-					if (bForeignProject)
+					// Add the directory in which which the code-workspace file exists.
+					// This is also known as ${workspaceRoot}
+					WorkspaceFile.BeginObject();
+					{
+						string ProjectName = bForeignProject ? GameProjectName : "UE4";
+						WorkspaceFile.AddField("name", ProjectName);
+						WorkspaceFile.AddField("path", ".");
+					}
+					WorkspaceFile.EndObject();
+
+					// If this project is outside the engine folder, add the root engine directory
+					if (bIncludeEngineSource && bForeignProject)
 					{
 						WorkspaceFile.BeginObject();
 						{
-							WorkspaceFile.AddField("path", ".");
+							WorkspaceFile.AddField("name", "UE4");
+							WorkspaceFile.AddField("path", MakeUnquotedPathString(UnrealBuildTool.RootDirectory, EPathType.Absolute));
 						}
 						WorkspaceFile.EndObject();
 					}
-
-					WorkspaceFile.BeginObject();
-					{
-						WorkspaceFile.AddField("path", MakeUnquotedPathString(UnrealBuildTool.RootDirectory, EPathType.Absolute));
-					}
-					WorkspaceFile.EndObject();
 				}
 				WorkspaceFile.EndArray();
 			}
@@ -1254,6 +1270,26 @@ namespace UnrealBuildTool
 			WorkspaceFile.BeginObject("settings");
 			{
 				WorkspaceFile.AddField("typescript.tsc.autoDetect", "off");
+			}
+			WorkspaceFile.EndObject();
+			
+			WorkspaceFile.BeginObject("extensions");
+			{
+				// extensions is a set of recommended extensions that a user should install.
+				// Adding this section aids discovery of extensions which are helpful to have installed for Unreal development.
+				WorkspaceFile.BeginArray("recommendations");
+				{
+					WorkspaceFile.AddUnnamedField("ms-vscode.cpptools");
+					WorkspaceFile.AddUnnamedField("ms-vscode.csharp");
+
+					// If the platform we run the generator on uses mono, there are additional debugging extensions to add.
+					if (Utils.IsRunningOnMono)
+					{
+						WorkspaceFile.AddUnnamedField("vadimcn.vscode-lldb");
+						WorkspaceFile.AddUnnamedField("ms-vscode.mono-debug");
+					}
+				}
+				WorkspaceFile.EndArray();
 			}
 			WorkspaceFile.EndObject();
 

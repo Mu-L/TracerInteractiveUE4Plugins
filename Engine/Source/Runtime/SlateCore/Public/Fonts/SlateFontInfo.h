@@ -78,25 +78,27 @@ struct SLATECORE_API FFontOutlineSettings
 
 	inline bool IsIdenticalToForCaching(const FFontOutlineSettings& Other) const
 	{
+		// Ignore OutlineMaterial && OutlineColor because they do not affect the cached glyph.
 		return OutlineSize == Other.OutlineSize
 			&&  bSeparateFillAlpha == Other.bSeparateFillAlpha;
 	}
 
 	inline bool IsIdenticalTo(const FFontOutlineSettings& Other) const
 	{
-		return OutlineSize == Other.OutlineSize
-			&& bSeparateFillAlpha == Other.bSeparateFillAlpha
-			&& OutlineMaterial == Other.OutlineMaterial
-			&& OutlineColor == Other.OutlineColor
-			&& bApplyOutlineToDropShadows == Other.bApplyOutlineToDropShadows;
+		return
+			OutlineSize == Other.OutlineSize &&
+			bSeparateFillAlpha == Other.bSeparateFillAlpha &&
+			bApplyOutlineToDropShadows == Other.bApplyOutlineToDropShadows &&
+			OutlineMaterial == Other.OutlineMaterial &&
+			OutlineColor == Other.OutlineColor;
 	}
 
 	friend inline uint32 GetTypeHash(const FFontOutlineSettings& OutlineSettings)
 	{
 		uint32 Hash = 0;
+		// Ignore OutlineMaterial && OutlineColor because they do not affect the cached glyph.
 		Hash = HashCombine(Hash, GetTypeHash(OutlineSettings.OutlineSize));
 		Hash = HashCombine(Hash, GetTypeHash(OutlineSettings.bSeparateFillAlpha));
-
 		return Hash;
 	}
 
@@ -238,6 +240,7 @@ public:
 public:
 	inline bool IsIdentialToForCaching(const FSlateFontInfo& Other) const
 	{
+		// Ignore FontMaterial because it does not affect the cached glyph.
 		return FontObject == Other.FontObject
 			&& OutlineSettings.IsIdenticalToForCaching(Other.OutlineSettings)
 			&& CompositeFont == Other.CompositeFont
@@ -281,9 +284,9 @@ public:
 	 */
 	friend inline uint32 GetTypeHash( const FSlateFontInfo& FontInfo )
 	{
+		// Ignore FontMaterial because it does not affect the cached glyph.
 		uint32 Hash = 0;
 		Hash = HashCombine(Hash, GetTypeHash(FontInfo.FontObject));
-		Hash = HashCombine(Hash, GetTypeHash(FontInfo.FontMaterial));
 		Hash = HashCombine(Hash, GetTypeHash(FontInfo.OutlineSettings));
 		Hash = HashCombine(Hash, GetTypeHash(FontInfo.CompositeFont));
 		Hash = HashCombine(Hash, GetTypeHash(FontInfo.TypefaceFontName));

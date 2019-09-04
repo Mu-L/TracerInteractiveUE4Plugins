@@ -9,7 +9,7 @@
 /**
  * Base class for target platforms.
  */
-class FTargetPlatformBase
+class TARGETPLATFORM_VTABLE FTargetPlatformBase
 	: public ITargetPlatform
 {
 public:
@@ -34,6 +34,14 @@ public:
 	TARGETPLATFORM_API virtual bool UsesForwardShading() const override;
 
 	TARGETPLATFORM_API virtual bool UsesDBuffer() const override;
+
+	TARGETPLATFORM_API virtual bool UsesBasePassVelocity() const override;
+
+	TARGETPLATFORM_API virtual bool UsesSelectiveBasePassOutputs() const override;
+	
+	TARGETPLATFORM_API virtual bool UsesDistanceFields() const override;
+
+	TARGETPLATFORM_API virtual float GetDownSampleMeshDistanceFieldDivider() const override;
 
 #if WITH_ENGINE
 	virtual void GetReflectionCaptureFormats( TArray<FName>& OutFormats ) const override
@@ -121,7 +129,7 @@ protected:
 	FTargetPlatformBase(const PlatformInfo::FPlatformInfo *const InPlatformInfo)
 		: PlatformInfo(InPlatformInfo)
 	{
-		check(PlatformInfo);
+		checkf(PlatformInfo, TEXT("Null PlatformInfo was passed to FTargetPlatformBase. Check the static IsUsable function before creating this object. See FWindowsTargetPlatformModule::GetTargetPlatform()"));
 
 		PlatformOrdinal = AssignPlatformOrdinal(*this);
 	}
@@ -143,6 +151,15 @@ class TTargetPlatformBase
 {
 public:
 
+	/**
+	 * Returns true if the target platform will be able to be  initialized with an FPlatformInfo. Because FPlatformInfo now comes from a .ini file,
+	 * it's possible that the .dll exists, but the .ini does not (should be uncommon, but is necessary to be handled)
+	 */
+	static bool IsUsable()
+	{
+		return PlatformInfo::FindPlatformInfo(TPlatformProperties::PlatformName()) != nullptr;
+	}
+	
 	/** Default constructor. */
 	TTargetPlatformBase()
 		: FTargetPlatformBase( PlatformInfo::FindPlatformInfo(TPlatformProperties::PlatformName()) )
@@ -243,6 +260,19 @@ public:
 
 		case ETargetPlatformFeatures::TextureStreaming:
 			return TPlatformProperties::SupportsTextureStreaming();
+		case ETargetPlatformFeatures::MeshLODStreaming:
+			return TPlatformProperties::SupportsMeshLODStreaming();
+
+		case ETargetPlatformFeatures::MemoryMappedFiles:
+			return TPlatformProperties::SupportsMemoryMappedFiles();
+
+		case ETargetPlatformFeatures::MemoryMappedAudio:
+			return TPlatformProperties::SupportsMemoryMappedAudio();
+		case ETargetPlatformFeatures::MemoryMappedAnimation:
+			return TPlatformProperties::SupportsMemoryMappedAnimation();
+
+		case ETargetPlatformFeatures::VirtualTextureStreaming:
+			return TPlatformProperties::SupportsVirtualTextureStreaming();
 
 		case ETargetPlatformFeatures::SdkConnectDisconnect:
 		case ETargetPlatformFeatures::UserCredentials:
@@ -266,6 +296,12 @@ public:
 	{
 		return TPlatformProperties::GetZlibReplacementFormat() != nullptr ? FName(TPlatformProperties::GetZlibReplacementFormat()) : NAME_Zlib;
 	}
+
+	virtual int32 GetMemoryMappingAlignment() const override
+	{
+		return TPlatformProperties::GetMemoryMappingAlignment();
+	}
+
 
 #if WITH_ENGINE
 	virtual FName GetPhysicsFormat( class UBodySetup* Body ) const override

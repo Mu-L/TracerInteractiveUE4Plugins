@@ -112,7 +112,7 @@ void MobileBasePass::GetShaders(
 	TMobileBasePassVSPolicyParamType<FUniformLightMapPolicy>*& VertexShader,
 	TMobileBasePassPSPolicyParamType<FUniformLightMapPolicy>*& PixelShader)
 {
-	bool bIsLit = (MaterialResource.GetShadingModel() != MSM_Unlit);
+	bool bIsLit = (MaterialResource.GetShadingModels().IsLit());
 	if (bIsLit && !UseSkylightPermutation(bEnableSkyLight, FReadOnlyCVARCache::Get().MobileSkyLightPermutation))	
 	{
 		bEnableSkyLight = !bEnableSkyLight;
@@ -192,16 +192,6 @@ static bool UseSkyReflectionCapture(const FScene* RenderScene)
 		&& RenderScene->SkyLight->ProcessedTexture->TextureRHI;
 }
 
-static void GetSkyTextureParams(const FScene* Scene, float& AverageBrightnessOUT, FTexture*& ReflectionTextureOUT, float& OutSkyMaxMipIndex)
-{
-	if (Scene && Scene->SkyLight && Scene->SkyLight->ProcessedTexture->TextureRHI)
-	{
-		AverageBrightnessOUT = Scene->SkyLight->AverageBrightness;
-		ReflectionTextureOUT = Scene->SkyLight->ProcessedTexture;
-		OutSkyMaxMipIndex = FMath::Log2(ReflectionTextureOUT->GetSizeX());
-	}
-}
-
 const FLightSceneInfo* MobileBasePass::GetDirectionalLightInfo(const FScene* Scene, const FPrimitiveSceneProxy* PrimitiveSceneProxy)
 {
 	const FLightSceneInfo* MobileDirectionalLight = nullptr;
@@ -216,7 +206,7 @@ const FLightSceneInfo* MobileBasePass::GetDirectionalLightInfo(const FScene* Sce
 int32 MobileBasePass::CalcNumMovablePointLights(const FMaterial& InMaterial, const FPrimitiveSceneProxy* InPrimitiveSceneProxy)
 {
 	const FReadOnlyCVARCache& ReadOnlyCVARCache = FReadOnlyCVARCache::Get();
-	const bool bIsUnlit = InMaterial.GetShadingModel() == MSM_Unlit;
+	const bool bIsUnlit = InMaterial.GetShadingModels().IsUnlit();
 	int32 OutNumMovablePointLights = (InPrimitiveSceneProxy && !bIsUnlit) ? FMath::Min<int32>(InPrimitiveSceneProxy->GetPrimitiveSceneInfo()->NumMobileMovablePointLights, ReadOnlyCVARCache.NumMobileMovablePointLights) : 0;
 	if (OutNumMovablePointLights > 0 && ReadOnlyCVARCache.bMobileMovablePointLightsUseStaticBranch)
 	{
@@ -244,7 +234,7 @@ ELightMapPolicyType MobileBasePass::SelectMeshLightmapPolicy(
 	const FMeshBatch& Mesh, 
 	const FPrimitiveSceneProxy* PrimitiveSceneProxy,
 	const FLightSceneInfo* MobileDirectionalLight,
-	EMaterialShadingModel ShadingModel, 
+	FMaterialShadingModelField ShadingModels, 
 	bool bPrimReceivesCSM, 
 	ERHIFeatureLevel::Type FeatureLevel)
 {
@@ -252,7 +242,7 @@ ELightMapPolicyType MobileBasePass::SelectMeshLightmapPolicy(
 	ELightMapPolicyType SelectedLightmapPolicy = LMP_NO_LIGHTMAP;
 
 	// Check for a cached light-map.
-	const bool bIsLitMaterial = ShadingModel != MSM_Unlit;
+	const bool bIsLitMaterial = ShadingModels.IsLit();
 	if (bIsLitMaterial)
 	{
 		const FLightMapInteraction LightMapInteraction = (Mesh.LCI && bIsLitMaterial)
@@ -271,7 +261,7 @@ ELightMapPolicyType MobileBasePass::SelectMeshLightmapPolicy(
 		{
 			// Lightmap path
 			const FShadowMapInteraction ShadowMapInteraction = (Mesh.LCI && bIsLitMaterial)
-				? Mesh.LCI->GetShadowMapInteraction()
+				? Mesh.LCI->GetShadowMapInteraction(FeatureLevel)
 				: FShadowMapInteraction();
 
 			if (bUseMovableLight)
@@ -412,6 +402,10 @@ void MobileBasePass::SetTranslucentRenderState(FMeshPassProcessorRenderState& Dr
 			// Blend with existing scene color. New color is already pre-multiplied by alpha.
 			DrawRenderState.SetBlendState(TStaticBlendState<CW_RGB, BO_Add, BF_One, BF_InverseSourceAlpha, BO_Add, BF_Zero, BF_InverseSourceAlpha>::GetRHI());
 			break;
+		case BLEND_AlphaHoldout:
+			// Blend by holding out the matte shape of the source alpha
+			DrawRenderState.SetBlendState(TStaticBlendState<CW_RGBA, BO_Add, BF_Zero, BF_InverseSourceAlpha, BO_Add, BF_One, BF_InverseSourceAlpha>::GetRHI());
+			break;
 		default:
 			check(0);
 		};
@@ -456,33 +450,17 @@ void TMobileBasePassPSPolicyParamType<FUniformLightMapPolicy>::GetShaderBindings
 
 	if (Scene)
 	{
-		static const int32 MaxNumReflections = FPrimitiveSceneInfo::MaxCachedReflectionCaptureProxies;
-		static_assert(MaxNumReflections == 3, "Update reflection array initializations to match MaxCachedReflectionCaptureProxies");
-		// set reflection parameters
-		const FShaderResourceParameter* ReflectionTextureParameters[MaxNumReflections] = { &ReflectionCubemap, &ReflectionCubemap1, &ReflectionCubemap2 };
-		const FShaderResourceParameter* ReflectionSamplerParameters[MaxNumReflections] = { &ReflectionSampler, &ReflectionSampler1, &ReflectionSampler2 };
-		FTexture* ReflectionCubemapTextures[MaxNumReflections] = { GBlackTextureCube, GBlackTextureCube, GBlackTextureCube };
-		FVector4 CapturePositions[MaxNumReflections] = { FVector4(0, 0, 0, 0), FVector4(0, 0, 0, 0), FVector4(0, 0, 0, 0) };
-		FVector4 ReflectionParams(1.0f, 1.0f, 1.0f, 0.0f);
-		
-		// If no reflection captures are available then attempt to use sky light's texture.
-		if (UseSkyReflectionCapture(Scene))
+		// test for HQ reflection parameter existence
+		if (HQReflectionCubemaps[0].IsBound() || HQReflectionCubemaps[1].IsBound() || HQReflectionCubemaps[2].IsBound())
 		{
-			// if > 0 this will disable shader's RGBM decoding and enable sky light tinting of this envmap.
-			// ReflectionParams.X == inv average brightness
-			// ReflectionParams.W == max sky cube mip
-			if (FeatureLevel > ERHIFeatureLevel::ES2) // not-supported on ES2 at the moment
-			{
-				float AverageBrightness = 1.0f;
-				GetSkyTextureParams(Scene, AverageBrightness, ReflectionCubemapTextures[0], ReflectionParams.W);
-				ReflectionParams.X = FMath::Max(FMath::Min(1.0f / AverageBrightness, 65504.f), -65504.f);
-			}
-		}
-		else
-		{
+			static const int32 MaxNumReflections = FPrimitiveSceneInfo::MaxCachedReflectionCaptureProxies;
+			static_assert(MaxNumReflections == 3, "Update reflection array initializations to match MaxCachedReflectionCaptureProxies");
+			// set reflection parameters
+			FTexture* ReflectionCubemapTextures[MaxNumReflections] = { GBlackTextureCube, GBlackTextureCube, GBlackTextureCube };
+			FVector4 CapturePositions[MaxNumReflections] = { FVector4(0, 0, 0, 0), FVector4(0, 0, 0, 0), FVector4(0, 0, 0, 0) };
+			FVector4 ReflectionParams(1.0f, 1.0f, 1.0f, 0.0f);
 			FPrimitiveSceneInfo* PrimitiveSceneInfo = PrimitiveSceneProxy ? PrimitiveSceneProxy->GetPrimitiveSceneInfo() : nullptr;
-			// test for HQ reflection parameter existence
-			if (PrimitiveSceneInfo && (ReflectionCubemap1.IsBound() || ReflectionCubemap2.IsBound() || ReflectionPositionsAndRadii.IsBound()))
+			if (PrimitiveSceneInfo)
 			{
 				for (int32 i = 0; i < MaxNumReflections; i++)
 				{
@@ -495,30 +473,36 @@ void TMobileBasePassPSPolicyParamType<FUniformLightMapPolicy>::GetShaderBindings
 						{
 							ReflectionCubemapTextures[i] = PrimitiveSceneInfo->CachedReflectionCaptureProxies[i]->EncodedHDRCubemap;
 						}
-						ReflectionParams.X = FMath::Max(FMath::Min(1.0f / ReflectionProxy->EncodedHDRAverageBrightness, 65504.f), -65504.f);
+						ReflectionParams[i] = FMath::Max(FMath::Min(1.0f / ReflectionProxy->EncodedHDRAverageBrightness, 65504.f), -65504.f);
 					}
 				}
 			}
-			else if (ReflectionCubemap.IsBound())
+			for (int32 i = 0; i < MaxNumReflections; i++)
 			{
-				if (PrimitiveSceneInfo 
-					&& PrimitiveSceneInfo->CachedReflectionCaptureProxy
-					&& PrimitiveSceneInfo->CachedReflectionCaptureProxy->EncodedHDRCubemap
-					&& PrimitiveSceneInfo->CachedReflectionCaptureProxy->EncodedHDRCubemap->IsInitialized())
+				ShaderBindings.AddTexture(HQReflectionCubemaps[i], HQReflectionSamplers[i], ReflectionCubemapTextures[i]->SamplerStateRHI, ReflectionCubemapTextures[i]->TextureRHI);
+			}
+			ShaderBindings.Add(HQReflectionInvAverageBrigtnessParams, ReflectionParams);
+			ShaderBindings.Add(HQReflectionPositionsAndRadii, CapturePositions);
+		}
+		else if (ReflectionParameter.IsBound())
+		{
+			FRHIUniformBuffer* ReflectionUB = GDefaultMobileReflectionCaptureUniformBuffer.GetUniformBufferRHI();
+			// If no reflection captures are available then attempt to use sky light's texture.
+			if (UseSkyReflectionCapture(Scene) && FeatureLevel > ERHIFeatureLevel::ES2) // not-supported on ES2 at the moment
+			{
+				ReflectionUB = Scene->UniformBuffers.MobileSkyReflectionUniformBuffer;
+			}
+			else
+			{
+				FPrimitiveSceneInfo* PrimitiveSceneInfo = PrimitiveSceneProxy ? PrimitiveSceneProxy->GetPrimitiveSceneInfo() : nullptr;
+				if (PrimitiveSceneInfo && PrimitiveSceneInfo->CachedReflectionCaptureProxy)
 				{
-					ReflectionParams.X = FMath::Max(FMath::Min(1.0f / PrimitiveSceneInfo->CachedReflectionCaptureProxy->EncodedHDRAverageBrightness, 65504.f), -65504.f);
-					ReflectionCubemapTextures[0] = PrimitiveSceneInfo->CachedReflectionCaptureProxy->EncodedHDRCubemap;
+					ReflectionUB = PrimitiveSceneInfo->CachedReflectionCaptureProxy->MobileUniformBuffer;
 				}
 			}
+			ShaderBindings.Add(ReflectionParameter, ReflectionUB);
 		}
-
-		for (int32 i = 0; i < MaxNumReflections; i++)
-		{
-			ShaderBindings.AddTexture(*ReflectionTextureParameters[i], *ReflectionSamplerParameters[i], ReflectionCubemapTextures[i]->SamplerStateRHI, ReflectionCubemapTextures[i]->TextureRHI);
-		}
-		ShaderBindings.Add(ReflectionPositionsAndRadii, CapturePositions);
-		ShaderBindings.Add(MobileReflectionParams, ReflectionParams);
-
+		
 		if (LightPositionAndInvRadiusParameter.IsBound() || SpotLightDirectionParameter.IsBound())
 		{
 			// Set dynamic point lights
@@ -532,7 +516,7 @@ void TMobileBasePassPSPolicyParamType<FUniformLightMapPolicy>::GetShaderBindings
 	}
 	else
 	{
-		ensure(!ReflectionCubemap.IsBound());
+		ensure(!ReflectionParameter.IsBound());
 	}
 
 	// Set directional light UB
@@ -578,7 +562,7 @@ void FMobileBasePassMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshB
 	const FMaterial& Material = MeshBatch.MaterialRenderProxy->GetMaterialWithFallback(FeatureLevel, FallbackMaterialRenderProxyPtr);
 	const FMaterialRenderProxy& MaterialRenderProxy = FallbackMaterialRenderProxyPtr ? *FallbackMaterialRenderProxyPtr : *MeshBatch.MaterialRenderProxy;
 	const EBlendMode BlendMode = Material.GetBlendMode();
-	const EMaterialShadingModel ShadingModel = Material.GetShadingModel();
+	const FMaterialShadingModelField ShadingModels = Material.GetShadingModels();
 	const bool bIsTranslucent = IsTranslucentBlendMode(BlendMode);
 	
 	if (bTranslucentBasePass)
@@ -592,8 +576,8 @@ void FMobileBasePassMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshB
 		{
 			check(bCanReceiveCSM == false);
 			const FLightSceneInfo* MobileDirectionalLight = MobileBasePass::GetDirectionalLightInfo(Scene, PrimitiveSceneProxy);
-			ELightMapPolicyType LightmapPolicyType = MobileBasePass::SelectMeshLightmapPolicy(Scene, MeshBatch, PrimitiveSceneProxy, MobileDirectionalLight, ShadingModel, bCanReceiveCSM, FeatureLevel);
-			Process(MeshBatch, BatchElementMask, StaticMeshId, PrimitiveSceneProxy, MaterialRenderProxy, Material, BlendMode, ShadingModel, LightmapPolicyType, MeshBatch.LCI);
+			ELightMapPolicyType LightmapPolicyType = MobileBasePass::SelectMeshLightmapPolicy(Scene, MeshBatch, PrimitiveSceneProxy, MobileDirectionalLight, ShadingModels, bCanReceiveCSM, FeatureLevel);
+			Process(MeshBatch, BatchElementMask, StaticMeshId, PrimitiveSceneProxy, MaterialRenderProxy, Material, BlendMode, ShadingModels, LightmapPolicyType, MeshBatch.LCI);
 		}
 	}
 	else
@@ -602,8 +586,8 @@ void FMobileBasePassMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshB
 		if (!bIsTranslucent)
 		{
 			const FLightSceneInfo* MobileDirectionalLight = MobileBasePass::GetDirectionalLightInfo(Scene, PrimitiveSceneProxy);
-			ELightMapPolicyType LightmapPolicyType = MobileBasePass::SelectMeshLightmapPolicy(Scene, MeshBatch, PrimitiveSceneProxy, MobileDirectionalLight, ShadingModel, bCanReceiveCSM, FeatureLevel);
-			Process(MeshBatch, BatchElementMask, StaticMeshId, PrimitiveSceneProxy, MaterialRenderProxy, Material, BlendMode, ShadingModel, LightmapPolicyType, MeshBatch.LCI);
+			ELightMapPolicyType LightmapPolicyType = MobileBasePass::SelectMeshLightmapPolicy(Scene, MeshBatch, PrimitiveSceneProxy, MobileDirectionalLight, ShadingModels, bCanReceiveCSM, FeatureLevel);
+			Process(MeshBatch, BatchElementMask, StaticMeshId, PrimitiveSceneProxy, MaterialRenderProxy, Material, BlendMode, ShadingModels, LightmapPolicyType, MeshBatch.LCI);
 		}
 	}
 }
@@ -616,7 +600,7 @@ void FMobileBasePassMeshProcessor::Process(
 		const FMaterialRenderProxy& RESTRICT MaterialRenderProxy,
 		const FMaterial& RESTRICT MaterialResource,
 		EBlendMode BlendMode,
-		EMaterialShadingModel ShadingModel,
+		FMaterialShadingModelField ShadingModels,
 		const ELightMapPolicyType LightMapPolicyType,
 		const FUniformLightMapPolicy::ElementDataType& RESTRICT LightMapElementData)
 {
@@ -626,7 +610,7 @@ void FMobileBasePassMeshProcessor::Process(
 		FBaseDS,
 		TMobileBasePassPSPolicyParamType<FUniformLightMapPolicy>> BasePassShaders;
 	
-	bool bEnableSkyLight = ShadingModel != MSM_Unlit && Scene && Scene->ShouldRenderSkylightInBasePass(BlendMode);
+	bool bEnableSkyLight = ShadingModels.IsLit() && Scene && Scene->ShouldRenderSkylightInBasePass(BlendMode);
 	int32 NumMovablePointLights = MobileBasePass::CalcNumMovablePointLights(MaterialResource, PrimitiveSceneProxy);
 
 	MobileBasePass::GetShaders(
@@ -715,6 +699,7 @@ FMeshPassProcessor* CreateMobileTranslucencyStandardPassProcessor(const FScene* 
 	PassDrawRenderState.SetInstancedViewUniformBuffer(Scene->UniformBuffers.InstancedViewUniformBuffer);
 	PassDrawRenderState.SetDepthStencilState(TStaticDepthStencilState<false, CF_DepthNearOrEqual>::GetRHI());
 	PassDrawRenderState.SetDepthStencilAccess(FExclusiveDepthStencil::DepthRead_StencilRead);
+	
 
 	const FMobileBasePassMeshProcessor::EFlags Flags = FMobileBasePassMeshProcessor::EFlags::CanUseDepthStencil;
 

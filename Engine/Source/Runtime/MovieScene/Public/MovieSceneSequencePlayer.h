@@ -371,7 +371,8 @@ public:
 
 
 	/**
-	 * Play the sequence from the current time, to the specified time in seconds
+	 * Low-level call to set the current time of the player by evaluating only the specified time. Will not trigger any events.
+	 * Does not alter the persistent playback status of the player (IsPlaying).
 	 *
 	 * @param TimeInSeconds   The desired time in seconds
 	 */
@@ -379,7 +380,8 @@ public:
 	void PlayToSeconds(float TimeInSeconds);
 
 	/**
-	 * Scrub the sequence from the current time, to the specified time in seconds
+	 * Low-level call to set the current time of the player by evaluating only the specified time. Will not trigger any events.
+	 * Does not alter the persistent playback status of the player (IsPlaying).
 	 *
 	 * @param TimeInSeconds   The desired time in seconds
 	 */
@@ -387,7 +389,8 @@ public:
 	void ScrubToSeconds(float TimeInSeconds);
 
 	/**
-	 * Jump to the specified time in seconds, without evaluating the sequence in between the current and desired time (as if in a paused state)
+	 * Low-level call to set the current time of the player by evaluating only the specified time, as if scrubbing the timeline. Will trigger only events that exist at the specified time.
+	 * Does not alter the persistent playback status of the player (IsPlaying).
 	 *
 	 * @param TimeInSeconds   The desired time in seconds
 	 */
@@ -396,7 +399,8 @@ public:
 
 
 	/**
-	 * Play the sequence from the current time, to the specified marked frame by label
+	 * Low-level call to set the current time of the player to the marked frame by label by evaluating only the specified time. Will not trigger any events.
+	 * Does not alter the persistent playback status of the player (IsPlaying).
 	 *
 	 * @param InLabel   The desired marked frame label to play to
 	 * @return Whether the marked frame was found
@@ -405,7 +409,8 @@ public:
 	bool PlayToMarkedFrame(const FString& InLabel);
 
 	/**
-	 * Scrub the sequence from the current time, to the specified marked frame by label
+	 * Low-level call to set the current time of the player to the marked frame by label by evaluating only the specified time. Will not trigger any events.
+	 * Does not alter the persistent playback status of the player (IsPlaying).
 	 *
 	 * @param InLabel   The desired marked frame label to scrub to
 	 * @return Whether the marked frame was found
@@ -414,7 +419,8 @@ public:
 	bool ScrubToMarkedFrame(const FString& InLabel);
 
 	/**
-	 * Jump to the specified marked frame by label, without evaluating the sequence in between the current and desired time (as if in a paused state)
+	 * Low-level call to set the current time of the player to the marked frame by label by evaluating only the specified time, as if scrubbing the timeline. Will trigger only events that exist at the specified time.
+	 * Does not alter the persistent playback status of the player (IsPlaying).
 	 *
 	 * @param InLabel   The desired marked frame label to jump to
 	 * @return Whether the marked frame was found
@@ -551,7 +557,8 @@ protected:
 	/*~ Begin UObject interface */
 	virtual void BeginDestroy() override;
 	virtual bool IsSupportedForNetworking() const { return true; }
-	virtual int32 GetFunctionCallspace(UFunction* Function, void* Parameters, FFrame* Stack) override;
+	virtual bool IsDestructionThreadSafe() const override { return false; }
+	virtual int32 GetFunctionCallspace(UFunction* Function, FFrame* Stack) override;
 	virtual bool CallRemoteFunction(UFunction* Function, void* Parameters, FOutParmRec* OutParms, FFrame* Stack) override;
 	virtual void PostNetReceive() override;
 	/*~ End UObject interface */
@@ -608,6 +615,9 @@ protected:
 	/** Set to true while evaluating to prevent reentrancy */
 	uint32 bIsEvaluating : 1;
 
+	/** Set to true to invoke OnStartedPlaying on first update tick for started playing */
+	uint32 bPendingOnStartedPlaying : 1;
+
 	/** The sequence to play back */
 	UPROPERTY(transient)
 	UMovieSceneSequence* Sequence;
@@ -626,14 +636,14 @@ protected:
 
 	struct FLatentAction
 	{
-		enum EType { Stop, Pause, Update };
+		enum class EType : uint8 { Stop, Pause, Update };
 
 		FLatentAction(EType InType, FFrameTime DesiredTime = 0)
 			: Type(InType)
 		{}
 
 		FLatentAction(EUpdatePositionMethod InUpdateMethod, FFrameTime DesiredTime)
-			: Type(Update), UpdateMethod(InUpdateMethod), Position(DesiredTime)
+			: Type(EType::Update), UpdateMethod(InUpdateMethod), Position(DesiredTime)
 		{}
 
 		EType                 Type;
@@ -675,4 +685,12 @@ private:
 
 	/** The maximum tick rate prior to playing (used for overriding delta time during playback). */
 	TOptional<double> OldMaxTickRate;
+
+	/**
+	* The last world game time at which we were ticked. Game time used is dependent on bTickEvenWhenPaused
+	* Valid only if we've been ticked at least once since having a tick interval; otherwise set to -1.f
+	*/
+	float LastTickGameTimeSeconds;
+
+
 };

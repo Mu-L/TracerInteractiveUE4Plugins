@@ -52,7 +52,7 @@ public:
 		/** Whether to clear keyboard focus when pressing enter to commit changes */
 		SLATE_ATTRIBUTE( bool, ClearKeyboardFocusOnCommit )
 
-		/** Called whenever the text is changed interactively by the user */
+		/** Called whenever the text is changed programmatically or interactively by the user */
 		SLATE_EVENT( FOnTextChanged, OnTextChanged )
 
 		/** Called whenever the text is committed.  This happens when the user presses enter or the text box loses focus. */
@@ -110,26 +110,36 @@ public:
 
 	virtual FText GetText() const override
 	{
+		check(IsInGameThread());
+
 		return Text.Get();
 	}
 
 	virtual FText GetHintText() const override
 	{
+		check(IsInGameThread());
+
 		return HintText.Get();
 	}
 
 	virtual EKeyboardType GetVirtualKeyboardType() const override
 	{
+		check(IsInGameThread());
+
 		return KeyboardType.Get();
 	}
 
 	virtual FVirtualKeyboardOptions GetVirtualKeyboardOptions() const override
 	{
+		check(IsInGameThread());
+
 		return VirtualKeyboardOptions;
 	}
 
 	virtual bool IsMultilineEntry() const override
 	{
+		check(IsInGameThread());
+
 		return false;
 	}
 	//~ End IVirtualKeyboardEntry Interface
@@ -169,7 +179,7 @@ private:
 	/** Whether to clear keyboard focus when pressing enter to commit changes */
 	TAttribute< bool > ClearKeyboardFocusOnCommit;
 
-	/** Called whenever the text is changed interactively by the user */
+	/** Called whenever the text is changed programmatically or interactively by the user */
 	FOnTextChanged OnTextChanged;
 
 	/** Called whenever the text is committed.  This happens when the user presses enter or the text box loses focus. */

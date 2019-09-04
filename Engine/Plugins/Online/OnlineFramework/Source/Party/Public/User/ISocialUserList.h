@@ -29,12 +29,21 @@ class FSocialUserListConfig
 public:
 	FSocialUserListConfig() {}
 
+	FString Name = TEXT("");
 	ESocialRelationship RelationshipType = ESocialRelationship::Friend;
 	TArray<ESocialSubsystem> RelevantSubsystems;
 	TArray<ESocialSubsystem> ForbiddenSubsystems;
 	ESocialUserStateFlags RequiredPresenceFlags = ESocialUserStateFlags::None;
 	ESocialUserStateFlags ForbiddenPresenceFlags = ESocialUserStateFlags::None;
+
+	// Delegate that is evaluated every time we test a user for inclusion/exclusion
 	FOnCustomFilterUser OnCustomFilterUser;
+
+	// These functions run whenever the User broadcasts OnGameSpecificStatusChanged and if they all return true will trigger a full re-evaluation of this user for list eligibility
+	TArray<TFunction<bool(const USocialUser&)>> GameSpecificStatusFilters;
+
+	// Whether or not the list should be polled regularly for updates (as opposed to manually having UpdateNow triggered)
+	bool bAutoUpdate = false;
 };
 
 class ISocialUserList
@@ -56,6 +65,9 @@ public:
 
 	/** Trigger an update of the list immediately, regardless of auto update period */
 	virtual void UpdateNow() = 0;
+
+	/** Give external overwrite to disable list auto update for perf */
+	virtual void SetAllowAutoUpdate(bool bIsEnabled) = 0;
 
 	/** Sets the period at which to update the list with all users that  */
 	virtual void SetAutoUpdatePeriod(float InAutoUpdatePeriod) = 0;

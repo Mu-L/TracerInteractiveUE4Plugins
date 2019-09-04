@@ -202,7 +202,11 @@ public:
 			const ALandscapeProxy* LandscapeProxy = Component->GetLandscapeProxy();
 			const ULandscapeLayerInfoObject* LayerInfo = EdMode->CurrentToolTarget.LayerInfo.Get();
 
-			if (EdMode->CurrentToolTarget.TargetType == ELandscapeToolTargetType::Weightmap &&
+			if (!EdMode->CanEditLayer())
+			{
+				bCanPaint = false;
+			}
+			else if (EdMode->CurrentToolTarget.TargetType == ELandscapeToolTargetType::Weightmap &&
 				EdMode->UISettings->PaintingRestriction != ELandscapeLayerPaintingRestriction::None)
 			{
 				if (EdMode->UISettings->PaintingRestriction == ELandscapeLayerPaintingRestriction::UseComponentWhitelist &&
@@ -212,12 +216,14 @@ public:
 				}
 				else
 				{
-					bool bExisting = Component->WeightmapLayerAllocations.ContainsByPredicate([LayerInfo](const FWeightmapLayerAllocationInfo& Allocation) { return Allocation.LayerInfo == LayerInfo; });
+					TArray<FWeightmapLayerAllocationInfo>& ComponentWeightmapLayerAllocations = Component->GetWeightmapLayerAllocations(true);
+
+					bool bExisting = ComponentWeightmapLayerAllocations.ContainsByPredicate([LayerInfo](const FWeightmapLayerAllocationInfo& Allocation) { return Allocation.LayerInfo == LayerInfo; });
 					if (!bExisting)
 					{
 						if (EdMode->UISettings->PaintingRestriction == ELandscapeLayerPaintingRestriction::ExistingOnly ||
 							(EdMode->UISettings->PaintingRestriction == ELandscapeLayerPaintingRestriction::UseMaxLayers &&
-							 LandscapeProxy->MaxPaintedLayersPerComponent > 0 && Component->WeightmapLayerAllocations.Num() >= LandscapeProxy->MaxPaintedLayersPerComponent))
+							 LandscapeProxy->MaxPaintedLayersPerComponent > 0 && ComponentWeightmapLayerAllocations.Num() >= LandscapeProxy->MaxPaintedLayersPerComponent))
 						{
 							bCanPaint = false;
 						}

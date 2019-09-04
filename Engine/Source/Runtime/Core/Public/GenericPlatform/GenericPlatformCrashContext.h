@@ -88,6 +88,7 @@ enum class ECrashContextType
 	Assert,
 	Ensure,
 	GPUCrash,
+	Hang,
 
 	Max
 };
@@ -120,6 +121,7 @@ public:
 	static const FString RuntimePropertiesTag;
 	static const FString PlatformPropertiesTag;
 	static const FString EngineDataTag;
+	static const FString GameDataTag;
 	static const FString EnabledPluginsTag;
 	static const FString UE4MinidumpName;
 	static const FString NewLineTag;
@@ -129,6 +131,7 @@ public:
 	static const FString CrashTypeAssert;
 	static const FString CrashTypeEnsure;
 	static const FString CrashTypeGPU;
+	static const FString CrashTypeHang;
 
 	static const FString EngineModeExUnknown;
 	static const FString EngineModeExDirty;
@@ -217,6 +220,12 @@ public:
 	/** Updates (or adds if not already present) arbitrary engine data to the crash context (will remove the key if passed an empty string) */
 	static void SetEngineData(const FString& Key, const FString& Value);
 
+	/** Clears the game data dictionary */
+	static void ResetGameData();
+
+	/** Updates (or adds if not already present) arbitrary game data to the crash context (will remove the key if passed an empty string) */
+	static void SetGameData(const FString& Key, const FString& Value);
+
 	/** Adds a plugin descriptor string to the enabled plugins list in the crash context */
 	static void AddPlugin(const FString& PluginDesc);
 
@@ -228,6 +237,9 @@ public:
 	
 	/** Sets the portable callstack to a specified stack */
 	virtual void SetPortableCallStack(const uint64* StackFrames, int32 NumStackFrames);
+
+	/** Gets the portable callstack to a specified stack and puts it into OutCallStack */
+	virtual void GetPortableCallStack(const uint64* StackFrames, int32 NumStackFrames, TArray<FCrashStackFrame>& OutCallStack);
 
 	/**
 	 * @return whether this crash is a non-crash event
@@ -258,6 +270,9 @@ private:
 
 	/** Add callstack information to the crash report xml */
 	void AddPortableCallStack() const;
+
+	/** Produces a hash based on the offsets of the portable callstack and adds it to the xml */
+	void AddPortableCallStackHash() const;
 
 	/** Writes header information to the buffer. */
 	void AddHeader() const;

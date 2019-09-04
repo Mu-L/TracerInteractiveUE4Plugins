@@ -16,6 +16,29 @@
 		</if>
 	</init>
 
+	<androidManifestUpdates>
+		<if condition="bEnabled">
+			<true>
+				<addElements tag="application">
+					<service
+					  android:name="com.epicgames.ue4.notifications.EpicFirebaseInstanceIDService"
+					  android:exported="false" >
+						<intent-filter>
+							<action android:name="com.google.firebase.INSTANCE_ID_EVENT"/>
+						</intent-filter>
+					</service>
+					<service
+					  android:name="com.epicgames.ue4.notifications.EpicFirebaseMessagingService"
+					  android:exported="false">
+						<intent-filter>
+							<action android:name="com.google.firebase.MESSAGING_EVENT"/>
+						</intent-filter>
+					</service>
+				</addElements>
+			</true>
+		</if>
+	</androidManifestUpdates>
+
 	<buildscriptGradleAdditions>
 		<if condition="bEnabled">
 			<true>
@@ -43,12 +66,22 @@ apply plugin: 'com.google.gms.google-services'
 		</if>
 	</buildGradleAdditions>
 
+	<prebuildCopies>
+		<if condition="bEnabled">
+			<true>
+				<copyDir src="$S(PluginDir)/Java" dst="$S(BuildDir)/src/com/epicgames/ue4"/>
+			</true>
+		</if>
+	</prebuildCopies>
+	
 	<gradleCopies>
 		<if condition="bEnabled">
 			<true>
 				<!-- Will need to revisit this if/when other plug-ins need to modify google-services.json -->
 				<copyFile src="$S(BuildDir)/google-services.json" dst="$S(BuildDir)/gradle/app/google-services.json" force="false"/>
+				<copyFile src="$S(BuildDir)/google-services-$S(Configuration).json" dst="$S(BuildDir)/gradle/app/google-services.json" force="false"/>
 			</true>
 		</if>
 	</gradleCopies>
+
 </root>

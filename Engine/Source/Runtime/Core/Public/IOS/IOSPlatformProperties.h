@@ -63,6 +63,23 @@ struct FIOSPlatformProperties
 		return true;
 	}
 
+	static FORCEINLINE bool SupportsMemoryMappedFiles()
+	{
+		return true;
+	}
+	static FORCEINLINE bool SupportsMemoryMappedAudio()
+	{
+		return true;
+	}
+	static FORCEINLINE bool SupportsMemoryMappedAnimation()
+	{
+		return true;
+	}
+	static FORCEINLINE int64 GetMemoryMappingAlignment()
+	{
+		return 16384;
+	}
+
 	static FORCEINLINE bool HasFixedResolution()
 	{
 		return true;
@@ -78,3 +95,7 @@ struct FIOSPlatformProperties
 		return true;
 	}
 };
+
+#ifdef PROPERTY_HEADER_SHOULD_DEFINE_TYPE
+typedef FIOSPlatformProperties FPlatformProperties;
+#endif

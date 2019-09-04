@@ -38,6 +38,7 @@ void FMaterialRelevance::SetPrimitiveViewRelevance(FPrimitiveViewRelevance& OutV
 {
 	OutViewRelevance.bOpaqueRelevance = bOpaque;
 	OutViewRelevance.bMaskedRelevance = bMasked;
+	OutViewRelevance.bOutputsTranslucentVelocityRelevance = bOutputsTranslucentVelocity;
 	OutViewRelevance.bDistortionRelevance = bDistortion;
 	OutViewRelevance.bSeparateTranslucencyRelevance = bSeparateTranslucency;
 	OutViewRelevance.bNormalTranslucencyRelevance = bNormalTranslucency;
@@ -122,14 +123,13 @@ FMaterialRelevance UMaterialInterface::GetRelevance_Internal(const UMaterial* Ma
 		const EBlendMode BlendMode = (EBlendMode)GetBlendMode();
 		const bool bIsTranslucent = IsTranslucentBlendMode(BlendMode);
 
-		EMaterialShadingModel ShadingModel = GetShadingModel();
 		EMaterialDomain Domain = (EMaterialDomain)MaterialResource->GetMaterialDomain();
 		bool bDecal = (Domain == MD_DeferredDecal);
 
 		// Determine the material's view relevance.
 		FMaterialRelevance MaterialRelevance;
 
-		MaterialRelevance.ShadingModelMask = 1 << ShadingModel;
+		MaterialRelevance.ShadingModelMask = GetShadingModels().GetShadingModelField();
 
 		if(bDecal)
 		{
@@ -138,7 +138,9 @@ FMaterialRelevance UMaterialInterface::GetRelevance_Internal(const UMaterial* Ma
 		}
 		else
 		{
-			bool bMaterialSeparateTranclucency = (InFeatureLevel > ERHIFeatureLevel::ES3_1 ? Material->bEnableSeparateTranslucency : Material->bEnableMobileSeparateTranslucency);
+			// Check whether the material can be drawn in the separate translucency pass as per FMaterialResource::IsTranslucencyAfterDOFEnabled and IsMobileSeparateTranslucencyEnabled
+			bool bSupportsSeparateTranclucency = Material->MaterialDomain != MD_UI && Material->MaterialDomain != MD_DeferredDecal;
+			bool bMaterialSeparateTranclucency = bSupportsSeparateTranclucency && (InFeatureLevel > ERHIFeatureLevel::ES3_1 ? Material->bEnableSeparateTranslucency : Material->bEnableMobileSeparateTranslucency);
 			
 			MaterialRelevance.bOpaque = !bIsTranslucent;
 			MaterialRelevance.bMasked = IsMasked();
@@ -148,7 +150,7 @@ FMaterialRelevance UMaterialInterface::GetRelevance_Internal(const UMaterial* Ma
 			MaterialRelevance.bDisableDepthTest = bIsTranslucent && Material->bDisableDepthTest;		
 			MaterialRelevance.bUsesSceneColorCopy = bIsTranslucent && MaterialResource->RequiresSceneColorCopy_GameThread();
 			MaterialRelevance.bDisableOffscreenRendering = BlendMode == BLEND_Modulate; // Blend Modulate must be rendered directly in the scene color.
-			MaterialRelevance.bOutputsVelocityInBasePass = Material->bOutputVelocityOnBasePass;	
+			MaterialRelevance.bOutputsTranslucentVelocity = Material->IsTranslucencyWritingVelocity();
 			MaterialRelevance.bUsesGlobalDistanceField = MaterialResource->UsesGlobalDistanceField_GameThread();
 			MaterialRelevance.bUsesWorldPositionOffset = MaterialResource->UsesWorldPositionOffset_GameThread();
 			ETranslucencyLightingMode TranslucencyLightingMode = MaterialResource->GetTranslucencyLightingMode();
@@ -409,6 +411,11 @@ bool UMaterialInterface::IsTranslucencyWritingCustomDepth() const
 	return false;
 }
 
+bool UMaterialInterface::IsTranslucencyWritingVelocity() const
+{
+	return false;
+}
+
 bool UMaterialInterface::IsMasked() const
 {
 	return false;
@@ -423,14 +430,24 @@ bool UMaterialInterface::GetCastDynamicShadowAsMasked() const
 	return false;
 }
 
-EMaterialShadingModel UMaterialInterface::GetShadingModel() const
+FMaterialShadingModelField UMaterialInterface::GetShadingModels() const
 {
 	return MSM_DefaultLit;
+}
+
+bool UMaterialInterface::IsShadingModelFromMaterialExpression() const
+{
+	return false;
 }
 
 USubsurfaceProfile* UMaterialInterface::GetSubsurfaceProfile_Internal() const
 {
 	return NULL;
+}
+
+bool UMaterialInterface::CastsRayTracedShadows() const
+{
+	return true;
 }
 
 void UMaterialInterface::SetFeatureLevelToCompile(ERHIFeatureLevel::Type FeatureLevel, bool bShouldCompile)
@@ -473,10 +490,10 @@ void UMaterialInterface::UpdateMaterialRenderProxy(FMaterialRenderProxy& Proxy)
 	// no 0 pointer
 	check(&Proxy);
 
-	EMaterialShadingModel MaterialShadingModel = GetShadingModel();
+	FMaterialShadingModelField MaterialShadingModels = GetShadingModels();
 
 	// for better performance we only update SubsurfaceProfileRT if the feature is used
-	if (UseSubsurfaceProfile(MaterialShadingModel))
+	if (UseSubsurfaceProfile(MaterialShadingModels))
 	{
 		FSubsurfaceProfileStruct Settings;
 
@@ -521,13 +538,31 @@ void UMaterialInterface::SortTextureStreamingData(bool bForceSort, bool bFinalSo
 	// In cook that was already done in the save.
 	if (!bTextureStreamingDataSorted || bForceSort)
 	{
+		TArray<UObject*> UsedTextures;
+		if (bFinalSort)
+		{
+			AppendReferencedTextures(UsedTextures);
+			for (int32 TextureIndex = 0; TextureIndex < UsedTextures.Num(); ++TextureIndex)
+			{
+				UTexture* UsedTexture = Cast<UTexture>(UsedTextures[TextureIndex]);
+				// Sort some of the conditions that could make the texture unstreamable, to make the data leaner.
+				// Note that because we are cooking, UStreamableRenderAsset::bIsStreamable is not reliable here.
+				if (!UsedTexture || UsedTexture->NeverStream || UsedTexture->LODGroup == TEXTUREGROUP_UI || UsedTexture->MipGenSettings == TMGS_NoMipmaps)
+				{
+					UsedTextures.RemoveAtSwap(TextureIndex);
+					--TextureIndex;
+				}
+			}
+		}
+
 		for (int32 Index = 0; Index < TextureStreamingData.Num(); ++Index)
 		{
 			FMaterialTextureInfo& TextureData = TextureStreamingData[Index];
-			UObject* Texture = TextureData.TextureReference.ResolveObject();
+			UTexture* Texture = Cast<UTexture>(TextureData.TextureReference.ResolveObject());
 
-			// In the final data it must also be a streaming texture, to make the data leaner.
-			if (Texture)
+			// Also, when cooking, only keep textures that are directly referenced by this material to prevent non-deterministic cooking.
+			// This would happen if a texture reference resolves to a texture not used anymore by this material. The resolved object could then be valid or not.
+			if (Texture && (!bFinalSort || UsedTextures.Contains(Texture)))
 			{
 				TextureData.TextureName = Texture->GetFName();
 			}
@@ -543,7 +578,18 @@ void UMaterialInterface::SortTextureStreamingData(bool bForceSort, bool bFinalSo
 		}
 
 		// Sort by name to be compatible with FindTextureStreamingDataIndexRange
-		TextureStreamingData.Sort([](const FMaterialTextureInfo& Lhs, const FMaterialTextureInfo& Rhs) { return Lhs.TextureName < Rhs.TextureName; });
+		TextureStreamingData.Sort([](const FMaterialTextureInfo& Lhs, const FMaterialTextureInfo& Rhs) 
+		{ 
+#if WITH_EDITORONLY_DATA
+			// Sort by register indices when the name are the same, as when initially added in the streaming data.
+			if (Lhs.TextureName == Rhs.TextureName)
+			{
+				return Lhs.TextureIndex < Rhs.TextureIndex;
+
+			}
+#endif
+			return Lhs.TextureName.LexicalLess(Rhs.TextureName); 
+		});
 		bTextureStreamingDataSorted = true;
 	}
 #endif
@@ -565,7 +611,7 @@ bool UMaterialInterface::FindTextureStreamingDataIndexRange(FName TextureName, i
 		return false;
 	}
 
-	const int32 MatchingIndex = Algo::BinarySearchBy(TextureStreamingData, TextureName, &FMaterialTextureInfo::TextureName);
+	const int32 MatchingIndex = Algo::BinarySearchBy(TextureStreamingData, TextureName, &FMaterialTextureInfo::TextureName, FNameLexicalLess());
 	if (MatchingIndex != INDEX_NONE)
 	{
 		// Find the range of entries for this texture. 
@@ -585,7 +631,9 @@ void UMaterialInterface::SetTextureStreamingData(const TArray<FMaterialTextureIn
 {
 	TextureStreamingData = InTextureStreamingData;
 #if WITH_EDITORONLY_DATA
+	bTextureStreamingDataSorted = false;
 	TextureStreamingDataVersion = InTextureStreamingData.Num() ? MATERIAL_TEXTURE_STREAMING_DATA_VERSION : 0;
+	TextureStreamingDataMissingEntries.Empty();
 #endif
 	SortTextureStreamingData(true, false);
 }
@@ -620,7 +668,7 @@ bool UMaterialInterface::UseAnyStreamingTexture() const
 
 	for (UTexture* Texture : Textures)
 	{
-		if (IsStreamingTexture(Cast<UTexture2D>(Texture)))
+		if (IsStreamingRenderAsset(Texture))
 		{
 			return true;
 		}

@@ -444,7 +444,7 @@ int FPyWrapperStruct::SetPropertyValue(FPyWrapperStruct* InSelf, PyObject* InVal
 	bool OwnerIsTemplate = false;
 	if (const UObject* OwnerObject = PyUtil::GetOwnerObject((PyObject*)InSelf))
 	{
-		OwnerIsTemplate = OwnerObject->IsTemplate();
+		OwnerIsTemplate = OwnerObject->IsTemplate() || OwnerObject->IsAsset();
 	}
 
 	const FPyWrapperOwnerContext ChangeOwner = InNotifyChange ? FPyWrapperOwnerContext((PyObject*)InSelf, InPropDef.Prop) : FPyWrapperOwnerContext();
@@ -1498,6 +1498,14 @@ void UPythonGeneratedStruct::InitializeStruct(void* Dest, int32 ArrayDim) const
 			}
 		}
 	}
+}
+
+void UPythonGeneratedStruct::ReleasePythonResources()
+{
+	PyType.Reset();
+	PyPostInitFunction.Reset();
+	PropertyDefs.Reset();
+	PyMetaData = FPyWrapperStructMetaData();
 }
 
 UPythonGeneratedStruct* UPythonGeneratedStruct::GenerateStruct(PyTypeObject* InPyType)

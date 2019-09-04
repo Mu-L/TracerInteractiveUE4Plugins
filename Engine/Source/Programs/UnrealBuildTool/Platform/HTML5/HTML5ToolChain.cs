@@ -38,7 +38,6 @@ namespace UnrealBuildTool
 		}
 
 		public HTML5ToolChain(FileReference InProjectFile)
-			: base(CppPlatform.HTML5)
 		{
 			if (!HTML5SDKInfo.IsSDKInstalled())
 			{
@@ -92,7 +91,7 @@ namespace UnrealBuildTool
 			Log.TraceInformation("*** Emscripten Config File: " + Environment.GetEnvironmentVariable("EM_CONFIG"));
 		}
 
-		string GetSharedArguments_Global(CppConfiguration Configuration, bool bOptimizeForSize, string Architecture, bool bEnableShadowVariableWarnings, bool bShadowVariableWarningsAsErrors, bool bEnableUndefinedIdentifierWarnings, bool bUndefinedIdentifierWarningsAsErrors, bool bUseInlining)
+		string GetSharedArguments_Global(CppConfiguration Configuration, bool bOptimizeForSize, string Architecture, bool bEnableShadowVariableWarnings, bool bShadowVariableWarningsAsErrors, bool bEnableUndefinedIdentifierWarnings, bool bUndefinedIdentifierWarningsAsErrors, bool bUseInlining, bool bUE423_OSX_LinkerFix=false)
 		{
 			string Result = " ";
 //			string Result = " -Werror";
@@ -139,7 +138,14 @@ namespace UnrealBuildTool
 
 			else if (Configuration == CppConfiguration.Shipping)
 			{
-				Result += " -O3"; // favor speed over size
+				if (bUE423_OSX_LinkerFix && (BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Mac))
+				{	// UE-78966 - TEMP HACK - remove this on next EMSCRIPTEN_TOOLCHAIN_UPGRADE_CHECK
+					Result += " -O2";
+				}
+				else
+				{
+					Result += " -O3"; // favor speed over size
+				}
 			}
 
 			if (!bUseInlining)
@@ -159,8 +165,9 @@ namespace UnrealBuildTool
 
 			if (enableMultithreading)
 			{
-				Result += " -msse2 -s USE_PTHREADS=1";
-				Result += " -DEXPERIMENTAL_OPENGL_RHITHREAD=" + (bMultithreading_UseOffscreenCanvas ? "1" : "0");
+//				Result += " -msse2 -s USE_PTHREADS=1";
+				Result += " -s USE_PTHREADS=1";
+				Result += " -DEXPERIMENTAL_OPENGL_RHITHREAD=" + (bMultithreading_UseOffscreenCanvas ? "0" : "1");
 
 				// NOTE: use "emscripten native" video, keyboard, mouse
 			}
@@ -204,6 +211,7 @@ namespace UnrealBuildTool
 
 			// THESE ARE TEST/DEBUGGING -- TRY NOT TO USE THESE
 //			Environment.SetEnvironmentVariable("EMCC_DEBUG", "1"); // NOTE: try to use -v instead of EMCC_DEBUG
+//			Environment.SetEnvironmentVariable("EMCC_DEBUG_SAVE", "1"); // very useful for compiler bughunts
 //			Environment.SetEnvironmentVariable("EMCC_CORES", "8");
 //			Environment.SetEnvironmentVariable("EMCC_OPTIMIZE_NORMALLY", "1");
 
@@ -219,6 +227,10 @@ namespace UnrealBuildTool
 			{
 				// Packaging on Window needs this - zap any existing HOME environment variables to prevent any accidental pick ups
 				Environment.SetEnvironmentVariable("HOME", "");
+			}
+			if (BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Mac)
+			{
+				Environment.SetEnvironmentVariable("LD_LIBRARY_PATH", HTML5SDKInfo.MacPythonLib()); // UE-75402
 			}
 			return Result;
 		}
@@ -246,7 +258,7 @@ namespace UnrealBuildTool
 
 		string GetLinkArguments(LinkEnvironment LinkEnvironment)
 		{
-			string Result = GetSharedArguments_Global(LinkEnvironment.Configuration, LinkEnvironment.bOptimizeForSize, LinkEnvironment.Architecture, false, false, false, false, false);
+			string Result = GetSharedArguments_Global(LinkEnvironment.Configuration, LinkEnvironment.bOptimizeForSize, LinkEnvironment.Architecture, false, false, false, false, false, true);
 
 			/* N.B. When editing link flags in this function, UnrealBuildTool does not seem to automatically pick them up and do an incremental
 			 *	relink only of UE4Game.js (at least when building blueprints projects). Therefore after editing, delete the old build
@@ -254,9 +266,6 @@ namespace UnrealBuildTool
 			 *
 			 *    > rm Engine/Binaries/HTML5/UE4Game.bc
 			 */
-
-			// enable verbose mode
-			Result += " -v";
 
 
 			// --------------------------------------------------
@@ -336,8 +345,8 @@ namespace UnrealBuildTool
 			if (enableMultithreading)
 			{
 				Result += " -s ALLOW_MEMORY_GROWTH=0";
-				Result += " -s TOTAL_MEMORY=512MB";
-
+//				Result += " -s TOTAL_MEMORY=512MB";
+				Result += " -s TOTAL_MEMORY=600MB";
 // NOTE: browsers needs to temporarly have some flags set:
 //  https://github.com/kripken/emscripten/wiki/Pthreads-with-WebAssembly
 //  https://kripken.github.io/emscripten-site/docs/porting/pthreads.html
@@ -346,6 +355,7 @@ namespace UnrealBuildTool
 			else
 			{
 				Result += " -s ALLOW_MEMORY_GROWTH=1";
+				Result += " -s TOTAL_MEMORY=32MB";
 			}
 
 
@@ -544,13 +554,6 @@ namespace UnrealBuildTool
 			return Result;
 		}
 
-		public override CPPOutput CompileRCFiles(CppCompileEnvironment CompileEnvironment, List<FileItem> InputFiles, DirectoryReference OutputDir, List<Action> Actions)
-		{
-			CPPOutput Result = new CPPOutput();
-
-			return Result;
-		}
-
 		public override FileItem LinkFiles(LinkEnvironment LinkEnvironment, bool bBuildImportLibraryOnly, List<Action> Actions)
 		{
 			FileItem OutputFile;
@@ -641,6 +644,11 @@ namespace UnrealBuildTool
 
 			FileReference ResponseFileName = GetResponseFileName(LinkEnvironment, OutputFile);
 
+			// this is needed when using EMCC_DEBUG_SAVE
+			if (!FileReference.Exists(ResponseFileName))
+			{
+				DirectoryReference.CreateDirectory(ResponseFileName.Directory);
+			}
 			FileItem ResponseFileItem = FileItem.CreateIntermediateTextFile(ResponseFileName, ReponseLines);
 
 			LinkAction.CommandArguments += string.Format(" @\"{0}\"", ResponseFileName);

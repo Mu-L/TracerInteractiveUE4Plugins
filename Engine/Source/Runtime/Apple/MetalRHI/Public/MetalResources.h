@@ -176,6 +176,7 @@ public:
 	
 	mtlpp::Function GetFunction();
 	
+#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
 	// for VSHS
 	FMetalTessellationOutputs TessellationOutputAttribs;
 	float  TessellationMaxTessFactor;
@@ -189,6 +190,7 @@ public:
 	uint32 TessellationHSTFOutBuffer;
 	uint32 TessellationControlPointOutBuffer;
 	uint32 TessellationControlPointIndexBuffer;
+#endif
 };
 
 class FMetalPixelShader : public TMetalBaseShader<FRHIPixelShader, SF_Pixel>
@@ -200,6 +202,7 @@ public:
 	mtlpp::Function GetFunction();
 };
 
+#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
 class FMetalHullShader : public TMetalBaseShader<FRHIHullShader, SF_Hull>
 {
 public:
@@ -222,6 +225,10 @@ public:
 	uint32 TessellationHSOutBuffer;
 	uint32 TessellationControlPointOutBuffer;
 };
+#else
+typedef TMetalBaseShader<FRHIHullShader, SF_Hull> FMetalHullShader;
+typedef TMetalBaseShader<FRHIDomainShader, SF_Domain> FMetalDomainShader;
+#endif
 
 typedef TMetalBaseShader<FRHIGeometryShader, SF_Geometry> FMetalGeometryShader;
 
@@ -276,15 +283,20 @@ public:
 	/** Cached shaders */
 	TRefCountPtr<FMetalVertexShader> VertexShader;
 	TRefCountPtr<FMetalPixelShader> PixelShader;
+#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
 	TRefCountPtr<FMetalHullShader> HullShader;
 	TRefCountPtr<FMetalDomainShader> DomainShader;
+#endif
+#if PLATFORM_SUPPORTS_GEOMETRY_SHADERS
 	TRefCountPtr<FMetalGeometryShader> GeometryShader;
+#endif
 	
 	/** Cached state objects */
 	TRefCountPtr<FMetalDepthStencilState> DepthStencilState;
 	TRefCountPtr<FMetalRasterizerState> RasterizerState;
 	
 	inline EPrimitiveType GetPrimitiveType() { return Initializer.PrimitiveType; }
+	inline bool GetDepthBounds() const { return Initializer.bDepthBounds; }
 	
 	friend class FMetalDynamicRHI;
 	
@@ -348,6 +360,7 @@ public:
 	inline bool IsPooled() const { return bPooled; }
 	inline bool IsSingleUse() const { return bSingleUse; }
 	inline void MarkSingleUse() { bSingleUse = true; }
+    void SetOwner(class FMetalRHIBuffer* Owner);
 	void Release();
 	
 	friend uint32 GetTypeHash(FMetalBuffer const& Hash)
@@ -503,7 +516,6 @@ public:
 	// iOS A9+ where depth resolve is available
 	// iOS < A9 where depth resolve is unavailable.
 	FMetalTexture MSAAResolveTexture;
-	FMetalTexture StencilTexture;
 	uint32 SizeX, SizeY, SizeZ;
 	bool bIsCubemap;
 	int32 volatile Written;
@@ -573,7 +585,7 @@ public:
 
 	// Constructor, just calls base and Surface constructor
 	FMetalTexture2DArray(EPixelFormat Format, uint32 SizeX, uint32 SizeY, uint32 ArraySize, uint32 NumMips, uint32 Flags, FResourceBulkDataInterface* BulkData, const FClearValueBinding& InClearValue)
-		: FRHITexture2DArray(SizeX, SizeY, ArraySize, NumMips, Format, Flags, InClearValue)
+		: FRHITexture2DArray(SizeX, SizeY, ArraySize, NumMips, 1, Format, Flags, InClearValue)
 		, Surface(RRT_Texture2DArray, Format, SizeX, SizeY, 1, /*NumSamples=*/1, /*bArray=*/ true, ArraySize, NumMips, Flags, BulkData)
 	{
 	}
@@ -767,6 +779,8 @@ public:
 	 */
 	void Unlock();
 	
+	void Swap(FMetalRHIBuffer& Other);
+	
 	/**
 	 * Whether to allocate the resource rom private memory or not.
 	 */
@@ -812,6 +826,8 @@ public:
 	FMetalIndexBuffer(uint32 InStride, uint32 InSize, uint32 InUsage);
 	virtual ~FMetalIndexBuffer();
 	
+	void Swap(FMetalIndexBuffer& Other);
+	
 	// 16- or 32-bit
 	mtlpp::IndexType IndexType;
 };
@@ -824,6 +840,8 @@ public:
 	/** Constructor */
 	FMetalVertexBuffer(uint32 InSize, uint32 InUsage);
 	virtual ~FMetalVertexBuffer();
+
+	void Swap(FMetalVertexBuffer& Other);
 };
 
 class FMetalUniformBuffer : public FRHIUniformBuffer, public FMetalRHIBuffer
@@ -840,12 +858,12 @@ public:
 
 	void InitIAB();
 
-	void Update(const void* Contents, EUniformBufferValidation Validation);
+	void Update(const void* Contents, TArray<TRefCountPtr<FRHIResource>>& Resources, EUniformBufferValidation Validation);
 	
 	/** Resource table containing RHI references. */
 	TArray<TRefCountPtr<FRHIResource> > ResourceTable;
 	
-	TSet<FTextureReferenceRHIParamRef> TextureReferences;
+	TSet<FRHITextureReference*> TextureReferences;
 
 	struct Argument
 	{
@@ -873,6 +891,9 @@ public:
 	EUniformBufferUsage UniformUsage;
 	FMetalIndirectArgumentBuffer& GetIAB();
 	FMetalIndirectArgumentBuffer* IAB;
+	TArray<EUniformBufferBaseType> ResourceTypes;
+	uint32 NumResources;
+	uint32 ConstantSize;
 };
 
 
@@ -960,7 +981,7 @@ public:
 	/**
 	 * Commit shader parameters to the currently bound program.
 	 */
-	void CommitPackedGlobals(class FMetalStateCache* Cache, class FMetalCommandEncoder* Encoder, EShaderFrequency Frequency, const FMetalShaderBindings& Bindings);
+	void CommitPackedGlobals(class FMetalStateCache* Cache, class FMetalCommandEncoder* Encoder, uint32 Frequency, const FMetalShaderBindings& Bindings);
 
 private:
 	/** CPU memory block for storing uniform values. */
@@ -1042,7 +1063,7 @@ private:
 class FMetalShaderLibrary final : public FRHIShaderLibrary
 {	
 public:
-	FMetalShaderLibrary(EShaderPlatform Platform, FString const& Name, TArray<mtlpp::Library> Library, FMetalShaderMap const& Map);
+	FMetalShaderLibrary(EShaderPlatform Platform, FString const& Name, TArray<mtlpp::Library> Library, FMetalShaderMap const& Map, const FString& InShaderLibraryFilename);
 	virtual ~FMetalShaderLibrary();
 	
 	virtual bool IsNativeLibrary() const override final {return true;}
@@ -1092,7 +1113,11 @@ private:
 	
 private:
 	TArray<mtlpp::Library> Library;
+#if !UE_BUILD_SHIPPING
+	class FMetalShaderDebugZipFile* DebugFile;
+#endif
 	FMetalShaderMap Map;
+	FString ShaderLibraryFilename;
 };
 
 template<class T>

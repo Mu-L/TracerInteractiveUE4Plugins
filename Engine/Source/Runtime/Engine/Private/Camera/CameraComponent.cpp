@@ -13,6 +13,7 @@
 #include "Logging/TokenizedMessage.h"
 #include "Logging/MessageLog.h"
 #include "Misc/UObjectToken.h"
+#include "Rendering/MotionVectorSimulation.h"
 #include "Misc/MapErrors.h"
 #include "Components/DrawFrustumComponent.h"
 #include "IHeadMountedDisplay.h"
@@ -108,7 +109,6 @@ void UCameraComponent::OnRegister()
 			ProxyMeshComponent->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
 			ProxyMeshComponent->bHiddenInGame = true;
 			ProxyMeshComponent->CastShadow = false;
-			ProxyMeshComponent->PostPhysicsComponentTick.bCanEverTick = false;
 			ProxyMeshComponent->CreationMethod = CreationMethod;
 			ProxyMeshComponent->RegisterComponentWithWorld(GetWorld());
 		}
@@ -322,6 +322,9 @@ void UCameraComponent::GetCameraView(float DeltaTime, FMinimalViewInfo& DesiredV
 	{
 		DesiredView.PostProcessSettings = PostProcessSettings;
 	}
+
+	// If this camera component has a motion vector simumlation transform, use that for the current view's previous transform
+	DesiredView.PreviousViewTransform = FMotionVectorSimulation::Get().GetPreviousTransform(this);
 }
 
 #if WITH_EDITOR

@@ -324,6 +324,9 @@ public:
 	{
 		if ( !bEmptying )
 		{
+			// NOTE:
+			// We don't do any invalidating here, that's handled by the FSlotBase, which eventually calls ConditionallyDetatchParentWidget
+
 			TIndirectArray< SlotType >::RemoveAt(Index);
 		}
 	}
@@ -332,8 +335,20 @@ public:
 	{
 		if ( !bEmptying )
 		{
+			// NOTE:
+			// We don't do any invalidating here, that's handled by the FSlotBase, which eventually calls ConditionallyDetatchParentWidget
+
 			TGuardValue<bool> GuardEmptying(bEmptying, true);
+
+			// We empty children by first transferring them onto a stack-owned array, then freeing the elements.
+			// This alleviates issues where (misbehaving) destructors on the children may call back into this class and query children while they are being destroyed.
+			// By storing the children on the stack first, we defer the destruction of children until after we have emptied our owned container.
+			TIndirectArray< SlotType > ChildrenCopy = MoveTemp(static_cast<TIndirectArray< SlotType >&>(*this));
+
+			// Explicitly calling Empty is not really necessary (it is already empty/moved-from now), but we call it for safety
 			TIndirectArray< SlotType >::Empty();
+
+			// ChildrenCopy will now be destroyed 
 		}
 	}
 
@@ -385,6 +400,12 @@ public:
 	void Sort( const PREDICATE_CLASS& Predicate )
 	{
 		::Sort(TIndirectArray< SlotType >::GetData(), TIndirectArray<SlotType>::Num(), Predicate);
+	}
+
+	template <class PREDICATE_CLASS>
+	void StableSort(const PREDICATE_CLASS& Predicate)
+	{
+		::StableSort(TIndirectArray< SlotType >::GetData(), TIndirectArray< SlotType >::Num(), Predicate);
 	}
 
 	void Swap( int32 IndexA, int32 IndexB )
@@ -567,6 +588,20 @@ public:
 		}
 
 		return TArray< TSharedRef<ChildType> >::Add(Child);
+	}
+
+	void Reset(int32 NewSize = 0)
+	{
+		for (int ChildIndex = 0; ChildIndex < TArray< TSharedRef<ChildType> >::Num(); ChildIndex++)
+		{
+			TSharedRef<SWidget> Child = GetChildAt(ChildIndex);
+			if (Child != SNullWidget::NullWidget)
+			{
+				Child->ConditionallyDetatchParentWidget(Owner);
+			}
+		}
+
+		TArray< TSharedRef<ChildType> >::Reset(NewSize);
 	}
 
 	void Empty()

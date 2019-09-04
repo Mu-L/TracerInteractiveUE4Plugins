@@ -5,11 +5,26 @@
 #include "CoreMinimal.h"
 #include "NiagaraCommon.h"
 #include "Templates/Tuple.h"
+#include "ViewModels/Stack/NiagaraStackGraphUtilities.h"
 
 class UNiagaraNodeOutput;
 class UEdGraphPin;
 class UEdGraphNode;
 class UNiagaraParameterCollection;
+class FHlslNiagaraTranslator;
+
+class FCompileConstantResolver
+{
+public:
+	FCompileConstantResolver() : Emitter(nullptr), Translator(nullptr) {}
+	FCompileConstantResolver(UNiagaraEmitter* Emitter) : Emitter(Emitter), Translator(nullptr) {}
+	FCompileConstantResolver(FHlslNiagaraTranslator* Translator) : Emitter(nullptr), Translator(Translator) {}
+
+	bool ResolveConstant(FNiagaraVariable& OutConstant) const;
+private:
+	UNiagaraEmitter* Emitter;
+	FHlslNiagaraTranslator* Translator;
+};
 
 /** Traverses a Niagara node graph to identify the variables that have been written and read from a parameter map. 
 * 	This class is meant to aid in UI and compilation of the graph. There are several main script types and each one interacts
@@ -45,7 +60,7 @@ public:
 	TArray<const UEdGraphPin*> MapPinHistory;
 
 	/** List of nodes that manipulated the parameter map from input to output.*/
-	TArray<class UNiagaraNode*> MapNodeVisitations;
+	TArray<const class UNiagaraNode*> MapNodeVisitations;
 
 	/** For each node in MapNodeVisitations, record the start index and end index of variables added within the body of the node, i.e. a Get node will record just the values it pulls out directly. A function call, however, will record all sub-graph traversals.*/
 	TArray<TTuple<uint32, uint32> > MapNodeVariableMetaData;
@@ -58,7 +73,7 @@ public:
 	*/
 	int32 RegisterParameterMapPin(const UEdGraphPin* Pin);
 
-	uint32 BeginNodeVisitation(UNiagaraNode* Node);
+	uint32 BeginNodeVisitation(const UNiagaraNode* Node);
 	void EndNodeVisitation(uint32 IndexFromBeginNode);
 
 	/**
@@ -191,9 +206,6 @@ public:
 	/** Get the default value for this variable.*/
 	const UEdGraphPin* GetDefaultValuePin(int32 VarIdx) const;
 
-	const FNiagaraVariableMetaData* GetMetaData(int32 VarIdx) const;
-	FNiagaraVariableMetaData* GetMetaData(int32 VarIdx);
-
 	static FNiagaraVariable ConvertVariableToRapidIterationConstantName(FNiagaraVariable InVar, const TCHAR* InEmitterName, ENiagaraScriptUsage InUsage);
 
 	/**
@@ -220,7 +232,7 @@ public:
 	int32 CreateParameterMap();
 
 	/** Called in order to set up the correct initial context for an Output node and invokes the UNiagaraNodeOutput's BuildParameterMapHistory method.*/
-	void BuildParameterMaps(UNiagaraNodeOutput* OutputNode, bool bRecursive = true);
+	void BuildParameterMaps(const UNiagaraNodeOutput* OutputNode, bool bRecursive = true);
 
 	/**
 	* Called first during a node's visitation during traversal to identify that a node has been visited.
@@ -230,7 +242,7 @@ public:
 	/** Important. Must be called for each routing of the parameter map. This feeds the list used by TraceParameterMapOutputPin.*/
 	int32 RegisterParameterMapPin(int32 WhichParameterMap, const UEdGraphPin* Pin);
 
-	uint32 BeginNodeVisitation(int32 WhichParameterMap, class UNiagaraNode* Node);
+	uint32 BeginNodeVisitation(int32 WhichParameterMap, const class UNiagaraNode* Node);
 	void EndNodeVisitation(int32 WhichParameterMap, uint32 IndexFromBeginNode);
 
 	/** Trace back a pin to whom it was connected to to find the current parameter map to use.*/
@@ -250,22 +262,22 @@ public:
 	/**
 	* Record that we have entered a new function scope.
 	*/
-	void EnterFunction(const FString& InNodeName, const class UNiagaraScript* InScript, class UNiagaraNode* Node);
+	void EnterFunction(const FString& InNodeName, const class UNiagaraScript* InScript, const class UNiagaraNode* Node);
 
 	/**
 	* Record that we have exited a function scope.
 	*/
-	void ExitFunction(const FString& InNodeName, const class UNiagaraScript* InScript, class UNiagaraNode* Node);
+	void ExitFunction(const FString& InNodeName, const class UNiagaraScript* InScript, const class UNiagaraNode* Node);
 
 	/**
 	* Record that we have entered an emitter scope.
 	*/
-	void EnterEmitter(const FString& InEmitterName, class UNiagaraNode* Node);
+	void EnterEmitter(const FString& InEmitterName, const class UNiagaraNode* Node);
 
 	/**
 	* Record that we have exited an emitter scope.
 	*/
-	void ExitEmitter(const FString& InEmitterName, class UNiagaraNode* Node);
+	void ExitEmitter(const FString& InEmitterName, const class UNiagaraNode* Node);
 
 	/**
 	* Use the current alias map to resolve any aliases in this input variable name.
@@ -283,10 +295,10 @@ public:
 	bool GetNodePreviouslyVisited(const class UNiagaraNode* Node) const;
 
 	/** If we haven't already visited the owning nodes, do so.*/
-	void VisitInputPins(class UNiagaraNode*);
+	void VisitInputPins(const class UNiagaraNode*, bool bFilterForCompilation);
 	
 	/** If we haven't already visited the owning node, do so.*/
-	void VisitInputPin(const UEdGraphPin* Pin, class UNiagaraNode*);
+	void VisitInputPin(const UEdGraphPin* Pin, const class UNiagaraNode*, bool bFilterForCompilation);
 
 	/**
 	* Record that a pin writes to the parameter map. The pin name is expected to be the namespaced parameter map version of the name. If any aliases are in place, they are removed.
@@ -301,7 +313,7 @@ public:
 	/**
 	* Record that a pin reads from the parameter map. The pin name is expected to be the namespaced parameter map version of the name. If any aliases are in place, they are removed.
 	*/
-	int32 HandleVariableRead(int32 ParameterMapIndex, const UEdGraphPin* InPin, bool RegisterReadsAsVariables, const UEdGraphPin* InDefaultPin, bool& OutUsedDefault);
+	int32 HandleVariableRead(int32 ParameterMapIndex, const UEdGraphPin* InPin, bool RegisterReadsAsVariables, const UEdGraphPin* InDefaultPin, bool bFilterForCompilation, bool& OutUsedDefault);
 
 	int32 HandleExternalVariableRead(int32 ParamMapIdx, const FName& InVarName);
 	
@@ -316,7 +328,7 @@ public:
 	const FString* GetEmitterAlias() const;
 
 	/** Get the node calling this sub-graph.*/
-	UNiagaraNode* GetCallingContext() const;
+	const UNiagaraNode* GetCallingContext() const;
 
 	/** Are we currently in a top-level function call context (ie a node in the main graph or an argument into a function for the main graph.)*/
 	bool InTopLevelFunctionCall(ENiagaraScriptUsage InFilterScriptType) const;
@@ -344,6 +356,8 @@ public:
 	void RegisterEncounterableVariables(const TArray<FNiagaraVariable>& Variables);
 	const TArray<FNiagaraVariable>& GetEncounterableVariables() const {	return EncounterableExternalVariables;}
 
+	FCompileConstantResolver ConstantResolver;
+
 protected:
 	/**
 	* Generate the internal alias map from the current traversal state.
@@ -357,7 +371,7 @@ protected:
 	bool IsNamespacedVariableRelevantToScriptType(const FNiagaraVariable& InVar, ENiagaraScriptUsage ScriptType);
 
 	/** Contains the hierarchy of nodes leading to the current graph being processed. Usually made up of FunctionCall and Emitter nodes.*/
-	TArray<UNiagaraNode*> CallingContext;
+	TArray<const UNiagaraNode*> CallingContext;
 	/** Tracker for each context level of the parameter map index associated with a given pin. Used to trace parameter maps through the graph.*/
 	TArray<TMap<const UEdGraphPin*, int32> > PinToParameterMapIndices;
 	/** List of previously visited nodes per context. Note that the same node may be visited multiple times across all graph traversals, but only one time per context level.*/

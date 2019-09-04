@@ -22,6 +22,12 @@
 -keep class com.epicgames.ue4.MediaPlayer14 {
 	public *;
 }
+-keep class com.epicgames.ue4.VideoDecoder {
+	public *;
+}
+-keep class com.epicgames.ue4.AudioDecoder {
+	public *;
+}
 -keep class com.epicgames.ue4.MessageBox01 {
 	public *;
 }
@@ -88,6 +94,10 @@
 }
 
 -keep class com.epicgames.ue4.WebViewControl$FrameUpdateInfo {
+	public *;
+}
+
+-keep class com.epicgames.ue4.VideoDecoder$FrameUpdateInfo {
 	public *;
 }
 

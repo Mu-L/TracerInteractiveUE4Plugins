@@ -55,12 +55,15 @@ enum class EPipelineCacheFileFormatVersions : uint32
 	PSOUsageMask = 13,
 	PSOBindCount = 14,
 	EOFMarker = 15,
+	EngineFlags = 16,
+	Subpass = 17,
 };
 
 const uint64 FPipelineCacheFileFormatMagic = 0x5049504543414348; // PIPECACH
 const uint64 FPipelineCacheTOCFileFormatMagic = 0x544F435354415254; // TOCSTART
 const uint64 FPipelineCacheEOFFileFormatMagic = 0x454F462D4D41524B; // EOF-MARK
-const uint32 FPipelineCacheFileFormatCurrentVersion = (uint32)EPipelineCacheFileFormatVersions::EOFMarker;
+const uint32 FPipelineCacheFileFormatCurrentVersion = (uint32)EPipelineCacheFileFormatVersions::Subpass;
+const int32  FPipelineCacheGraphicsDescPartsNum = 63; // parser will expect this number of parts in a description string
 
 /**
   * PipelineFileCache API access
@@ -112,11 +115,18 @@ static TAutoConsoleVariable<int32> CVarLazyLoadShadersWhenPSOCacheIsPresent(
 	TEXT("Non-Zero: If we load a PSO cache, then lazy load from the shader code library. This assumes the PSO cache is more or less complete. This will only work on RHIs that support the library+Hash CreateShader API (GRHISupportsLazyShaderCodeLoading == true)."),
 	ECVF_RenderThreadSafe);
 
+static TAutoConsoleVariable<int32> CVarClearOSPSOFileCache(
+														   TEXT("r.ShaderPipelineCache.ClearOSCache"),
+														   0,
+														   TEXT("1 Enables the OS level clear after install, 0 disables it."),
+														   ECVF_Default | ECVF_RenderThreadSafe
+														   );
+
 
 FRWLock FPipelineFileCache::FileCacheLock;
 FPipelineCacheFile* FPipelineFileCache::FileCache = nullptr;
 TMap<uint32, FPSOUsageData> FPipelineFileCache::RunTimeToPSOUsage;
-TMap<uint32, uint64> FPipelineFileCache::NewPSOUsageMasks;
+TMap<uint32, FPSOUsageData> FPipelineFileCache::NewPSOUsage;
 TMap<uint32, FPipelineStateStats*> FPipelineFileCache::Stats;
 TSet<FPipelineCacheFileFormatPSO> FPipelineFileCache::NewPSOs;
 uint32 FPipelineFileCache::NumNewPSOs;
@@ -184,11 +194,17 @@ FArchive& operator<<( FArchive& Ar, FPipelineStateStats& Info )
 	return Ar;
 }
 
+/**
+  * PipelineFileCache MetaData Engine Flags
+  **/
+const uint16 FPipelineCacheFlagInvalidPSO = 1 << 0;
+
 struct FPipelineCacheFileFormatPSOMetaData
 {
 	FPipelineCacheFileFormatPSOMetaData()
 	: FileOffset(0)
 	, UsageMask(0)
+	, EngineFlags(0)
 	{
 	}
 	
@@ -202,6 +218,7 @@ struct FPipelineCacheFileFormatPSOMetaData
 	FPipelineStateStats Stats;
 	TSet<FSHAHash> Shaders;
 	uint64 UsageMask;
+	uint16 EngineFlags;
 	
 	friend FArchive& operator<<(FArchive& Ar, FPipelineCacheFileFormatPSOMetaData& Info)
 	{
@@ -222,6 +239,11 @@ struct FPipelineCacheFileFormatPSOMetaData
 		if(Ar.GameNetVer() >= (uint32)EPipelineCacheFileFormatVersions::PSOUsageMask)
 		{
 			Ar << Info.UsageMask;
+		}
+		
+		if(Ar.GameNetVer() >= (uint32)EPipelineCacheFileFormatVersions::EngineFlags)
+		{
+			Ar << Info.EngineFlags;
 		}
 		
 		return Ar;
@@ -343,6 +365,11 @@ FString FPipelineCacheFileFormatPSO::GraphicsDescriptor::StateToString() const
 		);
 	}
 
+	Result += FString::Printf(TEXT("%d,%d,")
+		, uint32(SubpassHint)
+		, uint32(SubpassIndex)
+	);
+	
 	FVertexElement NullVE;
 	FMemory::Memzero(NullVE);
 	Result += FString::Printf(TEXT("%d,")
@@ -365,14 +392,19 @@ FString FPipelineCacheFileFormatPSO::GraphicsDescriptor::StateToString() const
 	}
 	return Result.Left(Result.Len() - 1); // remove trailing comma
 }
-void FPipelineCacheFileFormatPSO::GraphicsDescriptor::StateFromString(const FString& Src)
+
+bool FPipelineCacheFileFormatPSO::GraphicsDescriptor::StateFromString(const FString& Src)
 {
 	TArray<FString> Parts;
 	Src.TrimStartAndEnd().ParseIntoArray(Parts, TEXT(","));
 	int32 PartIndex = 0;
 
-
-
+	// check if we have expected number of parts
+	if (Parts.Num() != FPipelineCacheGraphicsDescPartsNum)
+	{
+		// instead of crashing let caller handle this case
+		return false;
+	}
 
 	check(Parts.Num() - PartIndex >= 3); //not a very robust parser
 	BlendState.FromString(Parts[PartIndex++]);
@@ -404,6 +436,17 @@ void FPipelineCacheFileFormatPSO::GraphicsDescriptor::StateFromString(const FStr
 		LexFromString(Store, *Parts[PartIndex++]);
 	}
 
+	// parse sub-pass information
+	{
+		uint32 LocalSubpassHint = 0;
+		uint32 LocalSubpassIndex = 0;
+		check(Parts.Num() - PartIndex >= 2);
+		LexFromString(LocalSubpassHint, *Parts[PartIndex++]);
+		LexFromString(LocalSubpassIndex, *Parts[PartIndex++]);
+		SubpassHint = LocalSubpassHint;
+		SubpassIndex = LocalSubpassIndex;
+	}
+	
 	check(Parts.Num() - PartIndex >= 1); //not a very robust parser
 	int32 VertDescNum = 0;
 	LexFromString(VertDescNum, *Parts[PartIndex++]);
@@ -446,6 +489,8 @@ void FPipelineCacheFileFormatPSO::GraphicsDescriptor::StateFromString(const FStr
 		  }
 		  return false;
 	  });
+
+	return true;
 }
 
 FString FPipelineCacheFileFormatPSO::GraphicsDescriptor::StateHeaderLine()
@@ -469,7 +514,7 @@ FString FPipelineCacheFileFormatPSO::GraphicsDescriptor::StateHeaderLine()
 		, TEXT("StencilStore")
 		, TEXT("PrimitiveType")
 	);
-
+	
 	Result += FString::Printf(TEXT("%s,")
 		, TEXT("RenderTargetsActive")
 	);
@@ -483,6 +528,11 @@ FString FPipelineCacheFileFormatPSO::GraphicsDescriptor::StateHeaderLine()
 		);
 	}
 
+	Result += FString::Printf(TEXT("%s,%s,")
+		, TEXT("SubpassHint")
+		, TEXT("SubpassIndex")
+	);
+	
 	Result += FString::Printf(TEXT("%s,")
 		, TEXT("VertexDescriptorNum")
 	);
@@ -500,7 +550,7 @@ FString FPipelineCacheFileFormatPSO::GraphicsDescriptor::ToString() const
 	return FString::Printf(TEXT("%s,%s"), *ShadersToString(), *StateToString());
 }
 
-void FPipelineCacheFileFormatPSO::GraphicsDescriptor::FromString(const FString& Src)
+bool FPipelineCacheFileFormatPSO::GraphicsDescriptor::FromString(const FString& Src)
 {
 	static const int32 NumShaderParts = 5;
 	TArray<FString> Parts;
@@ -510,7 +560,7 @@ void FPipelineCacheFileFormatPSO::GraphicsDescriptor::FromString(const FString& 
 	StateParts.RemoveAt(0, NumShaderParts);
 	Parts.RemoveAt(NumShaderParts, Parts.Num() - 5);
 	ShadersFromString(FString::Join(Parts, TEXT(",")));
-	StateFromString(FString::Join(StateParts, TEXT(",")));
+	return StateFromString(FString::Join(StateParts, TEXT(",")));
 }
 
 FString FPipelineCacheFileFormatPSO::GraphicsDescriptor::HeaderLine()
@@ -587,7 +637,7 @@ void FPipelineCacheFileFormatPSO::CommonFromString(const FString& Src)
 				KeyHash = FCrc::MemCrc32(&Key.GraphicsDesc.StencilLoad, sizeof(Key.GraphicsDesc.StencilLoad), KeyHash);
 				KeyHash = FCrc::MemCrc32(&Key.GraphicsDesc.DepthStore, sizeof(Key.GraphicsDesc.DepthStore), KeyHash);
 				KeyHash = FCrc::MemCrc32(&Key.GraphicsDesc.StencilStore, sizeof(Key.GraphicsDesc.StencilStore), KeyHash);
-				
+
 				KeyHash = FCrc::MemCrc32(&Key.GraphicsDesc.BlendState.bUseIndependentRenderTargetBlendStates, sizeof(Key.GraphicsDesc.BlendState.bUseIndependentRenderTargetBlendStates), KeyHash);
 				for( uint32 i = 0; i < MaxSimultaneousRenderTargets; i++ )
 				{
@@ -602,7 +652,10 @@ void FPipelineCacheFileFormatPSO::CommonFromString(const FString& Src)
 
 				KeyHash = FCrc::MemCrc32(&Key.GraphicsDesc.RenderTargetFormats, sizeof(Key.GraphicsDesc.RenderTargetFormats), KeyHash);
 				KeyHash = FCrc::MemCrc32(&Key.GraphicsDesc.RenderTargetFlags, sizeof(Key.GraphicsDesc.RenderTargetFlags), KeyHash);
-
+				
+				KeyHash = FCrc::MemCrc32(&Key.GraphicsDesc.SubpassHint, sizeof(Key.GraphicsDesc.SubpassHint), KeyHash);
+				KeyHash = FCrc::MemCrc32(&Key.GraphicsDesc.SubpassIndex, sizeof(Key.GraphicsDesc.SubpassIndex), KeyHash);
+				
 				for(auto const& Element : Key.GraphicsDesc.VertexDescriptor)
 				{
 					KeyHash = FCrc::MemCrc32(&Element, sizeof(FVertexElement), KeyHash);
@@ -755,6 +808,10 @@ void FPipelineCacheFileFormatPSO::CommonFromString(const FString& Src)
 			Ar << Info.GraphicsDesc.StencilLoad;
 			Ar << Info.GraphicsDesc.DepthStore;
 			Ar << Info.GraphicsDesc.StencilStore;
+
+			Ar << Info.GraphicsDesc.SubpassHint;
+			Ar << Info.GraphicsDesc.SubpassIndex;
+
 			break;
 		}
 		default:
@@ -848,6 +905,7 @@ FPipelineCacheFileFormatPSO::FPipelineCacheFileFormatPSO()
 		PSO.GraphicsDesc.VertexShader = Init.BoundShaderState.VertexShaderRHI->GetHash();
 	}
 	
+#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
 	if (Init.BoundShaderState.HullShaderRHI)
 	{
 		PSO.GraphicsDesc.HullShader = Init.BoundShaderState.HullShaderRHI->GetHash();
@@ -857,16 +915,18 @@ FPipelineCacheFileFormatPSO::FPipelineCacheFileFormatPSO()
 	{
 		PSO.GraphicsDesc.DomainShader = Init.BoundShaderState.DomainShaderRHI->GetHash();
 	}
-	
+#endif
 	if (Init.BoundShaderState.PixelShaderRHI)
 	{
 		PSO.GraphicsDesc.FragmentShader = Init.BoundShaderState.PixelShaderRHI->GetHash();
 	}
 	
+#if PLATFORM_SUPPORTS_GEOMETRY_SHADERS
 	if (Init.BoundShaderState.GeometryShaderRHI)
 	{
 		PSO.GraphicsDesc.GeometryShader = Init.BoundShaderState.GeometryShaderRHI->GetHash();
 	}
+#endif
 	
 	check (Init.BlendState);
 	{
@@ -891,7 +951,7 @@ FPipelineCacheFileFormatPSO::FPipelineCacheFileFormatPSO()
 	
 	for (uint32 i = 0; i < MaxSimultaneousRenderTargets; i++)
 	{
-		PSO.GraphicsDesc.RenderTargetFormats[i] = Init.RenderTargetFormats[i];
+		PSO.GraphicsDesc.RenderTargetFormats[i] = (EPixelFormat)Init.RenderTargetFormats[i];
 		PSO.GraphicsDesc.RenderTargetFlags[i] = Init.RenderTargetFlags[i];
 	}
 	
@@ -906,6 +966,9 @@ FPipelineCacheFileFormatPSO::FPipelineCacheFileFormatPSO()
 	PSO.GraphicsDesc.StencilStore = Init.StencilTargetStoreAction;
 	
 	PSO.GraphicsDesc.PrimitiveType = Init.PrimitiveType;
+
+	PSO.GraphicsDesc.SubpassHint = (uint8)Init.SubpassHint;
+	PSO.GraphicsDesc.SubpassIndex = Init.SubpassIndex;
 	
 	return bOK;
 }
@@ -949,6 +1012,7 @@ bool FPipelineCacheFileFormatPSO::operator==(const FPipelineCacheFileFormatPSO& 
 					GraphicsDesc.MSAASamples == Other.GraphicsDesc.MSAASamples && GraphicsDesc.DepthStencilFormat == Other.GraphicsDesc.DepthStencilFormat &&
 					GraphicsDesc.DepthStencilFlags == Other.GraphicsDesc.DepthStencilFlags && GraphicsDesc.DepthLoad == Other.GraphicsDesc.DepthLoad &&
 					GraphicsDesc.DepthStore == Other.GraphicsDesc.DepthStore && GraphicsDesc.StencilLoad == Other.GraphicsDesc.StencilLoad && GraphicsDesc.StencilStore == Other.GraphicsDesc.StencilStore &&
+					GraphicsDesc.SubpassHint == Other.GraphicsDesc.SubpassHint && GraphicsDesc.SubpassIndex == Other.GraphicsDesc.SubpassIndex &&
 					FMemory::Memcmp(&GraphicsDesc.BlendState, &Other.GraphicsDesc.BlendState, sizeof(FBlendStateInitializerRHI)) == 0 &&
 					FMemory::Memcmp(&GraphicsDesc.RasterizerState, &Other.GraphicsDesc.RasterizerState, sizeof(FPipelineFileCacheRasterizerState)) == 0 &&
 					FMemory::Memcmp(&GraphicsDesc.DepthStencilState, &Other.GraphicsDesc.DepthStencilState, sizeof(FDepthStencilStateInitializerRHI)) == 0 &&
@@ -1276,6 +1340,9 @@ public:
         {
             TOC = GameTOC;
         }
+		
+		uint32 InvalidEntryCount = 0;
+		
         for (auto const& Entry : TOC.MetaData)
         {
             FPipelineStateStats* Stat = FPipelineFileCache::Stats.FindRef(Entry.Key);
@@ -1286,6 +1353,17 @@ public:
                 Stat->TotalBindCount = -1;
                 FPipelineFileCache::Stats.Add(Entry.Key, Stat);
             }
+#if !UE_BUILD_SHIPPING
+			if((Entry.Value.EngineFlags & FPipelineCacheFlagInvalidPSO) != 0)
+			{
+				++InvalidEntryCount;
+			}
+#endif
+        }
+		
+        if(InvalidEntryCount > 0)
+        {
+        	UE_LOG(LogRHI, Warning, TEXT("Found %d / %d PSO entries marked as invalid."), InvalidEntryCount, TOC.MetaData.Num());
         }
 		
 		SET_MEMORY_STAT(STAT_FileCacheMemory, TOC.MetaData.GetAllocatedSize());
@@ -1293,17 +1371,18 @@ public:
 		return bGameFileOk || bUserFileOk;
 	}
 	
-	void MergeUsageMasksToMetaData(TMap<uint32, uint64>& NewPSOUsageMasks, TMap<uint32, FPipelineCacheFileFormatPSOMetaData>& MetaData, bool bRemoveUpdatedentries = false)
+	void MergePSOUsageToMetaData(TMap<uint32, FPSOUsageData>& NewPSOUsage, TMap<uint32, FPipelineCacheFileFormatPSOMetaData>& MetaData, bool bRemoveUpdatedentries = false)
 	{
-		// Update MetaData Usage Masks
-		for(auto It = NewPSOUsageMasks.CreateIterator(); It; ++It)
+		for(auto It = NewPSOUsage.CreateIterator(); It; ++It)
 		{
 			auto& MaskEntry = *It;
+			
 			//Don't use FindChecked as if new PSO was not bound - it might not be in the TOC.MetaData - they are not always added in every save mode - this is not an error
 			auto* PSOMetaData = MetaData.Find(MaskEntry.Key);
 			if(PSOMetaData != nullptr)
 			{
-				PSOMetaData->UsageMask |= MaskEntry.Value;
+				PSOMetaData->UsageMask |= MaskEntry.Value.UsageMask;
+				PSOMetaData->EngineFlags |= MaskEntry.Value.EngineFlags;
 				
 				if(bRemoveUpdatedentries)
 				{
@@ -1313,7 +1392,7 @@ public:
 		}
 	}
 	
-	bool SavePipelineFileCache(FString const& FilePath, FPipelineFileCache::SaveMode Mode, TMap<uint32, FPipelineStateStats*> const& Stats, TSet<FPipelineCacheFileFormatPSO>& NewEntries, FPipelineFileCache::PSOOrder Order, TMap<uint32, uint64>& NewPSOUsageMasks)
+	bool SavePipelineFileCache(FString const& FilePath, FPipelineFileCache::SaveMode Mode, TMap<uint32, FPipelineStateStats*> const& Stats, TSet<FPipelineCacheFileFormatPSO>& NewEntries, FPipelineFileCache::PSOOrder Order, TMap<uint32, FPSOUsageData>& NewPSOUsage)
 	{
 		QUICK_SCOPE_CYCLE_COUNTER(STAT_SavePipelineFileCache);
 		double StartTime = FPlatformTime::Seconds();
@@ -1328,7 +1407,7 @@ public:
 		bool bPerformWrite = true;
 		if (FPipelineFileCache::SaveMode::Incremental == Mode)
 		{
-			bPerformWrite = NewEntries.Num() || Order != TOC.SortedOrder || NewPSOUsageMasks.Num();
+			bPerformWrite = NewEntries.Num() || Order != TOC.SortedOrder || NewPSOUsage.Num();
 			bFileWriteSuccess = !bPerformWrite;
 		}
 		
@@ -1550,8 +1629,8 @@ public:
                                 TOC.SortedOrder = FPipelineFileCache::PSOOrder::Default;
                             }
 							
-							// Update TOC Metadata usage masks and clear relevant entries NewPSOUsageMasks as we are saving this file cache TOC
-							MergeUsageMasksToMetaData(NewPSOUsageMasks, TOC.MetaData, true);
+							// Update TOC Metadata usage and clear relevant entries in NewPSOUsage as we are saving this file cache TOC
+							MergePSOUsageToMetaData(NewPSOUsage, TOC.MetaData, true);
 							
                             Header.TableOffset = PSOOffset;
                             TOCOffset = PSOOffset;
@@ -1622,8 +1701,8 @@ public:
                                 PSOs.Add(Meta.Stats.PSOHash, Entry);
                             }
 							
-							// Update TOC Metadata usage masks - don't clear NewPSOUsageMasks as we are using a TempTOC
-							MergeUsageMasksToMetaData(NewPSOUsageMasks, TempTOC.MetaData);
+							// Update TOC Metadata usage masks - don't clear NewPSOUsage as we are using a TempTOC
+							MergePSOUsageToMetaData(NewPSOUsage, TempTOC.MetaData);
                             
                             for (auto& Pair : Stats)
                             {
@@ -1803,8 +1882,8 @@ public:
                                 PSOs.Add(Meta.Stats.PSOHash, Entry);
                             }
 							
-							// Update TOC Metadata usage masks and clear NewPSOUsageMasks as we are file TOC is getting updated
-							MergeUsageMasksToMetaData(NewPSOUsageMasks, TOC.MetaData, true);
+							// Update TOC Metadata usage and clear updated entries in NewPSOUsage as file TOC is getting updated
+							MergePSOUsageToMetaData(NewPSOUsage, TOC.MetaData, true);
 							
 							FPipelineCacheFileFormatTOC TempTOC = TOC;
 							// Update PSO usage stats for new and old
@@ -1984,17 +2063,18 @@ public:
 		return bFileWriteSuccess;
 	}
 	
-	bool IsPSOEntryCached(FPipelineCacheFileFormatPSO const& NewEntry, uint64* OutUsageMask = nullptr) const
+	bool IsPSOEntryCached(FPipelineCacheFileFormatPSO const& NewEntry, FPSOUsageData* EntryData = nullptr) const
 	{
 		uint32 PSOHash = GetTypeHash(NewEntry);
 		FPipelineCacheFileFormatPSOMetaData const * const Existing = TOC.MetaData.Find(PSOHash);
 		
-		if(Existing != nullptr && OutUsageMask != nullptr)
+		if(Existing != nullptr && EntryData != nullptr)
 		{
-			*OutUsageMask = Existing->UsageMask;
+			EntryData->UsageMask = Existing->UsageMask;
+			EntryData->EngineFlags = Existing->EngineFlags;
 		}
 		
-		return  Existing != nullptr;
+		return Existing != nullptr;
 	}
 	
 	bool IsBSSEquivalentPSOEntryCached(FPipelineCacheFileFormatPSO const& NewEntry) const
@@ -2070,7 +2150,8 @@ public:
 		
 		for (auto const& Hash : TOC.MetaData)
 		{
-			if(FPipelineFileCache::MaskComparisonFn(FPipelineFileCache::GameUsageMask, Hash.Value.UsageMask) &&
+			if( (Hash.Value.EngineFlags & FPipelineCacheFlagInvalidPSO) == 0 &&
+				FPipelineFileCache::MaskComparisonFn(FPipelineFileCache::GameUsageMask, Hash.Value.UsageMask) &&
 				Hash.Value.Stats.TotalBindCount >= MinBindCount &&
 				!AlreadyCompiledHashes.Contains(Hash.Key))
 			{
@@ -2108,6 +2189,14 @@ public:
 		{
 			FPipelineCacheFileFormatPSORead* Entry = *It;
 			FPipelineCacheFileFormatPSOMetaData const& Meta = TOC.MetaData.FindChecked(Entry->Hash);
+			
+			if((Meta.EngineFlags & FPipelineCacheFlagInvalidPSO) != 0)
+			{
+				// In reality we should not get to this case as GetOrderedPSOHashes() won't pass back PSOs that have this flag set
+				UE_LOG(LogRHI, Verbose, TEXT("Encountered a PSO entry %u marked invalid - ignoring"), Entry->Hash);
+				Entry->bValid = false;
+				continue;
+			}
 			
 			if (Meta.FileGuid == GameFileGuid)
 			{
@@ -2219,6 +2308,8 @@ bool FPipelineFileCache::ReportNewPSOs()
 
 void FPipelineFileCache::Initialize(uint32 InGameVersion)
 {
+	ClearOSPipelineCache();
+	
 	// Make enabled explicit on a flag not the existence of "FileCache" object as we are using that behind a lock and in Open / Close operations
 	FileCacheEnabled = true;
 	FPipelineCacheFile::GameVersion = InGameVersion;
@@ -2230,6 +2321,41 @@ void FPipelineFileCache::Initialize(uint32 InGameVersion)
 	
 	SET_MEMORY_STAT(STAT_NewCachedPSOMemory, 0);
 	SET_MEMORY_STAT(STAT_PSOStatMemory, 0);
+}
+
+void FPipelineFileCache::ClearOSPipelineCache()
+{
+	if (CVarClearOSPSOFileCache.GetValueOnAnyThread() > 0)
+	{
+#if PLATFORM_IOS
+		// clear the PSO cache on IOS if the executable is newer
+		static FString ExecutablePath = FString([[NSBundle mainBundle] bundlePath]) + TEXT("/") + FPlatformProcess::ExecutableName();
+		struct stat FileInfo;
+		if(stat(TCHAR_TO_UTF8(*ExecutablePath), &FileInfo) != -1)
+		{
+			FTimespan ExecutableTime(0, 0, FileInfo.st_atime);
+			static FString PrivateWritePathBase = FString([NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES) objectAtIndex:0]) + TEXT("/");
+			FString Result = PrivateWritePathBase + TEXT("/Caches/com.chairentertainment.Fortnite/com.apple.metal/functions.data");
+			if (stat(TCHAR_TO_UTF8(*Result), &FileInfo) != -1)
+			{
+				FTimespan DataTime(0, 0, FileInfo.st_atime);
+				if (ExecutableTime > DataTime)
+				{
+					unlink(TCHAR_TO_UTF8(*Result));
+				}
+			}
+			Result = PrivateWritePathBase + TEXT("/Caches/com.chairentertainment.Fortnite/com.apple.metal/functions.maps");
+			if (stat(TCHAR_TO_UTF8(*Result), &FileInfo) != -1)
+			{
+				FTimespan MapsTime(0, 0, FileInfo.st_atime);
+				if (ExecutableTime > MapsTime)
+				{
+					unlink(TCHAR_TO_UTF8(*Result));
+				}
+			}
+		}
+#endif
+	}
 }
 
 uint64 FPipelineFileCache::SetGameUsageMaskWithComparison(uint64 InGameUsageMask, FPSOMaskComparisonFn InComparisonFnPtr)
@@ -2310,7 +2436,7 @@ bool FPipelineFileCache::SavePipelineFileCache(FString const& Name, SaveMode Mod
 		{
 			FName PlatformName = FileCache->GetPlatformName();
 			FString Path = FPaths::ProjectSavedDir() / FString::Printf(TEXT("%s_%s.upipelinecache"), *Name, *PlatformName.ToString());
-			bOk = FileCache->SavePipelineFileCache(Path, Mode, Stats, NewPSOs, RequestedOrder, NewPSOUsageMasks);
+			bOk = FileCache->SavePipelineFileCache(Path, Mode, Stats, NewPSOs, RequestedOrder, NewPSOUsage);
 			
 			// If successful clear new PSO's as they should have been saved out
 			// Leave everything else in-tact (e.g stats) for subsequent in place save operations
@@ -2356,7 +2482,7 @@ void FPipelineFileCache::ClosePipelineFileCache()
 			
 			// Clear Runtime hashes otherwise we can't start adding newPSO's for a newly opened file
 			RunTimeToPSOUsage.Empty();
-			NewPSOUsageMasks.Empty();
+			NewPSOUsage.Empty();
 			NewPSOs.Empty();
             NumNewPSOs = 0;
 			
@@ -2366,12 +2492,12 @@ void FPipelineFileCache::ClosePipelineFileCache()
 	}
 }
 
-void FPipelineFileCache::EnsurePSOUsageMask(uint32 PSOHash, uint64 UsageMask)
+void FPipelineFileCache::RegisterPSOUsageDataUpdateForNextSave(FPSOUsageData& UsageData)
 {
-	uint64& Entry = NewPSOUsageMasks.FindOrAdd(PSOHash);
-	Entry |= UsageMask;
-	
-	UE_LOG(LogRHI, Warning, TEXT("Added UsageMask %llu for PSO: %u"), UsageMask, PSOHash);
+	FPSOUsageData& CurrentEntry = NewPSOUsage.FindOrAdd(UsageData.PSOHash);	
+	CurrentEntry.PSOHash = UsageData.PSOHash;
+	CurrentEntry.UsageMask |= UsageData.UsageMask;
+	CurrentEntry.EngineFlags |= UsageData.EngineFlags;
 }
 
 void FPipelineFileCache::CacheGraphicsPSO(uint32 RunTimeHash, FGraphicsPipelineStateInitializer const& Initializer)
@@ -2395,8 +2521,9 @@ void FPipelineFileCache::CacheGraphicsPSO(uint32 RunTimeHash, FGraphicsPipelineS
 					check(bOK);
 					
 					uint32 PSOHash = GetTypeHash(NewEntry);
-					uint64 ExistingPSOUsageMask = 0;
-					if (!FileCache->IsPSOEntryCached(NewEntry, &ExistingPSOUsageMask))
+					FPSOUsageData CurrentUsageData(PSOHash, 0, 0);
+					
+					if (!FileCache->IsPSOEntryCached(NewEntry, &CurrentUsageData))
 					{
 						bool bActuallyNewPSO = true;
 						if (IsOpenGLPlatform(GMaxRHIShaderPlatform)) // OpenGL is a BSS platform and so we don't report BSS matches as missing.
@@ -2428,19 +2555,20 @@ void FPipelineFileCache::CacheGraphicsPSO(uint32 RunTimeHash, FGraphicsPipelineS
 						}
 					}
 					
-					// Apply the existing file PSO Usage mask and current to our "fast" runtime check
-					RunTimeToPSOUsage.Add(RunTimeHash, FPSOUsageData(PSOHash, FPipelineFileCache::GameUsageMask | ExistingPSOUsageMask));
-					
 					// Only set if the file cache doesn't have this Mask for the PSO - avoid making more entries and unnessary file saves
-					if(!IsReferenceMaskSet(FPipelineFileCache::GameUsageMask, ExistingPSOUsageMask))
+					if(!IsReferenceMaskSet(FPipelineFileCache::GameUsageMask, CurrentUsageData.UsageMask))
 					{
-						EnsurePSOUsageMask(PSOHash, FPipelineFileCache::GameUsageMask);
+						CurrentUsageData.UsageMask |= FPipelineFileCache::GameUsageMask;
+						RegisterPSOUsageDataUpdateForNextSave(CurrentUsageData);
 					}
+					
+					// Apply the existing file PSO Usage mask and current to our "fast" runtime check
+					RunTimeToPSOUsage.Add(RunTimeHash, CurrentUsageData);
 				}
 				else if(!IsReferenceMaskSet(FPipelineFileCache::GameUsageMask, PSOUsage->UsageMask))
 				{
 					PSOUsage->UsageMask |= FPipelineFileCache::GameUsageMask;
-					EnsurePSOUsageMask(PSOUsage->PSOHash, FPipelineFileCache::GameUsageMask);
+					RegisterPSOUsageDataUpdateForNextSave(*PSOUsage);
 				}
 			}
 		}
@@ -2468,10 +2596,9 @@ void FPipelineFileCache::CacheComputePSO(uint32 RunTimeHash, FRHIComputeShader c
 					check(bOK);
 					
 					uint32 PSOHash = GetTypeHash(NewEntry);
-					RunTimeToPSOUsage.Add(RunTimeHash, FPSOUsageData(PSOHash, FPipelineFileCache::GameUsageMask));
+					FPSOUsageData CurrentUsageData(PSOHash, 0, 0);
 					
-					uint64 ExistingPSOUsageMask = 0;
-					if (!FileCache->IsPSOEntryCached(NewEntry, &ExistingPSOUsageMask))
+					if (!FileCache->IsPSOEntryCached(NewEntry, &CurrentUsageData))
 					{
 						CSV_EVENT(PSO, TEXT("Encountered new compute PSO"));
 						UE_LOG(LogRHI, Warning, TEXT("Encountered a new compute PSO: %u"), PSOHash);
@@ -2496,19 +2623,66 @@ void FPipelineFileCache::CacheComputePSO(uint32 RunTimeHash, FRHIComputeShader c
 						}
 					}
 					
-					// Apply the existing file PSO Usage mask and current to our "fast" runtime check
-					RunTimeToPSOUsage.Add(RunTimeHash, FPSOUsageData(PSOHash, FPipelineFileCache::GameUsageMask | ExistingPSOUsageMask));
-					
 					// Only set if the file cache doesn't have this Mask for the PSO - avoid making more entries and unnessary file saves
-					if(!IsReferenceMaskSet(FPipelineFileCache::GameUsageMask, ExistingPSOUsageMask))
+					if(!IsReferenceMaskSet(FPipelineFileCache::GameUsageMask, CurrentUsageData.UsageMask))
 					{
-						EnsurePSOUsageMask(PSOHash, FPipelineFileCache::GameUsageMask);
+						CurrentUsageData.UsageMask |= FPipelineFileCache::GameUsageMask;
+						RegisterPSOUsageDataUpdateForNextSave(CurrentUsageData);
 					}
+					
+					// Apply the existing file PSO Usage mask and current to our "fast" runtime check
+					RunTimeToPSOUsage.Add(RunTimeHash, CurrentUsageData);
 				}
 				else if(!IsReferenceMaskSet(FPipelineFileCache::GameUsageMask, PSOUsage->UsageMask))
 				{
 					PSOUsage->UsageMask |= FPipelineFileCache::GameUsageMask;
-					EnsurePSOUsageMask(PSOUsage->PSOHash, FPipelineFileCache::GameUsageMask);
+					RegisterPSOUsageDataUpdateForNextSave(*PSOUsage);
+				}
+			}
+		}
+	}
+}
+
+void FPipelineFileCache::RegisterPSOCompileFailure(uint32 RunTimeHash, FGraphicsPipelineStateInitializer const& Initializer)
+{
+	if(IsPipelineFileCacheEnabled() && (LogPSOtoFileCache() || ReportNewPSOs()) && Initializer.bFromPSOFileCache)
+	{
+		FRWScopeLock Lock(FileCacheLock, SLT_ReadOnly);
+		
+		if(FileCache)
+		{
+			FPSOUsageData* PSOUsage = RunTimeToPSOUsage.Find(RunTimeHash);
+			if(PSOUsage == nullptr || !IsReferenceMaskSet(FPipelineCacheFlagInvalidPSO, PSOUsage->EngineFlags))
+			{
+				Lock.ReleaseReadOnlyLockAndAcquireWriteLock_USE_WITH_CAUTION();
+				PSOUsage = RunTimeToPSOUsage.Find(RunTimeHash);
+				
+				if(PSOUsage == nullptr)
+				{
+					FPipelineCacheFileFormatPSO ShouldBeExistingEntry;
+					bool bOK = FPipelineCacheFileFormatPSO::Init(ShouldBeExistingEntry, Initializer);
+					check(bOK);
+					
+					uint32 PSOHash = GetTypeHash(ShouldBeExistingEntry);
+					FPSOUsageData CurrentUsageData(PSOHash, 0, 0);
+					
+					bool bCached = FileCache->IsPSOEntryCached(ShouldBeExistingEntry, &CurrentUsageData);
+					check(bCached);	//bFromPSOFileCache was set but not in the cache something has gone wrong
+					{
+						CurrentUsageData.EngineFlags |= FPipelineCacheFlagInvalidPSO;
+						
+						RegisterPSOUsageDataUpdateForNextSave(CurrentUsageData);
+						RunTimeToPSOUsage.Add(RunTimeHash, CurrentUsageData);
+						
+						UE_LOG(LogRHI, Warning, TEXT("Graphics PSO (%u) compile failure registering to File Cache"), PSOHash);
+					}
+				}
+				else if(!IsReferenceMaskSet(FPipelineCacheFlagInvalidPSO, PSOUsage->EngineFlags))
+				{
+					PSOUsage->EngineFlags |= FPipelineCacheFlagInvalidPSO;
+					RegisterPSOUsageDataUpdateForNextSave(*PSOUsage);
+					
+					UE_LOG(LogRHI, Warning, TEXT("Graphics PSO (%u) compile failure registering to File Cache"), PSOUsage->PSOHash);
 				}
 			}
 		}
@@ -2598,7 +2772,9 @@ struct FPipelineCacheFileData
 				{
 					for (auto& Entry : Data.TOC.MetaData)
 					{
-                        if (Entry.Value.FileGuid == Data.Header.Guid && Entry.Value.FileSize > sizeof(FPipelineCacheFileFormatPSO::DescriptorType))
+						if ( (Entry.Value.EngineFlags & FPipelineCacheFlagInvalidPSO) == 0 &&
+                        	 Entry.Value.FileGuid == Data.Header.Guid &&
+                        	 Entry.Value.FileSize > sizeof(FPipelineCacheFileFormatPSO::DescriptorType))
                         {
                             FPipelineCacheFileFormatPSO PSO;
                             FileAReader->Seek(Entry.Value.FileOffset);
@@ -2703,16 +2879,16 @@ uint32 FPipelineFileCache::NumPSOsLogged()
 	uint32 Result = 0;
 	if(IsPipelineFileCacheEnabled() && LogPSOtoFileCache())
 	{
-		// Only count PSOs that are both new and have at least one bind, otherwise we can ignore them.
+		// Only count PSOs that are both new and have at least one bind or have been marked invalid (compile failure) otherwise we can ignore them
 		FRWScopeLock Lock(FileCacheLock, SLT_ReadOnly);
 		
 		// We now need to know if the number of usage masks changes - this number should be as least the same as before but could be conceptually more if an existing PSO has an extra usage mask applied
-		if(NewPSOUsageMasks.Num() > 0)
+		if(NewPSOUsage.Num() > 0)
 		{
-			for(auto& MaskEntry : NewPSOUsageMasks)
+			for(auto& MaskEntry : NewPSOUsage)
 			{
 				FPipelineStateStats const* Stat = Stats.FindRef(MaskEntry.Key);
-				if (Stat && Stat->TotalBindCount > 0)
+				if ((Stat && Stat->TotalBindCount > 0) || (MaskEntry.Value.EngineFlags & FPipelineCacheFlagInvalidPSO) != 0)
 				{
 					Result++;
 				}
@@ -2884,15 +3060,28 @@ bool FPipelineFileCache::MergePipelineFileCaches(FString const& PathA, FString c
 		uint32 MergeCount = 0;
 		for (auto const& Entry : A.TOC.MetaData)
 		{
+			// Don't merge PSOs that have the invalid bit set
+			if((Entry.Value.EngineFlags & FPipelineCacheFlagInvalidPSO) != 0)
+			{
+				continue;
+			}
+
 			Output.TOC.MetaData.Add(Entry.Key, Entry.Value);
 		}
 		for (auto const& Entry : B.TOC.MetaData)
 		{
+			// Don't merge PSOs that have the invalid bit set
+			if((Entry.Value.EngineFlags & FPipelineCacheFlagInvalidPSO) != 0)
+			{
+				continue;
+			}
+
 			// Make sure these usage masks for the same PSOHash find their way in
 			auto* ExistingMetaEntry = Output.TOC.MetaData.Find(Entry.Key);
 			if(ExistingMetaEntry != nullptr)
 			{
 				ExistingMetaEntry->UsageMask |=  Entry.Value.UsageMask;
+				ExistingMetaEntry->EngineFlags |= Entry.Value.EngineFlags;
 				++MergeCount;
 			}
 			else

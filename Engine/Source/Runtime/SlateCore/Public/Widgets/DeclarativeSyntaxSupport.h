@@ -11,6 +11,7 @@
 #include "GenericPlatform/ICursor.h"
 #include "Types/ISlateMetaData.h"
 #include "Widgets/SNullWidget.h"
+#include "Widgets/Accessibility/SlateWidgetAccessibleTypes.h"
 
 class IToolTip;
 class SUserWidget;
@@ -313,6 +314,18 @@ template<typename WidgetType> struct TSlateBaseNamedArgs;
 			return this->Me(); \
 		}
 
+/**
+ * Like SLATE_ARGUMENT, but support a default value. e.g.
+ * 
+ * SLATE_ARGUMENT_DEFAULT(float, WheelScrollMultiplier) { 1.0f };
+ */
+#define SLATE_ARGUMENT_DEFAULT( ArgType, ArgName ) \
+		WidgetArgsType& ArgName( ArgType InArg ) \
+		{ \
+			_##ArgName = InArg; \
+			return this->Me(); \
+		}\
+		ArgType _##ArgName
 
 /**
  * Use this macro to declare a slate argument.
@@ -776,6 +789,8 @@ struct TSlateBaseNamedArgs
 	, _ForceVolatile( false )
 	, _Clipping( EWidgetClipping::Inherit )
 	, _FlowDirectionPreference( EFlowDirectionPreference::Inherit )
+	, _AccessibleParams()
+	, _AccessibleText()
 	{
 	}
 
@@ -820,6 +835,8 @@ struct TSlateBaseNamedArgs
 	SLATE_ARGUMENT( bool, ForceVolatile )
 	SLATE_ARGUMENT( EWidgetClipping, Clipping )
 	SLATE_ARGUMENT( EFlowDirectionPreference, FlowDirectionPreference)
+	SLATE_ARGUMENT(TOptional<FAccessibleWidgetData>, AccessibleParams)
+	SLATE_ATTRIBUTE(FText, AccessibleText)
 
 	TArray<TSharedRef<ISlateMetaData>> MetaData;
 };
@@ -1093,6 +1110,7 @@ struct TDecl
 			InArgs._ForceVolatile,
 			InArgs._Clipping,
 			InArgs._FlowDirectionPreference,
+			InArgs._AccessibleText.IsSet() ? FAccessibleWidgetData(InArgs._AccessibleText) : InArgs._AccessibleParams,
 			InArgs.MetaData );
 
 		_RequiredArgs.CallConstruct(_Widget, InArgs);

@@ -212,7 +212,7 @@ void FColorVertexBuffer::Serialize( FArchive& Ar, bool bNeedsCPUAccess )
 	}
 	else
 	{
-		Ar << Stride << NumVertices;
+		SerializeMetaData(Ar);
 
 		if (Ar.IsLoading() && NumVertices > 0)
 		{
@@ -235,6 +235,16 @@ void FColorVertexBuffer::Serialize( FArchive& Ar, bool bNeedsCPUAccess )
 			}
 		}
 	}
+}
+
+void FColorVertexBuffer::SerializeMetaData(FArchive& Ar)
+{
+	Ar << Stride << NumVertices;
+}
+
+void FColorVertexBuffer::ClearMetaData()
+{
+	Stride = NumVertices = 0;
 }
 
 
@@ -375,25 +385,49 @@ uint32 FColorVertexBuffer::GetAllocatedSize() const
 	}
 }
 
+template <bool bRenderThread>
+FVertexBufferRHIRef FColorVertexBuffer::CreateRHIBuffer_Internal()
+{
+	if (NumVertices)
+	{
+		FResourceArrayInterface* RESTRICT ResourceArray = VertexData ? VertexData->GetResourceArray() : nullptr;
+		const uint32 SizeInBytes = ResourceArray ? ResourceArray->GetResourceDataSize() : 0;
+		FRHIResourceCreateInfo CreateInfo(ResourceArray);
+		CreateInfo.bWithoutNativeResource = !VertexData;
+		if (bRenderThread)
+		{
+			return RHICreateVertexBuffer(SizeInBytes, BUF_Static | BUF_ShaderResource, CreateInfo);
+		}
+		else
+		{
+			return RHIAsyncCreateVertexBuffer(SizeInBytes, BUF_Static | BUF_ShaderResource, CreateInfo);
+		}
+	}
+	return nullptr;
+}
+
+FVertexBufferRHIRef FColorVertexBuffer::CreateRHIBuffer_RenderThread()
+{
+	return CreateRHIBuffer_Internal<true>();
+}
+
+FVertexBufferRHIRef FColorVertexBuffer::CreateRHIBuffer_Async()
+{
+	return CreateRHIBuffer_Internal<false>();
+}
+
 void FColorVertexBuffer::InitRHI()
 {
-	if( VertexData != NULL )
+	VertexBufferRHI = CreateRHIBuffer_RenderThread();
+	if (VertexBufferRHI)
 	{
-		FResourceArrayInterface* ResourceArray = VertexData->GetResourceArray();
-		if(ResourceArray->GetResourceDataSize())
-		{
-			// Create the vertex buffer.
-			FRHIResourceCreateInfo CreateInfo(ResourceArray);
-			VertexBufferRHI = RHICreateVertexBuffer(ResourceArray->GetResourceDataSize(), BUF_Static | BUF_ShaderResource, CreateInfo);
-			ColorComponentsSRV = RHICreateShaderResourceView(VertexBufferRHI, 4,  PF_R8G8B8A8);
-		}
+		ColorComponentsSRV = RHICreateShaderResourceView(VertexData ? VertexBufferRHI : nullptr, 4, PF_R8G8B8A8);
 	}
 }
 
 void FColorVertexBuffer::ReleaseRHI()
 {
 	ColorComponentsSRV.SafeRelease();
-
 	FVertexBuffer::ReleaseRHI();
 }
 

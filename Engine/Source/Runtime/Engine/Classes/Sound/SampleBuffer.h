@@ -3,12 +3,15 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "UObject/ObjectMacros.h"
+#include "UObject/Object.h"
 #include "DSP/Dsp.h"
 #include "Misc/Paths.h"
 #include "Sound/SoundEffectBase.h"
 #include "Async/AsyncWork.h"
 #include "Templates/UnrealTypeTraits.h"
 #include "UObject/GCObject.h"
+#include "Tickable.h"
 
 class USoundWave;
 class FAudioDevice;
@@ -68,6 +71,17 @@ namespace Audio
 			FMemory::Memcpy(RawPCMData.GetData(), Other.RawPCMData.GetData(), NumSamples * sizeof(SampleType));
 		}
 
+		FORCEINLINE TSampleBuffer(TSampleBuffer&& Other)
+		{
+			NumSamples = Other.NumSamples;
+			NumFrames = Other.NumFrames;
+			NumChannels = Other.NumChannels;
+			SampleRate = Other.SampleRate;
+			SampleDuration = Other.SampleDuration;
+
+			RawPCMData = MoveTemp(Other.RawPCMData);
+		}
+
 		FORCEINLINE TSampleBuffer(AlignedFloatBuffer& InData, int32 InNumChannels, int32 InSampleRate)
 		{
 			*this =  TSampleBuffer(InData.GetData(), InData.Num(), InNumChannels, InSampleRate);
@@ -83,7 +97,7 @@ namespace Audio
 
 			RawPCMData.Reset(NumSamples);
 			RawPCMData.AddUninitialized(NumSamples);
-
+		
 			if (TIsSame<SampleType, float>::Value)
 			{
 				FMemory::Memcpy(RawPCMData.GetData(), InBufferPtr, NumSamples * sizeof(float));
@@ -156,6 +170,19 @@ namespace Audio
 			return *this;
 		}
 
+		// Move assignment operator:
+		TSampleBuffer& operator=(TSampleBuffer&& Other)
+		{
+			NumSamples = Other.NumSamples;
+			NumFrames = Other.NumFrames;
+			NumChannels = Other.NumChannels;
+			SampleRate = Other.SampleRate;
+			SampleDuration = Other.SampleDuration;
+
+			RawPCMData = MoveTemp(Other.RawPCMData);
+			return *this;
+		}
+
 		//SampleType converting assignment operator:
 		template<class OtherSampleType>
 		TSampleBuffer& operator=(const TSampleBuffer<OtherSampleType>& Other)
@@ -202,6 +229,65 @@ namespace Audio
 			return *this;
 		}
 
+		// copy from a container of the same element type
+		void CopyFrom(const TArray<SampleType>& InArray, int32 InNumChannels, int32 InSampleRate)
+		{
+			NumSamples = InArray.Num();
+			NumFrames = NumSamples / InNumChannels;
+			NumChannels = InNumChannels;
+			SampleRate = InSampleRate;
+			SampleDuration = ((float)NumFrames) / SampleRate;
+
+			RawPCMData.Reset(NumSamples);
+			RawPCMData.AddZeroed(NumSamples);
+
+			FMemory::Memcpy(RawPCMData.GetData(), InArray.GetData(), NumSamples * sizeof(SampleType));
+		}
+
+		// Append audio data to internal buffer of different sample type of this sample buffer
+		template<class OtherSampleType>
+		void Append(const OtherSampleType* InputBuffer, int32 InNumSamples)
+		{
+			int32 StartIndex = RawPCMData.AddUninitialized(InNumSamples);
+
+			if (TIsSame<SampleType, OtherSampleType>::Value)
+			{
+				FMemory::Memcpy(&RawPCMData[StartIndex], InputBuffer, InNumSamples * sizeof(SampleType));
+			}
+			else
+			{
+				if (TIsSame<SampleType, int16>::Value && TIsSame<OtherSampleType, float>::Value)
+				{
+					// Convert from float to int:
+					for (int32 SampleIndex = 0; SampleIndex < InNumSamples; SampleIndex++)
+					{
+						RawPCMData[StartIndex + SampleIndex] = (int16)(InputBuffer[SampleIndex] * 32767.0f);
+					}
+				}
+				else if (TIsSame<SampleType, float>::Value && TIsSame<OtherSampleType, int16>::Value)
+				{
+					// Convert from int to float:
+					for (int32 SampleIndex = 0; SampleIndex < InNumSamples; SampleIndex++)
+					{
+						RawPCMData[StartIndex + SampleIndex] = (float)InputBuffer[SampleIndex] / 32767.0f;
+					}
+				}
+				else
+				{
+					// for any other types, we don't know how to explicitly convert, so we fall back to casts:
+					for (int32 SampleIndex = 0; SampleIndex < InNumSamples; SampleIndex++)
+					{
+						RawPCMData[StartIndex + SampleIndex] = InputBuffer[SampleIndex];
+					}
+				}
+			}
+
+			// Update meta-data
+			NumSamples += InNumSamples;
+			NumFrames = NumSamples / NumChannels;
+			SampleDuration = (float)NumFrames / SampleRate;
+		}
+
 		~TSampleBuffer() {};
 
 		// Gets the raw PCM data of the sound wave
@@ -244,6 +330,7 @@ namespace Audio
 			return SampleRate;
 		}
 
+		// Gets the sample duration (in seconds) of the sound
 		FORCEINLINE float GetSampleDuration() const
 		{
 			return SampleDuration;
@@ -277,7 +364,7 @@ namespace Audio
 
 			NumChannels = InNumChannels;
 			NumSamples = NumFrames * NumChannels;
-			
+
 			// Resize our buffer and copy the result in:
 			RawPCMData.Reset(NumSamples);
 			RawPCMData.AddUninitialized(NumSamples);
@@ -344,6 +431,89 @@ namespace Audio
 			NumFrames = RawPCMData.Num() / NumChannels;
 			NumSamples = RawPCMData.Num();
 		}
+
+		// InIndex [0.0f, NumSamples - 1.0f]
+		// OutFrame is the multichannel output for one index value
+		// Returns InIndex wrapped between 0.0 and NumFrames
+		float GetAudioFrameAtFractionalIndex(float InIndex, TArray<SampleType>& OutFrame)
+		{
+			InIndex = FMath::Fmod(InIndex, static_cast<float>(NumFrames));
+
+			GetAudioFrameAtFractionalIndexInternal(InIndex, OutFrame);
+
+			return InIndex;
+		}
+
+		// InPhase [0, 1], wrapped, through duration of file (ignores sample rate)
+		// OutFrame is the multichannel output for one phase value
+		// Returns InPhase wrapped between 0.0 and 1.0
+		float GetAudioFrameAtPhase(float InPhase, TArray<SampleType>& OutFrame)
+		{
+			InPhase = FMath::Fmod(InPhase, 1.0f);
+
+			GetAudioFrameAtFractionalIndexInternal(InPhase * NumFrames, OutFrame);
+
+			return InPhase;
+		}
+
+
+		// InTimeSec, get the value of the buffer at the given time (uses sample rate)
+		// OutFrame is the multichannel output for one time value
+		// Returns InTimeSec wrapped between 0.0 and (NumSamples / SampleRate)
+		float GetAudioFrameAtTime(float InTimeSec, TArray<SampleType>& OutFrame)
+		{
+			if (InTimeSec >= SampleDuration)
+			{
+				InTimeSec -= SampleDuration;
+			}
+
+			check(InTimeSec >= 0.0f && InTimeSec <= SampleDuration);
+
+			GetAudioFrameAtFractionalIndexInternal(NumSamples * (InTimeSec / SampleDuration), OutFrame);
+
+			return InTimeSec;
+		}
+
+	private:
+		// Internal implementation. Called by all public GetAudioFrameAt_ _ _ _() functions
+		// public functions do range checking/wrapping and then call this function
+		void GetAudioFrameAtFractionalIndexInternal(float InIndex, TArray<SampleType>& OutFrame)
+		{
+			const float Alpha = FMath::Fmod(InIndex, 1.0f);
+			const int32 WholeThisIndex = FMath::FloorToInt(InIndex);
+			int32 WholeNextIndex = WholeThisIndex + 1;
+
+			// check for interpolation between last and first frames
+			if (WholeNextIndex == NumSamples)
+			{
+				WholeNextIndex = 0;
+			}
+
+			// TODO: if(NumChannels < 4)... do the current (non vectorized) way
+			OutFrame.SetNumUninitialized(NumChannels);
+
+			for (int32 i = 0; i < NumChannels; ++i)
+			{
+				float SampleA, SampleB;
+				
+				if (TIsSame<SampleType, float>::Value)
+				{
+					SampleA = RawPCMData[i * NumChannels + WholeThisIndex];
+					SampleB = RawPCMData[i * NumChannels + WholeNextIndex];
+					OutFrame[i] = FMath::Lerp(SampleA, SampleB, Alpha);
+				}
+				else
+				{
+					SampleA = static_cast<float>(RawPCMData[i * NumChannels + WholeThisIndex]);
+					SampleB = static_cast<float>(RawPCMData[i * NumChannels + WholeNextIndex]);
+					OutFrame[i] = static_cast<SampleType>(FMath::Lerp(SampleA, SampleB, Alpha));
+				}
+			}
+
+			// TODO: else { do vectorized version }
+			// make new function in BufferVectorOperations.cpp
+			// (use FMath::Lerp() overload for VectorRegisters)
+		}
 	};
 
 	// FSampleBuffer is a strictly defined TSampleBuffer that uses the same sample format we use for USoundWaves.
@@ -364,11 +534,13 @@ namespace Audio
 		// Loads a USoundWave, call on game thread.
 		void LoadSoundWave(USoundWave* InSoundWave, TFunction<void(const USoundWave* SoundWave, const Audio::FSampleBuffer& OutSampleBuffer)> OnLoaded);
 
+
 		// Update the loading state. 
 		void Update();
 
 		//~ GCObject Interface
-		void AddReferencedObjects(FReferenceCollector& Collector) override;
+		virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
+		virtual FString GetReferencerName() const override;
 		//~ GCObject Interface
 
 	private:
@@ -381,6 +553,8 @@ namespace Audio
 			// The lambda function to call when t he sound wave finishes loading
 			TFunction<void(const USoundWave* SoundWave, const Audio::FSampleBuffer& LoadedSampleBuffer)> OnLoaded;
 
+
+		
 			enum class LoadStatus : uint8
 			{
 				// No request to load has been issued (default)
@@ -404,6 +578,10 @@ namespace Audio
 
 		// Reference to current loading sound wave
 		TArray<FLoadingSoundWaveInfo> LoadingSoundWaves;
+		
+		// MERGE-REVIEW - should be in object or moved into loading info?
+		// Whether or not this object is tickable. I.e. a sound wave has been asked to load.
+		bool bCanBeTicked;
 	};
 
 	// Enum used to express the current state of a FSoundWavePCMWriter's current operation.

@@ -1,8 +1,10 @@
 // Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
 
-#include "OnlineSubsystemIOSPrivatePCH.h"
+#include "OnlineSubsystemIOS.h"
+#include "IOS/IOSAppDelegate.h"
 #import "OnlineStoreKitHelper.h"
 #import "OnlineAppStoreUtils.h"
+#include "Misc/ConfigCacheIni.h"
 
 FOnlineSubsystemIOS::FOnlineSubsystemIOS(FName InInstanceName)
 	: FOnlineSubsystemImpl(IOS_SUBSYSTEM, InInstanceName)
@@ -147,13 +149,7 @@ bool FOnlineSubsystemIOS::Init()
 	bool bSuccessfullyStartedUp = true;
 	UE_LOG_ONLINE(VeryVerbose, TEXT("FOnlineSubsystemIOS::Init()"));
 	
-	bool bIsGameCenterSupported = ([IOSAppDelegate GetDelegate].OSVersion >= 4.1f);
-	if( !bIsGameCenterSupported )
-	{
-		UE_LOG_ONLINE(Warning, TEXT("GameCenter is not supported on systems running IOS 4.0 or earlier."));
-		bSuccessfullyStartedUp = false;
-	}
-	else if( !IsEnabled() )
+	if( !IsEnabled() )
 	{
 		UE_LOG_ONLINE(Warning, TEXT("GameCenter has been disabled in the system settings"));
 		bSuccessfullyStartedUp = false;

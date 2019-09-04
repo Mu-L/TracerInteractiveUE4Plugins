@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "UObject/ObjectMacros.h"
 #include "UObject/Object.h"
+#include "Particles/ParticleSystem.h"
 #include "NiagaraCommon.h"
 #include "NiagaraDataSet.h"
 #include "NiagaraEmitterInstance.h"
@@ -58,7 +59,7 @@ struct FNiagaraSystemCompileRequest
 
 /** Container for multiple emitters that combine together to create a particle system effect.*/
 UCLASS(BlueprintType)
-class NIAGARA_API UNiagaraSystem : public UObject
+class NIAGARA_API UNiagaraSystem : public UFXSystemAsset
 {
 	GENERATED_UCLASS_BODY()
 
@@ -89,11 +90,6 @@ public:
 	/** Adds a new emitter handle to this System.  The new handle exposes an Instance value which is a copy of the
 		original asset. */
 	FNiagaraEmitterHandle AddEmitterHandle(UNiagaraEmitter& SourceEmitter, FName EmitterName);
-
-	/** Adds a new emitter handle to this System.  The new handle will not copy the emitter and any changes made to it's
-		Instance value will modify the original asset.  This should only be used in the emitter toolkit for simulation
-		purposes. */
-	FNiagaraEmitterHandle AddEmitterHandleWithoutCopying(UNiagaraEmitter& Emitter);
 
 	/** Duplicates an existing emitter handle and adds it to the System.  The new handle will reference the same source asset,
 		but will have a copy of the duplicated Instance value. */
@@ -134,23 +130,17 @@ public:
 
 	bool IsReadyToRun() const;
 
-	/** Are there any pending compile requests?*/
-	bool HasOutstandingCompilationRequests() const;
-
 	FORCEINLINE bool NeedsWarmup()const { return WarmupTickCount > 0 && WarmupTickDelta > SMALL_NUMBER; }
 	FORCEINLINE float GetWarmupTime()const { return WarmupTime; }
 	FORCEINLINE int32 GetWarmupTickCount()const { return WarmupTickCount; }
 	FORCEINLINE float GetWarmupTickDelta()const { return WarmupTickDelta; }
 
 #if WITH_EDITORONLY_DATA
-	/** Called to query whether or not this emitter is referenced as the source to any emitter handles for this System.*/
-	bool ReferencesSourceEmitter(UNiagaraEmitter& Emitter);
+	/** Are there any pending compile requests?*/
+	bool HasOutstandingCompilationRequests() const;
 
 	/** Determines if this system has the supplied emitter as an editable and simulating emitter instance. */
 	bool ReferencesInstanceEmitter(UNiagaraEmitter& Emitter);
-
-	/** Updates all handles which use this emitter as their source. */
-	void UpdateFromEmitterChanges(UNiagaraEmitter& ChangedSourceEmitter);
 
 	/** Updates the system's rapid iteration parameters from a specific emitter. */
 	void RefreshSystemParametersFromEmitter(const FNiagaraEmitterHandle& EmitterHandle);
@@ -232,9 +222,16 @@ public:
 
 	const TArray<FName>& GetUserDINamesReadInSystemScripts() const;
 
+	FBox GetFixedBounds() const;
+
+	/** Whether or not fixed bounds are enabled. */
+	UPROPERTY(EditAnywhere, Category = "System", meta = (InlineEditConditionToggle))
+		uint32 bFixedBounds : 1;
+
+	TStatId GetStatID(bool bGameThread, bool bConcurrent)const;
+
 private:
 #if WITH_EDITORONLY_DATA
-	INiagaraModule::FMergeEmitterResults MergeChangesForEmitterHandle(FNiagaraEmitterHandle& EmitterHandle);
 	bool QueryCompileComplete(bool bWait, bool bDoPost, bool bDoNotApply = false);
 #endif
 
@@ -248,8 +245,10 @@ protected:
 	UPROPERTY(EditAnywhere, Category="System")
 	TArray<UNiagaraParameterCollectionInstance*> ParameterCollectionOverrides;
 
+#if WITH_EDITORONLY_DATA
 	UPROPERTY(Transient)
 	TArray<FNiagaraSystemCompileRequest> ActiveCompilations;
+#endif
 
 // 	/** Category of this system. */
 // 	UPROPERTY(EditAnywhere, Category = System)
@@ -273,8 +272,7 @@ protected:
 	UPROPERTY()
 	FNiagaraUserRedirectionParameterStore ExposedParameters;
 
-#if WITH_EDITORONLY_DATA	
-
+#if WITH_EDITORONLY_DATA
 	/** Data used by the editor to maintain UI state etc.. */
 	UPROPERTY()
 	UNiagaraEditorDataBase* EditorData;
@@ -284,6 +282,10 @@ protected:
 	/** A multicast delegate which is called whenever the script has been compiled (successfully or not). */
 	FOnSystemCompiled OnSystemCompiledDelegate;
 #endif
+
+	/** The fixed bounding box value. bFixedBounds is the condition whether the fixed bounds can be edited. */
+	UPROPERTY(EditAnywhere, Category = "System", meta = (EditCondition = "bFixedBounds"))
+	FBox FixedBounds;
 
 	UPROPERTY(EditAnywhere, Category = Performance, meta = (ToolTip = "Auto-deactivate system if all emitters are determined to not spawn particles again, regardless of lifetime."))
 	bool bAutoDeactivate;
@@ -307,4 +309,12 @@ protected:
 
 	UPROPERTY()
 	TArray<FName> UserDINamesReadInSystemScripts;
+
+	void GenerateStatID();
+#if STATS
+	TStatId StatID_GT;
+	TStatId StatID_GT_CNC;
+	TStatId StatID_RT;
+	TStatId StatID_RT_CNC;
+#endif
 };

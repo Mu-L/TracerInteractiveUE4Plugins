@@ -22,6 +22,8 @@ class IDetailLayoutBuilder;
 class IPersonaToolkit;
 class SUniformGridPanel;
 struct FSectionLocalizer;
+class IDetailCategoryBuilder;
+class IDetailGroup;
 
 /**
  * Struct to uniquely identify clothing applied to a material section
@@ -364,9 +366,9 @@ private:
 	/** apply LOD changes if the user modified LOD reduction settings */
 	FReply OnApplyChanges();
 	/** regenerate one specific LOD Index no dependencies*/
-	void RegenerateOneLOD(int32 LODIndex);
+	void RegenerateOneLOD(int32 LODIndex, bool bReregisterComponent = true);
 	/** regenerate the specific all LODs dependent of InLODIndex. This is not regenerating the InLODIndex*/
-	void RegenerateDependentLODs(int32 LODIndex);
+	void RegenerateDependentLODs(int32 LODIndex, bool bReregisterComponent = true);
 	/** Apply specified LOD Index */
 	FReply RegenerateLOD(int32 LODIndex);
 	/** Removes the specified lod from the skeletal mesh */
@@ -434,6 +436,8 @@ private:
 	/** Gets the max LOD that can be set from the lod count slider (current num plus an interval) */
 	TOptional<int32> GetLodSliderMaxValue() const;
 
+	void CustomizeSkinWeightProfiles(IDetailLayoutBuilder& DetailLayout);
+	TSharedRef<SWidget> CreateSkinWeightProfileMenuContent();
 public:
 
 	bool IsApplyNeeded() const;
@@ -555,4 +559,16 @@ private:
 
 	/** LOD Info editing is enabled? LODIndex == -1, then it just verifies if the asset exists */
 	bool IsLODInfoEditingEnabled(int32 LODIndex) const;
+
+	// Property handle used to determine if the VertexColorImportOverride property should be enabled.
+	TSharedPtr<IPropertyHandle> VertexColorImportOptionHandle;
+
+	// Property handle used during UI construction
+	TSharedPtr<IPropertyHandle> VertexColorImportOverrideHandle;
+
+	// Delegate implementation of FOnInstancedPropertyIteration used during DataImport UI construction
+	void OnInstancedFbxSkeletalMeshImportDataPropertyIteration(IDetailCategoryBuilder& BaseCategory, IDetailGroup* PropertyGroup, TSharedRef<IPropertyHandle>& Property) const;
+
+	// Delegate used at runtime to determine the state of the VertexOverrideColor property
+	bool GetVertexOverrideColorEnabledState() const;
 };

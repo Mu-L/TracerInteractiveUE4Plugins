@@ -6,7 +6,7 @@
 
 void FSinglePrimitiveStructuredBuffer::InitRHI() 
 {
-	if (IsFeatureLevelSupported(GMaxRHIShaderPlatform, ERHIFeatureLevel::SM5))
+	if (RHISupportsComputeShaders(GMaxRHIShaderPlatform))
 	{
 		FRHIResourceCreateInfo CreateInfo;
 		PrimitiveSceneDataBufferRHI = RHICreateStructuredBuffer(sizeof(FVector4), FPrimitiveSceneShaderData::PrimitiveDataStrideInFloat4s * sizeof(FVector4), BUF_Static | BUF_ShaderResource, CreateInfo);
@@ -20,7 +20,7 @@ void FSinglePrimitiveStructuredBuffer::InitRHI()
 		PrimitiveSceneDataBufferSRV = RHICreateShaderResourceView(PrimitiveSceneDataBufferRHI);
 	}
 
-	if (IsFeatureLevelSupported(GMaxRHIShaderPlatform, ERHIFeatureLevel::SM5))
+	if (RHISupportsComputeShaders(GMaxRHIShaderPlatform))
 	{
 		FRHIResourceCreateInfo CreateInfo;
 		LightmapSceneDataBufferRHI = RHICreateStructuredBuffer(sizeof(FVector4), FLightmapSceneShaderData::LightmapDataStrideInFloat4s * sizeof(FVector4), BUF_Static | BUF_ShaderResource, CreateInfo);
@@ -42,25 +42,32 @@ FPrimitiveSceneShaderData::FPrimitiveSceneShaderData(const FPrimitiveSceneProxy*
 	bool bHasPrecomputedVolumetricLightmap;
 	FMatrix PreviousLocalToWorld;
 	int32 SingleCaptureIndex;
+	bool bOutputVelocity;
 
-	Proxy->GetScene().GetPrimitiveUniformShaderParameters_RenderThread(Proxy->GetPrimitiveSceneInfo(), bHasPrecomputedVolumetricLightmap, PreviousLocalToWorld, SingleCaptureIndex);
+	Proxy->GetScene().GetPrimitiveUniformShaderParameters_RenderThread(Proxy->GetPrimitiveSceneInfo(), bHasPrecomputedVolumetricLightmap, PreviousLocalToWorld, SingleCaptureIndex, bOutputVelocity);
+
+	FBoxSphereBounds PreSkinnedLocalBounds;
+	Proxy->GetPreSkinnedLocalBounds(PreSkinnedLocalBounds);
 
 	Setup(GetPrimitiveUniformShaderParameters(
 		Proxy->GetLocalToWorld(),
 		PreviousLocalToWorld,
 		Proxy->GetActorPosition(), 
 		Proxy->GetBounds(), 
-		Proxy->GetLocalBounds(), 
+		Proxy->GetLocalBounds(),
+		PreSkinnedLocalBounds,
 		Proxy->ReceivesDecals(), 
 		Proxy->HasDistanceFieldRepresentation(), 
 		Proxy->HasDynamicIndirectShadowCasterRepresentation(), 
 		Proxy->UseSingleSampleShadowFromStationaryLights(),
 		bHasPrecomputedVolumetricLightmap,
-		Proxy->UseEditorDepthTest(), 
+		Proxy->DrawsVelocity(), 
 		Proxy->GetLightingChannelMask(),
 		Proxy->GetLpvBiasMultiplier(),
 		Proxy->GetPrimitiveSceneInfo()->GetLightmapDataOffset(),
-		SingleCaptureIndex));
+		SingleCaptureIndex,
+        bOutputVelocity,
+		Proxy->GetCustomPrimitiveData()));
 }
 
 void FPrimitiveSceneShaderData::Setup(const FPrimitiveUniformShaderParameters& PrimitiveUniformShaderParameters)
@@ -96,7 +103,7 @@ void FPrimitiveSceneShaderData::Setup(const FPrimitiveUniformShaderParameters& P
 		PrimitiveUniformShaderParameters.DecalReceiverMask, 
 		PrimitiveUniformShaderParameters.PerObjectGBufferData, 
 		PrimitiveUniformShaderParameters.UseVolumetricLightmapShadowFromStationaryLights, 
-		PrimitiveUniformShaderParameters.UseEditorDepthTest);
+		PrimitiveUniformShaderParameters.DrawsVelocity);
 	Data[21] = PrimitiveUniformShaderParameters.ObjectOrientation;
 	Data[22] = PrimitiveUniformShaderParameters.NonUniformScale;
 
@@ -107,6 +114,16 @@ void FPrimitiveSceneShaderData::Setup(const FPrimitiveUniformShaderParameters& P
 	Data[24] = FVector4(PrimitiveUniformShaderParameters.LocalObjectBoundsMax, 0.0f);
 	Data[24].W = *(const float*)&PrimitiveUniformShaderParameters.LightmapDataIndex;
 
-	Data[25] = FVector4(0.0f, 0.0f, 0.0f, 0.0f);
-	Data[25].X = *(const float*)&PrimitiveUniformShaderParameters.SingleCaptureIndex;
+	Data[25] = FVector4(PrimitiveUniformShaderParameters.PreSkinnedLocalBoundsMin, 0.0f);
+	Data[25].W = *(const float*)&PrimitiveUniformShaderParameters.SingleCaptureIndex;
+
+	Data[26] = FVector4(PrimitiveUniformShaderParameters.PreSkinnedLocalBoundsMax, 0.0f);
+	Data[26].W = *(const float*)&PrimitiveUniformShaderParameters.OutputVelocity;
+
+	// Set all the custom primitive data float4. This matches the loop in SceneData.ush
+	const int32 CustomPrimitiveDataStartIndex = 27;
+	for (int i = 0; i < FCustomPrimitiveData::NumCustomPrimitiveDataFloat4s; i++)
+	{
+		Data[CustomPrimitiveDataStartIndex + i] = PrimitiveUniformShaderParameters.CustomPrimitiveData[i];
+	}
 }

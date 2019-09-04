@@ -15,6 +15,7 @@ USkeletalMeshComponentBudgeted::USkeletalMeshComponentBudgeted(const FObjectInit
 	, AnimationBudgetAllocator(nullptr)
 	, bAutoRegisterWithBudgetAllocator(true)
 	, bAutoCalculateSignificance(false)
+	, bShouldUseActorRenderedFlag(false)
 {
 }
 
@@ -40,9 +41,35 @@ void USkeletalMeshComponentBudgeted::EndPlay(const EEndPlayReason::Type EndPlayR
 	Super::EndPlay(EndPlayReason);
 }
 
+void USkeletalMeshComponentBudgeted::SetComponentTickEnabled(bool bEnabled)
+{
+	if (AnimationBudgetAllocator)
+	{
+		AnimationBudgetAllocator->SetComponentTickEnabled(this, bEnabled);
+	}
+	else
+	{
+		Super::SetComponentTickEnabled(bEnabled);
+	}
+}
+
+void USkeletalMeshComponentBudgeted::SetComponentSignificance(float Significance, bool bNeverSkip, bool bTickEvenIfNotRendered, bool bAllowReducedWork, bool bForceInterpolate)
+{
+	if (AnimationBudgetAllocator)
+	{
+		AnimationBudgetAllocator->SetComponentSignificance(this, Significance, bNeverSkip, bTickEvenIfNotRendered, bAllowReducedWork, bForceInterpolate);
+	}
+	else if (HasBegunPlay())
+	{
+		UE_LOG(LogSkeletalMesh, Warning, TEXT("SetComponentSignificance called on [%s] before registering with budget allocator"), *GetName());
+	}
+}
+
 void USkeletalMeshComponentBudgeted::TickComponent(float DeltaTime, enum ELevelTick TickType, FActorComponentTickFunction *ThisTickFunction)
 {
+#if !UE_BUILD_SHIPPING
 	CSV_SCOPED_TIMING_STAT(AnimationBudget, BudgetedAnimation);
+#endif
 
 	if(AnimationBudgetAllocator)
 	{
@@ -60,7 +87,9 @@ void USkeletalMeshComponentBudgeted::TickComponent(float DeltaTime, enum ELevelT
 
 void USkeletalMeshComponentBudgeted::CompleteParallelAnimationEvaluation(bool bDoPostAnimEvaluation)
 {
+#if !UE_BUILD_SHIPPING
 	CSV_SCOPED_TIMING_STAT(AnimationBudget, BudgetedAnimation);
+#endif
 
 	if(AnimationBudgetAllocator)
 	{

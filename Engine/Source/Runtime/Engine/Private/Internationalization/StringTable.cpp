@@ -124,22 +124,16 @@ private:
 	}
 
 	//~ IStringTableEngineBridge interface
+	virtual bool CanFindOrLoadStringTableAssetImpl() override
+	{
+		return IsInGameThread() && !IsGarbageCollecting() && !GIsSavingPackage;
+	}
+
 	virtual int32 LoadStringTableAssetImpl(const FName InTableId, FLoadStringTableAssetCallback InLoadedCallback) override
 	{
 		const FSoftObjectPath StringTableAssetReference = GetAssetReference(InTableId);
 		if (StringTableAssetReference.IsValid())
 		{
-			// HACK: Unable to attempt a find in these circumstances
-			// HACK: This check should be handled by FTextHistory_StringTableEntry::FStringTableReferenceData::ConditionalBeginAssetLoad() instead to avoid starting the find/load until it is safe to do so
-			if (GIsSavingPackage || IsGarbageCollecting())
-			{
-				if (InLoadedCallback)
-				{
-					InLoadedCallback(InTableId, InTableId);
-				}
-				return INDEX_NONE;
-			}
-
 			UStringTable* StringTableAsset = Cast<UStringTable>(StringTableAssetReference.ResolveObject());
 			if (StringTableAsset)
 			{
@@ -297,6 +291,11 @@ private:
 	{
 		FScopeLock KeepAliveStringTablesLock(&KeepAliveStringTablesCS);
 		Collector.AddReferencedObjects(KeepAliveStringTables);
+	}
+
+	virtual FString GetReferencerName() const override
+	{
+		return TEXT("FStringTableEngineBridge");
 	}
 
 private:

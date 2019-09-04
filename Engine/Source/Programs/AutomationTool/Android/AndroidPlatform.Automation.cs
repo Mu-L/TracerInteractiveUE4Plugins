@@ -107,7 +107,7 @@ public class AndroidPlatform : Platform
 
 	private static string GetFinalSymbolizedSODirectory(string ApkName, DeploymentContext SC, string Architecture, string GPUArchitecture)
 	{
-		string PackageVersion = GetPackageInfo(ApkName, true);
+		string PackageVersion = GetPackageInfo(ApkName, SC, true);
 		if (PackageVersion == null || PackageVersion.Length == 0)
 		{
 			throw new AutomationException(ExitCode.Error_FailureGettingPackageInfo, "Failed to get package version from " + ApkName);
@@ -116,16 +116,16 @@ public class AndroidPlatform : Platform
 		return SC.ShortProjectName + "_Symbols_v" + PackageVersion + "/" + SC.ShortProjectName + Architecture + GPUArchitecture;
 	}
 
-	private static string GetFinalObbName(string ApkName, bool bUseAppType = true)
+	private static string GetFinalObbName(string ApkName, DeploymentContext SC, bool bUseAppType = true)
 	{
 		// calculate the name for the .obb file
-		string PackageName = GetPackageInfo(ApkName, false);
+		string PackageName = GetPackageInfo(ApkName, SC, false);
 		if (PackageName == null)
 		{
 			throw new AutomationException(ExitCode.Error_FailureGettingPackageInfo, "Failed to get package name from " + ApkName);
 		}
 
-		string PackageVersion = GetPackageInfo(ApkName, true);
+		string PackageVersion = GetPackageInfo(ApkName, SC, true);
 		if (PackageVersion == null || PackageVersion.Length == 0)
 		{
 			throw new AutomationException(ExitCode.Error_FailureGettingPackageInfo, "Failed to get package version from " + ApkName);
@@ -151,6 +151,41 @@ public class AndroidPlatform : Platform
 		return ObbName;
 	}
 
+	private static string GetFinalPatchName(string ApkName, DeploymentContext SC, bool bUseAppType = true)
+	{
+		// calculate the name for the .obb file
+		string PackageName = GetPackageInfo(ApkName, SC, false);
+		if (PackageName == null)
+		{
+			throw new AutomationException(ExitCode.Error_FailureGettingPackageInfo, "Failed to get package name from " + ApkName);
+		}
+
+		string PackageVersion = GetPackageInfo(ApkName, SC, true);
+		if (PackageVersion == null || PackageVersion.Length == 0)
+		{
+			throw new AutomationException(ExitCode.Error_FailureGettingPackageInfo, "Failed to get package version from " + ApkName);
+		}
+
+		if (PackageVersion.Length > 0)
+		{
+			int IntVersion = int.Parse(PackageVersion);
+			PackageVersion = IntVersion.ToString("0");
+		}
+
+		string AppType = bUseAppType ? GetMetaAppType() : "";
+		if (AppType.Length > 0)
+		{
+			AppType += ".";
+		}
+
+		string PatchName = string.Format("patch.{0}.{1}.{2}obb", PackageVersion, PackageName, AppType);
+
+		// plop the .obb right next to the executable
+		PatchName = Path.Combine(Path.GetDirectoryName(ApkName), PatchName);
+
+		return PatchName;
+	}
+
 
 	public override string GetPlatformPakCommandLine(ProjectParams Params, DeploymentContext SC)
 	{
@@ -165,14 +200,21 @@ public class AndroidPlatform : Platform
 		return PakParams;
 	}
 
-	private static string GetDeviceObbName(string ApkName)
+	private static string GetDeviceObbName(string ApkName, DeploymentContext SC)
 	{
-        string ObbName = GetFinalObbName(ApkName, false);
-        string PackageName = GetPackageInfo(ApkName, false);
+        string ObbName = GetFinalObbName(ApkName, SC, false);
+        string PackageName = GetPackageInfo(ApkName, SC, false);
         return TargetAndroidLocation + PackageName + "/" + Path.GetFileName(ObbName);
 	}
 
-    public static string GetStorageQueryCommand()
+	private static string GetDevicePatchName(string ApkName, DeploymentContext SC)
+	{
+		string PatchName = GetFinalPatchName(ApkName, SC, false);
+		string PackageName = GetPackageInfo(ApkName, SC, false);
+		return TargetAndroidLocation + PackageName + "/" + Path.GetFileName(PatchName);
+	}
+
+	public static string GetStorageQueryCommand()
     {
 		if (Utils.IsRunningOnMono)
 		{
@@ -193,20 +235,13 @@ public class AndroidPlatform : Platform
 	private static string GetFinalBatchName(string ApkName, DeploymentContext SC, string Architecture, string GPUArchitecture, bool bNoOBBInstall, EBatchType BatchType, UnrealTargetPlatform Target)
 	{
 		string Extension = ".bat";
-		switch (Target)
+		if (Target == UnrealTargetPlatform.Linux)
 		{
-			default:
-			case UnrealTargetPlatform.Win64:
-				Extension = ".bat";
-				break;
-
-			case UnrealTargetPlatform.Linux:
-				Extension = ".sh";
-				break;
-
-			case UnrealTargetPlatform.Mac:
-				Extension = ".command";
-				break;
+			Extension = ".sh";
+		}
+		else if (Target == UnrealTargetPlatform.Mac)
+		{
+			Extension = ".command";
 		}
 
 		// Get the name of the APK to use for batch file
@@ -268,6 +303,76 @@ public class AndroidPlatform : Platform
 		return bAllowLargeOBBFiles ? MaxOBBSizeAllowed : NormalOBBSizeAllowed;
 	}
 
+	private bool AllowPatchOBBFile(DeploymentContext SC)
+	{
+		ConfigHierarchy Ini = ConfigCache.ReadHierarchy(ConfigHierarchyType.Engine, DirectoryReference.FromFile(SC.RawProjectPath), SC.StageTargetPlatform.PlatformType);
+		bool bAllowPatchOBBFile = false;
+		Ini.GetBool("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "bAllowPatchOBBFile", out bAllowPatchOBBFile);
+		return bAllowPatchOBBFile;
+	}
+
+	private bool CreateOBBFile(DeploymentContext SC, string StageDirectoryPath, string OutputFilename, List<FileReference> FilesForObb)
+	{
+		LogInformation("Creating {0} from {1}", OutputFilename, SC.StageDirectory);
+		using (ZipFile ObbFile = new ZipFile(OutputFilename))
+		{
+			ObbFile.CompressionMethod = CompressionMethod.None;
+			ObbFile.CompressionLevel = Ionic.Zlib.CompressionLevel.None;
+			ObbFile.UseZip64WhenSaving = Ionic.Zip.Zip64Option.Never;
+			ObbFile.Comment = String.Format("{0,10}", "1");
+
+			int ObbFileCount = 0;
+			ObbFile.AddProgress +=
+				delegate (object sender, AddProgressEventArgs e)
+				{
+					if (e.EventType == ZipProgressEventType.Adding_AfterAddEntry)
+					{
+						ObbFileCount += 1;
+						LogInformation("[{0}/{1}] Adding {2} to OBB",
+							ObbFileCount, e.EntriesTotal,
+							e.CurrentEntry.FileName);
+					}
+				};
+
+			foreach (FileReference FileRef in FilesForObb)
+			{
+				string DestinationPath = Path.GetDirectoryName(FileRef.FullName).Replace(StageDirectoryPath, SC.ShortProjectName);
+				ObbFile.AddFile(FileRef.FullName, DestinationPath);
+			}
+
+			// ObbFile.AddDirectory(SC.StageDirectory+"/"+SC.ShortProjectName, SC.ShortProjectName);
+			try
+			{
+				ObbFile.Save();
+			}
+			catch (Exception)
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private bool UpdateObbStoreVersion(string Filename)
+	{
+		string Version = Path.GetFileNameWithoutExtension(Filename).Split('.')[1];
+
+		using (ZipFile ObbFile = ZipFile.Read(Filename))
+		{
+			// Add the store version from the filename as a comment
+			ObbFile.Comment = String.Format("{0,10}", Version);
+			try
+			{
+				ObbFile.Save();
+			}
+			catch (Exception)
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
 	public override void Package(ProjectParams Params, DeploymentContext SC, int WorkingCL)
 	{
 		if (SC.StageTargetConfigurations.Count != 1)
@@ -294,75 +399,115 @@ public class AndroidPlatform : Platform
 		// includes any PAK files, movie files, etc.
 
 		string LocalObbName = SC.StageDirectory.FullName+".obb";
+		string LocalPatchName = SC.StageDirectory.FullName + ".patch.obb";
 
-		// Always delete the target OBB file if it exists
-		if (File.Exists(LocalObbName))
+		FileFilter ObbFileFilter = new FileFilter(FileFilterType.Include);
+		ConfigHierarchy EngineIni = ConfigCache.ReadHierarchy(ConfigHierarchyType.Engine, DirectoryReference.FromFile(Params.RawProjectPath), UnrealTargetPlatform.Android);
+		List<string> ObbFilters;
+		EngineIni.GetArray("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "ObbFilters", out ObbFilters);
+		if (ObbFilters != null)
 		{
-			File.Delete(LocalObbName);
+			ObbFileFilter.AddRules(ObbFilters);
 		}
 
-		// Now create the OBB as a ZIP archive.
-		LogInformation("Creating {0} from {1}", LocalObbName, SC.StageDirectory);
-		using (ZipFile ObbFile = new ZipFile(LocalObbName))
+		string StageDirectoryPath = Path.Combine(SC.StageDirectory.FullName, SC.ShortProjectName);
+		List<FileReference> FilesForObb = ObbFileFilter.ApplyToDirectory(new DirectoryReference(StageDirectoryPath), true);
+
+		bool OBBNeedsUpdate = false;
+		System.DateTime OBBTimeStamp = File.GetLastWriteTimeUtc(LocalObbName);
+		foreach (FileReference FileToObb in FilesForObb)
 		{
-			ObbFile.CompressionMethod = CompressionMethod.None;
-			ObbFile.CompressionLevel = Ionic.Zlib.CompressionLevel.None;
-			ObbFile.UseZip64WhenSaving = Ionic.Zip.Zip64Option.Never;
+			System.DateTime FileTimeStamp = File.GetLastWriteTimeUtc(FileToObb.FullName);
+			if(FileTimeStamp > OBBTimeStamp)
+			{
+				OBBNeedsUpdate = true;
+				break;
+			}
+		}
 
-			int ObbFileCount = 0;
-			ObbFile.AddProgress +=
-				delegate(object sender, AddProgressEventArgs e)
+		Int64 OBBSizeAllowed = GetMaxOBBSizeAllowed(SC);
+		string LimitString = (OBBSizeAllowed < MaxOBBSizeAllowed) ? "2 GiB" : "4 GiB";
+
+		if (!OBBNeedsUpdate)
+		{
+			LogInformation("OBB is up to date: " + LocalObbName);
+		}
+		else
+		{
+			// Always delete the target OBB file if it exists
+			if (File.Exists(LocalObbName))
+			{
+				File.Delete(LocalObbName);
+			}
+
+			// Always delete the target patch OBB file if it exists
+			if (File.Exists(LocalPatchName))
+			{
+				File.Delete(LocalPatchName);
+			}
+
+			List<FileReference> FilesToObb = FilesForObb;
+			List<FileReference> FilesToPatch = new List<FileReference>();
+
+			if (AllowPatchOBBFile(SC))
+			{
+				FilesToObb = new List<FileReference>();
+
+				// Collect the filesize and place into Obb or Patch list
+				Int64 MainObbSize = 22 + 10;	// EOCD with comment (store version)
+				Int64 PatchObbSize = 22 + 10;	// EOCD with comment (store version)
+				foreach (FileReference FileRef in FilesForObb)
 				{
-					if (e.EventType == ZipProgressEventType.Adding_AfterAddEntry)
+					FileInfo LocalFileInfo = new FileInfo(FileRef.FullName);
+					Int64 LocalFileLength = LocalFileInfo.Length;
+
+					string DestinationPath = Path.GetDirectoryName(FileRef.FullName).Replace(StageDirectoryPath, SC.ShortProjectName);
+					int FilenameLength = DestinationPath.Length;
+					Int64 Overhead = (30 + 36 + FilenameLength) + (46 + 36 + FilenameLength); // local file descriptor + central directory cost per file
+					Int64 FileRequirements = LocalFileLength + Overhead;
+
+					if (MainObbSize + FileRequirements < OBBSizeAllowed)
 					{
-						ObbFileCount += 1;
-						LogInformation("[{0}/{1}] Adding {2} to OBB",
-							ObbFileCount, e.EntriesTotal,
-							e.CurrentEntry.FileName);
+						FilesToObb.Add(FileRef);
+						MainObbSize += FileRequirements;
 					}
-				};
-
-
-
-			FileFilter ObbFileFilter = new FileFilter(FileFilterType.Include);
-			ConfigHierarchy EngineIni = ConfigCache.ReadHierarchy(ConfigHierarchyType.Engine, DirectoryReference.FromFile(Params.RawProjectPath), UnrealTargetPlatform.Android);
-			List<string> ObbFilters;
-			EngineIni.GetArray("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "ObbFilters", out ObbFilters);
-			if (ObbFilters != null)
-			{
-				ObbFileFilter.AddRules(ObbFilters);
+					else if (PatchObbSize + FileRequirements < OBBSizeAllowed)
+					{
+						FilesToPatch.Add(FileRef);
+						PatchObbSize += FileRequirements;
+					}
+					else
+					{
+						// no room in either file
+						LogInformation("Failed to build OBB: " + LocalObbName);
+						throw new AutomationException(ExitCode.Error_AndroidOBBError, "Stage Failed. Could not build OBB {0}. The file may be too big to fit in an OBB ({1} limit)", LocalObbName, LimitString);
+					}
+				}
 			}
 
-			string StageDirectoryPath = Path.Combine(SC.StageDirectory.FullName, SC.ShortProjectName);
-			List<FileReference> FilesToObb = ObbFileFilter.ApplyToDirectory(new DirectoryReference(StageDirectoryPath), true);
-
-			foreach (FileReference FileToObb in FilesToObb)
-			{
-				string DestinationPath = Path.GetDirectoryName(FileToObb.FullName).Replace(StageDirectoryPath, SC.ShortProjectName);
-				ObbFile.AddFile(FileToObb.FullName, DestinationPath);
-			}
-			
-
-
-			// ObbFile.AddDirectory(SC.StageDirectory+"/"+SC.ShortProjectName, SC.ShortProjectName);
-			try
-			{
-				ObbFile.Save();
-			}
-			catch (Exception)
+			// Now create the main OBB as a ZIP archive.
+			if (!CreateOBBFile(SC, StageDirectoryPath, LocalObbName, FilesToObb))
 			{
 				LogInformation("Failed to build OBB: " + LocalObbName);
-				throw new AutomationException(ExitCode.Error_AndroidOBBError, "Stage Failed. Could not build OBB {0}. The file may be too big to fit in an OBB (2 GiB limit)", LocalObbName);
+				throw new AutomationException(ExitCode.Error_AndroidOBBError, "Stage Failed. Could not build OBB {0}. The file may be too big to fit in an OBB ({1} limit)", LocalObbName, LimitString);
+			}
+
+			// Now create the patch OBB as a ZIP archive if required.
+			if (FilesToPatch.Count() > 0)
+			{
+				if (!CreateOBBFile(SC, StageDirectoryPath, LocalPatchName, FilesToPatch))
+				{
+					LogInformation("Failed to build OBB: " + LocalPatchName);
+					throw new AutomationException(ExitCode.Error_AndroidOBBError, "Stage Failed. Could not build OBB {0}. The file may be too big to fit in an OBB ({1} limit)", LocalPatchName, LimitString);
+				}
 			}
 		}
 
 		// make sure the OBB is <= 2GiB (or 4GiB if large OBB enabled)
 		FileInfo OBBFileInfo = new FileInfo(LocalObbName);
-		Int64 OBBSizeAllowed = GetMaxOBBSizeAllowed(SC);
 		Int64 ObbFileLength = OBBFileInfo.Length;
 		if (ObbFileLength > OBBSizeAllowed)
 		{
-			string LimitString = (OBBSizeAllowed < MaxOBBSizeAllowed) ? "2 GiB" : "4 GiB";
 			LogInformation("OBB exceeds " + LimitString + " limit: " + ObbFileLength + " bytes");
 			throw new AutomationException(ExitCode.Error_AndroidOBBError, "Stage Failed. OBB {0} exceeds {1} limit)", LocalObbName, LimitString);
 		}
@@ -375,7 +520,7 @@ public class AndroidPlatform : Platform
 		Ini.GetInt32("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "MinSDKVersion", out MinSDKVersion);
 		int TargetSDKVersion = MinSDKVersion;
 		Ini.GetInt32("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "TargetSDKVersion", out TargetSDKVersion);
-		LogInformation("Target SDK Version" + TargetSDKVersion);
+		LogInformation("Target SDK Version " + TargetSDKVersion);
 
 		foreach (string Architecture in Architectures)
 		{
@@ -393,23 +538,60 @@ public class AndroidPlatform : Platform
 					}
 				}
 				
+				TargetReceipt Receipt = SC.StageTargets[0].Receipt;
 				              
+				// when we make an embedded executable, all we do is output to libUE4.so - we don't need to make an APK at all
+				// however, we still let package go through to make the .obb file
+				string CookFlavor = SC.FinalCookPlatform.IndexOf("_") > 0 ? SC.FinalCookPlatform.Substring(SC.FinalCookPlatform.IndexOf("_")) : "";
 				if (!Params.Prebuilt)
 				{
-					string CookFlavor = SC.FinalCookPlatform.IndexOf("_") > 0 ? SC.FinalCookPlatform.Substring(SC.FinalCookPlatform.IndexOf("_")) : "";
 					string SOName = GetSONameWithoutArchitecture(Params, SC.StageExecutables[0]);
-					Deploy.PrepForUATPackageOrDeploy(Params.RawProjectPath, Params.ShortProjectName, SC.ProjectRoot, SOName, SC.LocalRoot + "/Engine", Params.Distribution, CookFlavor, false);
+					bool bShouldCompileAsDll = Receipt.HasValueForAdditionalProperty("CompileAsDll", "true");
+					if (bShouldCompileAsDll)
+					{
+						// MakeApk
+						SOName = Receipt.BuildProducts[0].Path.FullName;
+
+						// saving package info, which will allow 
+						TargetType Type = TargetType.Game;
+						if (CookFlavor.EndsWith("Client"))
+						{
+							Type = TargetType.Client;
+						}
+						else if (CookFlavor.EndsWith("Server"))
+						{
+							Type = TargetType.Server;
+						}
+						LogInformation("SavePackageInfo");
+						Deploy.SavePackageInfo(Params.ShortProjectName, SC.ProjectRoot.FullName, Type, true);
+					}
+					Deploy.PrepForUATPackageOrDeploy(Params.RawProjectPath, Params.ShortProjectName, SC.ProjectRoot, SOName, SC.LocalRoot + "/Engine", Params.Distribution, CookFlavor, SC.StageTargets[0].Receipt.Configuration, false, bShouldCompileAsDll);
 				}
 
 			    // Create APK specific OBB in case we have a detached OBB.
 			    string DeviceObbName = "";
 			    string ObbName = "";
+				string DevicePatchName = "";
+				string PatchName = "";
 				if (!bPackageDataInsideApk)
 			    {
-				    DeviceObbName = GetDeviceObbName(ApkName);
-				    ObbName = GetFinalObbName(ApkName);
-				    CopyFile(LocalObbName, ObbName);
-			    }
+				    DeviceObbName = GetDeviceObbName(ApkName, SC);
+				    ObbName = GetFinalObbName(ApkName, SC);
+					CopyFile(LocalObbName, ObbName);
+
+					// apply store version to OBB to make it unique for PlayStore upload
+					UpdateObbStoreVersion(ObbName);
+
+					if (File.Exists(LocalPatchName))
+					{
+						DevicePatchName = GetDevicePatchName(ApkName, SC);
+						PatchName = GetFinalPatchName(ApkName, SC);
+						CopyFile(LocalPatchName, PatchName);
+
+						// apply store version to OBB to make it unique for PlayStore upload
+						UpdateObbStoreVersion(PatchName);
+					}
+				}
 
 				//figure out which platforms we need to create install files for
 				bool bNeedsPCInstall = false;
@@ -422,14 +604,14 @@ public class AndroidPlatform : Platform
 				{
 					bool bIsPC = (Target == UnrealTargetPlatform.Win64);
 					// Write install batch file(s).
-					string PackageName = GetPackageInfo(ApkName, false);
+					string PackageName = GetPackageInfo(ApkName, SC, false);
 					string BatchName = GetFinalBatchName(ApkName, SC, bMakeSeparateApks ? Architecture : "", bMakeSeparateApks ? GPUArchitecture : "", false, EBatchType.Install, Target);
 					// make a batch file that can be used to install the .apk and .obb files
-					string[] BatchLines = GenerateInstallBatchFile(bPackageDataInsideApk, PackageName, ApkName, Params, ObbName, DeviceObbName, false, bIsPC, Params.Distribution, TargetSDKVersion > 22);
+					string[] BatchLines = GenerateInstallBatchFile(bPackageDataInsideApk, PackageName, ApkName, Params, ObbName, DeviceObbName, false, PatchName, DevicePatchName, false, bIsPC, Params.Distribution, TargetSDKVersion > 22);
 					File.WriteAllLines(BatchName, BatchLines);
 					// make a batch file that can be used to uninstall the .apk and .obb files
 					string UninstallBatchName = GetFinalBatchName(ApkName, SC, bMakeSeparateApks ? Architecture : "", bMakeSeparateApks ? GPUArchitecture : "", false, EBatchType.Uninstall, Target);
-					BatchLines = GenerateUninstallBatchFile(bPackageDataInsideApk, PackageName, ApkName, Params, ObbName, DeviceObbName, false, bIsPC);
+					BatchLines = GenerateUninstallBatchFile(bPackageDataInsideApk, PackageName, ApkName, Params, ObbName, DeviceObbName, false, PatchName, DevicePatchName, false, bIsPC);
 					File.WriteAllLines(UninstallBatchName, BatchLines);
 
 					string SymbolizeBatchName = GetFinalBatchName(ApkName, SC, Architecture, GPUArchitecture, false, EBatchType.Symbolize, Target);
@@ -452,8 +634,7 @@ public class AndroidPlatform : Platform
 						//    CommandUtils.FixUnixFilePermissions(NoInstallBatchName);
 						//}
 					}
-				}
-				);
+				});
 
 				if (bNeedsPCInstall)
 				{
@@ -482,7 +663,7 @@ public class AndroidPlatform : Platform
 		PrintRunTime();
 	}
 
-    private string[] GenerateInstallBatchFile(bool bPackageDataInsideApk, string PackageName, string ApkName, ProjectParams Params, string ObbName, string DeviceObbName, bool bNoObbInstall, bool bIsPC, bool bIsDistribution, bool bRequireRuntimeStoragePermission)
+    private string[] GenerateInstallBatchFile(bool bPackageDataInsideApk, string PackageName, string ApkName, ProjectParams Params, string ObbName, string DeviceObbName, bool bNoObbInstall, string PatchName, string DevicePatchName, bool bNoPatchInstall, bool bIsPC, bool bIsDistribution, bool bRequireRuntimeStoragePermission)
     {
         string[] BatchLines = null;
         string ReadPermissionGrantCommand = "shell pm grant " + PackageName + " android.permission.READ_EXTERNAL_STORAGE";
@@ -495,13 +676,16 @@ public class AndroidPlatform : Platform
 		// We can't always push directly to Android/obb so uploads to Download then moves it
 		bool bDontMoveOBB = bPackageDataInsideApk || !bIsDistribution;
 
+		bool bHavePatch = (PatchName != "");
+
 		if (!bIsPC)
         {
 			// If it is a distribution build, push to $STORAGE/Android/obb folder instead of $STORAGE/obb folder.
 			// Note that $STORAGE/Android/obb will be the folder that contains the obb if you download the app from playstore.
 			string OBBInstallCommand = bNoObbInstall ? "shell 'rm -r $EXTERNAL_STORAGE/" + DeviceObbName + "'" : "push " + Path.GetFileName(ObbName) + " $STORAGE/" + (bIsDistribution ? "Download/" : "") + DeviceObbName;
+			string PatchInstallCommand = bNoPatchInstall ? "shell 'rm -r $EXTERNAL_STORAGE/" + DevicePatchName + "'" : "push " + Path.GetFileName(PatchName) + " $STORAGE/" + (bIsDistribution ? "Download/" : "") + DevicePatchName;
 
-            LogInformation("Writing shell script for install with {0}", bPackageDataInsideApk ? "data in APK" : "separate obb");
+			LogInformation("Writing shell script for install with {0}", bPackageDataInsideApk ? "data in APK" : "separate obb");
             BatchLines = new string[] {
 						"#!/bin/sh",
 						"cd \"`dirname \"$0\"`\"",
@@ -526,12 +710,16 @@ public class AndroidPlatform : Platform
 						"\t$ADB $DEVICE shell 'rm -r $EXTERNAL_STORAGE/UE4Game/UE4CommandLine.txt" + "'",
 						"\t$ADB $DEVICE shell 'rm -r $EXTERNAL_STORAGE/" + TargetAndroidLocation + PackageName + "'",
 						"\t$ADB $DEVICE shell 'rm -r $EXTERNAL_STORAGE/Android/" + TargetAndroidLocation + PackageName + "'",
+						"\t$ADB $DEVICE shell 'rm -r $EXTERNAL_STORAGE/Download/" + TargetAndroidLocation + PackageName + "'",
 						bPackageDataInsideApk ? "" : "\techo",
 						bPackageDataInsideApk ? "" : "\techo Installing new data. Failures here indicate storage problems \\(missing SD card or bad permissions\\) and are fatal.",
 						bPackageDataInsideApk ? "" : "\tSTORAGE=$(echo \"`$ADB $DEVICE shell 'echo $EXTERNAL_STORAGE'`\" | cat -v | tr -d '^M')",
 						bPackageDataInsideApk ? "" : "\t$ADB $DEVICE " + OBBInstallCommand,
 						bPackageDataInsideApk ? "if [ 1 ]; then" : "\tif [ $? -eq 0 ]; then",
-						bDontMoveOBB ? "" : "\t\t$ADB $DEVICE shell mv $STORAGE/Download/obb/" + PackageName + " $STORAGE/Android/obb/" + PackageName,
+						!bHavePatch ? "" : (bPackageDataInsideApk ? "" : "\t$ADB $DEVICE " + PatchInstallCommand),
+						bDontMoveOBB ? "" : "\t\t$ADB $DEVICE shell mkdir $STORAGE/Android/" + TargetAndroidLocation + PackageName, // don't check for error since installing may create the obb directory
+						bDontMoveOBB ? "" : "\t\t$ADB $DEVICE shell cp $STORAGE/Download/" + TargetAndroidLocation + PackageName + "/* $STORAGE/Android/" + TargetAndroidLocation + PackageName,
+						bDontMoveOBB ? "" : "\t\t$ADB $DEVICE shell rm -r $STORAGE/Download/" + TargetAndroidLocation + PackageName,
 						"\t\techo",
 						"\t\techo Installation successful",
 						"\t\texit 0",
@@ -550,12 +738,13 @@ public class AndroidPlatform : Platform
         else
         {
 			string OBBInstallCommand = bNoObbInstall ? "shell rm -r %STORAGE%/" + DeviceObbName : "push " + Path.GetFileName(ObbName) + " %STORAGE%/" + (bIsDistribution ? "Download/" : "") + DeviceObbName;
+			string PatchInstallCommand = bNoPatchInstall ? "shell rm -r %STORAGE%/" + DevicePatchName : "push " + Path.GetFileName(PatchName) + " %STORAGE%/" + (bIsDistribution ? "Download/" : "") + DevicePatchName;
 
 			LogInformation("Writing bat for install with {0}", bPackageDataInsideApk ? "data in APK" : "separate OBB");
             BatchLines = new string[] {
 						"setlocal",
-                        "set ANDROIDHOME=%ANDROID_HOME%",
-						"if NOT \"UE_SDKS_ROOT\"==\"\" (call %UE_SDKS_ROOT%\\HostWin64\\Android\\SetupEnvironmentVars.bat)",
+						"if NOT \"%UE_SDKS_ROOT%\"==\"\" (call %UE_SDKS_ROOT%\\HostWin64\\Android\\SetupEnvironmentVars.bat)",
+						"set ANDROIDHOME=%ANDROID_HOME%",		
 						"if \"%ANDROIDHOME%\"==\"\" set ANDROIDHOME="+Environment.GetEnvironmentVariable("ANDROID_HOME"),
 						"set ADB=%ANDROIDHOME%\\platform-tools\\adb.exe",
 						"set DEVICE=",
@@ -572,12 +761,17 @@ public class AndroidPlatform : Platform
 						"%ADB% %DEVICE% shell rm -r %STORAGE%/UE4Game/UE4CommandLine.txt", // we need to delete the commandline in UE4Game or it will mess up loading
 						"%ADB% %DEVICE% shell rm -r %STORAGE%/" + TargetAndroidLocation + PackageName,
 						"%ADB% %DEVICE% shell rm -r %STORAGE%/Android/" + TargetAndroidLocation + PackageName,
+						"%ADB% %DEVICE% shell rm -r %STORAGE%/Download/" + TargetAndroidLocation + PackageName,
 						bPackageDataInsideApk ? "" : "@echo.",
 						bPackageDataInsideApk ? "" : "@echo Installing new data. Failures here indicate storage problems (missing SD card or bad permissions) and are fatal.",
 						bPackageDataInsideApk ? "" : "%ADB% %DEVICE% " + OBBInstallCommand,
 						bPackageDataInsideApk ? "" : "if \"%ERRORLEVEL%\" NEQ \"0\" goto Error",
-						bDontMoveOBB ? "" : "%ADB% %DEVICE% shell mv %STORAGE%/Download/obb/" + PackageName + " %STORAGE%/Android/obb/" + PackageName,
+						!bHavePatch ? "" : (bPackageDataInsideApk ? "" : "%ADB% %DEVICE% " + PatchInstallCommand),
+						!bHavePatch ? "" : (bPackageDataInsideApk ? "" : "if \"%ERRORLEVEL%\" NEQ \"0\" goto Error"),
+						bDontMoveOBB ? "" : "%ADB% %DEVICE% shell mkdir %STORAGE%/Android/" + TargetAndroidLocation + PackageName, // don't check for error since installing may create the obb directory
+						bDontMoveOBB ? "" : "%ADB% %DEVICE% shell cp %STORAGE%/Download/" + TargetAndroidLocation + PackageName + "/* %STORAGE%/Android/" + TargetAndroidLocation + PackageName,
 						bDontMoveOBB ? "" : "if \"%ERRORLEVEL%\" NEQ \"0\" goto Error",
+						bDontMoveOBB ? "" : "%ADB% %DEVICE% shell rm -r %STORAGE%/Download/" + TargetAndroidLocation + PackageName,
 						"@echo.",
 						bNeedGrantStoragePermission ? "@echo Grant READ_EXTERNAL_STORAGE and WRITE_EXTERNAL_STORAGE to the apk for reading OBB file or game file in external storage." : "",
 						bNeedGrantStoragePermission ? "%ADB% %DEVICE% " + ReadPermissionGrantCommand : "",
@@ -599,7 +793,7 @@ public class AndroidPlatform : Platform
         return BatchLines;
     }
 
-	private string[] GenerateUninstallBatchFile(bool bPackageDataInsideApk, string PackageName, string ApkName, ProjectParams Params, string ObbName, string DeviceObbName, bool bNoObbInstall, bool bIsPC)
+	private string[] GenerateUninstallBatchFile(bool bPackageDataInsideApk, string PackageName, string ApkName, ProjectParams Params, string ObbName, string DeviceObbName, bool bNoObbInstall, string PatchName, string DevicePatchName, bool bNoPatchInstall, bool bIsPC)
 	{
 		string[] BatchLines = null;
 
@@ -632,6 +826,7 @@ public class AndroidPlatform : Platform
 			LogInformation("Writing bat for uninstall with {0}", bPackageDataInsideApk ? "data in APK" : "separate OBB");
 			BatchLines = new string[] {
 						"setlocal",
+						"if NOT \"%UE_SDKS_ROOT%\"==\"\" (call %UE_SDKS_ROOT%\\HostWin64\\Android\\SetupEnvironmentVars.bat)",
 						"set ANDROIDHOME=%ANDROID_HOME%",
 						"if \"%ANDROIDHOME%\"==\"\" set ANDROIDHOME="+Environment.GetEnvironmentVariable("ANDROID_HOME"),
 						"set ADB=%ANDROIDHOME%\\platform-tools\\adb.exe",
@@ -683,7 +878,7 @@ public class AndroidPlatform : Platform
 						"setlocal",
 						"set NDK_ROOT=%ANDROID_NDK_ROOT%",
 						"if \"%ANDROID_NDK_ROOT%\"==\"\" set NDK_ROOT=\""+Environment.GetEnvironmentVariable("ANDROID_NDK_ROOT")+"\"",
-						"set NDKSTACK=%NDK_ROOT%\ndk-stack.cmd",
+						"set NDKSTACK=%NDK_ROOT%\\ndk-stack.cmd",
 						"",
 						"%NDKSTACK% -sym "+GetFinalSymbolizedSODirectory(ApkName, SC, Architecture, GPUArchitecture)+" -dump \"%1\" > "+ Params.ShortProjectName+"_SymbolizedCallStackOutput.txt",
 						"",
@@ -713,13 +908,14 @@ public class AndroidPlatform : Platform
 		bool bMakeSeparateApks = UnrealBuildTool.AndroidExports.ShouldMakeSeparateApks();
 		bool bPackageDataInsideApk = UnrealBuildTool.AndroidExports.CreateDeploymentHandler(Params.RawProjectPath, Params.ForcePackageData).GetPackageDataInsideApk();
 
-		bool bAddedOBB = false;
+		List<string> AddedObbFiles = new List<string>();
 		foreach (string Architecture in Architectures)
 		{
 			foreach (string GPUArchitecture in GPUArchitectures)
 			{
 				string ApkName = GetFinalApkName(Params, SC.StageExecutables[0], true, bMakeSeparateApks ? Architecture : "", bMakeSeparateApks ? GPUArchitecture : "");
-				string ObbName = GetFinalObbName(ApkName);
+				string ObbName = GetFinalObbName(ApkName, SC);
+				string PatchName = GetFinalPatchName(ApkName, SC);
 				bool bBuildWithHiddenSymbolVisibility = BuildWithHiddenSymbolVisibility(SC);
 				bool bSaveSymbols = GetSaveSymbols(SC);
 				//string NoOBBBatchName = GetFinalBatchName(ApkName, Params, bMakeSeparateApks ? Architecture : "", bMakeSeparateApks ? GPUArchitecture : "", true, false);
@@ -748,10 +944,19 @@ public class AndroidPlatform : Platform
 				}
 
 				SC.ArchiveFiles(Path.GetDirectoryName(ApkName), Path.GetFileName(ApkName));
-				if (!bPackageDataInsideApk && !bAddedOBB)
+				if (!bPackageDataInsideApk)
 				{
-					bAddedOBB = true;
-					SC.ArchiveFiles(Path.GetDirectoryName(ObbName), Path.GetFileName(ObbName));
+					// only add if not already in archive list
+					if (!AddedObbFiles.Contains(ObbName))
+					{
+						AddedObbFiles.Add(ObbName);
+
+						SC.ArchiveFiles(Path.GetDirectoryName(ObbName), Path.GetFileName(ObbName));
+						if (FileExists(PatchName))
+						{
+							SC.ArchiveFiles(Path.GetDirectoryName(PatchName), Path.GetFileName(PatchName));
+						}
+					}
 				}
 
 				// copy optional unprotected APK if exists
@@ -1034,18 +1239,19 @@ public class AndroidPlatform : Platform
                 string CookFlavor = SC.FinalCookPlatform.IndexOf("_") > 0 ? SC.FinalCookPlatform.Substring(SC.FinalCookPlatform.IndexOf("_")) : "";
 				string SOName = GetSONameWithoutArchitecture(Params, SC.StageExecutables[0]);
 				Deploy.SetAndroidPluginData(AppArchitectures, CollectPluginDataPaths(SC));
-                Deploy.PrepForUATPackageOrDeploy(Params.RawProjectPath, Params.ShortProjectName, SC.ProjectRoot, SOName, SC.LocalRoot + "/Engine", Params.Distribution, CookFlavor, true);
+                Deploy.PrepForUATPackageOrDeploy(Params.RawProjectPath, Params.ShortProjectName, SC.ProjectRoot, SOName, SC.LocalRoot + "/Engine", Params.Distribution, CookFlavor, SC.StageTargets[0].Receipt.Configuration, true, false);
             }
 
             // now we can use the apk to get more info
-            string PackageName = GetPackageInfo(ApkName, false);
+            string PackageName = GetPackageInfo(ApkName, SC, false);
 
             // Setup the OBB name and add the storage path (queried from the device) to it
             string DeviceStorageQueryCommand = GetStorageQueryCommand();
             IProcessResult Result = RunAdbCommand(Params, DeviceName, DeviceStorageQueryCommand, null, ERunOptions.AppMustExist);
             String StorageLocation = Result.Output.Trim(); // "/mnt/sdcard";
-            string DeviceObbName = StorageLocation + "/" + GetDeviceObbName(ApkName);
-            string RemoteDir = StorageLocation + "/UE4Game/" + Params.ShortProjectName;
+            string DeviceObbName = StorageLocation + "/" + GetDeviceObbName(ApkName, SC);
+			string DevicePatchName = StorageLocation + "/" + GetDevicePatchName(ApkName, SC);
+			string RemoteDir = StorageLocation + "/UE4Game/" + Params.ShortProjectName;
 
             // determine if APK out of date
             string APKLastUpdateTime = new FileInfo(ApkName).LastWriteTime.ToString();
@@ -1420,11 +1626,12 @@ public class AndroidPlatform : Platform
 
                 // delete the .obb file, since it will cause nothing we just deployed to be used
                 RunAdbCommand(Params, DeviceName, "shell rm " + DeviceObbName);
-            }
-            else if (SC.Archive)
+				RunAdbCommand(Params, DeviceName, "shell rm " + DevicePatchName);
+			}
+			else if (SC.Archive)
             {
                 // deploy the obb if there is one
-                string ObbPath = Path.Combine(SC.StageDirectory.FullName, GetFinalObbName(ApkName));
+                string ObbPath = Path.Combine(SC.StageDirectory.FullName, GetFinalObbName(ApkName, SC));
                 if (File.Exists(ObbPath))
                 {
                     // cache some strings
@@ -1433,8 +1640,19 @@ public class AndroidPlatform : Platform
                     string Commandline = string.Format("{0} \"{1}\" \"{2}\"", BaseCommandline, ObbPath, DeviceObbName);
                     RunAdbCommand(Params, DeviceName, Commandline);
                 }
-            }
-            else
+
+				// deploy the patch if there is one
+				string PatchPath = Path.Combine(SC.StageDirectory.FullName, GetFinalPatchName(ApkName, SC));
+				if (File.Exists(PatchPath))
+				{
+					// cache some strings
+					string BaseCommandline = "push";
+
+					string Commandline = string.Format("{0} \"{1}\" \"{2}\"", BaseCommandline, PatchPath, DevicePatchName);
+					RunAdbCommand(Params, DeviceName, Commandline);
+				}
+			}
+			else
             {
                 // cache some strings
                 string BaseCommandline = "push";
@@ -1471,37 +1689,105 @@ public class AndroidPlatform : Platform
 	/** Run an external exe (and capture the output), given the exe path and the commandline. */
 	public static string GetPackageInfo(string ApkName, bool bRetrieveVersionCode)
 	{
+		string ReturnValue = null;
+
 		// we expect there to be one, so use the first one
 		string AaptPath = GetAaptPath();
 
 		PackageInfoMutex.WaitOne();
 
-		var ExeInfo = new ProcessStartInfo(AaptPath, "dump --include-meta-data badging \"" + ApkName + "\"");
-		ExeInfo.UseShellExecute = false;
-		ExeInfo.RedirectStandardOutput = true;
-		using (var GameProcess = Process.Start(ExeInfo))
+		if (File.Exists(ApkName))
 		{
-			PackageLine = null;
-			LaunchableActivityLine = null;
-			MetaAppTypeLine = null;
-			GameProcess.BeginOutputReadLine();
-			GameProcess.OutputDataReceived += ParsePackageName;
-			GameProcess.WaitForExit();
-		}
-
-		PackageInfoMutex.ReleaseMutex();
-
-		string ReturnValue = null;
-		if (PackageLine != null)
-		{
-			// the line should look like: package: name='com.epicgames.qagame' versionCode='1' versionName='1.0'
-			string[] Tokens = PackageLine.Split("'".ToCharArray());
-			int TokenIndex = bRetrieveVersionCode ? 3 : 1;
-			if (Tokens.Length >= TokenIndex + 1)
+			var ExeInfo = new ProcessStartInfo(AaptPath, "dump --include-meta-data badging \"" + ApkName + "\"");
+			ExeInfo.UseShellExecute = false;
+			ExeInfo.RedirectStandardOutput = true;
+			using (var GameProcess = Process.Start(ExeInfo))
 			{
-				ReturnValue = Tokens[TokenIndex];
+				PackageLine = null;
+				LaunchableActivityLine = null;
+				MetaAppTypeLine = null;
+				GameProcess.BeginOutputReadLine();
+				GameProcess.OutputDataReceived += ParsePackageName;
+				GameProcess.WaitForExit();
 			}
+
+			PackageInfoMutex.ReleaseMutex();
+			
+			if (PackageLine != null)
+			{
+				// the line should look like: package: name='com.epicgames.qagame' versionCode='1' versionName='1.0'
+				string[] Tokens = PackageLine.Split("'".ToCharArray());
+				int TokenIndex = bRetrieveVersionCode ? 3 : 1;
+				if (Tokens.Length >= TokenIndex + 1)
+				{
+					ReturnValue = Tokens[TokenIndex];
+				}
+			}
+			LogInformation("GetPackageInfo ReturnValue: {0}", ReturnValue);
 		}
+
+		return ReturnValue;
+	}
+
+	public static string GetPackageInfo(string ApkName, DeploymentContext SC, bool bRetrieveVersionCode)
+	{
+		string ReturnValue = GetPackageInfo(ApkName, bRetrieveVersionCode);
+
+		if (ReturnValue == null || ReturnValue.Length == 0)
+		{
+			/** If APK does not exist or we cant find package info in apk use the packageInfo file */
+			ReturnValue = GetPackageInfoFromInfoFile(ApkName, SC, bRetrieveVersionCode);
+		}
+
+		return ReturnValue;
+	}
+
+	/** Lookup package info in packageInfo.txt file in same directory as the APK would have been */
+	private static string GetPackageInfoFromInfoFile(string ApkName, DeploymentContext SC, bool bRetrieveVersionCode)
+	{
+		string ReturnValue = null;
+		String PackageInfoPath = Path.Combine(Path.GetDirectoryName(ApkName), "packageInfo.txt");
+		Boolean fileExists = File.Exists(PackageInfoPath);
+		if (fileExists)
+		{
+			string[] Lines = File.ReadAllLines(PackageInfoPath);
+			int LineIndex = bRetrieveVersionCode ? 1 : 0;
+			LogInformation("packageInfo line index: {0}", LineIndex);
+			if (Lines.Length >= 2)
+			{
+				ReturnValue = Lines[LineIndex];
+			}
+			// parse extra info that the aapt-based method got
+			MetaAppTypeLine = Lines[3];
+		}
+
+		if (bRetrieveVersionCode)
+		{
+			int StoreVersion = 1;
+			int.TryParse(ReturnValue, out StoreVersion);
+
+			int StoreVersionOffset = 0;
+			ConfigHierarchy Ini = ConfigCache.ReadHierarchy(ConfigHierarchyType.Engine, DirectoryReference.FromFile(SC.RawProjectPath), SC.StageTargetPlatform.PlatformType);
+			if (ApkName.Contains("-armv7-"))
+			{
+				Ini.GetInt32("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "StoreVersionOffsetArmV7", out StoreVersionOffset);
+			}
+			else if (ApkName.Contains("-arm64-"))
+			{
+				Ini.GetInt32("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "StoreVersionOffsetArm64", out StoreVersionOffset);
+			}
+			else if (ApkName.Contains("-x64-"))
+			{
+				Ini.GetInt32("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "StoreVersionOffsetX8664", out StoreVersionOffset);
+			}
+			StoreVersion += StoreVersionOffset;
+			ReturnValue = StoreVersion.ToString("0");
+		}
+
+		LogInformation("packageInfo.txt file exists: {0}", fileExists);
+		LogInformation("packageInfo return MetaAppTypeLine: {0}", MetaAppTypeLine);
+		LogInformation("packageInfo return value: {0}", ReturnValue);
+
 		return ReturnValue;
 	}
 

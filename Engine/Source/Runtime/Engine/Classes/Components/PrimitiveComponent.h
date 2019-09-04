@@ -19,6 +19,7 @@
 #include "PhysicsEngine/BodyInstance.h"
 #include "Engine/TextureStreamingTypes.h"
 #include "AI/Navigation/NavRelevantInterface.h"
+#include "VT/RuntimeVirtualTextureEnum.h"
 #include "PrimitiveComponent.generated.h"
 
 class AController;
@@ -142,26 +143,26 @@ struct FRendererStencilMaskEvaluation
  * Delegate for notification of blocking collision against a specific component.  
  * NormalImpulse will be filled in for physics-simulating bodies, but will be zero for swept-component blocking collisions. 
  */
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_FiveParams( FComponentHitSignature, UPrimitiveComponent*, HitComponent, AActor*, OtherActor, UPrimitiveComponent*, OtherComp, FVector, NormalImpulse, const FHitResult&, Hit );
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_FiveParams( FComponentHitSignature, UPrimitiveComponent, OnComponentHit, UPrimitiveComponent*, HitComponent, AActor*, OtherActor, UPrimitiveComponent*, OtherComp, FVector, NormalImpulse, const FHitResult&, Hit );
 /** Delegate for notification of start of overlap with a specific component */
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_SixParams( FComponentBeginOverlapSignature, UPrimitiveComponent*, OverlappedComponent, AActor*, OtherActor, UPrimitiveComponent*, OtherComp, int32, OtherBodyIndex, bool, bFromSweep, const FHitResult &, SweepResult);
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_SixParams( FComponentBeginOverlapSignature, UPrimitiveComponent, OnComponentBeginOverlap, UPrimitiveComponent*, OverlappedComponent, AActor*, OtherActor, UPrimitiveComponent*, OtherComp, int32, OtherBodyIndex, bool, bFromSweep, const FHitResult &, SweepResult);
 /** Delegate for notification of end of overlap with a specific component */
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams( FComponentEndOverlapSignature, UPrimitiveComponent*, OverlappedComponent, AActor*, OtherActor, UPrimitiveComponent*, OtherComp, int32, OtherBodyIndex);
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_FourParams( FComponentEndOverlapSignature, UPrimitiveComponent, OnComponentEndOverlap, UPrimitiveComponent*, OverlappedComponent, AActor*, OtherActor, UPrimitiveComponent*, OtherComp, int32, OtherBodyIndex);
 /** Delegate for notification when a wake event is fired by physics*/
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FComponentWakeSignature, UPrimitiveComponent*, WakingComponent, FName, BoneName);
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_TwoParams(FComponentWakeSignature, UPrimitiveComponent, OnComponentWake, UPrimitiveComponent*, WakingComponent, FName, BoneName);
 /** Delegate for notification when a sleep event is fired by physics*/
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FComponentSleepSignature, UPrimitiveComponent*, SleepingComponent, FName, BoneName);
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_TwoParams(FComponentSleepSignature, UPrimitiveComponent, OnComponentSleep, UPrimitiveComponent*, SleepingComponent, FName, BoneName);
 /** Delegate for notification when collision settings change. */
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FComponentCollisionSettingsChangedSignature, UPrimitiveComponent*, ChangedComponent);
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_OneParam(FComponentCollisionSettingsChangedSignature, UPrimitiveComponent, OnComponentCollisionSettingsChangedEvent, UPrimitiveComponent*, ChangedComponent);
 
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam( FComponentBeginCursorOverSignature, UPrimitiveComponent*, TouchedComponent );
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam( FComponentEndCursorOverSignature, UPrimitiveComponent*, TouchedComponent );
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams( FComponentOnClickedSignature, UPrimitiveComponent*, TouchedComponent , FKey, ButtonPressed);
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams( FComponentOnReleasedSignature, UPrimitiveComponent*, TouchedComponent, FKey, ButtonReleased);
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams( FComponentOnInputTouchBeginSignature, ETouchIndex::Type, FingerIndex, UPrimitiveComponent*, TouchedComponent );
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams( FComponentOnInputTouchEndSignature, ETouchIndex::Type, FingerIndex, UPrimitiveComponent*, TouchedComponent );
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams( FComponentBeginTouchOverSignature, ETouchIndex::Type, FingerIndex, UPrimitiveComponent*, TouchedComponent );
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams( FComponentEndTouchOverSignature, ETouchIndex::Type, FingerIndex, UPrimitiveComponent*, TouchedComponent );
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_OneParam( FComponentBeginCursorOverSignature, UPrimitiveComponent, OnBeginCursorOver, UPrimitiveComponent*, TouchedComponent );
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_OneParam( FComponentEndCursorOverSignature, UPrimitiveComponent, OnEndCursorOver, UPrimitiveComponent*, TouchedComponent );
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_TwoParams( FComponentOnClickedSignature, UPrimitiveComponent, OnClicked, UPrimitiveComponent*, TouchedComponent , FKey, ButtonPressed);
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_TwoParams( FComponentOnReleasedSignature, UPrimitiveComponent, OnReleased, UPrimitiveComponent*, TouchedComponent, FKey, ButtonReleased);
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_TwoParams( FComponentOnInputTouchBeginSignature, UPrimitiveComponent, OnInputTouchBegin, ETouchIndex::Type, FingerIndex, UPrimitiveComponent*, TouchedComponent );
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_TwoParams( FComponentOnInputTouchEndSignature, UPrimitiveComponent, OnInputTouchEnd, ETouchIndex::Type, FingerIndex, UPrimitiveComponent*, TouchedComponent );
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_TwoParams( FComponentBeginTouchOverSignature, UPrimitiveComponent, OnInputTouchEnter, ETouchIndex::Type, FingerIndex, UPrimitiveComponent*, TouchedComponent );
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_TwoParams( FComponentEndTouchOverSignature, UPrimitiveComponent, OnInputTouchLeave, ETouchIndex::Type, FingerIndex, UPrimitiveComponent*, TouchedComponent );
 
 /**
  * PrimitiveComponents are SceneComponents that contain or generate some sort of geometry, generally to be rendered or used as collision data.
@@ -216,18 +217,18 @@ public:
 	ELightmapType LightmapType;
 
 #if WITH_EDITORONLY_DATA
-	/** If true, and if World setting has bEnableHierarchicalLOD equal to true, then this component will be included when generating a Proxy mesh for the parent Actor */
-	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = HLOD, meta = (DisplayName = "Include Component for HLOD Mesh generation"))
-	uint8 bEnableAutoLODGeneration : 1;
-
-	/** Use the Maximum LOD Mesh (imposter) instead of including Mesh data from this component in the Proxy Generation process */
-	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = HLOD)
-	uint8 bUseMaxLODAsImposter: 1;
-
 	/** Which specific HLOD levels this component should be excluded from */
 	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadWrite, Category = HLOD)
 	TArray<int32> ExcludeForSpecificHLODLevels;
+
+	/** If true, and if World setting has bEnableHierarchicalLOD equal to true, then this component will be included when generating a Proxy mesh for the parent Actor */
+	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = HLOD, meta = (DisplayName = "Include Component for HLOD Mesh generation"))
+	uint8 bEnableAutoLODGeneration : 1;
 #endif 
+
+	/** Use the Maximum LOD Mesh (imposter) instead of including Mesh data from this component in the Proxy Generation process */
+	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = HLOD)
+	uint8 bUseMaxLODAsImposter : 1;
 
 	/**
 	 * When enabled this object will not be culled by distance. This is ignored if a child of a HLOD.
@@ -235,9 +236,9 @@ public:
 	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category=LOD)
 	uint8 bNeverDistanceCull:1;
 
-	/** Whether this primitive is referenced by a FLevelTextureManager  */
+	/** Whether this primitive is referenced by a FLevelRenderAssetManager  */
 	mutable uint8 bAttachedToStreamingManagerAsStatic : 1;
-	/** Whether this primitive is referenced by a FDynamicTextureInstanceManager */
+	/** Whether this primitive is referenced by a FDynamicRenderAssetInstanceManager */
 	mutable uint8 bAttachedToStreamingManagerAsDynamic : 1;
 	/** Whether this primitive is handled as dynamic, although it could have no references */
 	mutable uint8 bHandledByStreamingManagerAsDynamic : 1;
@@ -535,9 +536,17 @@ public:
 	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category=Rendering,  meta=(UIMin = "0", UIMax = "255", editcondition = "bRenderCustomDepth", DisplayName = "CustomDepth Stencil Value"))
 	int32 CustomDepthStencilValue;
 
+private:
+	/** Custom data that can be read by a material through a material parameter expression. Set data using SetCustomPrimitiveData* functions */
+	UPROPERTY()
+	FCustomPrimitiveData CustomPrimitiveData;
+
+public:
+
 	/**
 	 * Translucent objects with a lower sort priority draw behind objects with a higher priority.
 	 * Translucent objects with the same priority are rendered from back-to-front based on their bounds origin.
+	 * This setting is also used to sort objects being drawn into a runtime virtual texture.
 	 *
 	 * Ignored if the object is not translucent.  The default priority is zero.
 	 * Warning: This should never be set to a non-default value unless you know what you are doing, as it will prevent the renderer from sorting correctly.  
@@ -549,6 +558,41 @@ public:
 	/** Used for precomputed visibility */
 	UPROPERTY()
 	int32 VisibilityId;
+
+	/** 
+	 * Array of runtime virtual textures into which we render the mesh for this actor. 
+	 * The material also needs to be set up to output to a virtual texture. 
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = VirtualTexture, meta = (DisplayName = "Render to Virtual Textures"))
+	TArray<URuntimeVirtualTexture*> RuntimeVirtualTextures;
+
+	/** Bias to the LOD selected for rendering to runtime virtual textures. */
+	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category = VirtualTexture, meta = (DisplayName = "Virtual Texture LOD Bias", UIMin = "0", UIMax = "7"))
+	int32 VirtualTextureLodBias = 0;
+
+	/**
+	 * Number of lower mips in the runtime virtual texture to skip for rendering this primitive.
+	 * Larger values reduce the effective draw distance in the runtime virtual texture.
+	 * This culling method doesn't take into account primitive size or virtual texture size.
+	 */
+	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category = VirtualTexture, meta = (DisplayName = "Virtual Texture Skip Mips", UIMin = "0", UIMax = "15"))
+	int32 VirtualTextureCullMips = 0;
+
+	/**
+	 * Set the minimum pixel coverage before culling from the runtime virtual texture.
+	 * Larger values reduce the effective draw distance in the runtime virtual texture.
+	 */
+	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category = VirtualTexture, meta = (UIMin = "0", UIMax = "7"))
+	int32 VirtualTextureMinCoverage = 0;
+
+	/** Render to the main pass based on the virtual texture settings. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = VirtualTexture, meta = (DisplayName = "Virtual Texture Pass Type"))
+	ERuntimeVirtualTextureMainPassType VirtualTextureRenderPassType = ERuntimeVirtualTextureMainPassType::Exclusive;
+
+	/** Get the array of runtime virtual textures into which we render the mesh for this actor. */
+	virtual TArray<URuntimeVirtualTexture*> const& GetRuntimeVirtualTextures() const { return RuntimeVirtualTextures; }
+	/** Get the runtime virtual texture pass settings. */
+	virtual ERuntimeVirtualTextureMainPassType GetVirtualTextureRenderPassType() const { return VirtualTextureRenderPassType; }
 
 	/** Used by the renderer, to identify a component across re-registers. */
 	FPrimitiveComponentId ComponentId;
@@ -607,20 +651,26 @@ public:
 	float BoundsScale;
 
 	/** Last time the component was submitted for rendering (called FScene::AddPrimitive). */
-	UPROPERTY(transient)
 	float LastSubmitTime;
 
+private:
 	/**
 	 * The value of WorldSettings->TimeSeconds for the frame when this component was last rendered.  This is written
 	 * from the render thread, which is up to a frame behind the game thread, so you should allow this time to
 	 * be at least a frame behind the game thread's world time before you consider the actor non-visible.
 	 */
-	UPROPERTY(transient)
-	float LastRenderTime;
+	mutable float LastRenderTime;
 
 	/** Same as LastRenderTimeOnScreen but only updated if the component is on screen. Used by the texture streamer. */
-	UPROPERTY(transient)
-	float LastRenderTimeOnScreen;
+	mutable float LastRenderTimeOnScreen;
+
+	friend class FPrimitiveSceneInfo;
+
+public:
+
+	void SetLastRenderTime(float InLastRenderTime);
+	float GetLastRenderTime() const { return LastRenderTime; }
+	float GetLastRenderTimeOnScreen() const { return LastRenderTimeOnScreen; }
 
 	/**
 	 * Set of actors to ignore during component sweeps in MoveComponent().
@@ -704,6 +754,28 @@ public:
 	/** Get the mask filter checked when others move into us. */
 	FMaskFilter GetMaskFilterOnBodyInstance(FMaskFilter InMaskFilter) const { return BodyInstance.GetMaskFilter(); }
 
+	/** Set custom primitive data at index DataIndex. */
+	UFUNCTION(BlueprintCallable, Category="Rendering|Material")
+	void SetCustomPrimitiveDataFloat(int32 DataIndex, float Value);
+
+	/** Set custom primitive data, two floats at once, from index DataIndex to index DataIndex + 2. */
+	UFUNCTION(BlueprintCallable, Category="Rendering|Material")
+	void SetCustomPrimitiveDataVector2(int32 DataIndex, FVector2D Value);
+
+	/** Set custom primitive data, three floats at once, from index DataIndex to index DataIndex + 3. */
+	UFUNCTION(BlueprintCallable, Category="Rendering|Material")
+	void SetCustomPrimitiveDataVector3(int32 DataIndex, FVector Value);
+
+	/** Set custom primitive data, four floats at once, from index DataIndex to index DataIndex + 4. */
+	UFUNCTION(BlueprintCallable, Category="Rendering|Material")
+	void SetCustomPrimitiveDataVector4(int32 DataIndex, FVector4 Value);
+
+	/** 
+	 * Get the custom primitive data for this primitive component.
+	 * @return The payload of custom data that will be set on the primitive and accessible in the material through a material expression.
+	 */
+	const FCustomPrimitiveData& GetCustomPrimitiveData() const { return CustomPrimitiveData; }
+
 #if WITH_EDITOR
 	/** Override delegate used for checking the selection state of a component */
 	DECLARE_DELEGATE_RetVal_OneParam( bool, FSelectionOverride, const UPrimitiveComponent* );
@@ -711,15 +783,24 @@ public:
 #endif
 
 protected:
+
+	/** Insert an array of floats into the CustomPrimitiveData, starting at the given index */
+	void SetCustomPrimitiveDataInternal(int32 DataIndex, const TArray<float>& Values);
+
 	/** Set of components that this component is currently overlapping. */
 	TArray<FOverlapInfo> OverlappingComponents;
 
 private:
 	/** Convert a set of overlaps from a sweep to a subset that includes only those at the end location (filling in OverlapsAtEndLocation). */
-	const TArray<FOverlapInfo>* ConvertSweptOverlapsToCurrentOverlaps(TArray<FOverlapInfo>& OverlapsAtEndLocation, const TArray<FOverlapInfo>& SweptOverlaps, int32 SweptOverlapsIndex, const FVector& EndLocation, const FQuat& EndRotationQuat);
+	template<typename AllocatorType>
+	bool ConvertSweptOverlapsToCurrentOverlaps(TArray<FOverlapInfo, AllocatorType>& OutOverlapsAtEndLocation, const TOverlapArrayView& SweptOverlaps, int32 SweptOverlapsIndex, const FVector& EndLocation, const FQuat& EndRotationQuat);
 
 	/** Convert a set of overlaps from a symmetric change in rotation to a subset that includes only those at the end location (filling in OverlapsAtEndLocation). */
-	const TArray<FOverlapInfo>* ConvertRotationOverlapsToCurrentOverlaps(TArray<FOverlapInfo>& OverlapsAtEndLocation, const TArray<FOverlapInfo>& CurrentOverlaps);
+	template<typename AllocatorType>
+	bool ConvertRotationOverlapsToCurrentOverlaps(TArray<FOverlapInfo, AllocatorType>& OutOverlapsAtEndLocation, const TOverlapArrayView& CurrentOverlaps);
+
+	template<typename AllocatorType>
+	bool GetOverlapsWithActor_Template(const AActor* Actor, TArray<FOverlapInfo, AllocatorType>& OutOverlaps) const;
 
 	// FScopedMovementUpdate needs access to the above two functions.
 	friend FScopedMovementUpdate;
@@ -798,7 +879,15 @@ public:
 	 *									Generally this should only be used if this component is the RootComponent of the owning actor and overlaps with other descendant components have been verified.
 	 * @return							True if we can skip calling this in the future (i.e. no useful work is being done.)
 	 */
-	virtual bool UpdateOverlapsImpl(TArray<FOverlapInfo> const* NewPendingOverlaps=nullptr, bool bDoNotifies=true, const TArray<FOverlapInfo>* OverlapsAtEndLocation=nullptr) override;
+	virtual bool UpdateOverlapsImpl(const TOverlapArrayView* NewPendingOverlaps=nullptr, bool bDoNotifies=true, const TOverlapArrayView* OverlapsAtEndLocation=nullptr) override;
+
+#if WITH_EDITOR
+	/**
+	 * Whether or not the bounds of this component should be considered when focusing the editor camera to an actor with this component in it.
+	 * Useful for debug components which need a bounds for rendering but don't contribute to the visible part of the mesh in a meaningful way
+	 */
+	virtual bool IgnoreBoundsForEditorFocus() const { return false; }
+#endif
 
 	/** Update current physics volume for this component, if bShouldUpdatePhysicsVolume is true. Overridden to use the overlaps to find the physics volume. */
 	virtual void UpdatePhysicsVolume( bool bTriggerNotifiers ) override;
@@ -826,7 +915,7 @@ public:
 	// Internal physics engine data.
 	
 	/** Physics scene information for this component, holds a single rigid body with multiple shapes. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=Collision, meta=(ShowOnlyInnerProperties))
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=Collision, meta=(ShowOnlyInnerProperties, SkipUCSModifiedProperties))
 	FBodyInstance BodyInstance;
 
 	/** 
@@ -1520,17 +1609,17 @@ public:
 	virtual ELightMapInteractionType GetStaticLightingType() const	{ return LMIT_None;	}
 
 	/**
-	 * Enumerates the streaming textures used by the primitive.
+	 * Enumerates the streaming textures/meshes used by the primitive.
 	 * @param LevelContext - Level scope context used to process texture streaming build data.
-	 * @param OutStreamingTextures - Upon return, contains a list of the streaming textures used by the primitive.
+	 * @param OutStreamingRenderAssets - Upon return, contains a list of the streaming textures/meshes used by the primitive.
 	 */
-	virtual void GetStreamingTextureInfo(FStreamingTextureLevelContext& LevelContext, TArray<FStreamingTexturePrimitiveInfo>& OutStreamingTextures) const;
+	virtual void GetStreamingRenderAssetInfo(FStreamingTextureLevelContext& LevelContext, TArray<FStreamingRenderAssetPrimitiveInfo>& OutStreamingRenderAssets) const;
 
 	/**
-	 * Call GetStreamingTextureInfo and remove the elements with a NULL texture
-	 * @param OutStreamingTextures - Upon return, contains a list of the non-null streaming textures used by the primitive.
+	 * Call GetStreamingRenderAssetInfo and remove the elements with a NULL texture
+	 * @param OutStreamingRenderAssets - Upon return, contains a list of the non-null streaming textures or meshes used by the primitive.
 	 */
-	void GetStreamingTextureInfoWithNULLRemoval(FStreamingTextureLevelContext& LevelContext, TArray<FStreamingTexturePrimitiveInfo>& OutStreamingTextures) const;
+	void GetStreamingRenderAssetInfoWithNULLRemoval(FStreamingTextureLevelContext& LevelContext, TArray<FStreamingRenderAssetPrimitiveInfo>& OutStreamingRenderAssets) const;
 
 	/**
 	 *	Update the streaming data of this component.
@@ -1564,22 +1653,6 @@ public:
 	 * @param OutTextures	[out] The list of used textures.
 	 */
 	virtual void GetUsedTextures(TArray<UTexture*>& OutTextures, EMaterialQualityLevel::Type QualityLevel);
-
-	/** Tick function for physics ticking **/
-	UPROPERTY()
-	struct FPrimitiveComponentPostPhysicsTickFunction PostPhysicsComponentTick;
-
-	/** Controls if we get a post physics tick or not. If set during ticking, will take effect next frame **/
-	UE_DEPRECATED(4.11, "Please register your own tick function or use the primary tick function")
-	void SetPostPhysicsComponentTickEnabled(bool bEnable);
-
-	/** Returns whether we have the post physics tick enabled **/
-	UE_DEPRECATED(4.11, "Please register your own tick function or use the primary tick function")
-	bool IsPostPhysicsComponentTickEnabled() const;
-
-	/** Tick function called after physics (sync scene) has finished simulation */
-	UE_DEPRECATED(4.11, "Please register your own tick function or use the primary tick function")
-	virtual void PostPhysicsTick(FPrimitiveComponentPostPhysicsTickFunction &ThisTickFunction) {}
 
 	/** Return the BodySetup to use for this PrimitiveComponent (single body case) */
 	virtual class UBodySetup* GetBodySetup() { return NULL; }
@@ -1774,7 +1847,6 @@ public:
 	virtual void OnCreatePhysicsState() override;
 	virtual void OnDestroyPhysicsState() override;
 	virtual void OnActorEnableCollisionChanged() override;
-	virtual void RegisterComponentTickFunctions(bool bRegister) override;
 	virtual void InvalidateLightingCacheDetailed(bool bInvalidateBuildEnqueuedLighting, bool bTranslationOnly) override;
 	virtual bool IsEditorOnly() const override;
 	virtual bool ShouldCreatePhysicsState() const override;

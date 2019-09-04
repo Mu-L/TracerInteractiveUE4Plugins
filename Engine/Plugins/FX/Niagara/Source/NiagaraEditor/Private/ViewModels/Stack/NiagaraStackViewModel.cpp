@@ -10,6 +10,8 @@
 #include "NiagaraSystemEditorData.h"
 #include "NiagaraEmitterEditorData.h"
 #include "NiagaraStackEditorData.h"
+#include "NiagaraSystem.h"
+#include "NiagaraEmitterHandle.h"
 #include "NiagaraEmitter.h"
 #include "ViewModels/Stack/NiagaraStackItemGroup.h"
 #include "ViewModels/Stack/NiagaraStackItem.h"
@@ -178,6 +180,22 @@ bool UNiagaraStackViewModel::HasDismissedStackIssues()
 {
 	return GetSystemViewModel()->GetEditorData().GetStackEditorData().GetDismissedStackIssueIds().Num() > 0
 		|| GetEmitterHandleViewModel()->GetEmitterViewModel()->GetEditorData().GetStackEditorData().GetDismissedStackIssueIds().Num() > 0;
+}
+
+bool UNiagaraStackViewModel::HasParentEmitter() const
+{
+	return EmitterHandleViewModel->GetEmitterViewModel()->GetParentEmitter() != nullptr;
+}
+
+void UNiagaraStackViewModel::RemoveEmitterSource()
+{
+	{
+		FScopedTransaction ScopedTransaction(LOCTEXT("RemoveParentEmitterTransaction", "Remove Parent Emitter"));
+		UNiagaraEmitter* Emitter = EmitterHandleViewModel->GetEmitterViewModel()->GetEmitter();
+		Emitter->Modify();
+		Emitter->RemoveParent();
+	}
+	RootEntry->RefreshChildren();
 }
 
 void UNiagaraStackViewModel::CollapseToHeadersRecursive(TArray<UNiagaraStackEntry*> Entries)

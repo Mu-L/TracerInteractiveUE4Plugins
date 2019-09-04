@@ -66,7 +66,7 @@ public:
 		}
 	}
 
-	virtual bool GenerateStreamingInstallManifest(const TMultiMap<FString, int32>& ChunkMap, const TSet<int32>& ChunkIDsInUse) const override
+	virtual bool GenerateStreamingInstallManifest(const TMultiMap<FString, int32>& PakchunkMap, const TSet<int32>& PakchunkIndicesInUse) const override
 	{
 		return true;
 	}
@@ -156,13 +156,12 @@ return TSuper::SupportsFeature(Feature);
 		return StaticMeshLODSettings;
 	}
 
-	virtual void GetTextureFormats( const UTexture* Texture, TArray<FName>& OutFormats ) const override
+	virtual void GetTextureFormats( const UTexture* Texture, TArray< TArray<FName> >& OutFormats) const override
 	{
 		if (!IS_DEDICATED_SERVER)
 		{
 			// just use the standard texture format name for this texture (with DX11 support)
-			FName TextureFormatName = GetDefaultTextureFormatName(this, Texture, EngineSettings, true);
-			OutFormats.Add(TextureFormatName);
+			GetDefaultTextureFormatNamePerLayer(OutFormats.AddDefaulted_GetRef(), this, Texture, EngineSettings, true);
 		}
 	}
 
@@ -309,8 +308,14 @@ return TSuper::SupportsFeature(Feature);
 
 	virtual FName GetWaveFormat( const class USoundWave* Wave ) const override
 	{
-		static FName NAME_OGG(TEXT("OGG"));
-		static FName NAME_OPUS(TEXT("OPUS"));
+		static const FName NAME_ADPCM(TEXT("ADPCM"));
+		static const FName NAME_OGG(TEXT("OGG"));
+		static const FName NAME_OPUS(TEXT("OPUS"));
+
+		if (Wave->IsSeekableStreaming())
+		{
+			return NAME_ADPCM;
+		}
 
 		if (Wave->IsStreaming())
 		{
@@ -322,8 +327,11 @@ return TSuper::SupportsFeature(Feature);
 
 	virtual void GetAllWaveFormats(TArray<FName>& OutFormats) const override
 	{
-		static FName NAME_OGG(TEXT("OGG"));
-		static FName NAME_OPUS(TEXT("OPUS"));
+		static const FName NAME_ADPCM(TEXT("ADPCM"));
+		static const FName NAME_OGG(TEXT("OGG"));
+		static const FName NAME_OPUS(TEXT("OPUS"));
+
+		OutFormats.Add(NAME_ADPCM);
 		OutFormats.Add(NAME_OGG);
 		OutFormats.Add(NAME_OPUS);
 	}

@@ -30,16 +30,22 @@ void USoundNodeLooping::ParseNodes( FAudioDevice* AudioDevice, const UPTRINT Nod
 	}
 
 #if !(NO_LOGGING || UE_BUILD_SHIPPING || UE_BUILD_TEST)
-	if (bLoopIndefinitely && !ActiveSound.bWarnedAboutOrphanedLooping && ActiveSound.GetAudioComponentID() == 0)
+	if (bLoopIndefinitely && !ActiveSound.bWarnedAboutOrphanedLooping && ActiveSound.GetAudioComponentID() == 0 && ActiveSound.FadeOut == FActiveSound::EFadeOut::None)
 	{
 		UE_LOG(LogAudio, Warning, TEXT("Detected orphaned looping sound '%s'."), *ActiveSound.GetSound()->GetName());
 		ActiveSound.bWarnedAboutOrphanedLooping = true;
 	}
 #endif
 
+	// Do not continue parsing if virtualized and this is functioning as a one-shot
+	if (!bLoopIndefinitely && ActiveSound.bHasVirtualized)
+	{
+		return;
+	}
+
 	FSoundParseParameters UpdatedParams = ParseParams;
 	UpdatedParams.NotifyBufferFinishedHooks.AddNotify(this, NodeWaveInstanceHash);
-
+	UpdatedParams.bEnableRetrigger = true;
 	Super::ParseNodes( AudioDevice, NodeWaveInstanceHash, ActiveSound, UpdatedParams, WaveInstances );
 
 	if (ActiveSound.bFinished)

@@ -104,6 +104,13 @@ public:
 	static FString EnterpriseFeaturePackDir();
 
 	/**
+	 * Returns the directory where platform extensions reside
+	 *
+	 * @return root config directory
+	 */
+	static FString PlatformExtensionsDir();
+
+	/**
 	 * Returns the root directory of the engine directory tree
 	 *
 	 * @return Root directory.
@@ -282,6 +289,9 @@ public:
 	/** Returns the directory that contains subfolders for developer-specific content */
 	static FString GameDevelopersDir();
 
+	/** Returns The folder name for the developer-specific directory for the current user */
+	static FString GameUserDeveloperFolderName();
+
 	/** Returns The directory that contains developer-specific content for the current user */
 	static FString GameUserDeveloperDir();
 
@@ -389,6 +399,12 @@ public:
 
 	// Returns the path in front of the filename
 	static FString GetPath(FString&& InPath);
+
+	// Returns the leaf in the path
+	static FString GetPathLeaf(const FString& InPath);
+
+	// Returns the leaf in the path
+	static FString GetPathLeaf(FString&& InPath);
 
 	/** Changes the extension of the given filename (does nothing if the file has no extension) */
 	static FString ChangeExtension(const FString& InPath, const FString& InNewExtension);

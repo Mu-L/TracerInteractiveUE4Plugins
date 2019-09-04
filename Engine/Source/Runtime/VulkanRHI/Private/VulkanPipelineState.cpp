@@ -234,14 +234,15 @@ FVulkanGraphicsPipelineDescriptorState::FVulkanGraphicsPipelineDescriptorState(F
 
 		PackedUniformBuffers[ShaderStage::Geometry].Init(GeometryShader->GetCodeHeader(), PackedUniformBuffersMask[ShaderStage::Geometry]);
 	}
+#endif
 
+#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
 	uint64 HullShaderKey = InGfxPipeline->GetShaderKey(SF_Hull);
 	if (HullShaderKey)
 	{
 		const FVulkanHullShader* HullShader = ShaderFactory.LookupShader<FVulkanHullShader>(HullShaderKey);
 		PackedUniformBuffers[ShaderStage::Hull].Init(HullShader->GetCodeHeader(), PackedUniformBuffersMask[ShaderStage::Hull]);
 	}
-
 	uint64 DomainShaderKey = InGfxPipeline->GetShaderKey(SF_Domain);
 	if (DomainShaderKey)
 	{
@@ -337,7 +338,7 @@ bool FVulkanGraphicsPipelineDescriptorState::InternalUpdateDescriptorSets(FVulka
 }
 
 
-void FVulkanCommandListContext::RHISetGraphicsPipelineState(FGraphicsPipelineStateRHIParamRef GraphicsState)
+void FVulkanCommandListContext::RHISetGraphicsPipelineState(FRHIGraphicsPipelineState* GraphicsState)
 {
 	FVulkanRHIGraphicsPipelineState* Pipeline = ResourceCast(GraphicsState);
 	
@@ -358,7 +359,7 @@ void FVulkanCommandListContext::RHISetGraphicsPipelineState(FGraphicsPipelineSta
 #if VULKAN_ENABLE_AGGRESSIVE_STATS
 		SCOPE_CYCLE_COUNTER(STAT_VulkanPipelineBind);
 #endif
-		PendingGfxState->Bind(CmdBuffer->GetHandle(), TransitionAndLayoutManager.CurrentFramebuffer);
+		PendingGfxState->Bind(CmdBuffer->GetHandle());
 		CmdBuffer->bHasPipeline = true;
 		PendingGfxState->MarkNeedsDynamicStates();
 		PendingGfxState->StencilRef = 0;

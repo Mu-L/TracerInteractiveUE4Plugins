@@ -6,6 +6,9 @@
 #include "UObject/UObjectBase.h"
 #include "UObject/GCObject.h"
 
+class ITableRow;
+struct FSparseItemInfo;
+
 /**
  * Lists/Trees only work with shared pointer types, and UObjbectBase*.
  * Type traits to ensure that the user does not accidentally make a List/Tree of value types.
@@ -95,7 +98,15 @@ template <typename T> struct TListTypeTraits< TSharedPtr<T, ESPMode::NotThreadSa
 public:
 	typedef TSharedPtr<T> NullableType;
 
-	static void AddReferencedObjects( FReferenceCollector&, TArray< TSharedPtr<T> >&, TSet< TSharedPtr<T> >&  )
+	using MapKeyFuncs       = TDefaultMapHashableKeyFuncs<TSharedPtr<T, ESPMode::NotThreadSafe>, TSharedRef<ITableRow>, false>;
+	using MapKeyFuncsSparse = TDefaultMapHashableKeyFuncs<TSharedPtr<T, ESPMode::NotThreadSafe>, FSparseItemInfo, false>;
+	using SetKeyFuncs       = DefaultKeyFuncs<TSharedPtr<T, ESPMode::NotThreadSafe>>;
+
+	template<typename U>
+	static void AddReferencedObjects( FReferenceCollector&, 
+		TArray< TSharedPtr<T> >&, 
+		TSet< TSharedPtr<T> >&, 
+		TMap< const U*, TSharedPtr<T> >& )
 	{
 	}
 
@@ -119,6 +130,11 @@ public:
 		return InPtr;
 	}
 
+	static FString DebugDump( TSharedPtr<T> InPtr )
+	{
+		return InPtr.IsValid() ? FString::Printf(TEXT("0x%08x"), InPtr.Get()) : FString(TEXT("nullptr"));
+	}
+
 	class SerializerType{};
 };
 
@@ -128,7 +144,15 @@ template <typename T> struct TListTypeTraits< TSharedPtr<T, ESPMode::ThreadSafe>
 public:
 	typedef TSharedPtr<T, ESPMode::ThreadSafe> NullableType;
 
-	static void AddReferencedObjects( FReferenceCollector&, TArray< TSharedPtr<T, ESPMode::ThreadSafe> >&, TSet< TSharedPtr<T, ESPMode::ThreadSafe> >&  )
+	using MapKeyFuncs       = TDefaultMapHashableKeyFuncs<TSharedPtr<T, ESPMode::ThreadSafe>, TSharedRef<ITableRow>, false>;
+	using MapKeyFuncsSparse = TDefaultMapHashableKeyFuncs<TSharedPtr<T, ESPMode::ThreadSafe>, FSparseItemInfo, false>;
+	using SetKeyFuncs       = DefaultKeyFuncs<TSharedPtr<T, ESPMode::ThreadSafe>>;
+
+	template<typename U>
+	static void AddReferencedObjects( FReferenceCollector&, 
+		TArray< TSharedPtr<T, ESPMode::ThreadSafe> >&, 
+		TSet< TSharedPtr<T, ESPMode::ThreadSafe> >&, 
+		TMap< const U*, TSharedPtr<T, ESPMode::ThreadSafe> >& WidgetToItemMap)
 	{
 	}
 
@@ -152,6 +176,11 @@ public:
 		return InPtr;
 	}
 
+	static FString DebugDump( TSharedPtr<T, ESPMode::ThreadSafe> InPtr )
+	{
+		return InPtr.IsValid() ? FString::Printf(TEXT("0x%08x"), InPtr.Get()) : FString(TEXT("nullptr"));
+	}
+
 	class SerializerType{};
 };
 
@@ -161,7 +190,15 @@ template <typename T> struct TListTypeTraits< TSharedRef<T, ESPMode::NotThreadSa
 public:
 	typedef TSharedPtr<T> NullableType;
 
-	static void AddReferencedObjects( FReferenceCollector&, TArray< TSharedRef<T> >&, TSet< TSharedRef<T> >&  )
+	using MapKeyFuncs       = TDefaultMapHashableKeyFuncs<TSharedRef<T, ESPMode::NotThreadSafe>, TSharedRef<ITableRow>, false>;
+	using MapKeyFuncsSparse = TDefaultMapHashableKeyFuncs<TSharedRef<T, ESPMode::NotThreadSafe>, FSparseItemInfo, false>;
+	using SetKeyFuncs       = DefaultKeyFuncs<TSharedRef<T, ESPMode::NotThreadSafe>>;
+
+	template<typename U>
+	static void AddReferencedObjects( FReferenceCollector&, 
+		TArray< TSharedRef<T> >&, 
+		TSet< TSharedRef<T> >&, 
+		TMap< const U*, TSharedRef<T> >& )
 	{
 	}
 
@@ -185,6 +222,11 @@ public:
 		return InPtr.ToSharedRef();
 	}
 
+	static FString DebugDump( TSharedRef<T> InPtr )
+	{
+		return FString::Printf(TEXT("0x%08x"), &InPtr.Get());
+	}
+
 	class SerializerType{};
 };
 
@@ -194,7 +236,15 @@ template <typename T> struct TListTypeTraits< TSharedRef<T, ESPMode::ThreadSafe>
 public:
 	typedef TSharedPtr<T, ESPMode::ThreadSafe> NullableType;
 
-	static void AddReferencedObjects( FReferenceCollector&, TArray< TSharedRef<T, ESPMode::ThreadSafe> >&, TSet< TSharedRef<T, ESPMode::ThreadSafe> >&  )
+	using MapKeyFuncs       = TDefaultMapHashableKeyFuncs<TSharedRef<T, ESPMode::ThreadSafe>, TSharedRef<ITableRow>, false>;
+	using MapKeyFuncsSparse = TDefaultMapHashableKeyFuncs<TSharedRef<T, ESPMode::ThreadSafe>, FSparseItemInfo, false>;
+	using SetKeyFuncs       = DefaultKeyFuncs<TSharedRef<T, ESPMode::ThreadSafe>>;
+
+	template<typename U>
+	static void AddReferencedObjects( FReferenceCollector&, 
+		TArray< TSharedRef<T, ESPMode::ThreadSafe> >&, 
+		TSet< TSharedRef<T, ESPMode::ThreadSafe> >&,
+		TMap< const U*, TSharedRef<T, ESPMode::ThreadSafe> >&)
 	{
 	}
 
@@ -218,6 +268,11 @@ public:
 		return InPtr.ToSharedRef();
 	}
 
+	static FString DebugDump( TSharedRef<T, ESPMode::ThreadSafe> InPtr )
+	{
+		return FString::Printf(TEXT("0x%08x"), &InPtr.Get());
+	}
+
 	class SerializerType{};
 };
 
@@ -230,7 +285,15 @@ template <typename T> struct TListTypeTraits< TWeakObjectPtr<T> >
 public:
 	typedef TWeakObjectPtr<T> NullableType;
 
-	static void AddReferencedObjects( FReferenceCollector&, TArray< TWeakObjectPtr<T> >&, TSet< TWeakObjectPtr<T> >&  )
+	using MapKeyFuncs       = TDefaultMapHashableKeyFuncs<TWeakObjectPtr<T>, TSharedRef<ITableRow>, false>;
+	using MapKeyFuncsSparse = TDefaultMapHashableKeyFuncs<TWeakObjectPtr<T>, FSparseItemInfo, false>;
+	using SetKeyFuncs       = DefaultKeyFuncs< TWeakObjectPtr<T> >;
+
+	template<typename U>
+	static void AddReferencedObjects( FReferenceCollector&, 
+		TArray< TWeakObjectPtr<T> >&,
+		TSet< TWeakObjectPtr<T> >&,
+		TMap< const U*, TWeakObjectPtr<T> >&)
 	{
 	}
 
@@ -254,6 +317,12 @@ public:
 		return InPtr;
 	}
 
+	static FString DebugDump( TWeakObjectPtr<T> InPtr )
+	{
+		T* ObjPtr = InPtr.Get();
+		return ObjPtr ? FString::Printf(TEXT("0x%08x [%s]"), ObjPtr, *ObjPtr->GetName()) : FString(TEXT("nullptr"));
+	}
+
 	class SerializerType{};
 };
 
@@ -269,10 +338,25 @@ struct TListTypeTraits<T*, typename TEnableIf<TPointerIsConvertibleFromTo<T, UOb
 public:
 	typedef T* NullableType;
 
-	static void AddReferencedObjects( FReferenceCollector& Collector, TArray<T*>& ItemsWithGeneratedWidgets, TSet<T*>& SelectedItems )
+	using MapKeyFuncs       = TDefaultMapHashableKeyFuncs<T*, TSharedRef<ITableRow>, false>;
+	using MapKeyFuncsSparse = TDefaultMapHashableKeyFuncs<T*, FSparseItemInfo, false>;
+	using SetKeyFuncs       = DefaultKeyFuncs<T*>;
+
+	template<typename U>
+	static void AddReferencedObjects( FReferenceCollector& Collector, 
+		TArray<T*>& ItemsWithGeneratedWidgets, 
+		TSet<T*>& SelectedItems, 
+		TMap< const U*, T* >& WidgetToItemMap)
 	{
 		// Serialize generated items
 		Collector.AddReferencedObjects(ItemsWithGeneratedWidgets);
+		
+		// Serialize the map Value. We only do it for the WidgetToItemMap because we know that both maps are updated at the same time and contains the same objects
+		// Also, we cannot AddReferencedObject to the Keys of the ItemToWidgetMap or we end up with keys being set to 0 when the UObject is destroyed which generate an invalid id in the map.
+		for (auto& It : WidgetToItemMap)
+		{
+			Collector.AddReferencedObject(*(UObject**)&It.Value);
+		}
 
 		// Serialize the selected items
 		Collector.AddReferencedObjects(SelectedItems);
@@ -286,6 +370,11 @@ public:
 
 	static T* NullableItemTypeConvertToItemType( T* InPtr ) { return InPtr; }
 
+	static FString DebugDump( T* InPtr )
+	{
+		return InPtr ? FString::Printf(TEXT("0x%08x [%s]"), InPtr, *InPtr->GetName()) : FString(TEXT("nullptr"));
+	}
+
 	typedef FGCObject SerializerType;
 };
 
@@ -295,10 +384,25 @@ struct TListTypeTraits<const T*, typename TEnableIf<TPointerIsConvertibleFromTo<
 public:
 	typedef const T* NullableType;
 
-	static void AddReferencedObjects( FReferenceCollector& Collector, TArray<const T*>& ItemsWithGeneratedWidgets, TSet<const T*>& SelectedItems )
+	using MapKeyFuncs       = TDefaultMapHashableKeyFuncs<const T*, TSharedRef<ITableRow>, false>;
+	using MapKeyFuncsSparse = TDefaultMapHashableKeyFuncs<const T*, FSparseItemInfo, false>;
+	using SetKeyFuncs       = DefaultKeyFuncs<const T*>;
+
+	template<typename U>
+	static void AddReferencedObjects( FReferenceCollector& Collector, 
+		TArray<const T*>& ItemsWithGeneratedWidgets, 
+		TSet<const T*>& SelectedItems,
+		TMap< const U*, const T* >& WidgetToItemMap)
 	{
 		// Serialize generated items
 		Collector.AddReferencedObjects(ItemsWithGeneratedWidgets);
+
+		// Serialize the map Value. We only do it for the WidgetToItemMap because we know that both maps are updated at the same time and contains the same objects
+		// Also, we cannot AddReferencedObject to the Keys of the ItemToWidgetMap or we end up with keys being set to 0 when the UObject is destroyed which generate an invalid id in the map.
+		for (auto& It : WidgetToItemMap)
+		{
+			Collector.AddReferencedObject(*(UObject**)&It.Value);
+		}
 
 		// Serialize the selected items
 		Collector.AddReferencedObjects(SelectedItems);
@@ -311,6 +415,11 @@ public:
 	static const T* MakeNullPtr() { return NULL; }
 
 	static const T* NullableItemTypeConvertToItemType( const T* InPtr ) { return InPtr; }
+
+	static FString DebugDump( const T* InPtr )
+	{
+		return InPtr ? FString::Printf(TEXT("0x%08x [%s]"), InPtr, *InPtr->GetName()) : FString(TEXT("nullptr"));
+	}
 
 	typedef FGCObject SerializerType;
 };

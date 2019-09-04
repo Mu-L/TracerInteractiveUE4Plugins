@@ -2,7 +2,6 @@
 
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
-#include "Framework/Text/TextRange.h"
 #include "Framework/Text/ITextDecorator.h"
 
 #include "Framework/Text/RichTextMarkupProcessing.h"
@@ -100,7 +99,7 @@ namespace
 bool FRTFProcessingTest::RunTest (const FString& Parameters)
 {
 #if UE_ENABLE_ICU
-	TSharedRef< FDefaultRichTextMarkupParser > RichTextMarkupProcessing = FDefaultRichTextMarkupParser::Create();
+	TSharedRef< FDefaultRichTextMarkupParser > RichTextMarkupProcessing = FDefaultRichTextMarkupParser::GetStaticInstance();
 
 	// Text
 	{

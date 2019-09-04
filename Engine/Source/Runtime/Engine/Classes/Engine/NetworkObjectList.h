@@ -46,7 +46,14 @@ struct FNetworkObjectInfo
 	uint8 bPendingNetUpdate : 1;
 
 	/** Force this object to be considered relevant for at least one update */
+	UE_DEPRECATED(4.23, "Use the ForceRelevantFrame variable since this variable is not set anymore.")
 	uint8 bForceRelevantNextUpdate : 1;
+
+	/** Should this object be considered for replay checkpoint writes */
+	uint8 bDirtyForReplay : 1;
+
+	/** Force this object to be considered relevant for at least one update */
+	uint32 ForceRelevantFrame = 0;
 
 	FNetworkObjectInfo()
 		: Actor(nullptr)
@@ -55,7 +62,8 @@ struct FNetworkObjectInfo
 		, OptimalNetUpdateDelta(0.0f)
 		, LastNetUpdateTime(0.0f)
 		, bPendingNetUpdate(false)
-		, bForceRelevantNextUpdate(false) {}
+		, bForceRelevantNextUpdate(false)
+		, bDirtyForReplay(false) {}
 
 	FNetworkObjectInfo(AActor* InActor)
 		: Actor(InActor)
@@ -65,7 +73,8 @@ struct FNetworkObjectInfo
 		, OptimalNetUpdateDelta(0.0f) 
 		, LastNetUpdateTime(0.0f)
 		, bPendingNetUpdate(false)
-		, bForceRelevantNextUpdate(false) {}
+		, bForceRelevantNextUpdate(false)
+		, bDirtyForReplay(false) {}
 
 	void CountBytes(FArchive& Ar) const;
 };

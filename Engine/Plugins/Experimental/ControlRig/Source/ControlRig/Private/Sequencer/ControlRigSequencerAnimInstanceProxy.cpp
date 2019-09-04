@@ -38,18 +38,9 @@ void FControlRigSequencerAnimInstanceProxy::Update(float DeltaSeconds)
 	FAnimSequencerInstanceProxy::Update(DeltaSeconds);
 }
 
-void FControlRigSequencerAnimInstanceProxy::CacheBones()
+FAnimNode_Base* FControlRigSequencerAnimInstanceProxy::GetCustomRootNode()
 {
-	// As we dont use the RootNode (this is not using anim blueprint), 
-	// we just cache the nodes we know about
-	if (bBoneCachesInvalidated)
-	{
-		bBoneCachesInvalidated = false;
-
-		CachedBonesCounter.Increment();
-		FAnimationCacheBonesContext Context(this);
-		SequencerRootNode.CacheBones_AnyThread(Context);
-	}
+	return &SequencerRootNode;
 }
 
 void FControlRigSequencerAnimInstanceProxy::ResetNodes()
@@ -131,7 +122,7 @@ void FControlRigSequencerAnimInstanceProxy::InitControlRigTrack(UControlRig* InC
 	}
 }
 
-bool FControlRigSequencerAnimInstanceProxy::UpdateControlRig(UControlRig* InControlRig, uint32 SequenceId, bool bAdditive, bool bApplyBoneFilter, const FInputBlendPose& BoneFilter, float Weight)
+bool FControlRigSequencerAnimInstanceProxy::UpdateControlRig(UControlRig* InControlRig, uint32 SequenceId, bool bAdditive, bool bApplyBoneFilter, const FInputBlendPose& BoneFilter, float Weight, bool bExternalSource)
 {
 	bool bCreated = EnsureControlRigTrack(InControlRig, bAdditive, bApplyBoneFilter, BoneFilter, SequenceId);
 
@@ -146,6 +137,9 @@ bool FControlRigSequencerAnimInstanceProxy::UpdateControlRig(UControlRig* InCont
 		FAnimNode_MultiWayBlend& BlendNode = bAdditive ? AdditiveBlendNode : FullBodyBlendNode;
 		BlendNode.DesiredAlphas[PlayerState->PoseIndex] = Weight;
 	}
+
+	PlayerState->ControlRigNode.bUpdateInput = !bExternalSource;
+	PlayerState->ControlRigNode.bExecute = !bExternalSource;
 
 	return bCreated;
 }

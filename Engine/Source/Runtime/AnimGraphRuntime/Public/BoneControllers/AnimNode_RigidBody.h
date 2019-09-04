@@ -53,7 +53,7 @@ struct ANIMGRAPHRUNTIME_API FAnimNode_RigidBody : public FAnimNode_SkeletalContr
 	virtual void PreUpdate(const UAnimInstance* InAnimInstance) override;
 	virtual void UpdateInternal(const FAnimationUpdateContext& Context) override;
 	virtual bool HasPreUpdate() const override { return true; }
-	virtual bool IsValidToEvaluate(const USkeleton* Skeleton, const FBoneContainer& RequiredBones) override { return true; }
+	virtual bool IsValidToEvaluate(const USkeleton* Skeleton, const FBoneContainer& RequiredBones) override;
 	virtual bool NeedsDynamicReset() const override;
 	virtual void ResetDynamics(ETeleportType InTeleportType) override;
 	virtual int32 GetLODThreshold() const override;
@@ -174,7 +174,8 @@ private:
 private:
 
 	float AccumulatedDeltaTime;
-
+	float AnimPhysicsMinDeltaTime;
+	bool bSimulateAnimPhysicsAfterReset;
 	/** This should only be used for removing the delegate during termination. Do NOT use this for any per frame work */
 	TWeakObjectPtr<USkeletalMeshComponent> SkelMeshCompWeakPtr;
 

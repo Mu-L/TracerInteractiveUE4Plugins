@@ -114,7 +114,14 @@ void FEdGraphSchemaAction_K2Graph::MovePersistentItemToCategory(const FText& New
 {
 	if ((GraphType == EEdGraphSchemaAction_K2Graph::Function) || (GraphType == EEdGraphSchemaAction_K2Graph::Macro))
 	{
-		FBlueprintEditorUtils::SetBlueprintFunctionOrMacroCategory(EdGraph, NewCategoryName);
+		if(EdGraph->GetSchema()->GetClass()->GetFName() == TEXT("AnimationGraphSchema"))
+		{
+			FBlueprintEditorUtils::SetAnimationGraphLayerGroup(EdGraph, NewCategoryName);
+		}
+		else
+		{
+			FBlueprintEditorUtils::SetBlueprintFunctionOrMacroCategory(EdGraph, NewCategoryName);
+		}
 	}
 }
 
@@ -150,8 +157,14 @@ FEdGraphSchemaActionDefiningObject FEdGraphSchemaAction_K2Graph::GetPersistentIt
 	UObject* DefiningObject = GetSourceBlueprint();
 	if (UFunction* Func = GetFunction())
 	{
-		DefiningObject = Func->GetOwnerStruct();
+		// Use the class where the function was initially introduced as the defining object
+		while (Func->GetSuperFunction())
+		{
+			Func = Func->GetSuperFunction();
+		}
+		DefiningObject = Func->GetOuterUClassUnchecked();
 	}
+
 	return FEdGraphSchemaActionDefiningObject(DefiningObject, (void*)GraphType);
 }
 

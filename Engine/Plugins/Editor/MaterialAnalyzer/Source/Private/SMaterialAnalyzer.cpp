@@ -694,7 +694,16 @@ void FAnalyzeMaterialTreeAsyncTask::DoWork()
 		}
 		else if (BasePropertyOverrideName.Key.IsEqual(TEXT("bOverride_ShadingModel")))
 		{
-			TempValue = (float)CurrentMaterialInterface->GetShadingModel();
+			if (CurrentMaterialInterface->IsShadingModelFromMaterialExpression())
+			{
+				TempValue = (float)MSM_FromMaterialExpression;
+			}
+			else
+			{
+				ensure(CurrentMaterialInterface->GetShadingModels().CountShadingModels() == 1);
+				TempValue = (float)CurrentMaterialInterface->GetShadingModels().GetFirstShadingModel();
+			}
+
 			if (CurrentMaterialInstance)
 			{
 				bIsOverridden = CurrentMaterialInstance->BasePropertyOverrides.bOverride_ShadingModel;
@@ -913,8 +922,8 @@ void FAnalyzeForIdenticalPermutationsAsyncTask::GatherSuggestions()
 				AllNames.Add(PermutationString);
 			}
 
-			FPermutationSuggestionData NewData = FPermutationSuggestionData(FText::Format(LOCTEXT("IdenticalPermutationSuggestions",
-				"The following {0} materials all have identical permutations."),
+			FPermutationSuggestionData NewData = FPermutationSuggestionData(FText::Format(LOCTEXT("IdenticalStaticPermutationSuggestions",
+				"The following {0} materials all have identical static parameter permutations."),
 				FText::AsNumber(AssetCount)),
 				AllNames);
 

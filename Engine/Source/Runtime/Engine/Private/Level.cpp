@@ -58,6 +58,7 @@ Level.cpp: Level-related functions
 #include "Engine/StaticMeshActor.h"
 #include "ComponentRecreateRenderStateContext.h"
 #include "Algo/Copy.h"
+#include "HAL/LowLevelMemTracker.h"
 
 DEFINE_LOG_CATEGORY(LogLevel);
 
@@ -431,6 +432,7 @@ void ULevel::CreateReplicatedDestructionInfo(AActor* const Actor)
 	{
 		FReplicatedStaticActorDestructionInfo NewInfo;
 		NewInfo.PathName = Actor->GetFName();
+		NewInfo.FullName = Actor->GetFullName();
 		NewInfo.DestroyedPosition = Actor->GetActorLocation();
 		NewInfo.ObjOuter = Actor->GetOuter();
 		NewInfo.ObjClass = Actor->GetClass();
@@ -468,6 +470,7 @@ void ULevel::SortActorList()
 		// No need to sort an empty list
 		return;
 	}
+	LLM_REALLOC_SCOPE(Actors.GetData());
 
 	TArray<AActor*> NewActors;
 	TArray<AActor*> NewNetActors;
@@ -512,21 +515,6 @@ void ULevel::SortActorList()
 }
 
 
-void ULevel::ValidateLightGUIDs()
-{
-	for( TObjectIterator<ULightComponent> It; It; ++It )
-	{
-		ULightComponent*	LightComponent	= *It;
-		bool				IsInLevel		= LightComponent->IsIn( this );
-
-		if( IsInLevel )
-		{
-			LightComponent->ValidateLightGUIDs();
-		}
-	}
-}
-
-
 void ULevel::PreSave(const class ITargetPlatform* TargetPlatform)
 {
 	Super::PreSave(TargetPlatform);
@@ -534,10 +522,6 @@ void ULevel::PreSave(const class ITargetPlatform* TargetPlatform)
 #if WITH_EDITOR
 	if( !IsTemplate() )
 	{
-		UPackage* Package = GetOutermost();
-
-		ValidateLightGUIDs();
-
 		// Clear out any crosslevel references
 		for( int32 ActorIdx = 0; ActorIdx < Actors.Num(); ActorIdx++ )
 		{
@@ -547,8 +531,6 @@ void ULevel::PreSave(const class ITargetPlatform* TargetPlatform)
 				Actor->ClearCrossLevelReferences();
 			}
 		}
-
-		// CheckTextureStreamingBuild(this);
 	}
 #endif // WITH_EDITOR
 }
@@ -2016,11 +1998,20 @@ void ULevel::OnLevelScriptBlueprintChanged(ULevelScriptBlueprint* InBlueprint)
 		// Make sure this is OUR level scripting blueprint
 		ensureMsgf(InBlueprint == LevelScriptBlueprint, TEXT("Level ('%s') received OnLevelScriptBlueprintChanged notification for the wrong Blueprint ('%s')."), LevelScriptBlueprint ? *LevelScriptBlueprint->GetPathName() : TEXT("NULL"), *InBlueprint->GetPathName()) )
 	{
+		bool bResetDebugObject = false;
+
 		UClass* SpawnClass = (LevelScriptBlueprint->GeneratedClass) ? LevelScriptBlueprint->GeneratedClass : LevelScriptBlueprint->SkeletonGeneratedClass;
 
 		// Get rid of the old LevelScriptActor
 		if( LevelScriptActor )
 		{
+			// Clear the current debug object and indicate that it needs to be reset (below).
+			if (InBlueprint->GetObjectBeingDebugged() == LevelScriptActor)
+			{
+				bResetDebugObject = true;
+				InBlueprint->SetObjectBeingDebugged(nullptr);
+			}
+
 			LevelScriptActor->MarkPendingKill();
 			LevelScriptActor = nullptr;
 		}
@@ -2033,6 +2024,12 @@ void ULevel::OnLevelScriptBlueprintChanged(ULevelScriptBlueprint* InBlueprint)
 
 		if( LevelScriptActor )
 		{
+			// Reset the current debug object to the new instance if it was previously set to the old instance.
+			if (bResetDebugObject)
+			{
+				InBlueprint->SetObjectBeingDebugged(LevelScriptActor);
+			}
+
 			LevelScriptActor->ClearFlags(RF_Transactional);
 			check(LevelScriptActor->GetOuter() == this);
 			// Finally, fixup all the bound events to point to their new LSA

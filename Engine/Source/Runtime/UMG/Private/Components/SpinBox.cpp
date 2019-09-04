@@ -9,6 +9,8 @@
 /////////////////////////////////////////////////////
 // USpinBox
 
+static FSpinBoxStyle* DefaultSpinBoxStyle = nullptr;
+
 USpinBox::USpinBox(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
@@ -18,22 +20,28 @@ USpinBox::USpinBox(const FObjectInitializer& ObjectInitializer)
 		Font = FSlateFontInfo(RobotoFontObj.Object, 12, FName("Bold"));
 	}
 
-	// Grab other defaults from slate arguments.
-	SSpinBox<float>::FArguments Defaults;
-
-	Value = Defaults._Value.Get();
-	MinValue = Defaults._MinValue.Get().Get(0.0f);
-	MaxValue = Defaults._MaxValue.Get().Get(0.0f);
-	MinSliderValue = Defaults._MinSliderValue.Get().Get(0.0f);
-	MaxSliderValue = Defaults._MaxSliderValue.Get().Get(0.0f);
-	Delta = Defaults._Delta.Get();
-	SliderExponent = Defaults._SliderExponent.Get();
-	MinDesiredWidth = Defaults._MinDesiredWidth.Get();
-	ClearKeyboardFocusOnCommit = Defaults._ClearKeyboardFocusOnCommit.Get();
-	SelectAllTextOnCommit = Defaults._SelectAllTextOnCommit.Get();
-
-	WidgetStyle = *Defaults._Style;
+	Value = 0;
+	MinValue = 0;
+	MaxValue = 10;
+	MinSliderValue = 0;
+	MaxSliderValue = 0;
+	Delta = 0;
+	SliderExponent = 1;
+	MinDesiredWidth = 0;
+	ClearKeyboardFocusOnCommit = false;
+	SelectAllTextOnCommit = true;
 	ForegroundColor = FSlateColor(FLinearColor::Black);
+
+	if (DefaultSpinBoxStyle == nullptr)
+	{
+		// HACK: THIS SHOULD NOT COME FROM CORESTYLE AND SHOULD INSTEAD BE DEFINED BY ENGINE TEXTURES/PROJECT SETTINGS
+		DefaultSpinBoxStyle = new FSpinBoxStyle(FCoreStyle::Get().GetWidgetStyle<FSpinBoxStyle>("SpinBox"));
+
+		// Unlink UMG default colors from the editor settings colors.
+		DefaultSpinBoxStyle->UnlinkColors();
+	}
+
+	WidgetStyle = *DefaultSpinBoxStyle;
 }
 
 void USpinBox::ReleaseSlateResources(bool bReleaseChildren)

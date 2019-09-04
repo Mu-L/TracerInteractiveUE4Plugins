@@ -31,14 +31,11 @@ namespace NiagaraCommands
 
 const float Megabyte = 1024.0f * 1024.0f;
 
-FNiagaraEmitterViewModel::FNiagaraEmitterViewModel(UNiagaraEmitter* InEmitter, TWeakPtr<FNiagaraEmitterInstance> InSimulation)
-	: Emitter(InEmitter)
-	, Simulation(InSimulation)
-	, SharedScriptViewModel(MakeShareable(new FNiagaraScriptViewModel(InEmitter, LOCTEXT("SharedDisplayName", "Graph"), ENiagaraParameterEditMode::EditAll)))
+FNiagaraEmitterViewModel::FNiagaraEmitterViewModel()
+	: SharedScriptViewModel(MakeShareable(new FNiagaraScriptViewModel(LOCTEXT("SharedDisplayName", "Graph"), ENiagaraParameterEditMode::EditAll)))
 	, bUpdatingSelectionInternally(false)
 	, ExecutionStateEnum(StaticEnum<ENiagaraExecutionState>())
 {	
-	SetEmitter(InEmitter);
 }
 
 void FNiagaraEmitterViewModel::Cleanup()
@@ -51,14 +48,14 @@ void FNiagaraEmitterViewModel::Cleanup()
 
 	if (SharedScriptViewModel.IsValid())
 	{
-		SharedScriptViewModel->GetGraphViewModel()->GetSelection()->OnSelectedObjectsChanged().RemoveAll(this);
+		SharedScriptViewModel->GetGraphViewModel()->GetNodeSelection()->OnSelectedObjectsChanged().RemoveAll(this);
 		SharedScriptViewModel.Reset();
 	}
 
 	RemoveScriptEventHandlers();
 }
 
-bool FNiagaraEmitterViewModel::Set(UNiagaraEmitter* InEmitter, TWeakPtr<FNiagaraEmitterInstance> InSimulation)
+bool FNiagaraEmitterViewModel::Set(UNiagaraEmitter* InEmitter, TWeakPtr<FNiagaraEmitterInstance, ESPMode::ThreadSafe> InSimulation)
 {
 	SetEmitter(InEmitter);
 	SetSimulation(InSimulation);
@@ -90,8 +87,8 @@ void FNiagaraEmitterViewModel::SetEmitter(UNiagaraEmitter* InEmitter)
 
 	if (Emitter.IsValid())
 	{
-		Emitter->OnEmitterVMCompiled().AddRaw(this, &FNiagaraEmitterViewModel::OnVMCompiled);
-		Emitter->OnPropertiesChanged().AddRaw(this, &FNiagaraEmitterViewModel::OnEmitterPropertiesChanged);
+		Emitter->OnEmitterVMCompiled().AddSP(this, &FNiagaraEmitterViewModel::OnVMCompiled);
+		Emitter->OnPropertiesChanged().AddSP(this, &FNiagaraEmitterViewModel::OnEmitterPropertiesChanged);
 	}
 
 	AddScriptEventHandlers();
@@ -105,7 +102,7 @@ void FNiagaraEmitterViewModel::SetEmitter(UNiagaraEmitter* InEmitter)
 }
 
 
-void FNiagaraEmitterViewModel::SetSimulation(TWeakPtr<FNiagaraEmitterInstance> InSimulation)
+void FNiagaraEmitterViewModel::SetSimulation(TWeakPtr<FNiagaraEmitterInstance, ESPMode::ThreadSafe> InSimulation)
 {
 	Simulation = InSimulation;
 }
@@ -116,12 +113,34 @@ UNiagaraEmitter* FNiagaraEmitterViewModel::GetEmitter()
 	return Emitter.Get();
 }
 
+const UNiagaraEmitter* FNiagaraEmitterViewModel::GetParentEmitter() const
+{
+	return Emitter.IsValid() ? Emitter->GetParent() : nullptr;
+}
+
+FText FNiagaraEmitterViewModel::GetParentNameText() const
+{
+	if (Emitter.IsValid() && Emitter->GetParent() != nullptr)
+	{
+		return FText::FromString(Emitter->GetParent()->GetName());
+	}
+	return FText();
+}
+
+FText FNiagaraEmitterViewModel::GetParentPathNameText() const
+{
+	if (Emitter.IsValid() && Emitter->GetParent() != nullptr)
+	{
+		return FText::FromString(Emitter->GetParent()->GetPathName());
+	}
+	return FText();
+}
 
 FText FNiagaraEmitterViewModel::GetStatsText() const
 {
 	if (Simulation.IsValid())
 	{
-		TSharedPtr<FNiagaraEmitterInstance> SimInstance = Simulation.Pin();
+		TSharedPtr<FNiagaraEmitterInstance, ESPMode::ThreadSafe> SimInstance = Simulation.Pin();
 		if (SimInstance.IsValid())
 		{
 			static const FNumberFormattingOptions FractionalFormatOptions = FNumberFormattingOptions()
@@ -272,7 +291,7 @@ ENiagaraScriptCompileStatus FNiagaraEmitterViewModel::GetLatestCompileStatus()
 	check(SharedScriptViewModel.IsValid());
 	ENiagaraScriptCompileStatus UnionStatus = SharedScriptViewModel->GetLatestCompileStatus();
 
-	if (Emitter->SimTarget == ENiagaraSimTarget::GPUComputeSim || Emitter->SimTarget == ENiagaraSimTarget::DynamicLoadBalancedSim)
+	if (Emitter->SimTarget == ENiagaraSimTarget::GPUComputeSim)
 	{
 		if (UnionStatus != ENiagaraScriptCompileStatus::NCS_Dirty)
 		{
@@ -321,16 +340,16 @@ void FNiagaraEmitterViewModel::AddScriptEventHandlers()
 		{
 			UNiagaraScriptSource* ScriptSource = CastChecked<UNiagaraScriptSource>(Script->GetSource());
 			FDelegateHandle OnGraphChangedHandle = ScriptSource->NodeGraph->AddOnGraphChangedHandler(
-				FOnGraphChanged::FDelegate::CreateRaw<FNiagaraEmitterViewModel, const UNiagaraScript&>(this, &FNiagaraEmitterViewModel::ScriptGraphChanged, *Script));
+				FOnGraphChanged::FDelegate::CreateSP<FNiagaraEmitterViewModel, const UNiagaraScript&>(this->AsShared(), &FNiagaraEmitterViewModel::ScriptGraphChanged, *Script));
 			FDelegateHandle OnGraphNeedRecompileHandle = ScriptSource->NodeGraph->AddOnGraphNeedsRecompileHandler(
-				FOnGraphChanged::FDelegate::CreateRaw<FNiagaraEmitterViewModel, const UNiagaraScript&>(this, &FNiagaraEmitterViewModel::ScriptGraphChanged, *Script));
+				FOnGraphChanged::FDelegate::CreateSP<FNiagaraEmitterViewModel, const UNiagaraScript&>(this->AsShared(), &FNiagaraEmitterViewModel::ScriptGraphChanged, *Script));
 
 			ScriptToOnGraphChangedHandleMap.Add(FObjectKey(Script), OnGraphChangedHandle);
 			ScriptToRecompileHandleMap.Add(FObjectKey(Script), OnGraphNeedRecompileHandle);
 
 			FDelegateHandle OnParameterStoreChangedHandle = Script->RapidIterationParameters.AddOnChangedHandler(
-				FNiagaraParameterStore::FOnChanged::FDelegate::CreateRaw<FNiagaraEmitterViewModel, const FNiagaraParameterStore&, const UNiagaraScript&>(
-					this, &FNiagaraEmitterViewModel::ScriptParameterStoreChanged, Script->RapidIterationParameters, *Script));
+				FNiagaraParameterStore::FOnChanged::FDelegate::CreateSP<FNiagaraEmitterViewModel, const FNiagaraParameterStore&, const UNiagaraScript&>(
+					this->AsShared(), &FNiagaraEmitterViewModel::ScriptParameterStoreChanged, Script->RapidIterationParameters, *Script));
 			ScriptToOnParameterStoreChangedHandleMap.Add(FObjectKey(Script), OnParameterStoreChangedHandle);
 		}
 	}

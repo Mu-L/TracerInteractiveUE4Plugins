@@ -68,7 +68,9 @@ class CopySharedCookedBuild : BuildCommand
 
 		bool bOnlyCopyAssetRegistry = ParseParam("onlycopyassetregistry");
 
-		string SharedBuildCL = ParseParamValue("buildcl", "usesyncedbuild");
+		string SharedBuildCL = ParseParamValue("buildcl", "any");
+
+		SharedCookedBuild.SharedCookType BuildType = (SharedCookedBuild.SharedCookType)Enum.Parse(typeof(SharedCookedBuild.SharedCookType), SharedBuildCL, true);
 
 		List<UnrealTargetPlatform> TargetPlatforms = new List<UnrealTargetPlatform>();
 		var PlatformNames = new List<string>(CmdLinePlatform.Split('+'));
@@ -79,20 +81,12 @@ class CopySharedCookedBuild : BuildCommand
 
 			foreach (var SubPlatformName in SubPlatformNames)
 			{
-				UnrealTargetPlatform NewPlatformType = (UnrealTargetPlatform)Enum.Parse(typeof(UnrealTargetPlatform), SubPlatformName, true);
-
-				TargetPlatforms.Add(NewPlatformType);
+				TargetPlatforms.Add(UnrealTargetPlatform.Parse(SubPlatformName));
 			}
 		}
 
-		
+		new SharedCookedBuild(ProjectFile, TargetPlatforms.Select(x => x.ToString()), BuildType).CopySharedCookedBuilds();
 
-
-		foreach (var PlatformType in TargetPlatforms)
-		{
-			SharedCookedBuild.CopySharedCookedBuildForTarget(ProjectFile.FullName, PlatformType, PlatformType.ToString(), SharedBuildCL, bOnlyCopyAssetRegistry);
-			SharedCookedBuild.WaitForCopy();
-		}
 
 		
 		/*

@@ -80,6 +80,7 @@
 #include "Framework/Notifications/NotificationManager.h"
 #include "Widgets/Notifications/SNotificationList.h"
 #include "Engine/InheritableComponentHandler.h"
+#include "Classes/EditorStyleSettings.h"
 
 DECLARE_CYCLE_STAT(TEXT("Compile Blueprint"), EKismetCompilerStats_CompileBlueprint, STATGROUP_KismetCompiler);
 DECLARE_CYCLE_STAT(TEXT("Broadcast Precompile"), EKismetCompilerStats_BroadcastPrecompile, STATGROUP_KismetCompiler);
@@ -486,13 +487,17 @@ UBlueprint* FKismetEditorUtilities::CreateBlueprint(UClass* ParentClass, UObject
 	if (UAnimBlueprint* AnimBP = Cast<UAnimBlueprint>(NewBP))
 	{
 		UAnimBlueprint* RootAnimBP = UAnimBlueprint::FindRootAnimBlueprint(AnimBP);
-		if (RootAnimBP == NULL)
+		if (RootAnimBP == nullptr)
 		{
-			// Only allow an anim graph if there isn't one in a parent blueprint
-			UEdGraph* NewGraph = FBlueprintEditorUtils::CreateNewGraph(AnimBP, UEdGraphSchema_K2::GN_AnimGraph, UAnimationGraph::StaticClass(), UAnimationGraphSchema::StaticClass());
-			FBlueprintEditorUtils::AddDomainSpecificGraph(NewBP, NewGraph);
-			NewBP->LastEditedDocuments.Add(NewGraph);
-			NewGraph->bAllowDeletion = false;
+			// Interfaces dont have default graphs, only 'function' anim graphs
+			if(AnimBP->BlueprintType != BPTYPE_Interface)
+			{
+				// Only allow an anim graph if there isn't one in a parent blueprint
+				UEdGraph* NewGraph = FBlueprintEditorUtils::CreateNewGraph(AnimBP, UEdGraphSchema_K2::GN_AnimGraph, UAnimationGraph::StaticClass(), UAnimationGraphSchema::StaticClass());
+				FBlueprintEditorUtils::AddDomainSpecificGraph(NewBP, NewGraph);
+				NewBP->LastEditedDocuments.Add(NewGraph);
+				NewGraph->bAllowDeletion = false;
+			}
 		}
 		else
 		{
@@ -650,6 +655,14 @@ UK2Node_Event* FKismetEditorUtilities::AddDefaultEventNode(UBlueprint* InBluepri
 		NewEventNode = NewObject<UK2Node_Event>(InGraph);
 		NewEventNode->EventReference = EventReference;
 
+		// Snap the new position to the grid
+		const UEditorStyleSettings* StyleSettings = GetDefault<UEditorStyleSettings>();
+		if (StyleSettings)
+		{
+			const uint32 GridSnapSize = StyleSettings->GridSnapSize;
+			InOutNodePosY = GridSnapSize * FMath::RoundFromZero(InOutNodePosY / (float)GridSnapSize);
+		}
+		
 		// add update event graph
 		NewEventNode->bOverrideFunction=true;
 		NewEventNode->CreateNewGuid();
@@ -1114,6 +1127,12 @@ static void ConformComponentsUtils::ConformRemovedNativeComponents(UObject* BpCd
 		// else, the component has been removed from our native super class
 
 		Component->DestroyComponent(/*bPromoteChildren =*/false);
+		if (Component->HasAnyInternalFlags(EInternalObjectFlags::AsyncLoading))
+		{
+			// Async loading components cannot be pending kill, or the async loading code will assert when trying to postload them.
+			Component->ClearPendingKill();
+			FLinkerLoad::InvalidateExport(Component);
+		}
 		DestroyedComponents.Add(Component);
 
 		// The DestroyComponent() call above will clear the RootComponent value in this case.
@@ -1632,7 +1651,7 @@ UBlueprint* FKismetEditorUtilities::CreateBlueprintFromActor(const FName Bluepri
 			if (NewBlueprint->GeneratedClass != nullptr)
 			{
 				AActor* CDO = CastChecked<AActor>(NewBlueprint->GeneratedClass->GetDefaultObject());
-				const auto CopyOptions = (EditorUtilities::ECopyOptions::Type)(EditorUtilities::ECopyOptions::OnlyCopyEditOrInterpProperties | EditorUtilities::ECopyOptions::PropagateChangesToArchetypeInstances);
+				const EditorUtilities::ECopyOptions::Type CopyOptions = (EditorUtilities::ECopyOptions::Type)(EditorUtilities::ECopyOptions::OnlyCopyEditOrInterpProperties | EditorUtilities::ECopyOptions::PropagateChangesToArchetypeInstances | EditorUtilities::ECopyOptions::SkipInstanceOnlyProperties);
 				EditorUtilities::CopyActorProperties(Actor, CDO, CopyOptions);
 
 				if (USceneComponent* DstSceneRoot = CDO->GetRootComponent())

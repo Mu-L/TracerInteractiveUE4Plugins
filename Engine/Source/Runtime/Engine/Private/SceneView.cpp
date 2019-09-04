@@ -49,6 +49,13 @@ static TAutoConsoleVariable<float> CVarSSRMaxRoughness(
 
 #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
 
+static TAutoConsoleVariable<int32> CVarFreezeMouseCursor(
+	TEXT("r.FreezeMouseCursor"),
+	0,
+	TEXT("Free the mouse cursor position, for passes which use it to display debug information.\n")
+	TEXT("0: default\n")
+	TEXT("1: freeze mouse cursor position at current location"),
+	ECVF_Cheat);
 
 static TAutoConsoleVariable<int32> CVarShadowFreezeCamera(
 	TEXT("r.Shadow.FreezeCamera"),
@@ -211,6 +218,15 @@ static TAutoConsoleVariable<float> CVarMotionBlurMax(
 	TEXT("-1: override (default)"),
 	ECVF_Scalability | ECVF_RenderThreadSafe);
 
+static TAutoConsoleVariable<int32> CVarMotionBlurTargetFPS(
+	TEXT("r.MotionBlur.TargetFPS"),
+	-1,
+	TEXT("Allows to override the postprocess setting (target FPS for motion blur velocity length scaling).\n")
+	TEXT("-1: override (default)")
+	TEXT(" 0: target current frame rate with moving average\n")
+	TEXT("[1,120]: target FPS for motion blur velocity scaling"),
+	ECVF_Scalability | ECVF_RenderThreadSafe);
+
 static TAutoConsoleVariable<float> CVarSceneColorFringeMax(
 	TEXT("r.SceneColorFringe.Max"),
 	-1.0f,
@@ -285,6 +301,11 @@ static TAutoConsoleVariable<int32> CVarEnableTemporalUpsample(
 	TEXT(" 1: TemporalAA performs spatial and temporal upscale as screen percentage method."),
 	ECVF_Default);
 
+// Conversion factor used when "r.DefaultFeature.AutoExposure.ExtendDefaultLuminanceRange" 
+FORCEINLINE float LuminanceToEV100(float Luminance)
+{
+	return FMath::Log2(Luminance / 1.2f);
+}
 
 /** Global vertex color view mode setting when SHOW_VertexColors show flag is set */
 EVertexColorViewMode::Type GVertexColorViewMode = EVertexColorViewMode::Color;
@@ -727,7 +748,7 @@ FSceneView::FSceneView(const FSceneViewInitOptions& InitOptions)
 	bShouldBindInstancedViewUB = bIsInstancedStereoEnabled || bIsMobileMultiViewEnabled;
 
 	// If the device doesn't support mobile multi-view, disable it.
-	bIsMobileMultiViewEnabled = bIsMobileMultiViewEnabled && GSupportsMobileMultiView;
+	bIsMobileMultiViewEnabled = bIsMobileMultiViewEnabled && GSupportsMobileMultiView && StereoPass != eSSP_FULL;
 
 	SetupAntiAliasingMethod();
 
@@ -1333,16 +1354,9 @@ void FSceneView::OverridePostProcessSettings(const FPostProcessSettings& Src, fl
 		LERP_PP(DepthOfFieldNearTransitionRegion);
 		LERP_PP(DepthOfFieldFarTransitionRegion);
 		LERP_PP(DepthOfFieldScale);
-		PRAGMA_DISABLE_DEPRECATION_WARNINGS
-		LERP_PP(DepthOfFieldMaxBokehSize);
-		PRAGMA_ENABLE_DEPRECATION_WARNINGS
 		LERP_PP(DepthOfFieldNearBlurSize);
 		LERP_PP(DepthOfFieldFarBlurSize);
 		LERP_PP(DepthOfFieldOcclusion);
-		PRAGMA_DISABLE_DEPRECATION_WARNINGS
-		LERP_PP(DepthOfFieldColorThreshold);
-		LERP_PP(DepthOfFieldSizeThreshold);
-		PRAGMA_ENABLE_DEPRECATION_WARNINGS
 		LERP_PP(DepthOfFieldSkyFocusDistance);
 		LERP_PP(DepthOfFieldVignetteSize);
 		LERP_PP(MotionBlurAmount);
@@ -1424,10 +1438,16 @@ void FSceneView::OverridePostProcessSettings(const FPostProcessSettings& Src, fl
 			Dest.RayTracingGISamplesPerPixel = Src.RayTracingGISamplesPerPixel;
 		}
 
+		if (Src.bOverride_RayTracingAO)
+		{
+			Dest.RayTracingAO = Src.RayTracingAO;
+		}
+
 		if (Src.bOverride_RayTracingAOSamplesPerPixel)
 		{
 			Dest.RayTracingAOSamplesPerPixel = Src.RayTracingAOSamplesPerPixel;
 		}
+
 		if (Src.bOverride_PathTracingMaxBounces)
 		{
 			Dest.PathTracingMaxBounces = Src.PathTracingMaxBounces;
@@ -1489,14 +1509,6 @@ void FSceneView::OverridePostProcessSettings(const FPostProcessSettings& Src, fl
 			Dest.BloomConvolutionBufferScale = Src.BloomConvolutionBufferScale;
 		}
 
-		PRAGMA_DISABLE_DEPRECATION_WARNINGS
-		// actual texture cannot be blended but the intensity can be blended
-		IF_PP(DepthOfFieldBokehShape)
-		{
-			Dest.DepthOfFieldBokehShape = Src.DepthOfFieldBokehShape;
-		}
-		PRAGMA_ENABLE_DEPRECATION_WARNINGS
-
 		// Curve assets can not be blended.
 		IF_PP(AutoExposureBiasCurve)
 		{
@@ -1517,13 +1529,6 @@ void FSceneView::OverridePostProcessSettings(const FPostProcessSettings& Src, fl
 			}
 		}
 
-		PRAGMA_DISABLE_DEPRECATION_WARNINGS
-		if (Src.bOverride_DepthOfFieldMethod)
-		{
-			Dest.DepthOfFieldMethod = Src.DepthOfFieldMethod;
-		}
-		PRAGMA_ENABLE_DEPRECATION_WARNINGS
-
 		if (Src.bOverride_MobileHQGaussian)
 		{
 			Dest.bMobileHQGaussian = Src.bMobileHQGaussian;
@@ -1537,6 +1542,11 @@ void FSceneView::OverridePostProcessSettings(const FPostProcessSettings& Src, fl
 		if (Src.bOverride_AmbientOcclusionRadiusInWS)
 		{
 			Dest.AmbientOcclusionRadiusInWS = Src.AmbientOcclusionRadiusInWS;
+		}
+
+		if (Src.bOverride_MotionBlurTargetFPS)
+		{
+			Dest.MotionBlurTargetFPS = Src.MotionBlurTargetFPS;
 		}
 	}
 
@@ -1672,6 +1682,11 @@ void FSceneView::StartFinalPostprocessSettings(FVector InViewLocation)
 		{
 			FinalPostProcessSettings.AutoExposureMinBrightness = 1;
 			FinalPostProcessSettings.AutoExposureMaxBrightness = 1;
+			if (CVarDefaultAutoExposureExtendDefaultLuminanceRange.GetValueOnGameThread())
+			{
+				FinalPostProcessSettings.AutoExposureMinBrightness = LuminanceToEV100(FinalPostProcessSettings.AutoExposureMinBrightness);
+				FinalPostProcessSettings.AutoExposureMaxBrightness = LuminanceToEV100(FinalPostProcessSettings.AutoExposureMaxBrightness);
+			}
 		}
 		else
 		{
@@ -1701,15 +1716,22 @@ void FSceneView::StartFinalPostprocessSettings(FVector InViewLocation)
 		}
 	}
 
-	if(State)
+	{
+		if (GEngine->StereoRenderingDevice.IsValid())
+		{
+			GEngine->StereoRenderingDevice->StartFinalPostprocessSettings(&FinalPostProcessSettings, StereoPass);
+		}
+	}
+
+	if (State != nullptr)
 	{
 		State->OnStartPostProcessing(*this);
 	}
 
-	UWorld* World = Family->Scene->GetWorld();
+	UWorld* World = ((Family != nullptr) && (Family->Scene != nullptr)) ? Family->Scene->GetWorld() : nullptr;
 
 	// Some views have no world (e.g. material preview)
-	if (World)
+	if (World != nullptr)
 	{
 		for (auto VolumeIt = World->PostProcessVolumes.CreateIterator(); VolumeIt; ++VolumeIt)
 		{
@@ -1730,9 +1752,14 @@ void FSceneView::EndFinalPostprocessSettings(const FSceneViewInitOptions& ViewIn
 		FinalPostProcessSettings.AutoExposureMethod = AEM_Basic;
 		FinalPostProcessSettings.AutoExposureBias = -0.6f;
 		FinalPostProcessSettings.AutoExposureMaxBrightness = 2.f;
-		FinalPostProcessSettings.AutoExposureMinBrightness = 0.05;
+		FinalPostProcessSettings.AutoExposureMinBrightness = 0.05f;
 		FinalPostProcessSettings.AutoExposureSpeedDown = 1.f;
 		FinalPostProcessSettings.AutoExposureSpeedUp = 3.f;
+		if (CVarDefaultAutoExposureExtendDefaultLuminanceRange.GetValueOnGameThread())
+		{
+			FinalPostProcessSettings.AutoExposureMinBrightness = LuminanceToEV100(FinalPostProcessSettings.AutoExposureMinBrightness);
+			FinalPostProcessSettings.AutoExposureMaxBrightness = LuminanceToEV100(FinalPostProcessSettings.AutoExposureMaxBrightness);
+		}
 	}
 #endif
 
@@ -1885,21 +1912,10 @@ void FSceneView::EndFinalPostprocessSettings(const FSceneViewInitOptions& ViewIn
 	}
 #endif
 
-	PRAGMA_DISABLE_DEPRECATION_WARNINGS
-	if(FinalPostProcessSettings.DepthOfFieldMethod == DOFM_CircleDOF)
 	{
-		// We intentionally don't do the DepthOfFieldFocalRegion as it breaks realism.
-		// Doing this fixes DOF material expression.
-		FinalPostProcessSettings.DepthOfFieldFocalRegion = 0;
-	}
-	PRAGMA_ENABLE_DEPRECATION_WARNINGS
-
-	{
-		const bool bStereoEnabled = StereoPass != eSSP_FULL;
-		const bool bScaledToRenderTarget = GEngine->XRSystem.IsValid() && bStereoEnabled && GEngine->XRSystem->GetHMDDevice();
-		if (bScaledToRenderTarget)
+		if (GEngine->StereoRenderingDevice.IsValid())
 		{
-			GEngine->XRSystem->GetHMDDevice()->UpdatePostProcessSettings(&FinalPostProcessSettings);
+			GEngine->StereoRenderingDevice->EndFinalPostprocessSettings(&FinalPostProcessSettings, StereoPass);
 		}
 	}
 
@@ -1963,6 +1979,15 @@ void FSceneView::EndFinalPostprocessSettings(const FSceneViewInitOptions& ViewIn
 		if(Value >= 0.0f)
 		{
 			FinalPostProcessSettings.MotionBlurMax = Value;
+		}
+	}
+
+	{
+		int32 TargetFPS = CVarMotionBlurTargetFPS.GetValueOnGameThread();
+
+		if (TargetFPS >= 0)
+		{
+			FinalPostProcessSettings.MotionBlurTargetFPS = TargetFPS;
 		}
 	}
 
@@ -2315,10 +2340,22 @@ void FSceneView::SetupCommonViewUniformBufferParameters(
 	ViewUniformShaderParameters.GameTime = Family->CurrentWorldTime;
 	ViewUniformShaderParameters.RealTime = Family->CurrentRealTime;
 	ViewUniformShaderParameters.DeltaTime = Family->DeltaWorldTime;
+
+#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+	static FIntPoint LockedCursorPos = CursorPos;
+	if (CVarFreezeMouseCursor.GetValueOnRenderThread() == 0 && CursorPos.X >= 0 && CursorPos.Y >= 0)
+	{
+		LockedCursorPos = CursorPos;
+	}
+	ViewUniformShaderParameters.CursorPosition = LockedCursorPos;
+#endif
+
 	ViewUniformShaderParameters.Random = FMath::Rand();
 	ViewUniformShaderParameters.FrameNumber = Family->FrameNumber;
 
 	ViewUniformShaderParameters.CameraCut = bCameraCut ? 1 : 0;
+
+	ViewUniformShaderParameters.VirtualTextureParams = FVector4(ForceInitToZero);
 
 	//to tail call keep the order and number of parameters of the caller function
 	SetupViewRectUniformBufferParameters(ViewUniformShaderParameters, BufferSize, EffectiveViewRect, InViewMatrices, InPrevViewMatrices);
@@ -2546,6 +2583,11 @@ EDebugViewShaderMode FSceneViewFamily::ChooseDebugViewShaderMode() const
 	{
 		return DVSM_RequiredTextureResolution;
 	}
+	else if (EngineShowFlags.RayTracingDebug)
+	{
+		return DVSM_RayTracingDebug;
+	}
+
 	return DVSM_None;
 }
 

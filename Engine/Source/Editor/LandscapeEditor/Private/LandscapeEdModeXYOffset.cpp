@@ -10,7 +10,6 @@
 #include "Logging/TokenizedMessage.h"
 #include "Logging/MessageLog.h"
 #include "Misc/MapErrors.h"
-#include "Settings/EditorExperimentalSettings.h"
 
 #define LOCTEXT_NAMESPACE "LandscapeTools"
 namespace
@@ -540,15 +539,7 @@ public:
 				//XYOffsetVectorData(Index) = NewXYOffset(Index);
 			}
 		}
-
-		ALandscape* Landscape = LandscapeInfo->LandscapeActor.Get();
-
-		if (Landscape != nullptr && Landscape->HasProceduralContent && !GetMutableDefault<UEditorExperimentalSettings>()->bProceduralLandscape)
-		{
-			FMessageLog("MapCheck").Warning()->AddToken(FTextToken::Create(LOCTEXT("LandscapeProcedural_ChangingDataWithoutSettings", "This map contains landscape procedural content, modifying the landscape data will result in data loss when the map is reopened with Landscape Procedural settings on. Please enable Landscape Procedural settings before modifying the data.")));
-			FMessageLog("MapCheck").Open(EMessageSeverity::Warning);
-		}
-
+		
 		// Apply to XYOffset Texture map and Height map
 		Cache.SetCachedData(X1, Y1, X2, Y2, XYOffsetVectorData);
 		Cache.Flush();

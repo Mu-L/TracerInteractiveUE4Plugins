@@ -31,7 +31,6 @@ enum class EDefaultGraphicsRHI : uint8
 	DefaultGraphicsRHI_DX11 = 1 UMETA(DisplayName = "DirectX 11"),
 	DefaultGraphicsRHI_DX12 = 2 UMETA(DisplayName = "DirectX 12"),
 	DefaultGraphicsRHI_Vulkan = 3 UMETA(DisplayName = "Vulkan"),
-	DefaultGraphicsRHI_OpenGL = 4 UMETA(DisplayName = "OpenGL"),
 };
 
 
@@ -72,10 +71,6 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, config, Category="OS Info", Meta=(DisplayName = "Minimum OS Version"))
 	EMinimumSupportedOS MinimumOSVersion;
-
-	/** The audio device name to use if not the default windows audio device. Leave blank to use default audio device. */
-	UPROPERTY(config, EditAnywhere, Category = "Audio")
-	FString AudioDevice;
 
 	/** Sample rate to run the audio mixer with. */
 	UPROPERTY(config, EditAnywhere, Category = "Audio", Meta = (DisplayName = "Audio Mixer Sample Rate"))

@@ -18,12 +18,13 @@
 #include "Misc/EngineVersion.h"
 #include "PipelineStateCache.h"
 #include "PipelineFileCache.h"
-#include "Misc/ScopeRWLock.h"
+#include "Misc/ScopeLock.h"
 #include "Misc/CoreDelegates.h"
 #include "ShaderCodeLibrary.h"
 #include "TickableObjectRenderThread.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Async/AsyncFileHandle.h"
+#include "Misc/ScopeLock.h"
 
 DECLARE_DWORD_ACCUMULATOR_STAT(TEXT("Outstanding Tasks"), STAT_ShaderPipelineTaskCount, STATGROUP_PipelineStateCache );
 DECLARE_DWORD_ACCUMULATOR_STAT(TEXT("Waiting Tasks"), STAT_ShaderPipelineWaitingTaskCount, STATGROUP_PipelineStateCache );
@@ -64,11 +65,7 @@ static TAutoConsoleVariable<int32> CVarPSOFileCacheBackgroundBatchSize(
 														  );
 static TAutoConsoleVariable<int32> CVarPSOFileCacheBatchSize(
 														   TEXT("r.ShaderPipelineCache.BatchSize"),
-#if PLATFORM_MAC
-														   16, // On Mac, where we have many more PSOs to preload due to different video settings 16 works better than 50
-#else
 														   50,
-#endif
 														   TEXT("Set the number of PipelineStateObjects to compile in a single batch operation when compiling takes priority. Defaults to a maximum of 50 per frame, due to async. file IO it is less in practice."),
 														   ECVF_Default | ECVF_RenderThreadSafe
 														   );
@@ -550,6 +547,7 @@ bool FShaderPipelineCache::Precompile(FRHICommandListImmediate& RHICmdList, ESha
 			GraphicsInitializer.BoundShaderState.VertexShaderRHI = VertexShader;
 		}
 
+#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
 		FHullShaderRHIRef HullShader;
 		if (PSO.GraphicsDesc.HullShader != FSHAHash())
 		{
@@ -563,7 +561,7 @@ bool FShaderPipelineCache::Precompile(FRHICommandListImmediate& RHICmdList, ESha
 			DomainShader = FShaderCodeLibrary::CreateDomainShader(Platform, PSO.GraphicsDesc.DomainShader, DummyCode);
 			GraphicsInitializer.BoundShaderState.DomainShaderRHI = DomainShader;
 		}
-
+#endif
 		FPixelShaderRHIRef FragmentShader;
 		if (PSO.GraphicsDesc.FragmentShader != FSHAHash())
 		{
@@ -571,13 +569,14 @@ bool FShaderPipelineCache::Precompile(FRHICommandListImmediate& RHICmdList, ESha
 			GraphicsInitializer.BoundShaderState.PixelShaderRHI = FragmentShader;
 		}
 
+#if PLATFORM_SUPPORTS_GEOMETRY_SHADERS
 		FGeometryShaderRHIRef GeometryShader;
 		if (PSO.GraphicsDesc.GeometryShader != FSHAHash())
 		{
 			GeometryShader = FShaderCodeLibrary::CreateGeometryShader(Platform, PSO.GraphicsDesc.GeometryShader, DummyCode);
 			GraphicsInitializer.BoundShaderState.GeometryShaderRHI = GeometryShader;
 		}
-		
+#endif
 		auto BlendState = RHICmdList.CreateBlendState(PSO.GraphicsDesc.BlendState);
 		GraphicsInitializer.BlendState = BlendState;
 		
@@ -595,6 +594,14 @@ bool FShaderPipelineCache::Precompile(FRHICommandListImmediate& RHICmdList, ESha
 		
 		GraphicsInitializer.RenderTargetsEnabled = PSO.GraphicsDesc.RenderTargetsActive;
 		GraphicsInitializer.NumSamples = PSO.GraphicsDesc.MSAASamples;
+		
+		if(GraphicsInitializer.RenderTargetsEnabled > MaxSimultaneousRenderTargets || GraphicsInitializer.NumSamples > 16)
+		{
+			return false;
+		}
+
+		GraphicsInitializer.SubpassHint = (ESubpassHint)PSO.GraphicsDesc.SubpassHint;
+		GraphicsInitializer.SubpassIndex = PSO.GraphicsDesc.SubpassIndex;
 		
 		GraphicsInitializer.DepthStencilTargetFormat = PSO.GraphicsDesc.DepthStencilFormat;
 		GraphicsInitializer.DepthStencilTargetFlag = PSO.GraphicsDesc.DepthStencilFlags;
@@ -1096,16 +1103,14 @@ FShaderPipelineCache::FShaderPipelineCache(EShaderPlatform Platform)
 
 FShaderPipelineCache::~FShaderPipelineCache()
 {
+	// Only save PSO Record / Logging at shutdown
 	if (GetShaderPipelineCacheSaveBoundPSOLog())
 	{
 		FShaderPipelineCache::SavePipelineFileCache(FPipelineFileCache::SaveMode::BoundPSOsOnly);
 	}
-	if (GetPSOFileCacheSaveUserCache())
-	{
-		FShaderPipelineCache::SavePipelineFileCache(FPipelineFileCache::SaveMode::Incremental);
-	}
 	
-	Close();
+	// Close with shutdown flag
+	Close(true);
 	
 	// The render thread tick should be dead now and we are safe to destroy everything that needs to wait or manual destruction
 
@@ -1429,7 +1434,7 @@ bool FShaderPipelineCache::Save(FPipelineFileCache::SaveMode Mode)
 	return bOK;
 }
 
-void FShaderPipelineCache::Close()
+void FShaderPipelineCache::Close(bool bShuttingDown)
 {
 	FScopeLock Lock(&Mutex);
 		
@@ -1445,8 +1450,8 @@ void FShaderPipelineCache::Close()
 		Save(FPipelineFileCache::SaveMode::BoundPSOsOnly);
 	}
 	
-	// Force a fast save, just in case
-	if (GetPSOFileCacheSaveUserCache())
+	// Force a fast save, just in case - but not at shutdown / destruction
+	if (GetPSOFileCacheSaveUserCache() && !bShuttingDown)
 	{
 		Save(FPipelineFileCache::SaveMode::Incremental);
 	}

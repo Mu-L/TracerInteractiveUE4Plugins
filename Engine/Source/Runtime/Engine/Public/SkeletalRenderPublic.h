@@ -111,6 +111,12 @@ public:
 	 */
 	virtual const TArray<FMatrix>& GetReferenceToLocalMatrices() const = 0;
 
+	/**
+	*	Will force re-evaluating which Skin Weight buffer should be used for skinning, determined by checking for any override weights or a skin weight profile being set.
+	*	This prevents re-creating the vertex factories, but rather updates the bindings in place. 
+	*/
+	virtual void UpdateSkinWeightBuffer(USkinnedMeshComponent* InMeshComponent) = 0;
+
 	/** Get the LOD to render this mesh at. */
 	virtual int32 GetLOD() const = 0;
 	/** 
@@ -193,7 +199,9 @@ public:
 
 #if RHI_RAYTRACING
 	/** Retrieve ray tracing geometry from the underlying mesh object */
+	virtual FRayTracingGeometry* GetRayTracingGeometry() { return nullptr; }
 	virtual const FRayTracingGeometry* GetRayTracingGeometry() const { return nullptr; }
+	virtual FRWBuffer* GetRayTracingDynamicVertexBuffer() { return nullptr; }
 #endif // RHI_RAYTRACING
 
 	/** Called to notify clothing data that component transform has changed */

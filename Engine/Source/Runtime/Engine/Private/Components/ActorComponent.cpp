@@ -29,6 +29,7 @@
 #include "Engine/SimpleConstructionScript.h"
 #include "ComponentUtils.h"
 #include "Engine/Engine.h"
+#include "HAL/LowLevelMemTracker.h"
 
 #if WITH_EDITOR
 #include "Kismet2/ComponentEditorUtils.h"
@@ -144,6 +145,8 @@ FGlobalComponentRecreateRenderStateContext::~FGlobalComponentRecreateRenderState
 FActorComponentGlobalCreatePhysicsSignature UActorComponent::GlobalCreatePhysicsDelegate;
 // Destroy Physics global delegate
 FActorComponentGlobalDestroyPhysicsSignature UActorComponent::GlobalDestroyPhysicsDelegate;
+// Render state dirty global delegate
+UActorComponent::FOnMarkRenderStateDirty UActorComponent::MarkRenderStateDirtyEvent;
 
 const FString UActorComponent::ComponentTemplateNameSuffix(TEXT("_GEN_VARIABLE"));
 
@@ -191,8 +194,19 @@ void UActorComponent::PostInitProperties()
 			{
 				// else: this is a natively created component that thinks its archetype is the CDO of
 				// this class, rather than a template component and this isn't the template component.
-				// Delete this stale component:
-				MarkPendingKill();
+				// Delete this stale component
+#if WITH_EDITOR
+				if (HasAnyInternalFlags(EInternalObjectFlags::AsyncLoading))
+				{
+					// Async loading components cannot be pending kill, or the async loading code will assert when trying to postload them.
+					// Instead, wait until the postload and mark pending kill at that time
+					bMarkPendingKillOnPostLoad = true;
+				}
+				else
+#endif // WITH_EDITOR
+				{
+					MarkPendingKill();
+				}
 			}
 		}
 		else
@@ -265,6 +279,14 @@ void UActorComponent::PostLoad()
 		// For a brief period of time we were inadvertently storing these for all components, need to clear it out
 		UCSModifiedProperties.Empty();
 	}
+
+#if WITH_EDITOR
+	if (bMarkPendingKillOnPostLoad)
+	{
+		MarkPendingKill();
+		bMarkPendingKillOnPostLoad = false;
+	}
+#endif // WITH_EDITOR
 }
 
 bool UActorComponent::Rename( const TCHAR* InName, UObject* NewOuter, ERenameFlags Flags )
@@ -506,10 +528,10 @@ bool UActorComponent::NeedsLoadForEditorGame() const
 	return !IsEditorOnly() && Super::NeedsLoadForEditorGame();
 }
 
-int32 UActorComponent::GetFunctionCallspace( UFunction* Function, void* Parameters, FFrame* Stack )
+int32 UActorComponent::GetFunctionCallspace( UFunction* Function, FFrame* Stack )
 {
 	AActor* MyOwner = GetOwner();
-	return (MyOwner ? MyOwner->GetFunctionCallspace(Function, Parameters, Stack) : FunctionCallspace::Local);
+	return (MyOwner ? MyOwner->GetFunctionCallspace(Function, Stack) : FunctionCallspace::Local);
 }
 
 bool UActorComponent::CallRemoteFunction( UFunction* Function, void* Parameters, FOutParmRec* OutParms, FFrame* Stack )
@@ -563,6 +585,7 @@ void UActorComponent::PreEditChange(UProperty* PropertyThatWillChange)
 		// Don't do do a full recreate in this situation, and instead simply detach.
 		if( !IsPendingKill() )
 		{
+			// One way this check can fail is that component subclass does not call Super::PostEditChangeProperty
 			check(!EditReregisterContexts.Find(this));
 			EditReregisterContexts.Add(this,new FComponentReregisterContext(this));
 		}
@@ -1241,6 +1264,7 @@ void UActorComponent::OnDestroyPhysicsState()
 
 void UActorComponent::CreatePhysicsState()
 {
+	LLM_SCOPE(ELLMTag::PhysX);
 	SCOPE_CYCLE_COUNTER(STAT_ComponentCreatePhysicsState);
 
 	if (!bPhysicsStateCreated && WorldPrivate->GetPhysicsScene() && ShouldCreatePhysicsState())
@@ -1286,6 +1310,7 @@ void UActorComponent::ExecuteRegisterEvents()
 	if(FApp::CanEverRender() && !bRenderStateCreated && WorldPrivate->Scene && ShouldCreateRenderState())
 	{
 		SCOPE_CYCLE_COUNTER(STAT_ComponentCreateRenderState);
+		LLM_SCOPE(ELLMTag::SceneRender);
 		CreateRenderState_Concurrent();
 		checkf(bRenderStateCreated, TEXT("Failed to route CreateRenderState_Concurrent (%s)"), *GetFullName());
 	}
@@ -1391,6 +1416,8 @@ void UActorComponent::RemoveTickPrerequisiteComponent(UActorComponent* Prerequis
 
 void UActorComponent::DoDeferredRenderUpdates_Concurrent()
 {
+	LLM_SCOPE(ELLMTag::SceneRender);
+
 	checkf(!IsUnreachable(), TEXT("%s"), *GetFullName());
 	checkf(!IsTemplate(), TEXT("%s"), *GetFullName());
 	checkf(!IsPendingKill(), TEXT("%s"), *GetFullName());
@@ -1434,6 +1461,8 @@ void UActorComponent::MarkRenderStateDirty()
 		// Flag as dirty
 		bRenderStateDirty = true;
 		MarkForNeededEndOfFrameRecreate();
+
+		MarkRenderStateDirtyEvent.Broadcast(*this);
 	}
 }
 
@@ -1752,8 +1781,13 @@ void UActorComponent::DetermineUCSModifiedProperties()
 
 			virtual bool ShouldSkipProperty(const UProperty* InProperty) const override
 			{
-				return (    InProperty->HasAnyPropertyFlags(CPF_Transient)
-						|| !InProperty->HasAnyPropertyFlags(CPF_Edit | CPF_Interp));
+				static const FName MD_SkipUCSModifiedProperties(TEXT("SkipUCSModifiedProperties"));
+				return (InProperty->HasAnyPropertyFlags(CPF_Transient)
+					|| !InProperty->HasAnyPropertyFlags(CPF_Edit | CPF_Interp)
+#if WITH_EDITOR
+					|| InProperty->HasMetaData(MD_SkipUCSModifiedProperties)
+#endif
+					);
 			}
 		} PropertySkipper;
 

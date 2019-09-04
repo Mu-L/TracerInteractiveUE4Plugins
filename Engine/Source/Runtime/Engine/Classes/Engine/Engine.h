@@ -24,6 +24,7 @@
 class AMatineeActor;
 class APlayerController;
 class Error;
+class FAudioDeviceManager;
 class FCanvas;
 class FCommonViewportClient;
 class FFineGrainedPerformanceTracker;
@@ -89,25 +90,25 @@ enum EFullyLoadPackageType
  * Enumerates transition types.
  */
 UENUM()
-enum ETransitionType
+enum class ETransitionType : uint8
 {
-	TT_None,
-	TT_Paused,
-	TT_Loading,
-	TT_Saving,
-	TT_Connecting,
-	TT_Precaching,
-	TT_WaitingToConnect,
-	TT_MAX,
+	None,
+	Paused,
+	Loading,
+	Saving,
+	Connecting,
+	Precaching,
+	WaitingToConnect,
+	MAX
 };
 
 
 UENUM()
-enum EConsoleType
+enum class EConsoleType : uint8
 {
-	CONSOLE_Any,
-	CONSOLE_Mobile,
-	CONSOLE_MAX,
+	Any,
+	Mobile,
+	MAX
 };
 
 /** Status of dynamic resolution that depends on project setting cvar, game user settings, and pause */
@@ -375,6 +376,9 @@ struct FWorldContext
 
 	/** Handle to this world context's audio device.*/
 	uint32 AudioDeviceHandle;
+
+	/** Custom description to be display in blueprint debugger UI */
+	FString CustomDescription;
 
 	/**************************************************************/
 
@@ -881,9 +885,17 @@ public:
 	UPROPERTY()
 	class UMaterial* DebugMeshMaterial;
 
-	/** @todo document */
+	/** Path of the default material for debug mesh */
 	UPROPERTY(globalconfig)
 	FSoftObjectPath DebugMeshMaterialName;
+
+	/** A material used to render emissive meshes (e.g. light source surface). */
+	UPROPERTY()
+	class UMaterial* EmissiveMeshMaterial;
+
+	/** Path of the default material for emissive mesh */
+	UPROPERTY(globalconfig)
+	FSoftObjectPath EmissiveMeshMaterialName;
 
 	/** Material used for visualizing level membership in lit view port modes. */
 	UPROPERTY()
@@ -1188,6 +1200,13 @@ public:
 	UPROPERTY(globalconfig)
 	FSoftObjectPath PreIntegratedSkinBRDFTextureName;
 
+	/** Tiled blue-noise texture */
+	UPROPERTY()
+	class UTexture2D* BlueNoiseTexture;
+
+	UPROPERTY(globalconfig)
+	FSoftObjectPath BlueNoiseTextureName;
+
 	/** Texture used to do font rendering in shaders */
 	UPROPERTY()
 	class UTexture2D* MiniFontTexture;
@@ -1439,7 +1458,7 @@ public:
 
 	/** The current transition type. */
 	UPROPERTY()
-	TEnumAsByte<enum ETransitionType> TransitionType;
+	ETransitionType TransitionType;
 
 	/** The current transition description text. */
 	UPROPERTY()
@@ -1767,7 +1786,7 @@ private:
 protected:
 
 	/** The audio device manager */
-	class FAudioDeviceManager* AudioDeviceManager;
+	FAudioDeviceManager* AudioDeviceManager;
 
 	/** Audio device handle to the main audio device. */
 	uint32 MainAudioDeviceHandle;
@@ -1908,10 +1927,7 @@ public:
 	/** Event triggered after a network failure of any kind has occurred */
 	FOnNetworkFailure& OnNetworkFailure() { return NetworkFailureEvent; }
 	/** Called by internal engine systems after a network failure has occurred */
-	void BroadcastNetworkFailure(UWorld * World, UNetDriver *NetDriver, ENetworkFailure::Type FailureType, const FString& ErrorString = TEXT(""))
-	{
-		NetworkFailureEvent.Broadcast(World, NetDriver, FailureType, ErrorString);
-	}
+	void BroadcastNetworkFailure(UWorld * World, UNetDriver *NetDriver, ENetworkFailure::Type FailureType, const FString& ErrorString = TEXT(""));
 
 	/** Event triggered after network lag is being experienced or lag has ended */
 	FOnNetworkLagStateChanged& OnNetworkLagStateChanged() { return NetworkLagStateChangedEvent; }
@@ -1933,6 +1949,7 @@ public:
 	virtual void FinishDestroy() override;
 	virtual void Serialize(FArchive& Ar) override;
 	static void AddReferencedObjects(UObject* InThis, FReferenceCollector& Collector);
+	virtual bool IsDestructionThreadSafe() const override { return false; }
 	//~ End UObject Interface.
 
 	/** Initialize the game engine. */
@@ -2049,6 +2066,13 @@ public:
 	 * Update FApp::CurrentTime/ FApp::DeltaTime while taking into account max tick rate.
 	 */
 	void UpdateTimeAndHandleMaxTickRate();
+
+	/**
+	 * Allows games to correct the negative delta
+	 *
+	 * @return new delta
+	 */
+	virtual double CorrectNegativeTimeDelta(double DeltaRealTime);
 
 	/** Causes the current CustomTimeStep to be shut down and then reinitialized. */
 	void ReinitializeCustomTimeStep();
@@ -2319,7 +2343,7 @@ public:
 	 *
 	 * @return true if we're on a console, false if we're running on a PC
 	 */
-	bool IsConsoleBuild(EConsoleType ConsoleType = CONSOLE_Any) const;
+	bool IsConsoleBuild(EConsoleType ConsoleType = EConsoleType::Any) const;
 
 	/** Add a FString to the On-screen debug message system. bNewerOnTop only works with Key == INDEX_NONE */
 	void AddOnScreenDebugMessage(uint64 Key,float TimeToDisplay,FColor DisplayColor,const FString& DebugMessage, bool bNewerOnTop = true, const FVector2D& TextScale = FVector2D::UnitVector);
@@ -2423,7 +2447,7 @@ public:
 	bool IsEditor();
 
 	/** @return the audio device manager of the UEngine, this allows the creation and management of multiple audio devices. */
-	class FAudioDeviceManager* GetAudioDeviceManager();
+	FAudioDeviceManager* GetAudioDeviceManager();
 
 	/** @return the main audio device handle used by the engine. */
 	uint32 GetAudioDeviceHandle() const;
@@ -3269,7 +3293,7 @@ public:
 
 private:
 	/**
-	 * Function definition for those stats which have their own render funcsions (or affect another render functions).
+	 * Function definition for those stats which have their own render functions (or affect another render functions).
 	 *
 	 * @param World	The world being drawn to.
 	 * @param ViewportClient The viewport being drawn to.
@@ -3282,7 +3306,7 @@ private:
 	typedef int32 (UEngine::*EngineStatRender)(UWorld* World, FViewport* Viewport, FCanvas* Canvas, int32 X, int32 Y, const FVector* ViewLocation, const FRotator* ViewRotation);
 
 	/**
-	 * Function definition for those stats which have their own toggle funcsions (or toggle other stats).
+	 * Function definition for those stats which have their own toggle functions (or toggle other stats).
 	 *
 	 * @param World	The world being drawn to.
 	 * @param ViewportClient The viewport being drawn to.
@@ -3365,6 +3389,7 @@ private:
 	bool ToggleStatNamedEvents(UWorld* World, FCommonViewportClient* ViewportClient, const TCHAR* Stream = nullptr);
 	bool ToggleStatUnit(UWorld* World, FCommonViewportClient* ViewportClient, const TCHAR* Stream = nullptr);
 #if !UE_BUILD_SHIPPING
+	bool PostStatSoundModulatorHelp(UWorld* World, FCommonViewportClient* ViewportClient, const TCHAR* Stream = nullptr);
 	bool ToggleStatUnitMax(UWorld* World, FCommonViewportClient* ViewportClient, const TCHAR* Stream = nullptr);
 	bool ToggleStatUnitGraph(UWorld* World, FCommonViewportClient* ViewportClient, const TCHAR* Stream = nullptr);
 	bool ToggleStatUnitTime(UWorld* World, FCommonViewportClient* ViewportClient, const TCHAR* Stream = nullptr);
@@ -3373,6 +3398,7 @@ private:
 	bool ToggleStatSoundCues(UWorld* World, FCommonViewportClient* ViewportClient, const TCHAR* Stream = nullptr);
 	bool ToggleStatSounds(UWorld* World, FCommonViewportClient* ViewportClient, const TCHAR* Stream = nullptr);
 	bool ToggleStatSoundMixes(UWorld* World, FCommonViewportClient* ViewportClient, const TCHAR* Stream = nullptr);
+	bool ToggleStatSoundModulators(UWorld* World, FCommonViewportClient* ViewportClient, const TCHAR* Stream = nullptr);
 #endif
 
 	/**
@@ -3398,8 +3424,9 @@ private:
 	int32 RenderStatLevelMap(UWorld* World, FViewport* Viewport, FCanvas* Canvas, int32 X, int32 Y, const FVector* ViewLocation = nullptr, const FRotator* ViewRotation = nullptr);
 	int32 RenderStatUnit(UWorld* World, FViewport* Viewport, FCanvas* Canvas, int32 X, int32 Y, const FVector* ViewLocation = nullptr, const FRotator* ViewRotation = nullptr);
 #if !UE_BUILD_SHIPPING
-	int32 RenderStatReverb(UWorld* World, FViewport* Viewport, FCanvas* Canvas, int32 X, int32 Y, const FVector* ViewLocation = nullptr, const FRotator* ViewRotation = nullptr);
-	int32 RenderStatSoundMixes(UWorld* World, FViewport* Viewport, FCanvas* Canvas, int32 X, int32 Y, const FVector* ViewLocation = nullptr, const FRotator* ViewRotation = nullptr);
+	int32 RenderStatSoundReverb(UWorld* World, FViewport* Viewport, FCanvas* Canvas, int32 X, int32 Y, const FVector* ViewLocation = nullptr, const FRotator* ViewRotation = nullptr);
+ 	int32 RenderStatSoundMixes(UWorld* World, FViewport* Viewport, FCanvas* Canvas, int32 X, int32 Y, const FVector* ViewLocation = nullptr, const FRotator* ViewRotation = nullptr);
+	int32 RenderStatSoundModulators(UWorld* World, FViewport* Viewport, FCanvas* Canvas, int32 X, int32 Y, const FVector* ViewLocation = nullptr, const FRotator* ViewRotation = nullptr);
 	int32 RenderStatSoundWaves(UWorld* World, FViewport* Viewport, FCanvas* Canvas, int32 X, int32 Y, const FVector* ViewLocation = nullptr, const FRotator* ViewRotation = nullptr);
 	int32 RenderStatSoundCues(UWorld* World, FViewport* Viewport, FCanvas* Canvas, int32 X, int32 Y, const FVector* ViewLocation = nullptr, const FRotator* ViewRotation = nullptr);
 	int32 RenderStatSounds(UWorld* World, FViewport* Viewport, FCanvas* Canvas, int32 X, int32 Y, const FVector* ViewLocation = nullptr, const FRotator* ViewRotation = nullptr);

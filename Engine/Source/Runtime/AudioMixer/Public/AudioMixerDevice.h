@@ -73,6 +73,7 @@ namespace Audio
 		~FMixerDevice();
 
 		//~ Begin FAudioDevice
+		virtual void UpdateDeviceDeltaTime() override;
 		virtual void GetAudioDeviceList(TArray<FString>& OutAudioDeviceNames) const override;
 		virtual bool InitializeHardware() override;
 		virtual void FadeIn() override;
@@ -107,7 +108,13 @@ namespace Audio
 		// Updates the source effect chain (using unique object id). 
 		virtual void UpdateSourceEffectChain(const uint32 SourceEffectChainId, const TArray<FSourceEffectChainEntry>& SourceEffectChain, const bool bPlayEffectChainTails) override;
 		virtual bool GetCurrentSourceEffectChain(const uint32 SourceEffectChainId, TArray<FSourceEffectChainEntry>& OutCurrentSourceEffectChainEntries) override;
+
+		// Updates submix instances with new properties
+		virtual void UpdateSubmixProperties(USoundSubmix* InSubmix) override;
 		
+		// Sets the submix output volume dynamically
+		virtual void SetSubmixOutputVolume(USoundSubmix* InSubmix, float NewVolume) override;
+
 		// Submix recording callbacks:
 		virtual void StartRecording(USoundSubmix* InSubmix, float ExpectedRecordingDuration) override;
 		virtual Audio::AlignedFloatBuffer& StopRecording(USoundSubmix* InSubmix, float& OutNumChannels, float& OutSampleRate) override;
@@ -130,7 +137,7 @@ namespace Audio
 		virtual void RegisterSubmixBufferListener(ISubmixBufferListener* InSubmixBufferListener, USoundSubmix* InSubmix = nullptr) override;
 		virtual void UnregisterSubmixBufferListener(ISubmixBufferListener* InSubmixBufferListener, USoundSubmix* InSubmix = nullptr) override;
 
-		virtual void FlushAudioRenderingCommands() override;
+		virtual void FlushAudioRenderingCommands(bool bPumpSynchronously = false) override;
 		//~ End FAudioDevice
 
 		//~ Begin IAudioMixer
@@ -141,9 +148,9 @@ namespace Audio
 		FMixerSubmixWeakPtr GetSubmixInstance(USoundSubmix* SoundSubmix);
 
 		// Functions which check the thread it's called on and helps make sure functions are called from correct threads
-		void CheckAudioThread();
-		void CheckAudioRenderingThread();
-		bool IsAudioRenderingThread();
+		void CheckAudioThread() const;
+		void CheckAudioRenderingThread() const;
+		bool IsAudioRenderingThread() const;
 
 		// Public Functions
 		FMixerSourceVoice* GetMixerSourceVoice();
@@ -200,6 +207,12 @@ namespace Audio
 		double GetAudioRenderThreadTime() const { return AudioThreadTimingData.AudioRenderThreadTime; }
 		double GetAudioClockDelta() const { return AudioClockDelta; }
 
+	protected:
+
+		virtual void OnListenerUpdated(const TArray<FListener>& InListeners) override;
+
+		TArray<FTransform> ListenerTransforms;
+
 	private:
 		// Resets the thread ID used for audio rendering
 		void ResetAudioRenderingThreadId();
@@ -218,6 +231,7 @@ namespace Audio
 	private:
 
 		bool IsMasterSubmixType(USoundSubmix* InSubmix) const;
+		FMixerSubmix* GetMasterSubmixInstance(USoundSubmix* InSubmix);
 
 		// Pushes the command to a audio render thread command queue to be executed on render thread
 		void AudioRenderThreadCommand(TFunction<void()> Command);
@@ -257,6 +271,9 @@ namespace Audio
 		/** The audio clock from device initialization, updated at block rate. */
 		double AudioClock;
 
+		/** What the previous master volume was. */
+		float PreviousMasterVolume;
+
 		/** Timing data for audio thread. */
 		FAudioThreadTimingData AudioThreadTimingData;
 
@@ -278,10 +295,10 @@ namespace Audio
 		FMixerSourceManager SourceManager;
 
 		/** ThreadId for the game thread (or if audio is running a seperate thread, that ID) */
-		int32 GameOrAudioThreadId;
+		mutable int32 GameOrAudioThreadId;
 
 		/** ThreadId for the low-level platform audio mixer. */
-		int32 AudioPlatformThreadId;
+		mutable int32 AudioPlatformThreadId;
 
 		/** Command queue to send commands to audio render thread from game thread or audio thread. */
 		TQueue<TFunction<void()>> CommandQueue;

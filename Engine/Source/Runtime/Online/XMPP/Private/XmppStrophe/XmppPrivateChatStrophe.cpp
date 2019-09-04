@@ -6,17 +6,30 @@
 #include "XmppStrophe/StropheStanza.h"
 #include "XmppStrophe/StropheStanzaConstants.h"
 #include "XmppLog.h"
+#include "Misc/EmbeddedCommunication.h"
 
 #if WITH_XMPP_STROPHE
+
+const FName FXmppPrivateChatStrophe::TickRequesterId = FName("StrophePrivateChat");
 
 FXmppPrivateChatStrophe::FXmppPrivateChatStrophe(FXmppConnectionStrophe& InConnectionManager)
 	: ConnectionManager(InConnectionManager)
 {
 }
 
+FXmppPrivateChatStrophe::~FXmppPrivateChatStrophe()
+{
+	CleanupMessages();
+}
+
 void FXmppPrivateChatStrophe::OnDisconnect()
 {
-	IncomingChatMessages.Empty();
+	CleanupMessages();
+}
+
+void FXmppPrivateChatStrophe::OnReconnect()
+{
+
 }
 
 bool FXmppPrivateChatStrophe::ReceiveStanza(const FStropheStanza& IncomingStanza)
@@ -72,6 +85,7 @@ bool FXmppPrivateChatStrophe::ReceiveStanza(const FStropheStanza& IncomingStanza
 		ChatMessage.Timestamp = FDateTime::UtcNow();
 	}
 
+	FEmbeddedCommunication::KeepAwake(TickRequesterId, false);
 	IncomingChatMessages.Enqueue(MakeUnique<FXmppChatMessage>(MoveTemp(ChatMessage)));
 	return true;
 }
@@ -106,6 +120,7 @@ bool FXmppPrivateChatStrophe::Tick(float DeltaTime)
 		TUniquePtr<FXmppChatMessage> ChatMessage;
 		if (IncomingChatMessages.Dequeue(ChatMessage))
 		{
+			FEmbeddedCommunication::AllowSleep(TickRequesterId);
 			check(ChatMessage);
 			OnChatReceived(MoveTemp(ChatMessage));
 		}
@@ -118,6 +133,16 @@ void FXmppPrivateChatStrophe::OnChatReceived(TUniquePtr<FXmppChatMessage>&& Chat
 {
 	TSharedRef<FXmppChatMessage> ChatRef = MakeShareable(Chat.Release());
 	OnChatReceivedDelegate.Broadcast(ConnectionManager.AsShared(), ChatRef->FromJid, ChatRef);
+}
+
+void FXmppPrivateChatStrophe::CleanupMessages()
+{
+	while (!IncomingChatMessages.IsEmpty())
+	{
+		TUniquePtr<FXmppChatMessage> ChatMessage;
+		IncomingChatMessages.Dequeue(ChatMessage);
+		FEmbeddedCommunication::AllowSleep(TickRequesterId);
+	}
 }
 
 #endif

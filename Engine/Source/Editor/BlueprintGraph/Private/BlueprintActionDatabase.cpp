@@ -69,8 +69,6 @@
 
 #define LOCTEXT_NAMESPACE "BlueprintActionDatabase"
 
-DEFINE_LOG_CATEGORY_STATIC(LogBlueprintActionDatabase, Log, All);
-
 /*******************************************************************************
  * FBlueprintNodeSpawnerFactory
  ******************************************************************************/
@@ -510,18 +508,6 @@ namespace BlueprintActionDatabaseImpl
 	 */
 	static void OnProjectHotReloaded(bool bWasTriggeredAutomatically);
 
-	/**
-	 * String representation of an FObjectKey.
-	 */
-	static FString ObjectKeyToString(const FObjectKey& InKey)
-	{
-		const UObject* Obj = InKey.ResolveObjectPtr();
-		FString ObjStr = (Obj != nullptr) ? Obj->GetPathName() : TEXT("NULL");
-
-		const int32* DataPtr = reinterpret_cast<const int32*>(&InKey);
-		return FString::Printf(TEXT("Object: %s (ObjectIndex = %d, ObjectSerialNumber = %d)"), *ObjStr, *DataPtr, *(DataPtr + 1));
-	}
-
 	/** 
 	 * Assets that we cleared from the database (to remove references, and make 
 	 * way for a delete), but in-case the class wasn't deleted we need them 
@@ -541,8 +527,6 @@ static void BlueprintActionDatabaseImpl::OnModulesChanged(FName InModuleName, EM
 {
 	if (InModuleChangeReason == EModuleChangeReason::ModuleLoaded || InModuleChangeReason == EModuleChangeReason::ModuleUnloaded)
 	{
-		UE_LOG(LogBlueprintActionDatabase, Log, TEXT("Requesting refresh due to module change: %s (%s)"), *InModuleName.ToString(), InModuleChangeReason == EModuleChangeReason::ModuleLoaded ? TEXT("loaded") : TEXT("unloaded"));
-
 		BlueprintActionDatabaseImpl::bRefreshAllRequested = true;
 	}
 }
@@ -550,8 +534,6 @@ static void BlueprintActionDatabaseImpl::OnModulesChanged(FName InModuleName, EM
 //------------------------------------------------------------------------------
 static void BlueprintActionDatabaseImpl::OnProjectHotReloaded(bool bWasTriggeredAutomatically)
 {
-	UE_LOG(LogBlueprintActionDatabase, Log, TEXT("Requesting refresh due to hot reload"));
-
 	BlueprintActionDatabaseImpl::bRefreshAllRequested = true;
 }
 
@@ -1121,6 +1103,19 @@ void FBlueprintActionDatabase::AddReferencedObjects(FReferenceCollector& Collect
 	}
 }
 
+FString FBlueprintActionDatabase::GetReferencerName() const
+{
+	return TEXT("FBlueprintActionDatabase");
+}
+
+int32 GBlueprintDatabasePrimingMaxPerFrame = 16;
+static FAutoConsoleVariableRef CVarBlueprintDatabasePrimingMaxPerFrame(
+	TEXT("bp.DatabasePrimingMaxPerFrame"),
+	GBlueprintDatabasePrimingMaxPerFrame,
+	TEXT("How many entries should be primed in to the database per frame."),
+	ECVF_Default
+);
+
 //------------------------------------------------------------------------------
 void FBlueprintActionDatabase::Tick(float DeltaTime)
 {
@@ -1145,10 +1140,9 @@ void FBlueprintActionDatabase::Tick(float DeltaTime)
 	
 	// priming every database entry at once would cause a hitch, so we spread it 
 	// out over several frames
-	static int32 const PrimingMaxPerFrame = 16;
 	int32 PrimedCount = 0;
 
-	while ((ActionPrimingQueue.Num() > 0) && (PrimedCount < PrimingMaxPerFrame))
+	while ((ActionPrimingQueue.Num() > 0) && (PrimedCount < GBlueprintDatabasePrimingMaxPerFrame))
 	{
 		auto ActionIndex = ActionPrimingQueue.CreateIterator();	
 			
@@ -1159,7 +1153,7 @@ void FBlueprintActionDatabase::Tick(float DeltaTime)
 			if (FActionList* ClassActionList = ActionRegistry.Find(ActionsKey))
 			{
 				int32& ActionListIndex = ActionIndex.Value();
-				for (; (ActionListIndex < ClassActionList->Num()) && (PrimedCount < PrimingMaxPerFrame); ++ActionListIndex)
+				for (; (ActionListIndex < ClassActionList->Num()) && (PrimedCount < GBlueprintDatabasePrimingMaxPerFrame); ++ActionListIndex)
 				{
 					UBlueprintNodeSpawner* Action = (*ClassActionList)[ActionListIndex];
 					Action->Prime();
@@ -1185,17 +1179,11 @@ void FBlueprintActionDatabase::Tick(float DeltaTime)
 	// Handle deferred removals.
 	while (ActionRemoveQueue.Num() > 0)
 	{
-		FObjectKey ObjectKey = ActionRemoveQueue.Pop();
-		TArray<UBlueprintNodeSpawner*> const* NodeSpawners = ActionRegistry.Find(ObjectKey);
-		if (ensureMsgf(NodeSpawners != nullptr, TEXT("Entry was not found in the ActionRegistry for deferred removal - %s"), *BlueprintActionDatabaseImpl::ObjectKeyToString(ObjectKey)))
+		TArray<UBlueprintNodeSpawner*> NodeSpawners = ActionRegistry.FindAndRemoveChecked(ActionRemoveQueue.Pop());
+		for (UBlueprintNodeSpawner* Action : NodeSpawners)
 		{
-			for (UBlueprintNodeSpawner* Action : *NodeSpawners)
-			{
-				check(Action);
-				Action->ClearCachedTemplateNode();
-			}
-
-			ActionRegistry.Remove(ObjectKey);
+			check(Action);
+			Action->ClearCachedTemplateNode();
 		}
 	}
 }
@@ -1209,8 +1197,6 @@ TStatId FBlueprintActionDatabase::GetStatId() const
 //------------------------------------------------------------------------------
 void FBlueprintActionDatabase::DeferredRemoveEntry(FObjectKey const& InKey)
 {
-	UE_LOG(LogBlueprintActionDatabase, Log, TEXT("DeferredRemoveEntry - %s"), *BlueprintActionDatabaseImpl::ObjectKeyToString(InKey));
-	
 	ActionRemoveQueue.AddUnique(InKey);
 }
 

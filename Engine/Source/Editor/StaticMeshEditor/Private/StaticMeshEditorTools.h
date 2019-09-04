@@ -25,6 +25,7 @@ class FStaticMeshEditor;
 class IDetailCategoryBuilder;
 class IDetailChildrenBuilder;
 class IDetailLayoutBuilder;
+class IDetailGroup;
 class IStaticMeshEditor;
 class UMaterialInterface;
 struct FSectionLocalizer;
@@ -62,6 +63,18 @@ private:
 	TSharedPtr<FLevelOfDetailSettingsLayout> LevelOfDetailSettings;
 	/** Static mesh editor */
 	class FStaticMeshEditor& StaticMeshEditor;
+
+	// Property handle used to determine if the VertexColorImportOverride property should be enabled.
+	TSharedPtr<IPropertyHandle> VertexColorImportOptionHandle;
+	
+	// Property handle used during UI construction
+	TSharedPtr<IPropertyHandle> VertexColorImportOverrideHandle;
+
+	// Delegate implementation of FOnInstancedPropertyIteration used during DataImport UI construction
+	void OnInstancedFbxStaticMeshImportDataPropertyIteration(IDetailCategoryBuilder& BaseCategory, IDetailGroup* PropertyGroup, TSharedRef<IPropertyHandle>& Property) const;
+
+	// Delegate used at runtime to determine the state of the VertexOverrideColor property
+	bool GetVertexOverrideColorEnabledState() const;
 };
 
 
@@ -523,6 +536,14 @@ private:
 	bool RemoveMinLODPlatformOverride(FName PlatformGroupName);
 	TArray<FName> GetMinLODPlatformOverrideNames() const;
 
+	void OnNumStreamedLODsChanged(int32 NewValue, FName Platform);
+	void OnNumStreamedLODsCommitted(int32 InValue, ETextCommit::Type CommitInfo, FName Platform);
+	int32 GetNumStreamedLODs(FName Platform) const;
+	TSharedRef<SWidget> GetNumStreamedLODsWidget(FName PlatformGroupName) const;
+	bool AddNumStreamedLODsPlatformOverride(FName PlatformGroupName);
+	bool RemoveNumStreamedLODsPlatformOverride(FName PlatformGroupName);
+	TArray<FName> GetNumStreamedLODsPlatformOverrideNames() const;
+
 	bool CanRemoveLOD(int32 LODIndex) const;
 	FReply OnRemoveLOD(int32 LODIndex);
 
@@ -551,6 +572,7 @@ private:
 	void UpdateLODNames();
 	FText GetLODCountTooltip() const;
 	FText GetMinLODTooltip() const;
+	FText GetNumStreamedLODsTooltip() const;
 
 	FText GetLODCustomModeNameContent(int32 LODIndex) const;
 	ECheckBoxState IsLODCustomModeCheck(int32 LODIndex) const;

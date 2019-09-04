@@ -103,13 +103,14 @@ namespace AutomationTool
 		public static CommandLineArg NoP4 = new CommandLineArg("-NoP4");
 		public static CommandLineArg P4 = new CommandLineArg("-P4");
         public static CommandLineArg Compile = new CommandLineArg("-Compile");
-        /// <summary>
-        /// This command is LEGACY because we used to run UAT.exe to compile scripts by default.
-        /// Now we only compile by default when run via RunUAT.bat, which still understands -nocompile.
-        /// However, the batch file simply passes on all arguments, so UAT will choke when encountering -nocompile.
-        /// Keep this CommandLineArg around so that doesn't happen.
-        /// </summary>
-        public static CommandLineArg NoCompileLegacyDontUse = new CommandLineArg("-NoCompile");
+		public static CommandLineArg IgnoreDependencies = new CommandLineArg("-IgnoreDependencies");
+		/// <summary>
+		/// This command is LEGACY because we used to run UAT.exe to compile scripts by default.
+		/// Now we only compile by default when run via RunUAT.bat, which still understands -nocompile.
+		/// However, the batch file simply passes on all arguments, so UAT will choke when encountering -nocompile.
+		/// Keep this CommandLineArg around so that doesn't happen.
+		/// </summary>
+		public static CommandLineArg NoCompileLegacyDontUse = new CommandLineArg("-NoCompile");
         public static CommandLineArg NoCompileEditor = new CommandLineArg("-NoCompileEditor");
 		public static CommandLineArg Help = new CommandLineArg("-Help");
 		public static CommandLineArg List = new CommandLineArg("-List");
@@ -421,6 +422,11 @@ AutomationTool.exe [-verbose] [-compileonly] [-p4] Command0 [-Arg0 -Arg1 -Arg2 .
 		#region Main Program
 
 		/// <summary>
+		/// Compiler with all scripts
+		/// </summary>
+		public static ScriptCompiler Compiler { get; set; }
+
+		/// <summary>
 		/// Main method.
 		/// </summary>
 		/// <param name="Arguments">Command line</param>
@@ -478,7 +484,7 @@ AutomationTool.exe [-verbose] [-compileonly] [-p4] Command0 [-Arg0 -Arg1 -Arg2 .
 			ProjectUtils.CleanupFolders();
 
 			// Compile scripts.
-			ScriptCompiler Compiler = new ScriptCompiler();
+			Compiler = new ScriptCompiler();
 			using(TelemetryStopwatch ScriptCompileStopwatch = new TelemetryStopwatch("ScriptCompile"))
 			{
 				Compiler.FindAndCompileAllScripts(OutScriptsForProjectFileName, AdditionalScriptsFolders);

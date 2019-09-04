@@ -26,6 +26,10 @@
 #include "MovieSceneToolHelpers.h"
 #include "Misc/QualifiedFrameTime.h"
 #include "MovieSceneTimeHelpers.h"
+#include "EngineAnalytics.h"
+#include "Interfaces/IAnalyticsProvider.h"
+
+#include "CommonMovieSceneTools.h"
 
 namespace SubTrackEditorConstants
 {
@@ -67,7 +71,6 @@ public:
 	{
 		return &SectionObject;
 	}
-
 	virtual FText GetSectionTitle() const override
 	{
 		if(SectionObject.GetSequence())
@@ -113,7 +116,8 @@ public:
 		int32 LayerId = InPainter.PaintSectionBackground();
 
 		ESlateDrawEffect DrawEffects = InPainter.bParentEnabled ? ESlateDrawEffect::None : ESlateDrawEffect::DisabledEffect;
-
+		
+		
 		TRange<FFrameNumber> SectionRange = SectionObject.GetRange();
 		if (SectionRange.GetLowerBound().IsOpen() || SectionRange.GetUpperBound().IsOpen())
 		{
@@ -233,6 +237,23 @@ public:
 				DrawEffects,
 				FColor(200, 200, 200)
 			);
+
+
+			TSharedPtr<ISequencer> SequencerPtr = Sequencer.Pin();
+			if (InPainter.bIsSelected && SequencerPtr.IsValid())
+			{
+				FFrameTime CurrentTime = SequencerPtr->GetLocalTime().Time;
+				if (SectionRange.Contains(CurrentTime.FrameNumber))
+				{
+					UMovieScene* SubSequenceMovieScene = SectionObject.GetSequence()->GetMovieScene();
+					const FFrameRate DisplayRate = SubSequenceMovieScene->GetDisplayRate();
+					const FFrameRate TickResolution = SubSequenceMovieScene->GetTickResolution();
+					const FFrameNumber CurrentFrameNumber = ConvertFrameTime(CurrentTime * SectionObject.OuterToInnerTransform(), TickResolution, DisplayRate).FloorToFrame();
+
+					DrawFrameNumberHint(InPainter, CurrentTime, CurrentFrameNumber.Value);
+				}
+			}
+
 		}
 		else if (UMovieSceneSubSection::GetRecordingSection() == &SectionObject)
 		{
@@ -389,9 +410,7 @@ private:
 	/** Display name of the section */
 	FText DisplayName;
 
-	/** The section we are visualizing */
 	UMovieSceneSubSection& SectionObject;
-
 	/** Sequencer interface */
 	TWeakPtr<ISequencer> Sequencer;
 
@@ -475,6 +494,14 @@ bool FSubTrackEditor::HandleAssetAdded(UObject* Asset, const FGuid& TargetObject
 
 	if (FocusedMovieScene != nullptr && FocusedMovieScene->FindMasterTrack<UMovieSceneCinematicShotTrack>() != nullptr)
 	{
+		return false;
+	}
+
+	if (Sequence->GetMovieScene()->GetPlaybackRange().IsEmpty())
+	{
+		FNotificationInfo Info(FText::Format(LOCTEXT("InvalidSequenceDuration", "Invalid level sequence {0}. The sequence has no duration."), Sequence->GetDisplayName()));
+		Info.bUseLargeFont = false;
+		FSlateNotificationManager::Get().AddNotification(Info);
 		return false;
 	}
 
@@ -636,9 +663,8 @@ void FSubTrackEditor::HandleAddSubTrackMenuEntryExecute()
 
 	if (GetSequencer().IsValid())
 	{
-		GetSequencer()->OnAddTrack(NewTrack);
+		GetSequencer()->OnAddTrack(NewTrack, FGuid());
 	}
-	GetSequencer()->NotifyMovieSceneDataChanged( EMovieSceneDataChangeType::MovieSceneStructureItemAdded );
 }
 
 /** Helper function - get the first PIE world (or first PIE client world if there is more than one) */
@@ -746,6 +772,14 @@ FKeyPropertyResult FSubTrackEditor::AddKeyInternal(FFrameNumber KeyTime, UMovieS
 {	
 	FKeyPropertyResult KeyPropertyResult;
 
+	if (InMovieSceneSequence->GetMovieScene()->GetPlaybackRange().IsEmpty())
+	{
+		FNotificationInfo Info(FText::Format(LOCTEXT("InvalidSequenceDuration", "Invalid level sequence {0}. The sequence has no duration."), InMovieSceneSequence->GetDisplayName()));
+		Info.bUseLargeFont = false;
+		FSlateNotificationManager::Get().AddNotification(Info);
+		return KeyPropertyResult;
+	}
+
 	if (CanAddSubSequence(*InMovieSceneSequence))
 	{
 		UMovieSceneSubTrack* SubTrack = Cast<UMovieSceneSubTrack>(InTrack);
@@ -820,6 +854,12 @@ bool FSubTrackEditor::CanRecordNewSequence() const
 
 void FSubTrackEditor::HandleRecordNewSequence(AActor* InActorToRecord, UMovieSceneTrack* InTrack)
 {
+	// Keep track of how many people actually used record new sequence
+	if (FEngineAnalytics::IsAvailable())
+	{
+		FEngineAnalytics::GetProvider().RecordEvent(TEXT("Editor.Sequencer.RecordNewSequence"));
+	}
+
 	FSlateApplication::Get().DismissAllMenus();
 
 	const FScopedTransaction Transaction(LOCTEXT("AddRecordNewSequence_Transaction", "Add Record New Sequence"));

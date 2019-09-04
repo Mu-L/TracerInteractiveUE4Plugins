@@ -13,6 +13,10 @@
 #include "HAL/ThreadManager.h"
 #include "Modules/ModuleManager.h"
 
+#if BUILD_EMBEDDED_APP
+#include "Misc/EmbeddedCommunication.h"
+#endif
+
 #if PLATFORM_ANDROID
 #if USE_ANDROID_EVENTS
 #include "Android/AndroidEventManager.h"
@@ -134,6 +138,8 @@ void FPreLoadScreenManager::HandleEarlyStartupPlay()
         IPreLoadScreen* PreLoadScreen = GetActivePreLoadScreen();
         if (PreLoadScreen && MainWindow.IsValid())
         {
+			SCOPED_BOOT_TIMING("FPreLoadScreenManager::HandleEarlyStartupPlay()");
+
             PreLoadScreen->OnPlay(MainWindow.Pin());
 
             if (PreLoadScreen->GetWidget().IsValid())
@@ -147,11 +153,20 @@ void FPreLoadScreenManager::HandleEarlyStartupPlay()
 				bDidDisableScreensaver = FPlatformApplicationMisc::ControlScreensaver(FGenericPlatformApplicationMisc::EScreenSaverAction::Disable);
 			}
 
-            //We run this PreLoadScreen until its finished or we lose the MainWindow as EarlyPreLoadPlay is synchronous
-            while (!PreLoadScreen->IsDone())
-            {
-                EarlyPlayFrameTick();
-            }
+			{
+				SCOPED_BOOT_TIMING("FPreLoadScreenManager::EarlyPlayFrameTick()");
+
+				//We run this PreLoadScreen until its finished or we lose the MainWindow as EarlyPreLoadPlay is synchronous
+#if BUILD_EMBEDDED_APP && FAST_BOOT_HACKS
+				FString ObjName(TEXT("LoggedInObject"));
+				while (FEmbeddedDelegates::GetNamedObject(ObjName) == nullptr || !PreLoadScreen->IsDone())
+#else
+				while (!PreLoadScreen->IsDone())
+#endif
+				{
+					EarlyPlayFrameTick();
+				}
+			}
 
             if (bDidDisableScreensaver)
             {
@@ -276,17 +291,18 @@ void FPreLoadScreenManager::GameLogicFrameTick()
         double DeltaTime = CurrentTime - LastTickTime;
         LastTickTime = CurrentTime;
 
+		//Clamp to what should be more then any max reasonable time. This is to help with cases of
+		//backgrounding or setting breakpoints to trigger huge ticks
+		const double MaxTickTime = 5.0;
+		DeltaTime = FMath::Min(DeltaTime, MaxTickTime);
+
         //We have to manually tick everything as we are looping the main thread here
         FTicker::GetCoreTicker().Tick(DeltaTime);
         FThreadManager::Get().Tick();
 
-        //Tick android events
-#if PLATFORM_ANDROID
-#if USE_ANDROID_EVENTS
-    // Process any Android events or we may have issues returning from background
-        FAppEventManager::GetInstance()->Tick();
-#endif
-#endif
+		//Tick any platform specific things we need here
+		PlatformSpecificGameLogicFrameTick();
+
         //Tick the Active Screen
         ActivePreLoadScreen->Tick(DeltaTime);
 
@@ -300,6 +316,17 @@ void FPreLoadScreenManager::GameLogicFrameTick()
         //Needed as this won't be incrementing on its own and some other tick functions rely on this (like analytics)
         GFrameCounter++;
     }
+}
+
+void FPreLoadScreenManager::PlatformSpecificGameLogicFrameTick()
+{
+#if PLATFORM_ANDROID
+	Android_PlatformSpecificGameLogicFrameTick();
+#endif //PLATFORM_ANDROID
+
+#if PLATFORM_IOS
+	IOS_PlatformSpecificGameLogicFrameTick();
+#endif //PLATFORM_IOS
 }
 
 bool FPreLoadScreenManager::ShouldRender()
@@ -480,3 +507,21 @@ void FPreLoadScreenManager::CleanUpResources()
     //other game specific settings containers should be cleaned up by their screens/modules
     BeginCleanup(&FPreLoadSettingsContainerBase::Get());
 }
+
+#if PLATFORM_ANDROID
+void FPreLoadScreenManager::Android_PlatformSpecificGameLogicFrameTick()
+{
+#if USE_ANDROID_EVENTS
+	// Process any Android events or we may have issues returning from background
+	FAppEventManager::GetInstance()->Tick();
+#endif //USE_ANDROIID_EVENTS
+}
+#endif //PLATFORM_ANDROID
+
+#if PLATFORM_IOS
+void FPreLoadScreenManager::IOS_PlatformSpecificGameLogicFrameTick()
+{
+	// drain the async task queue from the game thread
+	[FIOSAsyncTask ProcessAsyncTasks];
+}
+#endif

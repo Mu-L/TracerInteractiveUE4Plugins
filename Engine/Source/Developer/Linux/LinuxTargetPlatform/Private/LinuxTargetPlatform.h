@@ -36,7 +36,7 @@ class TLinuxTargetPlatform
 	: public TTargetPlatformBase<TProperties>
 {
 public:
-	
+
 	typedef TTargetPlatformBase<TProperties> TSuper;
 
 	/**
@@ -46,12 +46,12 @@ public:
 #if WITH_ENGINE
 		: bChangingDeviceConfig(false)
 #endif // WITH_ENGINE
-	{		
+	{
 #if PLATFORM_LINUX
 		// only add local device if actually running on Linux
 		LocalDevice = MakeShareable(new FLinuxTargetDevice(*this, FPlatformProcess::ComputerName(), nullptr));
 #endif
-	
+
 #if WITH_ENGINE
 		FConfigCacheIni::LoadLocalIniFile(EngineSettings, TEXT("Engine"), true, *this->PlatformName());
 		TextureLODSettings = nullptr;
@@ -91,13 +91,13 @@ public:
 		}
 
 		FTargetDeviceId UATFriendlyId(TEXT("Linux"), DeviceName);
-		Device = MakeShareable(new FLinuxTargetDevice(*this, DeviceName, 
+		Device = MakeShareable(new FLinuxTargetDevice(*this, DeviceName,
 #if WITH_ENGINE
 			[&]() { SaveDevicesToConfig(); }));
 		SaveDevicesToConfig();	// this will do the right thing even if AddDevice() was called from InitDevicesFromConfig
 #else
 			nullptr));
-#endif // WITH_ENGINE	
+#endif // WITH_ENGINE
 
 		DeviceDiscoveredEvent.Broadcast(Device.ToSharedRef());
 		return true;
@@ -118,7 +118,7 @@ public:
 		}
 	}
 
-	virtual bool GenerateStreamingInstallManifest(const TMultiMap<FString, int32>& ChunkMap, const TSet<int32>& ChunkIDsInUse) const override
+	virtual bool GenerateStreamingInstallManifest(const TMultiMap<FString, int32>& PakchunkMap, const TSet<int32>& PakchunkIndicesInUse) const override
 	{
 		return true;
 	}
@@ -179,7 +179,7 @@ public:
 			{
 				return true;
 			}
-			
+
 			// else check for legacy LINUX_ROOT
 			FString ToolchainCompiler = FPlatformMisc::GetEnvironmentVariable(TEXT("LINUX_ROOT"));
 			if (PLATFORM_WINDOWS)
@@ -280,13 +280,12 @@ public:
 	}
 
 
-	virtual void GetTextureFormats( const UTexture* InTexture, TArray<FName>& OutFormats ) const override
+	virtual void GetTextureFormats( const UTexture* InTexture, TArray< TArray<FName> >& OutFormats) const override
 	{
 		if (!TProperties::IsServerOnly())
 		{
 			// just use the standard texture format name for this texture
-			FName TextureFormatName = GetDefaultTextureFormatName(this, InTexture, EngineSettings, false);
-			OutFormats.Add(TextureFormatName);
+			GetDefaultTextureFormatNamePerLayer(OutFormats.AddDefaulted_GetRef(), this, InTexture, EngineSettings, false);
 		}
 	}
 
@@ -312,8 +311,14 @@ public:
 
 	virtual FName GetWaveFormat( const class USoundWave* Wave ) const override
 	{
-		static FName NAME_OGG(TEXT("OGG"));
-		static FName NAME_OPUS(TEXT("OPUS"));
+		static const FName NAME_ADPCM(TEXT("ADPCM"));
+		static const FName NAME_OGG(TEXT("OGG"));
+		static const FName NAME_OPUS(TEXT("OPUS"));
+
+		if (Wave->IsSeekableStreaming())
+		{
+			return NAME_ADPCM;
+		}
 
 		if (Wave->IsStreaming())
 		{
@@ -325,8 +330,11 @@ public:
 
 	virtual void GetAllWaveFormats(TArray<FName>& OutFormats) const override
 	{
-		static FName NAME_OGG(TEXT("OGG"));
-		static FName NAME_OPUS(TEXT("OPUS"));
+		static const FName NAME_ADPCM(TEXT("ADPCM"));
+		static const FName NAME_OGG(TEXT("OGG"));
+		static const FName NAME_OPUS(TEXT("OPUS"));
+
+		OutFormats.Add(NAME_ADPCM);
 		OutFormats.Add(NAME_OGG);
 		OutFormats.Add(NAME_OPUS);
 	}
@@ -378,7 +386,7 @@ public:
 	{
 		return DeviceDiscoveredEvent;
 	}
-	
+
 	DECLARE_DERIVED_EVENT(TLinuxTargetPlatform, ITargetPlatform::FOnTargetDeviceLost, FOnTargetDeviceLost);
 	virtual FOnTargetDeviceLost& OnDeviceLost( ) override
 	{
@@ -401,7 +409,7 @@ protected:
 		}
 		bChangingDeviceConfig = true;
 
-		int NumDevices = 0;	
+		int NumDevices = 0;
 		for (;; ++NumDevices)
 		{
 			FString DeviceName, DeviceUser, DevicePass;
@@ -437,7 +445,7 @@ protected:
 				}
 			}
 		}
-		
+
 		bChangingDeviceConfig = false;
 	}
 

@@ -75,10 +75,12 @@ public:
 	virtual int32 IsNetReady( bool Saturate ) override;
 	virtual void FlushNet( bool bIgnoreSimulation = false ) override;
 	virtual void HandleClientPlayer( APlayerController* PC, class UNetConnection* NetConnection ) override;
-	virtual TSharedPtr<FInternetAddr> GetInternetAddr() override;
+	virtual TSharedPtr<const FInternetAddr> GetRemoteAddr() override { return nullptr; }
 	virtual bool ClientHasInitializedLevelFor( const AActor* TestActor ) const override;
 	virtual TSharedPtr<FObjectReplicator> CreateReplicatorForNewActorChannel(UObject* Object);
 	virtual FString RemoteAddressToString() override { return TEXT("Demo"); }
+
+	virtual void NotifyActorNetGUID(UActorChannel* Channel) override;
 
 public:
 
@@ -99,6 +101,8 @@ public:
 	TArray<FQueuedDemoPacket> QueuedDemoPackets;
 	TArray<FQueuedDemoPacket> QueuedCheckpointPackets;
 
+	TMap<FNetworkGUID, UActorChannel*>& GetOpenChannelMap() { return OpenChannelMap; }
+
 protected:
 	virtual void DestroyIgnoredActor(AActor* Actor) override;
 
@@ -109,4 +113,7 @@ protected:
 
 private:
 	void TrackSendForProfiler(const void* Data, int32 NumBytes);
+
+	// Not a weak object pointer, intended to exist only during checkpoint loading
+	TMap<FNetworkGUID, UActorChannel*> OpenChannelMap;
 };

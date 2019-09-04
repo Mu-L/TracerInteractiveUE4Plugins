@@ -130,7 +130,9 @@ void UUserWidget::TemplateInitInner()
 	{
 		WidgetTree->ForEachWidget([this, WidgetClass] (UWidget* Widget) {
 
+#if !UE_BUILD_SHIPPING
 			Widget->WidgetGeneratedByClass = WidgetClass;
+#endif
 
 			// TODO UMG Make this an FName
 			FString VariableName = Widget->GetName();
@@ -2144,6 +2146,15 @@ UUserWidget* UUserWidget::CreateInstanceInternal(UObject* Outer, TSubclassOf<UUs
 		{
 			ensureMsgf(BPClass->bAllowDynamicCreation, TEXT("This Widget Blueprint's 'Support Dynamic Creation' option either defaults to Off or was explictly turned off.  If you need to create this widget at runtime, turn this option on."));
 		}
+	}
+#endif
+
+#if !UE_BUILD_SHIPPING
+	// Check if the world is being torn down before we create a widget for it.
+	if (World)
+	{
+		// Look for indications that widgets are being created for a dead and dying world.
+		ensureMsgf(!World->bIsTearingDown, TEXT("Widget Class %s - Attempting to be created while tearing down the world."), *UserWidgetClass->GetName());
 	}
 #endif
 

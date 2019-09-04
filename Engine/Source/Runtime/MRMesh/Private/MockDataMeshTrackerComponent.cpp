@@ -4,7 +4,6 @@
 #include "Engine/Engine.h"
 #include "Engine/GameEngine.h"
 #include "GameFramework/WorldSettings.h"
-#include "HeadMountedDisplayFunctionLibrary.h"
 #if WITH_EDITOR
 #include "Editor.h"
 #endif
@@ -49,7 +48,7 @@ public:
 			Normals[i].Normalize();
 		}
 		const int32 IndexCount = 54;
-		uint32 Indices[IndexCount] =
+		MRMESH_INDEX_TYPE Indices[IndexCount] =
 		{
 			0,4,5,
 			0,5,1,
@@ -112,7 +111,7 @@ public:
 	{
 		TArray<FVector> Vertices;
 		TArray<FVector> Normals;
-		TArray<uint32> Indices;
+		TArray<MRMESH_INDEX_TYPE> Indices;
 	};
 	TArray<FRawMockMeshData> RawMockMeshData;
 
@@ -129,11 +128,11 @@ public:
 		IMRMesh::FBrickId BrickId = 0;
 		TArray<FVector> OffsetVertices;
 		TArray<FVector> WorldVertices;
-		TArray<uint32> Triangles;
 		TArray<FVector> Normals;
 		TArray<FVector2D> UV0;
 		TArray<FColor> VertexColors;
 		TArray<FPackedNormal> Tangents;
+		TArray<MRMESH_INDEX_TYPE> Triangles;
 		TArray<float> Confidence;
 
 		void Recycle(SharedPtr& MeshData)
@@ -397,7 +396,7 @@ void UMockDataMeshTrackerComponent::RemoveBlock(int32 BlockIndex)
 		const static TArray<FVector2D> EmptyUVs;
 		const static TArray<FPackedNormal> EmptyTangents;
 		const static TArray<FColor> EmptyVertexColors;
-		const static TArray<uint32> EmptyTriangles;
+		const static TArray<MRMESH_INDEX_TYPE> EmptyTriangles;
 		const auto& BrickId = Impl->MeshBrickCache[BlockIndex];
 		static_cast<IMRMesh*>(MRMesh)->SendBrickData(IMRMesh::FSendBrickDataArgs
 			{
@@ -439,7 +438,7 @@ void UMockDataMeshTrackerComponent::UpdateBlock(int32 BlockIndex)
 	CurrentMeshDataCache->BrickId = BrickId;
 
 	// Pull vertices
-	const FVector VertexOffset = UHeadMountedDisplayFunctionLibrary::GetTrackingToWorldTransform(this).Inverse().GetLocation();
+	const FVector VertexOffset = FVector::ZeroVector; // If this was the inverse of the worldToTrackingTransform position the mesh would be located in tracker space, but we don't want a dependency on HMD here.  
 	const int32 VertexCount = RawMeshData.Vertices.Num();
 	CurrentMeshDataCache->OffsetVertices.Reserve(VertexCount);
 	CurrentMeshDataCache->WorldVertices.Reserve(VertexCount);
@@ -454,7 +453,7 @@ void UMockDataMeshTrackerComponent::UpdateBlock(int32 BlockIndex)
 	CurrentMeshDataCache->Triangles.Reserve(IndexCount);
 	for (int32 i = 0; i < IndexCount; ++ i)
 	{
-		CurrentMeshDataCache->Triangles.Add(static_cast<uint32>(RawMeshData.Indices[i]));
+		CurrentMeshDataCache->Triangles.Add(static_cast<MRMESH_INDEX_TYPE>(RawMeshData.Indices[i]));
 	}
 
 	// Pull normals
@@ -588,11 +587,14 @@ void UMockDataMeshTrackerComponent::UpdateBlock(int32 BlockIndex)
 	// Broadcast that a mesh was updated
 	if (OnMeshTrackerUpdated.IsBound())
 	{
-		// Hack because blueprints don't support uint32.
-		TArray<int32> Triangles(reinterpret_cast<const int32*>(CurrentMeshDataCache->
-			Triangles.GetData()), CurrentMeshDataCache->Triangles.Num());
-		OnMeshTrackerUpdated.Broadcast(CurrentMeshDataCache->BrickId, CurrentMeshDataCache->OffsetVertices, 
-			Triangles, CurrentMeshDataCache->Normals, CurrentMeshDataCache->Confidence);
+		if (sizeof(MRMESH_INDEX_TYPE) == sizeof(uint32))
+		{
+			// Hack because blueprints don't support uint32.
+			TArray<int32> Triangles(reinterpret_cast<const int32*>(CurrentMeshDataCache->
+				Triangles.GetData()), CurrentMeshDataCache->Triangles.Num());
+			OnMeshTrackerUpdated.Broadcast(CurrentMeshDataCache->BrickId, CurrentMeshDataCache->OffsetVertices,
+				Triangles, CurrentMeshDataCache->Normals, CurrentMeshDataCache->Confidence);
+		}
 	}
 }
 

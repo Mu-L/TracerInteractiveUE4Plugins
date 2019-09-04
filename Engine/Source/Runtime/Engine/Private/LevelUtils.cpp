@@ -222,44 +222,9 @@ bool FLevelUtils::IsLevelLoaded(ULevel* Level)
 	}
 
 	ULevelStreaming* StreamingLevel = FindStreamingLevel( Level );
-	checkf( StreamingLevel, TEXT("Couldn't find streaming level" ) );
-
-	// @todo: Dave, please come talk to me before implementing anything like this.
-	return true;
+	return (StreamingLevel != nullptr);
 }
 
-/**
- * Flags an unloaded level for loading.
- *
- * @param	Level		The level to modify.
- */
-void FLevelUtils::MarkLevelForLoading(ULevel* Level)
-{
-	// If the level is valid and not the persistent level (which is always loaded) . . .
-	if ( Level && !Level->IsPersistentLevel() )
-	{
-		// Mark the level's stream for load.
-		ULevelStreaming* StreamingLevel = FindStreamingLevel( Level );
-		checkf( StreamingLevel, TEXT("Couldn't find streaming level" ) );
-		// @todo: Dave, please come talk to me before implementing anything like this.
-	}
-}
-
-/**
- * Flags a loaded level for unloading.
- *
- * @param	Level		The level to modify.
- */
-void FLevelUtils::MarkLevelForUnloading(ULevel* Level)
-{
-	// If the level is valid and not the persistent level (which is always loaded) . . .
-	if ( Level && !Level->IsPersistentLevel() )
-	{
-		ULevelStreaming* StreamingLevel = FindStreamingLevel( Level );
-		checkf( StreamingLevel, TEXT("Couldn't find streaming level" ) );
-		// @todo: Dave, please come talk to me before implementing anything like this.
-	}
-}
 
 /////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -332,6 +297,19 @@ void FLevelUtils::SetEditorTransform(ULevelStreaming* StreamingLevel, const FTra
 	// Setup an Undo transaction
 	const FScopedTransaction LevelOffsetTransaction( LOCTEXT( "ChangeEditorLevelTransform", "Edit Level Transform" ) );
 	StreamingLevel->Modify();
+
+	// Ensure that all Actors are in the transaction so that their location is restored and any construction script behaviors 
+	// based on being at a different location are correctly applied on undo/redo
+	if (ULevel* LoadedLevel = StreamingLevel->GetLoadedLevel())
+	{
+		for (AActor* Actor : LoadedLevel->Actors)
+		{
+			if (Actor)
+			{
+				Actor->Modify();
+			}
+		}
+	}
 
 	// Apply new transform
 	RemoveEditorTransform(StreamingLevel, false );
@@ -412,14 +390,14 @@ void FLevelUtils::ApplyLevelTransform( ULevel* Level, const FTransform& LevelTra
 		{
 			AActor* Actor = Level->Actors[ActorIndex];
 
-			// Don't want to transform children they should stay relative to there parents.
-			if( Actor && Actor->GetAttachParentActor() == NULL )
+			// Don't want to transform children they should stay relative to their parents.
+			if( Actor && Actor->GetAttachParentActor() == nullptr )
 			{
 				// Has to modify root component directly as GetActorPosition is incorrect this early
 				USceneComponent *RootComponent = Actor->GetRootComponent();
 				if (RootComponent)
 				{
-					RootComponent->SetRelativeLocationAndRotation( LevelTransform.TransformPosition(RootComponent->RelativeLocation), (FTransform(RootComponent->RelativeRotation) * LevelTransform).Rotator());
+					RootComponent->SetRelativeLocationAndRotation( LevelTransform.TransformPosition(RootComponent->RelativeLocation), LevelTransform.TransformRotation(RootComponent->RelativeRotation.Quaternion()) );
 				}			
 			}
 		}

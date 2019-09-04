@@ -318,7 +318,6 @@ protected:
 
 			// Input Layout State
 			D3D12_RECT CurrentScissorRects[D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
-			D3D12_RECT CurrentViewportScissorRects[D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
 			uint32 CurrentNumberOfScissorRects;
 
 			uint16 StreamStrides[MaxVertexElementCount];
@@ -380,9 +379,13 @@ protected:
 	}
 	DECLARE_SHADER_TRAITS(Vertex);
 	DECLARE_SHADER_TRAITS(Pixel);
+#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
 	DECLARE_SHADER_TRAITS(Domain);
 	DECLARE_SHADER_TRAITS(Hull);
+#endif
+#if PLATFORM_SUPPORTS_GEOMETRY_SHADERS
 	DECLARE_SHADER_TRAITS(Geometry);
+#endif
 #undef DECLARE_SHADER_TRAITS
 
 	template <typename TShader> D3D12_STATE_CACHE_INLINE void SetShader(TShader* Shader)
@@ -495,33 +498,13 @@ public:
 
 	template <EShaderFrequency ShaderFrequency>
 	void SetShaderResourceView(FD3D12ShaderResourceView* SRV, uint32 ResourceIndex);
-
-	template <EShaderFrequency ShaderFrequency>
-	D3D12_STATE_CACHE_INLINE void GetShaderResourceViews(uint32 StartResourceIndex, uint32& NumResources, FD3D12ShaderResourceView** SRV)
-	{
-		{
-			uint32 NumLoops = D3D12_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT - StartResourceIndex;
-			NumResources = 0;
-			for (uint32 ResourceLoop = 0; ResourceLoop < NumLoops; ResourceLoop++)
-			{
-				SRV[ResourceLoop] = PipelineState.Common.CurrentShaderResourceViews[ShaderFrequency][ResourceLoop + StartResourceIndex];
-				if (SRV[ResourceLoop])
-				{
-					SRV[ResourceLoop]->AddRef();
-					NumResources = ResourceLoop;
-				}
-			}
-		}
-	}
-
-	void UpdateViewportScissorRects();
+	
 	void SetScissorRects(uint32 Count, const D3D12_RECT* const ScissorRects);
 	void SetScissorRect(const D3D12_RECT& ScissorRect);
 
-	D3D12_STATE_CACHE_INLINE void GetScissorRect(D3D12_RECT* ScissorRect) const
+	D3D12_STATE_CACHE_INLINE const D3D12_RECT& GetScissorRect(int32 Index = 0) const
 	{
-		check(ScissorRect);
-		FMemory::Memcpy(ScissorRect, &PipelineState.Graphics.CurrentScissorRects, sizeof(D3D12_RECT));
+		return PipelineState.Graphics.CurrentScissorRects[Index];
 	}
 
 	void SetViewport(const D3D12_VIEWPORT& Viewport);
@@ -532,10 +515,9 @@ public:
 		return PipelineState.Graphics.CurrentNumberOfViewports;
 	}
 
-	D3D12_STATE_CACHE_INLINE void GetViewport(D3D12_VIEWPORT* Viewport) const
+	D3D12_STATE_CACHE_INLINE const D3D12_VIEWPORT& GetViewport(int32 Index = 0) const
 	{
-		check(Viewport);
-		FMemory::Memcpy(Viewport, &PipelineState.Graphics.CurrentViewport, sizeof(D3D12_VIEWPORT));
+		return PipelineState.Graphics.CurrentViewport[Index];
 	}
 
 	D3D12_STATE_CACHE_INLINE void GetViewports(uint32* Count, D3D12_VIEWPORT* Viewports) const
@@ -661,17 +643,29 @@ public:
 
 	D3D12_STATE_CACHE_INLINE void GetHullShader(FD3D12HullShader** Shader)
 	{
+#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
 		GetShader(Shader);
+#else
+		*Shader = nullptr;
+#endif
 	}
 
 	D3D12_STATE_CACHE_INLINE void GetDomainShader(FD3D12DomainShader** Shader)
 	{
+#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
 		GetShader(Shader);
+#else
+		*Shader = nullptr;
+#endif
 	}
 
 	D3D12_STATE_CACHE_INLINE void GetGeometryShader(FD3D12GeometryShader** Shader)
 	{
+#if PLATFORM_SUPPORTS_GEOMETRY_SHADERS
 		GetShader(Shader);
+#else
+		*Shader = nullptr;
+#endif
 	}
 
 	D3D12_STATE_CACHE_INLINE void GetPixelShader(FD3D12PixelShader** Shader)
@@ -687,10 +681,13 @@ public:
 			SetStreamStrides(GraphicsPipelineState->StreamStrides);
 			SetShader(GraphicsPipelineState->GetVertexShader());
 			SetShader(GraphicsPipelineState->GetPixelShader());
+#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
 			SetShader(GraphicsPipelineState->GetDomainShader());
 			SetShader(GraphicsPipelineState->GetHullShader());
+#endif
+#if PLATFORM_SUPPORTS_GEOMETRY_SHADERS
 			SetShader(GraphicsPipelineState->GetGeometryShader());
-
+#endif
 			// See if we need to change the root signature
 			if (GetGraphicsRootSignature() != GraphicsPipelineState->RootSignature)
 			{
@@ -814,7 +811,9 @@ public:
 	{
 		if (LastComputePipelineType != PipelineType)
 		{
-			ClearState();
+			PipelineState.Common.bNeedSetPSO = true;
+			PipelineState.Compute.bNeedSetRootSignature = true;
+
 			LastComputePipelineType = PipelineType;
 		}
 	}

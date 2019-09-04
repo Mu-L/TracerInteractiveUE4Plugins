@@ -976,6 +976,11 @@ static void InitRHICapabilitiesForGL()
 				// The user should check for support for PF_G16R16 and implement a fallback if it's not supported!
 				SetupTextureFormat(PF_G16R16, FOpenGLTextureFormat(GL_RG16, GL_RG16, GL_RG, GL_UNSIGNED_SHORT, false, false));
 			}
+			if (FOpenGL::SupportsRG32UI())
+			{
+				// The user should check for support for PF_G32R32 and implement a fallback if it's not supported!
+				SetupTextureFormat(PF_R32G32_UINT, FOpenGLTextureFormat(GL_RG32UI, GL_RG32UI, GL_RG, GL_UNSIGNED_INT, false, false));
+			}
 		}
 		else
 		{
@@ -1026,6 +1031,18 @@ static void InitRHICapabilitiesForGL()
 	#if PLATFORM_HTML5
 		SetupTextureFormat(PF_R8G8B8A8_UINT, FOpenGLTextureFormat(GL_RGBA8UI, GL_RGBA8UI, GL_RGBA_INTEGER, GL_UNSIGNED_BYTE, false, false));
 	#endif
+
+#if PLATFORM_ANDROID
+		if (GMaxRHIFeatureLevel == ERHIFeatureLevel::ES3_1)
+		{
+			// These integer formats are supported with ES3.1:
+			SetupTextureFormat(PF_R32_UINT, FOpenGLTextureFormat(GL_R32UI, GL_R32UI, GL_RED_INTEGER, GL_UNSIGNED_INT, false, false));
+			SetupTextureFormat(PF_R32_SINT, FOpenGLTextureFormat(GL_R32I, GL_R32I, GL_RED_INTEGER, GL_INT, false, false));
+			SetupTextureFormat(PF_R16_UINT, FOpenGLTextureFormat(GL_R16UI, GL_R16UI, GL_RED_INTEGER, GL_UNSIGNED_SHORT, false, false));
+			SetupTextureFormat(PF_R16_SINT, FOpenGLTextureFormat(GL_R16I, GL_R16I, GL_RED_INTEGER, GL_SHORT, false, false));
+			SetupTextureFormat(PF_R8_UINT, FOpenGLTextureFormat(GL_R8UI, GL_R8UI, GL_RED_INTEGER, GL_UNSIGNED_BYTE, false, false));
+		}
+#endif
 
 		if (FOpenGL::SupportsColorBufferHalfFloat() && FOpenGL::SupportsTextureHalfFloat())
 		{

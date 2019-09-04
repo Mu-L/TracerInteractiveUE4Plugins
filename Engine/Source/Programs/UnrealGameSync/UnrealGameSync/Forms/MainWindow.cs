@@ -58,10 +58,12 @@ namespace UnrealGameSync
 
 		UpdateMonitor UpdateMonitor;
 		SynchronizationContext MainThreadSynchronizationContext;
+		List<IssueMonitor> IssueMonitors = new List<IssueMonitor>();
 
 		string ApiUrl;
 		string DataFolder;
 		string CacheFolder;
+		PerforceConnection DefaultConnection;
 		LineBasedTextWriter Log;
 		UserSettings Settings;
 		int TabMenu_TabIdx = -1;
@@ -84,7 +86,10 @@ namespace UnrealGameSync
 
 		bool bAllowCreatingHandle;
 
-		public MainWindow(UpdateMonitor InUpdateMonitor, string InApiUrl, string InDataFolder, string InCacheFolder, bool bInRestoreStateOnLoad, string InOriginalExecutableFileName, bool bInUnstable, DetectProjectSettingsResult[] StartupProjects, LineBasedTextWriter InLog, UserSettings InSettings)
+		Rectangle PrimaryWorkArea;
+		List<IssueAlertWindow> AlertWindows = new List<IssueAlertWindow>();
+
+		public MainWindow(UpdateMonitor InUpdateMonitor, string InApiUrl, string InDataFolder, string InCacheFolder, bool bInRestoreStateOnLoad, string InOriginalExecutableFileName, bool bInUnstable, DetectProjectSettingsResult[] StartupProjects, PerforceConnection InDefaultConnection, LineBasedTextWriter InLog, UserSettings InSettings)
 		{
 			InitializeComponent();
 
@@ -96,6 +101,7 @@ namespace UnrealGameSync
 			bRestoreStateOnLoad = bInRestoreStateOnLoad;
 			OriginalExecutableFileName = InOriginalExecutableFileName;
 			bUnstable = bInUnstable;
+			DefaultConnection = InDefaultConnection;
 			Log = InLog;
 			Settings = InSettings;
 
@@ -156,6 +162,11 @@ namespace UnrealGameSync
 			ResumeLayout(false);
 
 			bAllowCreatingHandle = true;
+
+			foreach(IssueMonitor IssueMonitor in IssueMonitors)
+			{
+				IssueMonitor.Start();
+			}
 		}
 
 		void PostAutomationRequest(AutomationRequest Request)
@@ -208,7 +219,7 @@ namespace UnrealGameSync
 			string ProjectPath = Reader.ReadString();
 
 			AutomatedSyncWindow.WorkspaceInfo WorkspaceInfo;
-			if(!AutomatedSyncWindow.ShowModal(this, StreamName, ProjectPath, out WorkspaceInfo, Log))
+			if(!AutomatedSyncWindow.ShowModal(this, DefaultConnection, StreamName, ProjectPath, out WorkspaceInfo, Log))
 			{
 				return new AutomationRequestOutput(AutomationRequestResult.Canceled);
 			}
@@ -389,6 +400,32 @@ namespace UnrealGameSync
 			}
 			TabPanel.Dispose();
 
+			HashSet<IssueMonitor> NewIssueMonitors = new HashSet<IssueMonitor>();
+			for(int Idx = 0; Idx < TabControl.GetTabCount(); Idx++)
+			{
+				WorkspaceControl Workspace = TabControl.GetTabData(Idx) as WorkspaceControl;
+				if(Workspace != null)
+				{
+					NewIssueMonitors.Add(Workspace.GetIssueMonitor());
+				}
+			}
+			foreach(IssueMonitor IssueMonitor in IssueMonitors)
+			{
+				if(!NewIssueMonitors.Contains(IssueMonitor))
+				{
+					for(int Idx = AlertWindows.Count - 1; Idx >= 0; Idx--)
+					{
+						IssueAlertWindow AlertWindow = AlertWindows[Idx];
+						if(AlertWindow.IssueMonitor == IssueMonitor)
+						{
+							CloseAlertWindow(AlertWindow);
+						}
+					}
+					IssueMonitor.Release();
+				}
+			}
+			IssueMonitors = NewIssueMonitors.ToList();
+
 			SaveTabSettings();
 		}
 
@@ -415,6 +452,12 @@ namespace UnrealGameSync
 			}
 
 			StopScheduleTimer();
+
+			foreach(IssueMonitor IssueMonitor in IssueMonitors)
+			{
+				IssueMonitor.Release();
+			}
+			IssueMonitors.Clear();
 
 			if(AutomationServer != null)
 			{
@@ -477,6 +520,8 @@ namespace UnrealGameSync
 
 			StatusLine OpenLine = new StatusLine();
 			OpenLine.AddLink("Open project...", FontStyle.Bold | FontStyle.Underline, () => { OpenNewProject(); });
+			OpenLine.AddText("  |  ");
+			OpenLine.AddLink("Application settings...", FontStyle.Bold | FontStyle.Underline, () => { ModifyApplicationSettings(); });
 			Lines.Add(OpenLine);
 
 			DefaultControl.Set(Lines, null, null, null);
@@ -818,7 +863,7 @@ namespace UnrealGameSync
 		public void OpenNewProject()
 		{
 			DetectProjectSettingsTask DetectedProjectSettings;
-			if(OpenProjectWindow.ShowModal(this, null, out DetectedProjectSettings, Settings, DataFolder, CacheFolder, Log))
+			if(OpenProjectWindow.ShowModal(this, null, out DetectedProjectSettings, Settings, DataFolder, CacheFolder, DefaultConnection, Log))
 			{
 				int NewTabIdx = TryOpenProject(DetectedProjectSettings, -1, OpenProjectOptions.None);
 				if(NewTabIdx != -1)
@@ -870,7 +915,7 @@ namespace UnrealGameSync
 		public void EditSelectedProject(int TabIdx, UserSelectedProjectSettings SelectedProject)
 		{
 			DetectProjectSettingsTask DetectedProjectSettings;
-			if(OpenProjectWindow.ShowModal(this, SelectedProject, out DetectedProjectSettings, Settings, DataFolder, CacheFolder, Log))
+			if(OpenProjectWindow.ShowModal(this, SelectedProject, out DetectedProjectSettings, Settings, DataFolder, CacheFolder, DefaultConnection, Log))
 			{
 				int NewTabIdx = TryOpenProject(DetectedProjectSettings, TabIdx, OpenProjectOptions.None);
 				if(NewTabIdx != -1)
@@ -890,16 +935,18 @@ namespace UnrealGameSync
 			Log.WriteLine("Detecting settings for {0}", Project);
 			using(DetectProjectSettingsTask DetectProjectSettings = new DetectProjectSettingsTask(Project, DataFolder, CacheFolder, new PrefixedTextWriter("  ", Log)))
 			{
+				PerforceConnection Perforce = Utility.OverridePerforceSettings(DefaultConnection, Project.ServerAndPort, Project.UserName);
+
 				string ErrorMessage;
 
 				ModalTaskResult Result;
 				if((Options & OpenProjectOptions.Quiet) != 0)
 				{
-					Result = ModalTask.Execute(this, DetectProjectSettings, "Opening Project", "Opening project, please wait...", out ErrorMessage);
+					Result = ModalTask.Execute(this, new QuietDetectProjectSettingsTask(Perforce, DetectProjectSettings, Log), "Opening Project", "Opening project, please wait...", out ErrorMessage);
 				}
 				else
 				{
-					Result = PerforceModalTask.Execute(this, Project.LocalPath, Project.ServerAndPort, Project.UserName, DetectProjectSettings, "Opening Project", "Opening project, please wait...", Log, out ErrorMessage);
+					Result = PerforceModalTask.Execute(this, Perforce, DetectProjectSettings, "Opening Project", "Opening project, please wait...", Log, out ErrorMessage);
 				}
 
 				if(Result != ModalTaskResult.Succeeded)
@@ -964,8 +1011,18 @@ namespace UnrealGameSync
 				}
 			}
 
+			// Find or add an issue monitor for this
+			IssueMonitor IssueMonitor = IssueMonitors.FirstOrDefault(x => String.Compare(x.UserName, ProjectSettings.PerforceClient.UserName, StringComparison.OrdinalIgnoreCase) == 0);
+			if(IssueMonitor == null)
+			{
+				string LogFileName = Path.Combine(DataFolder, String.Format("IssueMonitor-{0}.log", ProjectSettings.PerforceClient.UserName));
+				IssueMonitor = new IssueMonitor(ApiUrl, ProjectSettings.PerforceClient.UserName, TimeSpan.FromSeconds(60.0), LogFileName);
+				IssueMonitor.OnIssuesChanged += IssueMonitor_OnUpdateAsync;
+				IssueMonitors.Add(IssueMonitor);
+			}
+
 			// Now that we have the project settings, we can construct the tab
-			WorkspaceControl NewWorkspace = new WorkspaceControl(this, ApiUrl, OriginalExecutableFileName, bUnstable, ProjectSettings, Log, Settings);
+			WorkspaceControl NewWorkspace = new WorkspaceControl(this, ApiUrl, OriginalExecutableFileName, bUnstable, ProjectSettings, IssueMonitor, Log, Settings);
 			NewWorkspace.Parent = TabPanel;
 			NewWorkspace.Dock = DockStyle.Fill;
 			NewWorkspace.Hide();
@@ -1158,7 +1215,7 @@ namespace UnrealGameSync
 
 		public void ModifyApplicationSettings()
 		{
-			bool? bRelaunchUnstable = ApplicationSettingsWindow.ShowModal(this, bUnstable, OriginalExecutableFileName, Settings, Log);
+			bool? bRelaunchUnstable = ApplicationSettingsWindow.ShowModal(this, DefaultConnection, bUnstable, OriginalExecutableFileName, Settings, Log);
 			if(bRelaunchUnstable.HasValue)
 			{
 				UpdateMonitor.TriggerUpdate(UpdateType.UserInitiated, bRelaunchUnstable);
@@ -1184,6 +1241,198 @@ namespace UnrealGameSync
 				}
 			}
 			WindowState = Settings.WindowState;
+		}
+
+		public void UpdateAlertWindows()
+		{
+			HashSet<IssueData> AllIssues = new HashSet<IssueData>();
+			foreach(IssueMonitor IssueMonitor in IssueMonitors)
+			{
+				List<IssueData> Issues = IssueMonitor.GetIssues();
+				foreach(IssueData Issue in Issues)
+				{
+					IssueAlertReason Reason = 0;
+					if(Issue.FixChange <= 0 && !Issue.ResolvedAt.HasValue)
+					{
+						if(Issue.Owner == null)
+						{
+							if(Issue.bNotify)
+							{
+								Reason |= IssueAlertReason.Normal;
+							}
+							if(Settings.NotifyUnassignedMinutes >= 0 && Issue.RetrievedAt - Issue.CreatedAt >= TimeSpan.FromMinutes(Settings.NotifyUnassignedMinutes))
+							{
+								Reason |= IssueAlertReason.UnassignedTimer;
+							}
+						}
+						else if(!Issue.AcknowledgedAt.HasValue)
+						{
+							if(String.Compare(Issue.Owner, IssueMonitor.UserName, StringComparison.OrdinalIgnoreCase) == 0)
+							{
+								Reason |= IssueAlertReason.Owner;
+							}
+							else if(Settings.NotifyUnacknowledgedMinutes >= 0 && Issue.RetrievedAt - Issue.CreatedAt >= TimeSpan.FromMinutes(Settings.NotifyUnacknowledgedMinutes))
+							{
+								Reason |= IssueAlertReason.UnacknowledgedTimer;
+							}
+						}
+						if(Settings.NotifyUnresolvedMinutes >= 0 && Issue.RetrievedAt - Issue.CreatedAt >= TimeSpan.FromMinutes(Settings.NotifyUnresolvedMinutes))
+						{
+							Reason |= IssueAlertReason.UnresolvedTimer;
+						}
+
+						IssueAlertReason PrevReason;
+						if(IssueMonitor.IssueIdToAlertReason.TryGetValue(Issue.Id, out PrevReason))
+						{
+							Reason &= ~PrevReason;
+						}
+					}
+
+					IssueAlertWindow AlertWindow = AlertWindows.FirstOrDefault(x => x.IssueMonitor == IssueMonitor && x.Issue.Id == Issue.Id);
+					if(AlertWindow == null)
+					{
+						if(Reason != 0)
+						{
+							ShowAlertWindow(IssueMonitor, Issue, Reason);
+						}
+					}
+					else
+					{
+						if(Reason != 0)
+						{
+							AlertWindow.SetIssue(Issue, Reason);
+						}
+						else
+						{
+							CloseAlertWindow(AlertWindow);
+						}
+					}
+				}
+				AllIssues.UnionWith(Issues);
+			}
+
+			// Close any alert windows which don't have an active issues
+			for(int Idx = 0; Idx < AlertWindows.Count; Idx++)
+			{
+				IssueAlertWindow AlertWindow = AlertWindows[Idx];
+				if(!AllIssues.Contains(AlertWindow.Issue))
+				{
+					AlertWindow.IssueMonitor.IssueIdToAlertReason.Remove(AlertWindow.Issue.Id);
+					CloseAlertWindow(AlertWindow);
+					Idx--;
+				}
+			}
+		}
+
+		void IssueMonitor_OnUpdateAsync()
+		{
+			MainThreadSynchronizationContext.Post((o) => IssueMonitor_OnUpdate(), null);
+		}
+
+		void IssueMonitor_OnUpdate()
+		{
+			UpdateAlertWindows();
+		}
+
+		void ShowAlertWindow(IssueMonitor IssueMonitor, IssueData Issue, IssueAlertReason Reason)
+		{
+			IssueAlertWindow Alert = new IssueAlertWindow(IssueMonitor, Issue, Reason);
+			Alert.AcceptBtn.Click += (s, e) => AcceptIssue(Alert);
+			Alert.DeclineBtn.Click += (s, e) => DeclineIssue(Alert);
+			Alert.DetailsBtn.Click += (s, e) => ShowIssueDetails(Alert);
+
+			SetAlertWindowPositions();
+			AlertWindows.Add(Alert);
+			SetAlertWindowPosition(AlertWindows.Count - 1);
+
+			Alert.Show(this);
+
+			UpdateAlertPositionsTimer.Enabled = true;
+		}
+
+		void AcceptIssue(IssueAlertWindow Alert)
+		{
+			IssueData Issue = Alert.Issue;
+
+			IssueAlertReason Reason;
+			Alert.IssueMonitor.IssueIdToAlertReason.TryGetValue(Issue.Id, out Reason);
+			Alert.IssueMonitor.IssueIdToAlertReason[Issue.Id] = Reason | Alert.Reason;
+
+			IssueUpdateData Update = new IssueUpdateData();
+			Update.Id = Issue.Id;
+			Update.Owner = Alert.IssueMonitor.UserName;
+			Update.NominatedBy = null;
+			Update.Acknowledged = true;
+			Alert.IssueMonitor.PostUpdate(Update);
+
+			CloseAlertWindow(Alert);
+		}
+
+		void DeclineIssue(IssueAlertWindow Alert)
+		{
+			IssueData Issue = Alert.Issue;
+
+			IssueAlertReason Reason;
+			Alert.IssueMonitor.IssueIdToAlertReason.TryGetValue(Issue.Id, out Reason);
+			Alert.IssueMonitor.IssueIdToAlertReason[Issue.Id] = Reason | Alert.Reason;
+
+			CloseAlertWindow(Alert);
+		}
+
+		void ShowIssueDetails(IssueAlertWindow Alert)
+		{
+			for(int Idx = 0; Idx < TabControl.GetTabCount(); Idx++)
+			{
+				WorkspaceControl Workspace = TabControl.GetTabData(Idx) as WorkspaceControl;
+				if(Workspace != null && Workspace.GetIssueMonitor() == Alert.IssueMonitor)
+				{
+					Workspace.ShowIssueDetails(Alert.Issue);
+					break;
+				}
+			}
+		}
+
+		void CloseAlertWindow(IssueAlertWindow Alert)
+		{
+			IssueData Issue = Alert.Issue;
+
+			Alert.Close();
+			Alert.Dispose();
+
+			AlertWindows.Remove(Alert);
+
+			for(int Idx = 0; Idx < AlertWindows.Count; Idx++)
+			{
+				SetAlertWindowPosition(Idx);
+			}
+
+			if(AlertWindows.Count == 0)
+			{
+				UpdateAlertPositionsTimer.Enabled = false;
+			}
+		}
+
+		private void SetAlertWindowPosition(int Idx)
+		{
+			AlertWindows[Idx].Location = new Point(PrimaryWorkArea.Right - 40 - AlertWindows[Idx].Size.Width, PrimaryWorkArea.Height - 40 - (Idx + 1) * (AlertWindows[Idx].Size.Height + 15));
+		}
+
+		private void SetAlertWindowPositions()
+		{
+			Rectangle NewPrimaryWorkArea = Screen.PrimaryScreen.WorkingArea;
+			if(NewPrimaryWorkArea != PrimaryWorkArea)
+			{
+				PrimaryWorkArea = NewPrimaryWorkArea;
+				for(int Idx = 0; Idx < AlertWindows.Count; Idx++)
+				{
+					SetAlertWindowPosition(Idx);
+				}
+			}
+		}
+
+		private void UpdateAlertPositionsTimer_Tick(object sender, EventArgs e)
+		{
+			SetAlertWindowPositions();
 		}
 	}
 }

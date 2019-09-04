@@ -89,7 +89,7 @@ class ENGINE_API UMeshComponent : public UPrimitiveComponent
 	virtual bool GetMaterialStreamingData(int32 MaterialIndex, FPrimitiveMaterialInfo& MaterialData) const { return false; }
 
 	/** Generate streaming data for all materials. */
-	void GetStreamingTextureInfoInner(FStreamingTextureLevelContext& LevelContext, const TArray<FStreamingTextureBuildInfo>* PreBuiltData, float ComponentScaling, TArray<FStreamingTexturePrimitiveInfo>& OutStreamingTextures) const;
+	void GetStreamingTextureInfoInner(FStreamingTextureLevelContext& LevelContext, const TArray<FStreamingTextureBuildInfo>* PreBuiltData, float ComponentScaling, TArray<FStreamingRenderAssetPrimitiveInfo>& OutStreamingTextures) const;
 
 #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
 	/**
@@ -141,11 +141,12 @@ protected:
 		float ScalarParameterDefaultValue = 0.f;
 	};
 
-	TSortedMap<FName, FMaterialParameterCache> MaterialParameterCache;
+	TSortedMap<FName, FMaterialParameterCache, FDefaultAllocator, FNameFastLess> MaterialParameterCache;
 
 	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category = MaterialParameters)
 	bool bEnableMaterialParameterCaching;
 
 	/** Flag whether or not the cached material parameter indices map is dirty (defaults to true, and is set from SetMaterial/Set(Skeletal)Mesh */
 	bool bCachedMaterialParameterIndicesAreDirty;
+
 };

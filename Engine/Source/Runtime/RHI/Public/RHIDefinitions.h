@@ -34,8 +34,9 @@ enum EShaderFrequency
 	SF_RayGen			= 6,
 	SF_RayMiss			= 7,
 	SF_RayHitGroup		= 8,
+	SF_RayCallable		= 9,
 
-	SF_NumFrequencies	= 9,
+	SF_NumFrequencies	= 10,
 	SF_NumBits			= 4,
 };
 static_assert(SF_NumFrequencies <= (1 << SF_NumBits), "SF_NumFrequencies will not fit on SF_NumBits");
@@ -80,10 +81,106 @@ enum EShaderPlatform
 	SP_METAL_TVOS			= 30,
 	SP_METAL_MRT_TVOS		= 31,
 
-	SP_NumPlatforms			= 32,
-	SP_NumBits				= 6,
+#ifdef DDPI_EXTRA_SHADERPLATFORMS
+	DDPI_EXTRA_SHADERPLATFORMS
+#endif
+	
+	SP_NumPlatforms,
+	SP_NumBits				= 7,
 };
 static_assert(SP_NumPlatforms <= (1 << SP_NumBits), "SP_NumPlatforms will not fit on SP_NumBits");
+
+/**
+ * The RHI's feature level indicates what level of support can be relied upon.
+ * Note: these are named after graphics API's like ES2 but a feature level can be used with a different API (eg ERHIFeatureLevel::ES2 on D3D11)
+ * As long as the graphics API supports all the features of the feature level (eg no ERHIFeatureLevel::SM5 on OpenGL ES2)
+ */
+namespace ERHIFeatureLevel
+{
+	enum Type
+	{
+		/** Feature level defined by the core capabilities of OpenGL ES2. */
+		ES2,
+
+		/** Feature level defined by the core capabilities of OpenGL ES3.1 & Metal/Vulkan. */
+		ES3_1,
+
+		/**
+		 * Feature level defined by the capabilities of DX10 Shader Model 4.
+		 *    Shaders can reference 128 unique textures, 16 texture samplers, 14 constant buffers
+		 *    Rendering to cubemaps and volume textures
+		 * Geometry shaders are not required for Feature Level SM4, as long as vertex shader render target selection is supported
+		 */
+		SM4,
+
+		/**
+		 * Feature level defined by the capabilities of DX11 Shader Model 5.
+		 *   Compute shaders with shared memory, group sync, UAV writes, integer atomics
+		 *   Indirect drawing
+		 *   Pixel shaders with UAV writes
+		 *   Cubemap arrays
+		 *   Read-only depth or stencil views (eg read depth buffer as SRV while depth test and stencil write)
+		 * Tessellation is not considered part of Feature Level SM5 and has a separate capability flag.
+		 */
+		SM5,
+		Num
+	};
+};
+
+
+extern RHI_API FName LANGUAGE_D3D;
+extern RHI_API FName LANGUAGE_Metal;
+extern RHI_API FName LANGUAGE_OpenGL;
+extern RHI_API FName LANGUAGE_Vulkan;
+extern RHI_API FName LANGUAGE_Sony;
+extern RHI_API FName LANGUAGE_Nintendo;
+
+struct RHI_API FDataDrivenShaderPlatformInfo
+{
+	FName Language;
+	ERHIFeatureLevel::Type MaxFeatureLevel;
+	bool bIsMobile;
+	bool bIsMetalMRT;
+	bool bIsPC;
+	bool bIsConsole;
+	bool bIsAndroidOpenGLES;
+
+	bool bSupportsDrawIndirect;
+	bool bSupportsMobileMultiView;
+	bool bSupportsVolumeTextureCompression;
+	bool bSupportsDistanceFields; // used for DFShadows and DFAO - since they had the same checks
+	bool bSupportsDiaphragmDOF;
+	bool bSupportsRGBColorBuffer;
+	bool bSupportsCapsuleShadows;
+	bool bSupportsVolumetricFog; // also used for FVVoxelization
+	bool bSupportsIndexBufferUAVs;
+	bool bSupportsInstancedStereo;
+	bool bSupportsMultiView;
+	bool bSupportsMSAA;
+	bool bSupports4ComponentUAVReadWrite;
+
+	bool bTargetsTiledGPU;
+	bool bNeedsOfflineCompiler;
+
+	// NOTE: WHen adding fields, you must also add to ParseDataDrivenShaderInfo!
+
+	FDataDrivenShaderPlatformInfo()
+	{
+		FMemory::Memzero(this, sizeof(*this));
+		MaxFeatureLevel = ERHIFeatureLevel::Num;
+	}
+
+	static void Initialize();
+
+	static const FDataDrivenShaderPlatformInfo& GetInfo(EShaderPlatform Platform)
+	{
+		return Infos[Platform];
+	}
+private:
+	static FDataDrivenShaderPlatformInfo Infos[SP_NumPlatforms];
+};
+
+
 
 enum ERenderQueryType
 {
@@ -97,6 +194,9 @@ enum ERenderQueryType
 
 /** Maximum number of miplevels in a texture. */
 enum { MAX_TEXTURE_MIP_COUNT = 14 };
+
+/** Maximum number of static/skeletal mesh LODs */
+enum { MAX_MESH_LOD_COUNT = 8 };
 
 /** Maximum number of immutable samplers in a PSO. */
 enum
@@ -138,42 +238,6 @@ enum class ERHIZBuffer
 	IsInverted = (int32)((int32)ERHIZBuffer::FarPlane < (int32)ERHIZBuffer::NearPlane),
 };
 
-/**
- * The RHI's feature level indicates what level of support can be relied upon.
- * Note: these are named after graphics API's like ES2 but a feature level can be used with a different API (eg ERHIFeatureLevel::ES2 on D3D11)
- * As long as the graphics API supports all the features of the feature level (eg no ERHIFeatureLevel::SM5 on OpenGL ES2)
- */
-namespace ERHIFeatureLevel
-{
-	enum Type
-	{
-		/** Feature level defined by the core capabilities of OpenGL ES2. */
-		ES2,
-
-		/** Feature level defined by the core capabilities of OpenGL ES3.1 & Metal/Vulkan. */
-		ES3_1,
-
-		/** 
-		 * Feature level defined by the capabilities of DX10 Shader Model 4. 
-		 *    Shaders can reference 128 unique textures, 16 texture samplers, 14 constant buffers
-		 *    Rendering to cubemaps and volume textures
-		 * Geometry shaders are not required for Feature Level SM4, as long as vertex shader render target selection is supported
-		 */
-		SM4,
-
-		/** 
-		 * Feature level defined by the capabilities of DX11 Shader Model 5. 
-		 *   Compute shaders with shared memory, group sync, UAV writes, integer atomics
-		 *   Indirect drawing
-		 *   Pixel shaders with UAV writes
-		 *   Cubemap arrays
-		 *   Read-only depth or stencil views (eg read depth buffer as SRV while depth test and stencil write)
-		 * Tessellation is not considered part of Feature Level SM5 and has a separate capability flag.
-		 */
-		SM5,
-		Num
-	};
-};
 
 /**
 * The RHI's currently enabled shading path.
@@ -415,6 +479,7 @@ enum EUniformBufferBaseType : uint8
 	// RHI resources not tracked by render graph.
 	UBMT_TEXTURE,
 	UBMT_SRV,
+	UBMT_UAV,
 	UBMT_SAMPLER,
 
 	// Resources tracked by render graph.
@@ -494,6 +559,7 @@ enum EResourceLockMode
 {
 	RLM_ReadOnly,
 	RLM_WriteOnly,
+	RLM_WriteOnly_NoOverwrite,
 	RLM_Num
 };
 
@@ -711,7 +777,7 @@ enum ETextureCreateFlags
 	TexCreate_CPUWritable			= 1<<5,
 	// Texture will be created with an un-tiled format
 	TexCreate_NoTiling				= 1<<6,
-	// Texture will be used for video decode on Switch
+	// Texture will be used for video decode
 	TexCreate_VideoDecode			= 1<<7,
 	// Texture that may be updated every frame
 	TexCreate_Dynamic				= 1<<8,
@@ -853,13 +919,15 @@ inline bool IsPCPlatform(const EShaderPlatform Platform)
 	return Platform == SP_PCD3D_SM5 || Platform == SP_PCD3D_SM4 || Platform == SP_PCD3D_ES2 || Platform == SP_PCD3D_ES3_1 ||
 		Platform == SP_OPENGL_SM4 || Platform == SP_OPENGL_SM5 || Platform == SP_OPENGL_PCES2 || Platform == SP_OPENGL_PCES3_1 ||
 		Platform == SP_METAL_SM5_NOTESS || Platform == SP_METAL_SM5 ||
-		Platform == SP_VULKAN_PCES3_1 || Platform == SP_VULKAN_SM4 || Platform == SP_VULKAN_SM5 || Platform == SP_METAL_MACES3_1 || Platform == SP_METAL_MACES2 || Platform == SP_METAL_MRT_MAC;
+		Platform == SP_VULKAN_PCES3_1 || Platform == SP_VULKAN_SM4 || Platform == SP_VULKAN_SM5 || Platform == SP_METAL_MACES3_1 || Platform == SP_METAL_MACES2 || Platform == SP_METAL_MRT_MAC 
+		|| FDataDrivenShaderPlatformInfo::GetInfo(Platform).bIsPC;
 }
 
 /** Whether the shader platform corresponds to the ES2 feature level. */
 inline bool IsES2Platform(const EShaderPlatform Platform)
 {
-	return Platform == SP_PCD3D_ES2 || Platform == SP_OPENGL_PCES2 || Platform == SP_OPENGL_ES2_ANDROID || Platform == SP_OPENGL_ES2_WEBGL || Platform == SP_OPENGL_ES2_IOS || Platform == SP_METAL_MACES2;
+	return Platform == SP_PCD3D_ES2 || Platform == SP_OPENGL_PCES2 || Platform == SP_OPENGL_ES2_ANDROID || Platform == SP_OPENGL_ES2_WEBGL || Platform == SP_OPENGL_ES2_IOS || Platform == SP_METAL_MACES2
+		|| FDataDrivenShaderPlatformInfo::GetInfo(Platform).MaxFeatureLevel == ERHIFeatureLevel::ES2;
 }
 
 /** Whether the shader platform corresponds to the ES2/ES3.1 feature level. */
@@ -870,69 +938,82 @@ inline bool IsMobilePlatform(const EShaderPlatform Platform)
 		|| Platform == SP_PCD3D_ES3_1
 		|| Platform == SP_OPENGL_PCES3_1 || Platform == SP_OPENGL_ES3_1_ANDROID
 		|| Platform == SP_VULKAN_ES3_1_ANDROID || Platform == SP_VULKAN_PCES3_1 || Platform == SP_VULKAN_ES3_1_LUMIN
-		|| Platform == SP_SWITCH_FORWARD;
+		|| Platform == SP_SWITCH_FORWARD
+		|| FDataDrivenShaderPlatformInfo::GetInfo(Platform).bIsMobile;
 }
 
 inline bool IsOpenGLPlatform(const EShaderPlatform Platform)
 {
 	return Platform == SP_OPENGL_SM4 || Platform == SP_OPENGL_SM5 || Platform == SP_OPENGL_PCES2 || Platform == SP_OPENGL_PCES3_1
 		|| Platform == SP_OPENGL_ES2_ANDROID || Platform == SP_OPENGL_ES2_WEBGL || Platform == SP_OPENGL_ES2_IOS || Platform == SP_OPENGL_ES31_EXT
-		|| Platform == SP_OPENGL_ES3_1_ANDROID;
+		|| Platform == SP_OPENGL_ES3_1_ANDROID
+		|| FDataDrivenShaderPlatformInfo::GetInfo(Platform).Language == LANGUAGE_OpenGL;
 }
 
 inline bool IsMetalPlatform(const EShaderPlatform Platform)
 {
-	return Platform == SP_METAL || Platform == SP_METAL_MRT || Platform == SP_METAL_TVOS || Platform == SP_METAL_MRT_TVOS || Platform == SP_METAL_SM5_NOTESS || Platform == SP_METAL_SM5 || Platform == SP_METAL_MACES3_1 || Platform == SP_METAL_MACES2 || Platform == SP_METAL_MRT_MAC;
+	return Platform == SP_METAL || Platform == SP_METAL_MRT || Platform == SP_METAL_TVOS || Platform == SP_METAL_MRT_TVOS || Platform == SP_METAL_SM5_NOTESS || Platform == SP_METAL_SM5 || Platform == SP_METAL_MACES3_1 || Platform == SP_METAL_MACES2 || Platform == SP_METAL_MRT_MAC
+		|| FDataDrivenShaderPlatformInfo::GetInfo(Platform).Language == LANGUAGE_Metal;
 }
 
 inline bool IsMetalMobilePlatform(const EShaderPlatform Platform)
 {
-	return Platform == SP_METAL || Platform == SP_METAL_TVOS;
+	return Platform == SP_METAL || Platform == SP_METAL_TVOS
+		|| (FDataDrivenShaderPlatformInfo::GetInfo(Platform).Language == LANGUAGE_OpenGL && FDataDrivenShaderPlatformInfo::GetInfo(Platform).bIsMobile);
 }
 
 inline bool IsMetalMRTPlatform(const EShaderPlatform Platform)
 {
-	return Platform == SP_METAL_MRT || Platform == SP_METAL_MRT_TVOS || Platform == SP_METAL_MRT_MAC;
+	return Platform == SP_METAL_MRT || Platform == SP_METAL_MRT_TVOS || Platform == SP_METAL_MRT_MAC
+		|| FDataDrivenShaderPlatformInfo::GetInfo(Platform).bIsMetalMRT;
 }
 
 inline bool IsMetalSM5Platform(const EShaderPlatform Platform)
 {
-	return Platform == SP_METAL_MRT || Platform == SP_METAL_MRT_TVOS || Platform == SP_METAL_SM5_NOTESS || Platform == SP_METAL_SM5 || Platform == SP_METAL_MRT_MAC;
+	return Platform == SP_METAL_MRT || Platform == SP_METAL_MRT_TVOS || Platform == SP_METAL_SM5_NOTESS || Platform == SP_METAL_SM5 || Platform == SP_METAL_MRT_MAC
+		|| (FDataDrivenShaderPlatformInfo::GetInfo(Platform).Language == LANGUAGE_Metal && FDataDrivenShaderPlatformInfo::GetInfo(Platform).MaxFeatureLevel == ERHIFeatureLevel::SM5);
 }
 
 inline bool IsConsolePlatform(const EShaderPlatform Platform)
 {
-	return Platform == SP_PS4 || Platform == SP_XBOXONE_D3D12;
+	return Platform == SP_PS4 || Platform == SP_XBOXONE_D3D12
+		|| FDataDrivenShaderPlatformInfo::GetInfo(Platform).bIsConsole;
 }
 
 inline bool IsSwitchPlatform(const EShaderPlatform Platform)
 {
-	return Platform == SP_SWITCH || Platform == SP_SWITCH_FORWARD;
+	return Platform == SP_SWITCH || Platform == SP_SWITCH_FORWARD
+		|| FDataDrivenShaderPlatformInfo::GetInfo(Platform).Language == LANGUAGE_Nintendo;
 }
 
 inline bool IsPS4Platform(const EShaderPlatform Platform)
 {
-	return Platform == SP_PS4;
+	return Platform == SP_PS4
+		|| FDataDrivenShaderPlatformInfo::GetInfo(Platform).Language == LANGUAGE_Sony;
 }
 
 inline bool IsVulkanPlatform(const EShaderPlatform Platform)
 {
-	return Platform == SP_VULKAN_SM5 || Platform == SP_VULKAN_SM5_LUMIN || Platform == SP_VULKAN_SM4 || Platform == SP_VULKAN_PCES3_1 || Platform == SP_VULKAN_ES3_1_ANDROID || Platform == SP_VULKAN_ES3_1_LUMIN;
+	return Platform == SP_VULKAN_SM5 || Platform == SP_VULKAN_SM5_LUMIN || Platform == SP_VULKAN_SM4 || Platform == SP_VULKAN_PCES3_1 || Platform == SP_VULKAN_ES3_1_ANDROID || Platform == SP_VULKAN_ES3_1_LUMIN
+		|| FDataDrivenShaderPlatformInfo::GetInfo(Platform).Language == LANGUAGE_Vulkan;
 }
 
 inline bool IsVulkanSM5Platform(const EShaderPlatform Platform)
 {
-	return Platform == SP_VULKAN_SM5 || Platform == SP_VULKAN_SM5_LUMIN;
+	return Platform == SP_VULKAN_SM5 || Platform == SP_VULKAN_SM5_LUMIN
+		|| (FDataDrivenShaderPlatformInfo::GetInfo(Platform).Language == LANGUAGE_Vulkan && FDataDrivenShaderPlatformInfo::GetInfo(Platform).MaxFeatureLevel == ERHIFeatureLevel::SM5);
 }
 
 inline bool IsAndroidOpenGLESPlatform(const EShaderPlatform Platform)
 {
-	return Platform == SP_OPENGL_ES2_ANDROID || Platform == SP_OPENGL_ES3_1_ANDROID;
+	return Platform == SP_OPENGL_ES2_ANDROID || Platform == SP_OPENGL_ES3_1_ANDROID
+		|| FDataDrivenShaderPlatformInfo::GetInfo(Platform).bIsAndroidOpenGLES;
 }
 
 inline bool IsVulkanMobilePlatform(const EShaderPlatform Platform)
 {
-	return Platform == SP_VULKAN_PCES3_1 || Platform == SP_VULKAN_ES3_1_ANDROID || Platform == SP_VULKAN_ES3_1_LUMIN;
+	return Platform == SP_VULKAN_PCES3_1 || Platform == SP_VULKAN_ES3_1_ANDROID || Platform == SP_VULKAN_ES3_1_LUMIN
+		|| (FDataDrivenShaderPlatformInfo::GetInfo(Platform).Language == LANGUAGE_Vulkan && FDataDrivenShaderPlatformInfo::GetInfo(Platform).bIsMobile);
 }
 
 inline bool IsD3DPlatform(const EShaderPlatform Platform, bool bIncludeXboxOne)
@@ -947,7 +1028,7 @@ inline bool IsD3DPlatform(const EShaderPlatform Platform, bool bIncludeXboxOne)
 	case SP_XBOXONE_D3D12:
 		return bIncludeXboxOne;
 	default:
-		break;
+		return FDataDrivenShaderPlatformInfo::GetInfo(Platform).Language == LANGUAGE_D3D;
 	}
 
 	return false;
@@ -999,8 +1080,7 @@ inline ERHIFeatureLevel::Type GetMaxSupportedFeatureLevel(EShaderPlatform InShad
 	case SP_SWITCH_FORWARD:
 		return ERHIFeatureLevel::ES3_1;
 	default:
-		checkf(0, TEXT("Unknown ShaderPlatform %d"), (int32)InShaderPlatform);
-		return ERHIFeatureLevel::Num;
+		return FDataDrivenShaderPlatformInfo::GetInfo(InShaderPlatform).MaxFeatureLevel;
 	}
 }
 
@@ -1060,7 +1140,8 @@ inline bool RHINeedsToSwitchVerticalAxis(EShaderPlatform Platform)
 	static const auto CVar = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.Mobile.ForceRHISwitchVerticalAxis"));
 	if (CVar->GetValueOnAnyThread())
 	{
-		return true;
+		// only allow this for mobile preview.
+		return IsMobilePlatform(Platform);
 	}
 #endif
 
@@ -1072,14 +1153,13 @@ inline bool RHINeedsToSwitchVerticalAxis(EShaderPlatform Platform)
 inline bool RHISupportsSeparateMSAAAndResolveTextures(const EShaderPlatform Platform)
 {
 	// Metal mobile devices, Vulkan and Android ES2/3.1 need to handle MSAA and resolve textures internally (unless RHICreateTexture2D was changed to take an optional resolve target)
-	const bool bMobileMetalDevice = (Platform == SP_METAL || Platform == SP_METAL_TVOS);
-	return !bMobileMetalDevice && !IsVulkanPlatform(Platform) && !IsAndroidOpenGLESPlatform(Platform);
+	return !IsMetalMobilePlatform(Platform) && !IsVulkanPlatform(Platform) && !IsAndroidOpenGLESPlatform(Platform);
 }
 
 inline bool RHISupportsComputeShaders(const EShaderPlatform Platform)
 {
-	//@todo-rco: Add Metal & ES3.1 support
-	return IsFeatureLevelSupported(Platform, ERHIFeatureLevel::SM5);
+	return IsFeatureLevelSupported(Platform, ERHIFeatureLevel::SM5) 
+		|| (GetMaxSupportedFeatureLevel(Platform) == ERHIFeatureLevel::ES3_1 && !IsSwitchPlatform(Platform));
 }
 
 inline bool RHISupportsGeometryShaders(const EShaderPlatform Platform)
@@ -1087,25 +1167,46 @@ inline bool RHISupportsGeometryShaders(const EShaderPlatform Platform)
 	return IsFeatureLevelSupported(Platform, ERHIFeatureLevel::SM4) && !IsMetalPlatform(Platform) && !IsVulkanMobilePlatform(Platform);
 }
 
+/** Return true if and only if the GPU support rendering to volume textures (2D Array, 3D) is guaranteed supported for a target platform.
+	if PipelineVolumeTextureLUTSupportGuaranteedAtRuntime is true then it is guaranteed that GSupportsVolumeTextureRendering is true at runtime.
+*/
+inline bool RHIVolumeTextureRenderingSupportGuaranteed(const EShaderPlatform Platform)
+{
+	return IsFeatureLevelSupported(Platform, ERHIFeatureLevel::SM4)
+		&& !IsMetalPlatform(Platform)		// EMetalFeaturesLayeredRendering supports needs to be checked at runtime
+		&& !IsOpenGLPlatform(Platform)		// Apparently, some OpenGL 3.3 cards support SM4 but can't render to volume textures 
+		&& Platform != SP_VULKAN_SM5_LUMIN;
+}
+
 inline bool RHIHasTiledGPU(const EShaderPlatform Platform)
 {
 	// @todo MetalMRT Technically we should include (Platform == SP_METAL_MRT) but this would disable depth-pre-pass which is currently required.
-	return Platform == SP_METAL || Platform == SP_METAL_TVOS || Platform == SP_OPENGL_ES2_IOS || Platform == SP_OPENGL_ES2_ANDROID || Platform == SP_OPENGL_ES3_1_ANDROID;
+	return Platform == SP_METAL || Platform == SP_METAL_TVOS
+		|| Platform == SP_OPENGL_ES2_IOS || Platform == SP_OPENGL_ES2_ANDROID || Platform == SP_OPENGL_ES3_1_ANDROID
+		|| Platform == SP_VULKAN_ES3_1_ANDROID
+		|| FDataDrivenShaderPlatformInfo::GetInfo(Platform).bTargetsTiledGPU;
 }
 
 inline bool RHISupportsMobileMultiView(const EShaderPlatform Platform)
 {
-	return (Platform == EShaderPlatform::SP_OPENGL_ES3_1_ANDROID || Platform == EShaderPlatform::SP_OPENGL_ES2_ANDROID);
+	return (Platform == EShaderPlatform::SP_OPENGL_ES3_1_ANDROID || Platform == EShaderPlatform::SP_OPENGL_ES2_ANDROID) || IsVulkanMobilePlatform(Platform)
+		|| FDataDrivenShaderPlatformInfo::GetInfo(Platform).bSupportsMobileMultiView;
 }
 
 inline bool RHISupportsDrawIndirect(const EShaderPlatform Platform)
 {
-	return (Platform == EShaderPlatform::SP_METAL_SM5 || Platform == EShaderPlatform::SP_PCD3D_SM5 || IsVulkanSM5Platform(Platform) || Platform == EShaderPlatform::SP_PS4);
+	return Platform == EShaderPlatform::SP_METAL_SM5 || Platform == EShaderPlatform::SP_PCD3D_SM5 || IsVulkanSM5Platform(Platform) || Platform == EShaderPlatform::SP_PS4
+		|| FDataDrivenShaderPlatformInfo::GetInfo(Platform).bSupportsDrawIndirect;
 }
 
 inline bool RHISupportsNativeShaderLibraries(const EShaderPlatform Platform)
 {
 	return IsMetalPlatform(Platform);
+}
+
+inline bool RHISupportsShaderPipelines(EShaderPlatform Platform)
+{
+	return !IsMobilePlatform(Platform);
 }
 
 
@@ -1162,21 +1263,23 @@ inline bool IsShaderParameterTypeForUniformBufferLayout(EUniformBufferBaseType B
 		BaseType == UBMT_SRV ||
 		BaseType == UBMT_SAMPLER ||
 
-		// RHI is able to dereference the RHI resource allocated in FRDGResource::CachedRHI to avoid pain in the high level to passdown.
+		// RHI is able to access RHI resources from RDG.
 		IsRDGResourceReferenceShaderParameterType(BaseType) ||
 
-		// #yuriy_todo: RHI is able to dereference uniform buffer in root shader parameter structures
-		// BaseType == UBMT_REFERENCED_STRUCT ||
-
 		// Render graph uses FRHIUniformBufferLayout to walk pass' parameters.
+		BaseType == UBMT_REFERENCED_STRUCT ||
 		BaseType == UBMT_RENDER_TARGET_BINDING_SLOTS;
 }
 
 /** Returns whether the shader parameter type in FRHIUniformBufferLayout is actually ignored by the RHI. */
 inline bool IsShaderParameterTypeIgnoredByRHI(EUniformBufferBaseType BaseType)
 {
-	// Render targets bindings slots needs to be in FRHIUniformBufferLayout for render graph, but the RHI does not actually need to know about it.
-	return BaseType == UBMT_RENDER_TARGET_BINDING_SLOTS;
+	return
+		// Render targets bindings slots needs to be in FRHIUniformBufferLayout for render graph, but the RHI does not actually need to know about it.
+		BaseType == UBMT_RENDER_TARGET_BINDING_SLOTS || 
+
+		// #yuriy_todo: RHI is able to dereference uniform buffer in root shader parameter structures
+		BaseType == UBMT_REFERENCED_STRUCT;
 }
 
 inline const TCHAR* GetShaderFrequencyString(EShaderFrequency Frequency, bool bIncludePrefix = true)
@@ -1193,6 +1296,7 @@ inline const TCHAR* GetShaderFrequencyString(EShaderFrequency Frequency, bool bI
 	case SF_RayGen:			String = TEXT("SF_RayGen"); break;
 	case SF_RayMiss:		String = TEXT("SF_RayMiss"); break;
 	case SF_RayHitGroup:	String = TEXT("SF_RayHitGroup"); break;
+	case SF_RayCallable:	String = TEXT("SF_RayCallable"); break;
 
 	default:
 		checkf(0, TEXT("Unknown ShaderFrequency %d"), (int32)Frequency);
@@ -1204,3 +1308,15 @@ inline const TCHAR* GetShaderFrequencyString(EShaderFrequency Frequency, bool bI
 	String += Index;
 	return String;
 };
+
+#if PLATFORM_SUPPORTS_GEOMETRY_SHADERS
+	#define GEOMETRY_SHADER(GeometryShader)	(GeometryShader)
+#else
+	#define GEOMETRY_SHADER(GeometryShader)	nullptr
+#endif
+
+#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
+	#define TESSELLATION_SHADER(HullOrDomainShader)	(HullOrDomainShader)
+#else
+	#define TESSELLATION_SHADER(HullOrDomainShader)	nullptr
+#endif

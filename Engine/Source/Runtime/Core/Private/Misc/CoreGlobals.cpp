@@ -11,7 +11,7 @@
 
 
 #ifndef FAST_PATH_UNIQUE_NAME_GENERATION
-#define FAST_PATH_UNIQUE_NAME_GENERATION 0
+#define FAST_PATH_UNIQUE_NAME_GENERATION (!WITH_EDITORONLY_DATA)
 #endif
 
 #define LOCTEXT_NAMESPACE "Core"
@@ -99,6 +99,9 @@ bool GAllowActorScriptExecutionInEditor = false;
 /** Forces use of template names for newly instanced components in a CDO */
 bool GCompilingBlueprint = false;
 
+/** True if we're garbage collecting after a blueprint compilation */
+bool GIsGCingAfterBlueprintCompile = false;
+
 /** True if we're reconstructing blueprint instances. Should never be true on cooked builds */
 bool GIsReconstructingBlueprintInstances = false;
 
@@ -107,7 +110,7 @@ bool GIsReinstancing = false;
 
 /**
  * If true, we are running an editor script that should not prompt any dialog modal. The default value of any model will be used.
- * This is used when running a Blutility or script like Python and we don't want an OK dialog to pop while the script is running.
+ * This is used when running an editor utility blueprint or script like Python and we don't want an OK dialog to pop while the script is running.
  * Could be set for commandlet with -RUNNINGUNATTENDEDSCRIPT
  */
 bool GIsRunningUnattendedScript = false;
@@ -181,7 +184,7 @@ bool					GExitPurge						= false;
 
 FChunkedFixedUObjectArray* GCoreObjectArrayForDebugVisualizers = nullptr;
 #if PLATFORM_UNIX
-FNameEntry*** CORE_API GFNameTableForDebuggerVisualizers_MT = FName::GetNameTableForDebuggerVisualizers_MT();
+uint8** CORE_API GNameBlocksDebug = FNameDebugVisualizer::GetBlocks();
 FChunkedFixedUObjectArray*& CORE_API GObjectArrayForDebugVisualizers = GCoreObjectArrayForDebugVisualizers;
 #endif
 
@@ -247,6 +250,8 @@ bool					GEventDrivenLoaderEnabled = false;
 /** Steadily increasing frame counter.																		*/
 TSAN_ATOMIC(uint64)		GFrameCounter(0);
 uint64					GLastGCFrame					= 0;
+/** The time input was sampled, in cycles. */
+uint64					GInputTime					= 0;
 /** Incremented once per frame before the scene is being rendered. In split screen mode this is incremented once for all views (not for each view). */
 uint32					GFrameNumber					= 1;
 /** NEED TO RENAME, for RT version of GFrameTime use View.ViewFamily->FrameNumber or pass down from RT from GFrameTime). */
@@ -299,6 +304,8 @@ bool					GIsDemoMode						= false;
 bool					GIsAutomationTesting					= false;
 /** Whether or not messages are being pumped outside of the main loop										*/
 bool					GPumpingMessagesOutsideOfMainLoop = false;
+/** Whether or not messages are being pumped */
+bool					GPumpingMessages = false;
 
 /** Enables various editor and HMD hacks that allow the experimental VR editor feature to work, perhaps at the expense of other systems */
 bool					GEnableVREditorHacks = false;
@@ -360,6 +367,7 @@ FScopedBootTiming::~FScopedBootTiming()
 }
 void BootTimingPoint(const ANSICHAR *Message)
 {
+	TRACE_BOOKMARK(TEXT("%s"), *FString(Message));
 }
 void DumpBootTiming()
 {
@@ -377,7 +385,8 @@ static void DumpBootTimingString(const TCHAR* Message)
 	}
 	else
 	{
-		FPlatformMisc::LowLevelOutputDebugString(Message);
+		// Some platforms add an implicit \n if it isn't there, others don't
+		FPlatformMisc::LowLevelOutputDebugStringf(TEXT("%s\n"), Message);
 	}
 }
 
@@ -395,12 +404,21 @@ void DumpBootTiming()
 
 static void BootTimingPoint(const TCHAR *Message, const TCHAR *Prefix = nullptr, int32 Depth = 0, double TookTime = 0.0)
 {
+	TRACE_BOOKMARK(TEXT("%s"), Message);
+
 	static double LastTime = 0.0;
-	static FString LastMessage;
+	static TArray<FString> MessageStack;
+	static FString LastGapMessage;
 	double Now = FPlatformTime::Seconds();
 
 	FString Result;
 	FString GapTime;
+	FString LastMessage;
+
+	if (MessageStack.Num())
+	{
+		LastMessage = MessageStack.Last();
+	}
 
 	if (!Prefix || FCString::Strcmp(Prefix, TEXT("}")) || LastMessage != FString(Message))
 	{
@@ -409,12 +427,29 @@ static void BootTimingPoint(const TCHAR *Message, const TCHAR *Prefix = nullptr,
 			GapTime = FString::Printf(TEXT("              %7.3fs **Gap**"), float(Now - LastTime));
 			GAllBootTiming.Add(GapTime);
 			DumpBootTimingString(*FString::Printf(TEXT("[BT]******** %s"), *GapTime));
+			LastGapMessage = LastMessage;
 		}
 	}
 	LastTime = Now;
-	LastMessage = Message;
+
 	if (Prefix)
 	{
+		if (FCString::Strcmp(Prefix, TEXT("}")) == 0)
+		{
+			if (LastMessage == Message)
+			{
+				MessageStack.Pop();
+				if (LastGapMessage == Message)
+				{
+					LastGapMessage.Reset();
+				}
+			}
+		}
+		else if (FCString::Strcmp(Prefix, TEXT("{")) == 0)
+		{
+			MessageStack.Add(Message);
+		}
+
 		if (TookTime != 0.0)
 		{
 			Result = FString::Printf(TEXT("%7.3fs took %7.3fs %s   %1s %s"), float(Now - GBootTimingStart.FirstTime), float(TookTime), FCString::Spc(Depth * 2), Prefix, Message);
@@ -435,7 +470,28 @@ static void BootTimingPoint(const TCHAR *Message, const TCHAR *Prefix = nullptr,
 			Result = FString::Printf(TEXT("%7.3fs : %s"), float(Now - GBootTimingStart.FirstTime), Message);
 		}
 	}
-	GAllBootTiming.Add(Result);
+	bool bKeep = true;
+	if (Prefix && TookTime > 0.0 && GAllBootTiming.Num())
+	{
+		// Don't suppress the first 0 time block if there was a gap right before
+		if (MessageStack.Num() != 0 && MessageStack.Last() == LastGapMessage)
+		{
+			LastGapMessage.Reset();
+		}
+		else if (TookTime < 0.001)
+		{
+			// Remove a paired {} if time was too small
+			if (GAllBootTiming.Last().Contains(Message))
+			{
+				GAllBootTiming.Pop();
+				bKeep = false;
+			}
+		}
+	}
+	if (bKeep)
+	{
+		GAllBootTiming.Add(Result);
+	}
 	DumpBootTimingString(*FString::Printf(TEXT("[BT]******** %s"), *Result));
 }
 
@@ -502,8 +558,6 @@ DEFINE_STAT(STAT_SkeletalMeshMotionBlurSkinningMemory);
 DEFINE_STAT(STAT_VertexShaderMemory);
 DEFINE_STAT(STAT_PixelShaderMemory);
 DEFINE_STAT(STAT_NavigationMemory);
-DEFINE_STAT(STAT_PhysSceneReadLock);
-DEFINE_STAT(STAT_PhysSceneWriteLock);
 
 DEFINE_STAT(STAT_ReflectionCaptureTextureMemory);
 DEFINE_STAT(STAT_ReflectionCaptureMemory);
@@ -536,20 +590,21 @@ DEFINE_STAT(STAT_CPUTimePct);
 DEFINE_STAT(STAT_CPUTimePctRelative);
 
 DEFINE_LOG_CATEGORY(LogHAL);
-DEFINE_LOG_CATEGORY(LogMac);
-DEFINE_LOG_CATEGORY(LogLinux);
-DEFINE_LOG_CATEGORY(LogIOS);
-DEFINE_LOG_CATEGORY(LogAndroid);
-DEFINE_LOG_CATEGORY(LogWindows);
-DEFINE_LOG_CATEGORY(LogXboxOne);
 DEFINE_LOG_CATEGORY(LogSerialization);
 DEFINE_LOG_CATEGORY(LogContentComparisonCommandlet);
 DEFINE_LOG_CATEGORY(LogNetPackageMap);
 DEFINE_LOG_CATEGORY(LogNetSerialization);
 DEFINE_LOG_CATEGORY(LogMemory);
 DEFINE_LOG_CATEGORY(LogProfilingDebugging);
-DEFINE_LOG_CATEGORY(LogSwitch);
-
 DEFINE_LOG_CATEGORY(LogTemp);
+
+// need another layer of macro to help using a define in a define
+#define DEFINE_LOG_CATEGORY_HELPER(A) DEFINE_LOG_CATEGORY(A)
+#ifdef PLATFORM_GLOBAL_LOG_CATEGORY
+	DEFINE_LOG_CATEGORY_HELPER(PLATFORM_GLOBAL_LOG_CATEGORY);
+#endif
+#ifdef PLATFORM_GLOBAL_LOG_CATEGORY_ALT
+	DEFINE_LOG_CATEGORY_HELPER(PLATFORM_GLOBAL_LOG_CATEGORY_ALT);
+#endif
 
 #undef LOCTEXT_NAMESPACE

@@ -342,6 +342,9 @@ public:
 	// GenericApplication overrides
 
 	virtual void SetMessageHandler( const TSharedRef< class FGenericApplicationMessageHandler >& InMessageHandler ) override;
+#if WITH_ACCESSIBILITY
+	virtual void SetAccessibleMessageHandler(const TSharedRef<FGenericAccessibleMessageHandler>& InAccessibleMessageHandler) override;
+#endif
 	virtual void PollGameDeviceState( const float TimeDelta ) override;
 	virtual void PumpMessages( const float TimeDelta ) override;
 	virtual void ProcessDeferredEvents( const float TimeDelta ) override;
@@ -349,6 +352,7 @@ public:
 	virtual void InitializeWindow( const TSharedRef< FGenericWindow >& Window, const TSharedRef< FGenericWindowDefinition >& InDefinition, const TSharedPtr< FGenericWindow >& InParent, const bool bShowImmediately ) override;
 	virtual void SetCapture( const TSharedPtr< FGenericWindow >& InWindow ) override;
 	virtual void* GetCapture( void ) const override;
+	virtual bool IsMinimized() const override { return bMinimized; }
 	virtual void SetHighPrecisionMouseMode( const bool Enable, const TSharedPtr< FGenericWindow >& InWindow ) override;
 	virtual bool IsUsingHighPrecisionMouseMode() const override { return bUsingHighPrecisionMouseInput; }
 	virtual bool IsMouseAttached() const override { return bIsMouseAttached; }
@@ -449,6 +453,8 @@ private:
 
 	HINSTANCE InstanceHandle;
 
+	bool bMinimized;
+
 	bool bUsingHighPrecisionMouseInput;
 
 	bool bIsMouseAttached;
@@ -503,6 +509,11 @@ private:
 	TSharedPtr<FWindowsTextInputMethodSystem> TextInputMethodSystem;
 
 	TSharedPtr<FTaskbarList> TaskbarList;
+
+#if WITH_ACCESSIBILITY
+	/** Handler for WM_GetObject messages that come in */
+	TUniquePtr<class FWindowsUIAManager> UIAManager;
+#endif
 
 	// Accessibility shortcut keys
 	STICKYKEYS							StartupStickyKeys;

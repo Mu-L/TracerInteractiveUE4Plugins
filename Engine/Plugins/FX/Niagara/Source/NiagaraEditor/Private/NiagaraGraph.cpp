@@ -29,6 +29,10 @@
 #include "NiagaraNode.h"
 #include "EdGraphSchema_Niagara.h"
 #include "ViewModels/Stack/NiagaraParameterHandle.h"
+#include "NiagaraNodeStaticSwitch.h"
+#include "NiagaraScriptVariable.h"
+#include "NiagaraHlslTranslator.h"
+#include "NiagaraNodeFunctionCall.h"
 
 DECLARE_CYCLE_STAT(TEXT("NiagaraEditor - Graph - FindInputNodes"), STAT_NiagaraEditor_Graph_FindInputNodes, STATGROUP_NiagaraEditor);
 DECLARE_CYCLE_STAT(TEXT("NiagaraEditor - Graph - FindInputNodes_NotFilterUsage"), STAT_NiagaraEditor_Graph_FindInputNodes_NotFilterUsage, STATGROUP_NiagaraEditor);
@@ -54,14 +58,29 @@ bool FNiagaraGraphParameterReferenceCollection::WasCreated() const
 
 FNiagaraGraphScriptUsageInfo::FNiagaraGraphScriptUsageInfo() : UsageType(ENiagaraScriptUsage::Function)
 {
-	DataHash.AddZeroed(sizeof(FSHAHash));
+}
+
+void FNiagaraGraphScriptUsageInfo::PostLoad(UObject* Owner)
+{
+	const int32 NiagaraVer = Owner->GetLinkerCustomVersion(FNiagaraCustomVersion::GUID);
+	if (NiagaraVer < FNiagaraCustomVersion::UseHashesToIdentifyCompileStateOfTopLevelScripts)
+	{
+		// When loading old data use the last generated compile id as the base id to prevent recompiles on load for existing scripts.
+		BaseId = GeneratedCompileId;
+
+		if (CompileHash.IsValid() == false && DataHash_DEPRECATED.Num() == FNiagaraCompileHash::HashSize)
+		{
+			CompileHash = FNiagaraCompileHash(DataHash_DEPRECATED);
+		}
+	}
 }
 
 UNiagaraGraph::UNiagaraGraph(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 	, bNeedNumericCacheRebuilt(true)
-	, bFindParametersAllowed(true)
 	, bIsRenamingParameter(false)
+	, bParameterReferenceRefreshPending(true)
+	, bUnreferencedMetaDataPurgePending(true)
 {
 	Schema = UEdGraphSchema_Niagara::StaticClass();
 	ChangeId = FGuid::NewGuid();
@@ -79,7 +98,7 @@ void UNiagaraGraph::RemoveOnGraphNeedsRecompileHandler(FDelegateHandle Handle)
 
 void UNiagaraGraph::NotifyGraphChanged(const FEdGraphEditAction& InAction)
 {
-	FindParameters();
+	InvalidateCachedParameterData();
 	if ((InAction.Action & GRAPHACTION_AddNode) != 0 || (InAction.Action & GRAPHACTION_RemoveNode) != 0 ||
 		(InAction.Action & GRAPHACTION_GenericNeedsRecompile) != 0)
 	{
@@ -95,14 +114,19 @@ void UNiagaraGraph::NotifyGraphChanged(const FEdGraphEditAction& InAction)
 
 void UNiagaraGraph::NotifyGraphChanged()
 {
-	FindParameters();
 	Super::NotifyGraphChanged();
+	InvalidateCachedParameterData();
 	InvalidateNumericCache();
 }
 
 void UNiagaraGraph::PostLoad()
 {
 	Super::PostLoad();
+
+	for (FNiagaraGraphScriptUsageInfo& CachedUsageInfoItem : CachedUsageInfo)
+	{
+		CachedUsageInfoItem.PostLoad(this);
+	}
 
 	// In the past, we didn't bother setting the CallSortPriority and just used lexicographic ordering.
 	// In the event that we have multiple non-matching nodes with a zero call sort priority, this will
@@ -134,7 +158,7 @@ void UNiagaraGraph::PostLoad()
 	if (bAllZeroes && UniqueNames.Num() > 1)
 	{
 		// Just do the lexicographic sort and assign the call order to their ordered index value.
-		UniqueNames.Sort();
+		UniqueNames.Sort(FNameLexicalLess());
 		for (UNiagaraNodeInput* InputNode : InputNodes)
 		{
 			if (InputNode->Usage == ENiagaraInputNodeUsage::Parameter)
@@ -175,15 +199,84 @@ void UNiagaraGraph::PostLoad()
 		}
 	}
 
-	RebuildCachedData();
+	RebuildCachedCompileIds();
 
 	if (GIsEditor)
 	{
 		SetFlags(RF_Transactional);
 	}
 
-	Parameters.Empty();
-	FindParameters();
+	// Migrate input condition metadata
+	const int32 NiagaraVer = GetLinkerCustomVersion(FNiagaraCustomVersion::GUID);
+
+	if (NiagaraVer < FNiagaraCustomVersion::MetaDataAndParametersUpdate)
+	{
+		// If the version of the asset is older than FNiagaraCustomVersion::MetaDataAndParametersUpdate 
+		// we need to migrate the old metadata by looping through VariableToMetaData_DEPRECATED
+		// and create new entries in VariableToScriptVariable
+		for (auto It = VariableToMetaData_DEPRECATED.CreateConstIterator(); It; ++It)
+		{
+			SetMetaData(It.Key(), It.Value());
+
+			FString PathName = GetPathName();
+			int ColonPos;
+			if (PathName.FindChar(TCHAR('.'), ColonPos))
+			{
+				// GetPathName() returns something similar to "/Path/To/ScriptName.ScriptName:NiagaraScriptSource_N.NiagaraGraph_N"
+				// so this will extract "/Path/To/ScriptName"
+				PathName = PathName.Left(ColonPos);
+			}
+		}
+		VariableToMetaData_DEPRECATED.Empty();
+	}
+	if (NiagaraVer < FNiagaraCustomVersion::MoveCommonInputMetadataToProperties)
+	{
+		auto MigrateInputCondition = [](TMap<FName, FString>& PropertyMetaData, const FName& InputConditionKey, FNiagaraInputConditionMetadata& InOutInputCondition)
+		{
+			FString* InputCondition = PropertyMetaData.Find(InputConditionKey);
+			if (InputCondition != nullptr)
+			{
+				FString InputName;
+				FString TargetValue;
+				int32 EqualsIndex = InputCondition->Find("=");
+				if (EqualsIndex == INDEX_NONE)
+				{
+					InOutInputCondition.InputName = **InputCondition;
+				}
+				else
+				{
+					InOutInputCondition.InputName = *InputCondition->Left(EqualsIndex);
+					InOutInputCondition.TargetValues.Add(InputCondition->RightChop(EqualsIndex + 1));
+				}
+				PropertyMetaData.Remove(InputConditionKey);
+			}
+		};
+
+		for (auto& VariableToScriptVariableItem : VariableToScriptVariable)
+		{
+			UNiagaraScriptVariable*& MetaData = VariableToScriptVariableItem.Value;
+
+			// Migrate advanced display.
+			if (MetaData->Metadata.PropertyMetaData.Contains("AdvancedDisplay"))
+			{
+				MetaData->Metadata.bAdvancedDisplay = true;
+				MetaData->Metadata.PropertyMetaData.Remove("AdvancedDisplay");
+			}
+
+			// Migrate inline edit condition toggle
+			if (MetaData->Metadata.PropertyMetaData.Contains("InlineEditConditionToggle"))
+			{
+				MetaData->Metadata.bInlineEditConditionToggle = true;
+				MetaData->Metadata.PropertyMetaData.Remove("InlineEditConditionToggle");
+			}
+
+			// Migrate edit and visible conditions
+			MigrateInputCondition(MetaData->Metadata.PropertyMetaData, TEXT("EditCondition"), MetaData->Metadata.EditCondition);
+			MigrateInputCondition(MetaData->Metadata.PropertyMetaData, TEXT("VisibleCondition"), MetaData->Metadata.VisibleCondition);
+		}
+	}
+
+	InvalidateCachedParameterData();
 }
 
 void UNiagaraGraph::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
@@ -196,9 +289,9 @@ class UNiagaraScriptSource* UNiagaraGraph::GetSource() const
 	return CastChecked<UNiagaraScriptSource>(GetOuter());
 }
 
-FGuid UNiagaraGraph::GetCompileID(ENiagaraScriptUsage InUsage, const FGuid& InUsageId)
+FGuid UNiagaraGraph::ComputeCompileID(ENiagaraScriptUsage InUsage, const FGuid& InUsageId)
 {
-	RebuildCachedData();
+	RebuildCachedCompileIds();
 
 	for (int32 j = 0; j < CachedUsageInfo.Num(); j++)
 	{
@@ -210,6 +303,46 @@ FGuid UNiagaraGraph::GetCompileID(ENiagaraScriptUsage InUsage, const FGuid& InUs
 
 	return FGuid();
 
+}
+
+FNiagaraCompileHash UNiagaraGraph::GetCompileDataHash(ENiagaraScriptUsage InUsage, const FGuid& InUsageId) const
+{
+	for (int32 i = 0; i < CachedUsageInfo.Num(); i++)
+	{
+		if (UNiagaraScript::IsEquivalentUsage(CachedUsageInfo[i].UsageType, InUsage) && CachedUsageInfo[i].UsageId == InUsageId)
+		{
+			return CachedUsageInfo[i].CompileHash;
+		}
+	}
+	return FNiagaraCompileHash();
+}
+
+FGuid UNiagaraGraph::GetBaseId(ENiagaraScriptUsage InUsage, const FGuid& InUsageId) const
+{
+	for (int32 i = 0; i < CachedUsageInfo.Num(); i++)
+	{
+		if (UNiagaraScript::IsEquivalentUsage(CachedUsageInfo[i].UsageType, InUsage) && CachedUsageInfo[i].UsageId == InUsageId)
+		{
+			return CachedUsageInfo[i].BaseId;
+		}
+	}
+	return FGuid();
+}
+
+void UNiagaraGraph::ForceBaseId(ENiagaraScriptUsage InUsage, const FGuid& InUsageId, const FGuid InForcedBaseId)
+{
+	FNiagaraGraphScriptUsageInfo* MatchingCachedUsageInfo = CachedUsageInfo.FindByPredicate([InUsage, InUsageId](const FNiagaraGraphScriptUsageInfo& CachedUsageInfoItem)
+	{ 
+		return CachedUsageInfoItem.UsageType == InUsage && CachedUsageInfoItem.UsageId == InUsageId; 
+	});
+
+	if (MatchingCachedUsageInfo == nullptr)
+	{
+		MatchingCachedUsageInfo = &CachedUsageInfo.AddDefaulted_GetRef();
+		MatchingCachedUsageInfo->UsageType = InUsage;
+		MatchingCachedUsageInfo->UsageId = InUsageId;
+	}
+	MatchingCachedUsageInfo->BaseId = InForcedBaseId;
 }
 
 UEdGraphPin* UNiagaraGraph::FindParameterMapDefaultValuePin(const FName VariableName, ENiagaraScriptUsage InUsage, ENiagaraScriptUsage InParentUsage) const
@@ -480,6 +613,87 @@ void UNiagaraGraph::FindInputNodes(TArray<UNiagaraNodeInput*>& OutInputNodes, UN
 	}
 }
 
+TArray<FNiagaraVariable> UNiagaraGraph::FindStaticSwitchInputs(bool bReachableOnly) const
+{
+	TArray<UEdGraphNode*> NodesToProcess = bReachableOnly ? FindReachbleNodes() : Nodes;
+
+	TArray<FNiagaraVariable> Result;
+	for (UEdGraphNode* Node : NodesToProcess)
+	{
+		UNiagaraNodeStaticSwitch* SwitchNode = Cast<UNiagaraNodeStaticSwitch>(Node);
+		if (SwitchNode && !SwitchNode->IsSetByCompiler())
+		{
+			FNiagaraVariable Variable(SwitchNode->GetInputType(), SwitchNode->InputParameterName);
+			Result.AddUnique(Variable);
+		}
+
+		if (UNiagaraNodeFunctionCall* FunctionNode = Cast<UNiagaraNodeFunctionCall>(Node))
+		{
+			for (const FNiagaraPropagatedVariable& Propagated : FunctionNode->PropagatedStaticSwitchParameters)
+			{
+				Result.AddUnique(Propagated.ToVariable());
+			}			
+		}
+	}
+	Result.Sort([](const FNiagaraVariable& Left, const FNiagaraVariable& Right)
+	{
+		return Left.GetName().LexicalLess(Right.GetName());
+	});
+	return Result;
+}
+
+TArray<UEdGraphNode*> UNiagaraGraph::FindReachbleNodes() const
+{
+	TArray<UEdGraphNode*> ResultNodes;
+	TArray<UNiagaraNodeOutput*> OutNodes;
+	FindOutputNodes(OutNodes);
+	ResultNodes.Append(OutNodes);
+
+	for (int i = 0; i < ResultNodes.Num(); i++)
+	{
+		UEdGraphNode* Node = ResultNodes[i];
+		if (Node == nullptr)
+		{
+			continue;
+		}
+		
+		UNiagaraNodeStaticSwitch* SwitchNode = Cast<UNiagaraNodeStaticSwitch>(Node);
+		if (SwitchNode)
+		{
+			TArray<UEdGraphPin*> OutPins;
+			SwitchNode->GetOutputPins(OutPins);
+			for (UEdGraphPin* Pin : OutPins)
+			{
+				UEdGraphPin* TracedPin = SwitchNode->GetTracedOutputPin(Pin, false);
+				if (TracedPin && TracedPin != Pin)
+				{
+					ResultNodes.AddUnique(TracedPin->GetOwningNode());
+				}
+			}
+		}
+		else
+		{
+			TArray<UEdGraphPin*> InputPins;
+			for (UEdGraphPin* Pin : Node->GetAllPins())
+			{
+				if (!Pin || Pin->Direction != EEdGraphPinDirection::EGPD_Input)
+				{
+					continue;
+				}
+				for (UEdGraphPin* LinkedPin : Pin->LinkedTo)
+				{
+					if (!LinkedPin)
+					{
+						continue;
+					}
+					ResultNodes.AddUnique(LinkedPin->GetOwningNode());
+				}
+			}
+		}
+	}
+	return ResultNodes;
+}
+
 void UNiagaraGraph::GetParameters(TArray<FNiagaraVariable>& Inputs, TArray<FNiagaraVariable>& Outputs)const
 {
 	Inputs.Empty();
@@ -514,30 +728,57 @@ void UNiagaraGraph::GetParameters(TArray<FNiagaraVariable>& Inputs, TArray<FNiag
 // 	Outputs.Sort(SortVars);
 }
 
-const TMap<FNiagaraVariable, FNiagaraGraphParameterReferenceCollection>& UNiagaraGraph::GetParameterMap() const
+const TMap<FNiagaraVariable, UNiagaraScriptVariable*>& UNiagaraGraph::GetAllMetaData() const
 {
-	return Parameters;
+	if (bUnreferencedMetaDataPurgePending)
+	{
+		PurgeUnreferencedMetaData();
+	}
+	return VariableToScriptVariable;
+}
+
+TMap<FNiagaraVariable, UNiagaraScriptVariable*>& UNiagaraGraph::GetAllMetaData()
+{
+	if (bUnreferencedMetaDataPurgePending)
+	{
+		PurgeUnreferencedMetaData();
+	}
+	return VariableToScriptVariable;
+}
+
+const TMap<FNiagaraVariable, FNiagaraGraphParameterReferenceCollection>& UNiagaraGraph::GetParameterReferenceMap() const
+{
+	if (bParameterReferenceRefreshPending)
+	{
+		RefreshParameterReferences();
+	}
+	return ParameterToReferencesMap;
 }
 
 void UNiagaraGraph::AddParameter(const FNiagaraVariable& Parameter)
 {
-	FNiagaraGraphParameterReferenceCollection* FoundParameterReferenceCollection = Parameters.Find(Parameter);
+	FNiagaraGraphParameterReferenceCollection* FoundParameterReferenceCollection = ParameterToReferencesMap.Find(Parameter);
 	if (!FoundParameterReferenceCollection)
 	{
 		FNiagaraGraphParameterReferenceCollection NewReferenceCollection = FNiagaraGraphParameterReferenceCollection(true /*bCreated*/);
 		NewReferenceCollection.Graph = this;
-		Parameters.Add(Parameter, NewReferenceCollection);
+		ParameterToReferencesMap.Add(Parameter, NewReferenceCollection);
+	}
+
+	UNiagaraScriptVariable** FoundScriptVariable = VariableToScriptVariable.Find(Parameter);
+	if (!FoundScriptVariable)
+	{
+		UNiagaraScriptVariable* NewScriptVariable = NewObject<UNiagaraScriptVariable>(this);
+		NewScriptVariable->Variable = Parameter;
+		VariableToScriptVariable.Add(Parameter, NewScriptVariable);
 	}
 }
 
-void UNiagaraGraph::RemoveParameter(const FNiagaraVariable& Parameter, const bool bNotifyGraphChanged /*= true*/)
+void UNiagaraGraph::RemoveParameter(const FNiagaraVariable& Parameter)
 {
-	FNiagaraGraphParameterReferenceCollection* ReferenceCollection = Parameters.Find(Parameter);
+	FNiagaraGraphParameterReferenceCollection* ReferenceCollection = ParameterToReferencesMap.Find(Parameter);
 	if (ReferenceCollection)
 	{
-		// Prevent finding all parameters and metadata when renaming each pin.
-		SetFindParametersAllowed(false);
-
 		for (int32 Index = 0; Index < ReferenceCollection->ParameterReferences.Num(); Index++)
 		{
 			const FNiagaraGraphParameterReference& Reference = ReferenceCollection->ParameterReferences[Index];
@@ -552,18 +793,14 @@ void UNiagaraGraph::RemoveParameter(const FNiagaraVariable& Parameter, const boo
 			}
 		}
 
-		Parameters.Remove(Parameter);
-
-		SetFindParametersAllowed(true);
-
-		if (bNotifyGraphChanged)
-		{
-			NotifyGraphChanged();
-		}
+		// Remove it from the reference collection directly because it might have been user added and
+		// these aren't removed when the cached data is rebuilt.
+		ParameterToReferencesMap.Remove(Parameter);
+		NotifyGraphChanged();
 	}
 }
 
-bool UNiagaraGraph::RenameParameter(const FNiagaraVariable& Parameter, FName NewName, const bool bInNotifyGraphChanged /*= true*/)
+bool UNiagaraGraph::RenameParameter(const FNiagaraVariable& Parameter, FName NewName)
 {
 	// Block rename when already renaming. This prevents recursion when CommitEditablePinName is called on referenced nodes. 
 	if (bIsRenamingParameter)
@@ -572,14 +809,19 @@ bool UNiagaraGraph::RenameParameter(const FNiagaraVariable& Parameter, FName New
 	}
 	bIsRenamingParameter = true;
 
-	// Prevent finding all parameters and metadata when renaming each pin.
-	SetFindParametersAllowed(false);
-	
 	// Create the new parameter
 	FNiagaraVariable NewParameter = Parameter;
 	NewParameter.SetName(NewName);
 
-	FNiagaraGraphParameterReferenceCollection* ReferenceCollection = Parameters.Find(Parameter);
+	UNiagaraScriptVariable** OldScriptVariable = VariableToScriptVariable.Find(Parameter);
+	FNiagaraVariableMetaData OldMetaData;
+	if (OldScriptVariable)
+	{
+		OldMetaData = (*OldScriptVariable)->Metadata;
+	}
+		
+
+	FNiagaraGraphParameterReferenceCollection* ReferenceCollection = ParameterToReferencesMap.Find(Parameter);
 	if (ReferenceCollection)
 	{
 		const FText NewNameText = FText::FromName(NewName);
@@ -597,26 +839,20 @@ bool UNiagaraGraph::RenameParameter(const FNiagaraVariable& Parameter, FName New
 			}
 		}
 
-		Parameters.Remove(Parameter);
-		Parameters.Add(NewParameter, NewReferences);
+		ParameterToReferencesMap.Remove(Parameter);
+		ParameterToReferencesMap.Add(NewParameter, NewReferences);
 	}
 
 	// Swap metadata to the new parameter
-	FNiagaraVariableMetaData* Metadata = GetMetaData(Parameter);
-	if (Metadata)
+	if (UNiagaraScriptVariable** Metadata = VariableToScriptVariable.Find(Parameter))
 	{
-		FNiagaraVariableMetaData MetadataCopy = *Metadata;
-		VariableToMetaData.Remove(Parameter);
-		VariableToMetaData.Add(NewParameter, MetadataCopy);
+		VariableToScriptVariable.Remove(Parameter);
 	}
+	SetMetaData(NewParameter, OldMetaData);
 
-	SetFindParametersAllowed(true);
 	bIsRenamingParameter = false;
 
-	if (bInNotifyGraphChanged)
-	{
-		NotifyGraphChanged();
-	}
+	NotifyGraphChanged();
 	return true;
 }
 
@@ -745,7 +981,7 @@ FNiagaraTypeDefinition UNiagaraGraph::GetCachedNumericConversion(class UEdGraphP
 	return ReturnDef;
 }
 
-void UNiagaraGraph::RebuildCachedData(bool bForce)
+void UNiagaraGraph::RebuildCachedCompileIds(bool bForce)
 {
 	// If the graph hasn't changed since last rebuild, then do nothing.
 	if (!bForce && ChangeId == LastBuiltTraversalDataChangeId && LastBuiltTraversalDataChangeId.IsValid())
@@ -785,26 +1021,37 @@ void UNiagaraGraph::RebuildCachedData(bool bForce)
 			}
 		}
 
+		if (FoundMatchIdx == INDEX_NONE || CachedUsageInfo[FoundMatchIdx].BaseId.IsValid() == false)
+		{
+			NewUsageCache[i].BaseId = FGuid::NewGuid();
+		}
+		else
+		{
+			//Copy the old base id if available and valid.
+			NewUsageCache[i].BaseId = CachedUsageInfo[FoundMatchIdx].BaseId;
+		}
+
 		// Now compare the change id's of all the nodes in the traversal by hashing them up and comparing the hash
 		// now with the hash from previous runs.
 		FSHA1 HashState;
 		for (UNiagaraNode* Node : NewUsageCache[i].Traversal)
 		{
-			FGuid Guid = Node->GetChangeId();
-			HashState.Update((const uint8*)&Guid, sizeof(FGuid));
+			Node->UpdateCompileHashForNode(HashState);
 		}
 		HashState.Final();
 
 		// We can't store in a FShaHash struct directly because you can't UProperty it. Using a standin of the same size.
-		check(sizeof(uint8)*NewUsageCache[i].DataHash.Num() == sizeof(FSHAHash));
-		HashState.GetHash(&NewUsageCache[i].DataHash[0]);
+		TArray<uint8> DataHash;
+		DataHash.AddUninitialized(20);
+		HashState.GetHash(DataHash.GetData());
+		NewUsageCache[i].CompileHash = FNiagaraCompileHash(DataHash);
 
 		bool bNeedsNewCompileId = true;
 
 		// Now compare the hashed data. If it is the same as before, then leave the compile ID as-is. If it is different, generate a new guid.
 		if (FoundMatchIdx != INDEX_NONE)
 		{
-			if (NewUsageCache[i].DataHash == CachedUsageInfo[FoundMatchIdx].DataHash)
+			if (NewUsageCache[i].CompileHash == CachedUsageInfo[FoundMatchIdx].CompileHash)
 			{
 				NewUsageCache[i].GeneratedCompileId = CachedUsageInfo[FoundMatchIdx].GeneratedCompileId;
 				bNeedsNewCompileId = false;
@@ -858,22 +1105,36 @@ void UNiagaraGraph::RebuildCachedData(bool bForce)
 		FNiagaraGraphScriptUsageInfo GpuUsageInfo;
 		GpuUsageInfo.UsageType = ENiagaraScriptUsage::ParticleGPUComputeScript;
 		GpuUsageInfo.UsageId = FGuid();
+
+		FNiagaraGraphScriptUsageInfo* OldGpuInfo = CachedUsageInfo.FindByPredicate(
+			[](const FNiagaraGraphScriptUsageInfo& OldInfo) { return OldInfo.UsageType == ENiagaraScriptUsage::ParticleGPUComputeScript && OldInfo.UsageId == FGuid(); });
+		if (OldGpuInfo == nullptr || OldGpuInfo->BaseId.IsValid() == false)
+		{
+			GpuUsageInfo.BaseId = FGuid::NewGuid();
+		}
+		else
+		{
+			// Copy the old base id if available
+			GpuUsageInfo.BaseId = OldGpuInfo->BaseId;
+		}
+
 		GpuUsageInfo.Traversal.Append(ParticleSpawnUsageInfo->Traversal);
 		GpuUsageInfo.Traversal.Append(ParticleUpdateUsageInfo->Traversal);
 
 		FSHA1 HashState;
 		for (UNiagaraNode* Node : GpuUsageInfo.Traversal)
 		{
-			FGuid Guid = Node->GetChangeId();
-			HashState.Update((const uint8*)&Guid, sizeof(FGuid));
+			Node->UpdateCompileHashForNode(HashState);
 		}
 		HashState.Final();
 
-		check(sizeof(uint8) * GpuUsageInfo.DataHash.Num() == sizeof(FSHAHash));
-		HashState.GetHash(GpuUsageInfo.DataHash.GetData());
+		TArray<uint8> DataHash;
+		DataHash.AddUninitialized(20);
+		HashState.GetHash(DataHash.GetData());
+		GpuUsageInfo.CompileHash = FNiagaraCompileHash(DataHash);
 
 		FNiagaraGraphScriptUsageInfo* OldGpuUsageInfo = CachedUsageInfo.FindByPredicate([](const FNiagaraGraphScriptUsageInfo& UsageInfo) { return UsageInfo.UsageType == ENiagaraScriptUsage::ParticleGPUComputeScript && UsageInfo.UsageId == FGuid(); });
-		if (OldGpuUsageInfo != nullptr && OldGpuUsageInfo->DataHash == GpuUsageInfo.DataHash)
+		if (OldGpuUsageInfo != nullptr && OldGpuUsageInfo->CompileHash == GpuUsageInfo.CompileHash)
 		{
 			GpuUsageInfo.GeneratedCompileId = OldGpuUsageInfo->GeneratedCompileId;
 		}
@@ -897,6 +1158,11 @@ void UNiagaraGraph::RebuildCachedData(bool bForce)
 	LastBuiltTraversalDataChangeId = ChangeId;
 
 	RebuildNumericCache();
+}
+
+void UNiagaraGraph::CopyCachedReferencesMap(UNiagaraGraph* TargetGraph)
+{
+	TargetGraph->ParameterToReferencesMap = ParameterToReferencesMap;
 }
 
 const class UEdGraphSchema_Niagara* UNiagaraGraph::GetNiagaraSchema() const
@@ -932,6 +1198,12 @@ FString UNiagaraGraph::GetFunctionAliasByContext(const FNiagaraGraphFunctionAlia
 			NiagaraNode->AppendFunctionAliasForContext(FunctionAliasContext, FunctionAlias);
 		}
 	}
+
+	for (UEdGraphPin* Pin : FunctionAliasContext.StaticSwitchValues)
+	{
+		FunctionAlias += TEXT("_") + FHlslNiagaraTranslator::GetSanitizedFunctionNameSuffix(Pin->GetName()) 
+			+ TEXT("_") + FHlslNiagaraTranslator::GetSanitizedFunctionNameSuffix(Pin->DefaultValue);
+	}
 	return FunctionAlias;
 }
 
@@ -946,13 +1218,16 @@ void UNiagaraGraph::ResolveNumerics(TMap<UNiagaraNode*, bool>& VisitedNodes, UEd
 		{
 			if (InputPins[i])
 			{
-				UNiagaraNode* FoundNode = Cast<UNiagaraNode>(InputPins[i]->GetOwningNode());
-				if (!FoundNode || VisitedNodes.Contains(FoundNode))
+				for (int32 j = 0; j < InputPins[i]->LinkedTo.Num(); j++)
 				{
-					continue;
+					UNiagaraNode* FoundNode = Cast<UNiagaraNode>(InputPins[i]->LinkedTo[j]->GetOwningNode());
+					if (!FoundNode || VisitedNodes.Contains(FoundNode))
+					{
+						continue;
+					}
+					VisitedNodes.Add(FoundNode, true);
+					ResolveNumerics(VisitedNodes, FoundNode);
 				}
-				VisitedNodes.Add(FoundNode, true);
-				ResolveNumerics(VisitedNodes, FoundNode);
 			}
 		}
 
@@ -965,7 +1240,7 @@ void UNiagaraGraph::ResolveNumerics(TMap<UNiagaraNode*, bool>& VisitedNodes, UEd
 void UNiagaraGraph::SynchronizeInternalCacheWithGraph(UNiagaraGraph* Other)
 {
 	// Force us to rebuild the cache, note that this builds traversals and everything else, keeping it in sync if nothing changed from the current version.
-	RebuildCachedData(true);
+	RebuildCachedCompileIds(true);
 	
 	UEnum* FoundEnum = nullptr;
 
@@ -985,7 +1260,7 @@ void UNiagaraGraph::SynchronizeInternalCacheWithGraph(UNiagaraGraph* Other)
 
 		if (FoundMatchIdx != INDEX_NONE)
 		{
-			if (CachedUsageInfo[i].DataHash == Other->CachedUsageInfo[FoundMatchIdx].DataHash)
+			if (CachedUsageInfo[i].CompileHash == Other->CachedUsageInfo[FoundMatchIdx].CompileHash)
 			{
 				CachedUsageInfo[i].GeneratedCompileId = Other->CachedUsageInfo[FoundMatchIdx].GeneratedCompileId;		
 
@@ -1001,7 +1276,10 @@ void UNiagaraGraph::SynchronizeInternalCacheWithGraph(UNiagaraGraph* Other)
 					{
 						ResultsEnum = FoundEnum->GetNameStringByValue((int64)CachedUsageInfo[i].UsageType);
 					}
-					UE_LOG(LogNiagaraEditor, Log, TEXT("'%s' changes synchronized with master script in %s .. synced guid: %s"), *GetFullName(), *ResultsEnum, *CachedUsageInfo[i].GeneratedCompileId.ToString());
+					if (GEnableVerboseNiagaraChangeIdLogging)
+					{
+						UE_LOG(LogNiagaraEditor, Log, TEXT("'%s' changes synchronized with master script in %s .. synced guid: %s"), *GetFullName(), *ResultsEnum, *CachedUsageInfo[i].GeneratedCompileId.ToString());
+					}
 				}
 			}
 		}
@@ -1022,9 +1300,9 @@ void UNiagaraGraph::InvalidateCachedCompileIds()
 	MarkGraphRequiresSynchronization(__FUNCTION__);
 }
 
-void UNiagaraGraph::GatherExternalDependencyIDs(ENiagaraScriptUsage InUsage, const FGuid& InUsageId, TArray<FGuid>& InReferencedIDs, TArray<UObject*>& InReferencedObjs)
+void UNiagaraGraph::GatherExternalDependencyIDs(ENiagaraScriptUsage InUsage, const FGuid& InUsageId, TArray<FNiagaraCompileHash>& InReferencedCompileHashes, TArray<FGuid>& InReferencedIDs, TArray<UObject*>& InReferencedObjs)
 {
-	RebuildCachedData();
+	RebuildCachedCompileIds();
 	
 	// Particle compute scripts get all particle scripts baked into their dependency chain. 
 	if (InUsage == ENiagaraScriptUsage::ParticleGPUComputeScript)
@@ -1034,12 +1312,12 @@ void UNiagaraGraph::GatherExternalDependencyIDs(ENiagaraScriptUsage InUsage, con
 			// Add all chains that we depend on.
 			if (UNiagaraScript::IsUsageDependentOn(InUsage, CachedUsageInfo[i].UsageType)) 
 			{
-				InReferencedIDs.Add(CachedUsageInfo[i].GeneratedCompileId);
+				InReferencedCompileHashes.Add(CachedUsageInfo[i].CompileHash);
 				InReferencedObjs.Add(CachedUsageInfo[i].Traversal.Last());
 
 				for (UNiagaraNode* Node : CachedUsageInfo[i].Traversal)
 				{
-					Node->GatherExternalDependencyIDs(InUsage, InUsageId, InReferencedIDs, InReferencedObjs);
+					Node->GatherExternalDependencyIDs(InUsage, InUsageId, InReferencedCompileHashes, InReferencedIDs, InReferencedObjs);
 				}
 			}
 		}
@@ -1055,18 +1333,18 @@ void UNiagaraGraph::GatherExternalDependencyIDs(ENiagaraScriptUsage InUsage, con
 				// Skip adding to list because we already did it in GetCompileId above.
 				for (UNiagaraNode* Node : CachedUsageInfo[i].Traversal)
 				{
-					Node->GatherExternalDependencyIDs(InUsage, InUsageId, InReferencedIDs, InReferencedObjs);
+					Node->GatherExternalDependencyIDs(InUsage, InUsageId, InReferencedCompileHashes, InReferencedIDs, InReferencedObjs);
 				}
 			}
 			// Now add any other dependency chains that we might have...
 			else if (UNiagaraScript::IsUsageDependentOn(InUsage, CachedUsageInfo[i].UsageType))
 			{
-				InReferencedIDs.Add(CachedUsageInfo[i].GeneratedCompileId);
+				InReferencedCompileHashes.Add(CachedUsageInfo[i].CompileHash);
 				InReferencedObjs.Add(CachedUsageInfo[i].Traversal.Last());
 
 				for (UNiagaraNode* Node : CachedUsageInfo[i].Traversal)
 				{
-					Node->GatherExternalDependencyIDs(InUsage, InUsageId, InReferencedIDs, InReferencedObjs);
+					Node->GatherExternalDependencyIDs(InUsage, InUsageId, InReferencedCompileHashes, InReferencedIDs, InReferencedObjs);
 				}
 			}
 		}
@@ -1129,151 +1407,53 @@ void UNiagaraGraph::MarkGraphRequiresSynchronization(FString Reason)
 {
 	Modify();
 	ChangeId = FGuid::NewGuid();
-	//UE_LOG(LogNiagaraEditor, Verbose, TEXT("Graph %s was marked requires synchronization.  Reason: %s"), *GetPathName(), *Reason);
-}
-
-/** Get the meta-data associated with this variable, if it exists.*/
-FNiagaraVariableMetaData* UNiagaraGraph::GetMetaData(const FNiagaraVariable& InVar)
-{
-	return VariableToMetaData.Find(InVar);
-}
-
-const FNiagaraVariableMetaData* UNiagaraGraph::GetMetaData(const FNiagaraVariable& InVar) const
-{
-	return VariableToMetaData.Find(InVar);
-}
-
-/** Return the meta-data associated with this variable. This should only be called on variables defined within this Graph, otherwise meta-data may leak.*/
-FNiagaraVariableMetaData& UNiagaraGraph::FindOrAddMetaData(const FNiagaraVariable& InVar)
-{
-	FNiagaraVariableMetaData* FoundMetaData = VariableToMetaData.Find(InVar);
-	if (FoundMetaData)
+	if (GEnableVerboseNiagaraChangeIdLogging)
 	{
-		return *FoundMetaData;
+		UE_LOG(LogNiagaraEditor, Verbose, TEXT("Graph %s was marked requires synchronization.  Reason: %s"), *GetPathName(), *Reason);
 	}
-	// We shouldn't add constants to the graph's meta-data list. Those are stored globally.
+}
+
+TOptional<FNiagaraVariableMetaData> UNiagaraGraph::GetMetaData(const FNiagaraVariable& InVar) const
+{
+	if (bUnreferencedMetaDataPurgePending)
+	{
+		PurgeUnreferencedMetaData();
+	}
+	
+	if (UNiagaraScriptVariable** MetaData = VariableToScriptVariable.Find(InVar))
+	{
+		if (*MetaData)
+		{
+			return (*MetaData)->Metadata;
+		}
+	}
+	return TOptional<FNiagaraVariableMetaData>();
+}
+
+void UNiagaraGraph::SetMetaData(const FNiagaraVariable& InVar, const FNiagaraVariableMetaData& InMetaData)
+{
 	ensure(FNiagaraConstants::IsNiagaraConstant(InVar) == false);
-	return VariableToMetaData.Add(InVar);
-}
 
-void UNiagaraGraph::PurgeUnreferencedMetaData()
-{
-	TArray<FNiagaraVariable> VarsToRemove;
-	for (auto It = VariableToMetaData.CreateConstIterator(); It; ++It)
+	if (UNiagaraScriptVariable** FoundMetaData = VariableToScriptVariable.Find(InVar))
 	{
-		int32 NumValid = 0;
-		for (TWeakObjectPtr<UObject> WeakPtr : It.Value().ReferencerNodes)
+		if (*FoundMetaData)
 		{
-			if (WeakPtr.IsValid())
-			{
-				NumValid++;
-			}
-		}
-
-		if (NumValid == 0)
-		{
-			VarsToRemove.Add(It.Key());
-		}
+			// Replace the old metadata..
+			(*FoundMetaData)->Metadata = InMetaData;
+		} 
 	}
-
-	for (FNiagaraVariable& Var : VarsToRemove)
+	else 
 	{
-		VariableToMetaData.Remove(Var);
+		UNiagaraScriptVariable*& NewScriptVariable = VariableToScriptVariable.Add(InVar, NewObject<UNiagaraScriptVariable>(this));
+		NewScriptVariable->Variable = InVar;
+		NewScriptVariable->Metadata = InMetaData;
 	}
 }
 
-void UNiagaraGraph::PurgeUnreferencedParameters()
+void UNiagaraGraph::PurgeUnreferencedMetaData() const
 {
-	TArray<FNiagaraVariable> VarsToRemove;
-	for (auto& ParameterEntry : Parameters)
-	{
-		if (!ParameterEntry.Value.WasCreated() && ParameterEntry.Value.ParameterReferences.Num() == 0)
-		{
-			VarsToRemove.Add(ParameterEntry.Key);
-		}
-	}
-
-	for (FNiagaraVariable& Var : VarsToRemove)
-	{
-		Parameters.Remove(Var);
-	}
-}
-
-UNiagaraGraph::FOnDataInterfaceChanged& UNiagaraGraph::OnDataInterfaceChanged()
-{
-	return OnDataInterfaceChangedDelegate;
-}
-
-void UNiagaraGraph::FindParameters()
-{
-	if (!bFindParametersAllowed)
-	{
-		return;
-	}
-
-	for (auto& ParameterEntry : Parameters)
-	{
-		ParameterEntry.Value.ParameterReferences.Empty();
-	}
-
-	for (auto& MetadataEntry : VariableToMetaData)
-	{
-		MetadataEntry.Value.ReferencerNodes.Empty();
-	}
-
-	auto AddParameterReference = [&](const FNiagaraVariable& Parameter, const UEdGraphPin* Pin, FNiagaraGraphParameterReferenceCollection*& ReferenceCollection)
-	{
-		if (Pin->PinType.PinSubCategory == UNiagaraNodeParameterMapBase::ParameterPinSubCategory)
-		{
-			const FNiagaraGraphParameterReference Reference(Pin->PersistentGuid, Cast<UNiagaraNode>(Pin->GetOwningNode()));
-			bool bNewReference = true;
-			if (ReferenceCollection)
-			{
-				ReferenceCollection->ParameterReferences.AddUnique(Reference);
-				bNewReference = false;
-			}
-			else
-			{
-				FNiagaraGraphParameterReferenceCollection* FoundReferenceCollection = Parameters.Find(Parameter);
-				if (FoundReferenceCollection)
-				{
-					ReferenceCollection = FoundReferenceCollection;
-					FoundReferenceCollection->ParameterReferences.AddUnique(Reference);
-					bNewReference = false;
-				}
-			}
-
-			if (bNewReference)
-			{
-				FNiagaraGraphParameterReferenceCollection NewReferenceCollection;
-				NewReferenceCollection.ParameterReferences.Add(Reference);
-				NewReferenceCollection.Graph = this;
-				Parameters.Add(Parameter, NewReferenceCollection);
-			}
-		}
-	};
-
-	const TArray<FNiagaraParameterMapHistory> Histories = UNiagaraNodeParameterMapBase::GetParameterMaps(this);
-	for (const FNiagaraParameterMapHistory& History : Histories)
-	{
-		for (int32 Index = 0; Index < History.VariablesWithOriginalAliasesIntact.Num(); Index++)
-		{
-			const FNiagaraVariable& Parameter = History.VariablesWithOriginalAliasesIntact[Index];
-
-			FNiagaraGraphParameterReferenceCollection* FoundReferences = nullptr;
-			for (const UEdGraphPin* WritePin : History.PerVariableWriteHistory[Index])
-			{
-				AddParameterReference(Parameter, WritePin, FoundReferences);
-			}
-
-			for (const TTuple<const UEdGraphPin*, const UEdGraphPin*>& ReadPinTuple : History.PerVariableReadHistory[Index])
-			{
-				AddParameterReference(Parameter, ReadPinTuple.Key, FoundReferences);
-			}
-		}
-	}
-
-	// Find all the parameters in the graph that have no connection and won't be picked up by the parameter map history.
+	TSet<FNiagaraVariable> ReferencedParameters;
+	ReferencedParameters.Append(FindStaticSwitchInputs());
 	const UEdGraphSchema_Niagara* NiagaraSchema = Cast<UEdGraphSchema_Niagara>(Schema);
 	for (UEdGraphNode* Node : Nodes)
 	{
@@ -1283,48 +1463,170 @@ void UNiagaraGraph::FindParameters()
 			{
 				const FNiagaraVariable Parameter = NiagaraSchema->PinToNiagaraVariable(Pin, false);
 				const FNiagaraParameterHandle Handle = FNiagaraParameterHandle(Parameter.GetName());
-
 				if (Handle.IsModuleHandle() && !FNiagaraConstants::IsNiagaraConstant(Parameter))
 				{
-					FNiagaraVariableMetaData* MetaData = VariableToMetaData.Find(Parameter);
-					if (MetaData)
-					{
-						MetaData->ReferencerNodes.AddUnique(Node);
-					}
-					else
-					{
-						FNiagaraVariableMetaData NewVariableMetadata;
-						NewVariableMetadata.ReferencerNodes.Add(Node);
-						VariableToMetaData.Add(Parameter, NewVariableMetadata);
-					}
-				}
-			
-				const FNiagaraGraphParameterReference Reference(Pin->PersistentGuid, Cast<UNiagaraNode>(Pin->GetOwningNode()));
-				FNiagaraGraphParameterReferenceCollection* FoundParameterReferenceCollection = Parameters.Find(Parameter);
-				if (FoundParameterReferenceCollection)
-				{
-					FoundParameterReferenceCollection->ParameterReferences.AddUnique(Reference);
-				}
-				else
-				{
-					FNiagaraGraphParameterReferenceCollection NewReferenceCollection;
-					NewReferenceCollection.ParameterReferences.Add(Reference);
-					NewReferenceCollection.Graph = this;
-					Parameters.Add(Parameter, NewReferenceCollection);
+					ReferencedParameters.Add(Parameter);
 				}
 			}
 		}
 	}
 
-	// Clean up all parameters and metadata that do not have a reference
-	PurgeUnreferencedParameters();
-	PurgeUnreferencedMetaData();
+	TArray<FNiagaraVariable> VarsToRemove;
+	for (auto It = VariableToScriptVariable.CreateConstIterator(); It; ++It)
+	{
+		if (!ReferencedParameters.Contains(It.Key()))
+		{
+			VarsToRemove.Add(It.Key());
+		}
+	}
+
+	for (FNiagaraVariable& Var : VarsToRemove)
+	{
+		VariableToScriptVariable.Remove(Var);
+	}
+
+	bUnreferencedMetaDataPurgePending = false;
 }
 
-
-void UNiagaraGraph::SetFindParametersAllowed(const bool bAllowed)
+UNiagaraGraph::FOnDataInterfaceChanged& UNiagaraGraph::OnDataInterfaceChanged()
 {
-	bFindParametersAllowed = bAllowed;
+	return OnDataInterfaceChangedDelegate;
+}
+
+void UNiagaraGraph::RefreshParameterReferences() const 
+{
+	// A set of variables to track which parameters are used so that unused parameters can be removed after the reference tracking.
+	TSet<FNiagaraVariable> CandidateUnreferencedParametersToRemove;
+
+	// The set of pins which has already been handled by add parameters.
+	TSet<const UEdGraphPin*> HandledPins;
+
+	// Purge existing parameter references and collect candidate unreferenced parameters.
+	for (auto& ParameterToReferences : ParameterToReferencesMap)
+	{
+		ParameterToReferences.Value.ParameterReferences.Empty();
+		if (ParameterToReferences.Value.WasCreated() == false)
+		{
+			// Collect all parameters not created for the user so that they can be removed later if no references are found for them.
+			CandidateUnreferencedParametersToRemove.Add(ParameterToReferences.Key);
+		}
+	}
+
+	auto AddParameterReference = [&](const FNiagaraVariable& Parameter, const UEdGraphPin* Pin)
+	{
+		if (Pin->PinType.PinSubCategory == UNiagaraNodeParameterMapBase::ParameterPinSubCategory)
+		{
+			FNiagaraGraphParameterReferenceCollection* ReferenceCollection = ParameterToReferencesMap.Find(Parameter);
+			if (ReferenceCollection == nullptr)
+			{
+				FNiagaraGraphParameterReferenceCollection& NewReferenceCollection = ParameterToReferencesMap.Add(Parameter);
+				NewReferenceCollection.Graph = this;
+				ReferenceCollection = &NewReferenceCollection;
+
+				// When a variable is created or added from the graph it won't call AddParameter, 
+				// but instead call this method
+				UNiagaraScriptVariable** FoundScriptVariable = VariableToScriptVariable.Find(Parameter);
+				if (!FoundScriptVariable)
+				{
+					// Warning! This method (RefreshParameterReferences) isn't const at all!
+					// Need to cast away the const to be able to create a serializable UObject here...
+					UNiagaraScriptVariable* NewScriptVariable = NewObject<UNiagaraScriptVariable>(const_cast<UNiagaraGraph*>(this));
+					NewScriptVariable->Variable = Parameter;
+					VariableToScriptVariable.Add(Parameter, NewScriptVariable);
+				}
+			}
+			ReferenceCollection->ParameterReferences.AddUnique(FNiagaraGraphParameterReference(Pin->PersistentGuid, Cast<UNiagaraNode>(Pin->GetOwningNode())));
+
+			// If we're adding a parameter reference then it needs to be removed from the list of candidate variables to remove since it's been referenced.
+			CandidateUnreferencedParametersToRemove.Remove(Parameter);
+		}
+
+		HandledPins.Add(Pin);
+	};
+
+	auto AddStaticParameterReference = [&](const FNiagaraVariable& Variable, UNiagaraNode* Node)
+	{
+		FNiagaraGraphParameterReferenceCollection* ReferenceCollection = ParameterToReferencesMap.Find(Variable);
+		if (ReferenceCollection == nullptr)
+		{
+			FNiagaraGraphParameterReferenceCollection NewReferenceCollection(true);
+			NewReferenceCollection.Graph = this;
+			ReferenceCollection = &ParameterToReferencesMap.Add(Variable, NewReferenceCollection);
+		}
+		UNiagaraScriptVariable** FoundScriptVariable = VariableToScriptVariable.Find(Variable);
+		if (!FoundScriptVariable)
+		{
+			UNiagaraScriptVariable* NewScriptVariable = NewObject<UNiagaraScriptVariable>(const_cast<UNiagaraGraph*>(this));
+			NewScriptVariable->Variable = Variable;
+			NewScriptVariable->Metadata.bIsStaticSwitch = true;
+			VariableToScriptVariable.Add(Variable, NewScriptVariable);
+		}
+		ReferenceCollection->ParameterReferences.AddUnique(FNiagaraGraphParameterReference(Node->NodeGuid, Node));
+		CandidateUnreferencedParametersToRemove.Remove(Variable);
+	};
+
+	// Add parameter references from parameter map traversals.
+	const TArray<FNiagaraParameterMapHistory> Histories = UNiagaraNodeParameterMapBase::GetParameterMaps(this);
+	for (const FNiagaraParameterMapHistory& History : Histories)
+	{
+		for (int32 Index = 0; Index < History.VariablesWithOriginalAliasesIntact.Num(); Index++)
+		{
+			const FNiagaraVariable& Parameter = History.VariablesWithOriginalAliasesIntact[Index];
+
+			for (const UEdGraphPin* WritePin : History.PerVariableWriteHistory[Index])
+			{
+				AddParameterReference(Parameter, WritePin);
+			}
+
+			for (const TTuple<const UEdGraphPin*, const UEdGraphPin*>& ReadPinTuple : History.PerVariableReadHistory[Index])
+			{
+				AddParameterReference(Parameter, ReadPinTuple.Key);
+			}
+		}
+	}
+
+	// Check all pins on all nodes in the graph to find parameter pins which may have been missed in the parameter map traversal.  This
+	// can happen for nodes which are not fully connected and therefore don't show up in the traversal.
+	const UEdGraphSchema_Niagara* NiagaraSchema = Cast<UEdGraphSchema_Niagara>(Schema);
+	for (UEdGraphNode* Node : Nodes)
+	{
+		UNiagaraNodeStaticSwitch* SwitchNode = Cast<UNiagaraNodeStaticSwitch>(Node);
+		if (SwitchNode && !SwitchNode->IsSetByCompiler())
+		{
+			FNiagaraVariable Variable(SwitchNode->GetInputType(), SwitchNode->InputParameterName);
+			AddStaticParameterReference(Variable, SwitchNode);
+		}
+		else if (UNiagaraNodeFunctionCall* FunctionNode = Cast<UNiagaraNodeFunctionCall>(Node))
+		{
+			for (const FNiagaraPropagatedVariable& Propagated : FunctionNode->PropagatedStaticSwitchParameters)
+			{
+				AddStaticParameterReference(Propagated.ToVariable(), FunctionNode);
+			}
+		}
+
+		for (UEdGraphPin* Pin : Node->Pins)
+		{
+			if (HandledPins.Contains(Pin) == false)
+			{
+				const FNiagaraVariable Parameter = NiagaraSchema->PinToNiagaraVariable(Pin, false);
+				AddParameterReference(Parameter, Pin);
+			}
+		}
+	}
+
+	// If there were any previous parameters which didn't have any references added, remove them here.
+	for (const FNiagaraVariable& UnreferencedParameterToRemove : CandidateUnreferencedParametersToRemove)
+	{
+		ParameterToReferencesMap.Remove(UnreferencedParameterToRemove);
+	}
+
+	bParameterReferenceRefreshPending = false;
+}
+
+void UNiagaraGraph::InvalidateCachedParameterData()
+{
+	bParameterReferenceRefreshPending = true;
+	bUnreferencedMetaDataPurgePending = true;
 }
 
 #undef LOCTEXT_NAMESPACE

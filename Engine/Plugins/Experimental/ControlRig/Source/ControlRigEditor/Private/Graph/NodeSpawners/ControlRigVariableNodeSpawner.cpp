@@ -10,9 +10,37 @@
 #include "EditorCategoryUtils.h"
 #include "K2Node_Variable.h"
 #include "BlueprintNodeTemplateCache.h"
+#include "ControlRigController.h"
+#include "ControlRigBlueprint.h"
 #include "ControlRigBlueprintUtils.h"
+#include "Units/RigUnit.h"
+
+#if WITH_EDITOR
+#include "Editor.h"
+#endif
 
 #define LOCTEXT_NAMESPACE "ControlRigVariableNodeSpawner"
+
+const TArray<FString> GControlRigVariableNodeSpawnerAllowedStructTypes = {
+	TEXT("FBox"),
+	TEXT("FBox2D"),
+	TEXT("FColor"),
+	TEXT("FLinearColor"),
+	TEXT("FVector"),
+	TEXT("FVector2D"),
+	TEXT("FVector4"),
+	TEXT("FRotator"),
+	TEXT("FQuat"),
+	TEXT("FPlane"),
+	TEXT("FMatrix"),
+	TEXT("FRotationMatrix"),
+	TEXT("FScaleMatrix"),
+	TEXT("FTransform"),
+	TEXT("FEulerTransform")
+};
+
+const TArray<FString> GControlRigVariableNodeSpawnerAllowedEnumTypes = {
+};
 
 UControlRigVariableNodeSpawner* UControlRigVariableNodeSpawner::CreateFromPinType(const FEdGraphPinType& InPinType, const FText& InMenuDesc, const FText& InCategory, const FText& InTooltip)
 {
@@ -25,16 +53,7 @@ UControlRigVariableNodeSpawner* UControlRigVariableNodeSpawner::CreateFromPinTyp
 	MenuSignature.MenuName = InMenuDesc;
 	MenuSignature.Tooltip  = InTooltip;
 	MenuSignature.Category = InCategory;
-
-	// add at least one character, so that PrimeDefaultUiSpec() doesn't 
-	// attempt to query the template node
-	//
-	// @TODO: maybe UPROPERTY() fields should have keyword metadata like functions
-	if (MenuSignature.Keywords.IsEmpty())
-	{
-		// want to set it to something so we won't end up back in this condition
-		MenuSignature.Keywords = FText::FromString(TEXT(" "));
-	}
+	MenuSignature.Keywords = FText::FromString(TEXT("Variable"));
 	MenuSignature.Icon = UK2Node_Variable::GetVarIconFromPinType(NodeSpawner->GetVarType(), MenuSignature.IconTint);
 
 	return NodeSpawner;
@@ -64,8 +83,6 @@ UEdGraphNode* UControlRigVariableNodeSpawner::Invoke(UEdGraph* ParentGraph, FBin
 {
 	UControlRigGraphNode* NewNode = nullptr;
 
-//	const FScopedTransaction Transaction(LOCTEXT("AddRigPropertyNode", "Add Rig Property Node"));
-
 	bool const bIsTemplateNode = FBlueprintNodeTemplateCache::IsTemplateOuter(ParentGraph);
 
 	// First create a backing member for our node
@@ -73,19 +90,98 @@ UEdGraphNode* UControlRigVariableNodeSpawner::Invoke(UEdGraph* ParentGraph, FBin
 	FName MemberName = NAME_None;
 	if(!bIsTemplateNode)
 	{
-		MemberName = FControlRigBlueprintUtils::AddPropertyMember(Blueprint, EdGraphPinType, DefaultMenuSignature.MenuName.ToString());
+#if WITH_EDITOR
+		if (GEditor)
+		{
+			GEditor->CancelTransaction(0);
+		}
+#endif
+
+		if (UControlRigBlueprint* RigBlueprint = Cast<UControlRigBlueprint>(Blueprint))
+		{
+			FName DataType = EdGraphPinType.PinCategory;
+			if (UStruct* Struct = Cast<UStruct>(EdGraphPinType.PinSubCategoryObject))
+			{
+				DataType = Struct->GetFName();
+			}
+
+			FName Name = FControlRigBlueprintUtils::ValidateName(RigBlueprint, DefaultMenuSignature.MenuName.ToString());
+			if (RigBlueprint->ModelController->AddParameter(*Name.ToString(), DataType, EControlRigModelParameterType::Hidden, Location))
+			{
+				MemberName = RigBlueprint->LastNameFromNotification;
+				for (UEdGraphNode* Node : ParentGraph->Nodes)
+				{
+					if (UControlRigGraphNode* RigNode = Cast<UControlRigGraphNode>(Node))
+					{
+						if (RigNode->GetPropertyName() == MemberName)
+						{
+							NewNode = RigNode;
+							break;
+						}
+					}
+				}
+			}
+		}
 	}
 	else
 	{
-		MemberName = FControlRigBlueprintUtils::GetNewPropertyMemberName(Blueprint, DefaultMenuSignature.MenuName.ToString());
-	}
-
-	if(MemberName != NAME_None)
-	{
-		NewNode = FControlRigBlueprintUtils::InstantiateGraphNodeForProperty(ParentGraph, MemberName, Location);
+		NewNode = FControlRigBlueprintUtils::InstantiateGraphNodeForProperty(ParentGraph, *DefaultMenuSignature.MenuName.ToString(), Location, EdGraphPinType);
 	}
 
 	return NewNode;
+}
+
+bool UControlRigVariableNodeSpawner::IsTemplateNodeFilteredOut(FBlueprintActionFilter const& Filter) const
+{
+	if (EdGraphPinType.PinCategory == UEdGraphSchema_K2::PC_Struct)
+	{
+		UStruct* Struct = Cast<UStruct>(EdGraphPinType.PinSubCategoryObject);
+		if (Struct == nullptr)
+		{
+			return true;
+		}
+		if (Struct->IsChildOf(FRigUnit::StaticStruct()))
+		{
+			return true;
+		}
+
+		UScriptStruct* ScriptStruct = Cast<UScriptStruct>(Struct);
+		if (ScriptStruct == nullptr)
+		{
+			// for now filter out anything which is not a script struct
+			return true;
+		}
+
+		// check if it is any of the math types
+		FString StructName = ScriptStruct->GetStructCPPName();
+		if (!GControlRigVariableNodeSpawnerAllowedStructTypes.Contains(StructName))
+		{
+			return true;
+		}
+	}
+	else if (EdGraphPinType.PinCategory == UEdGraphSchema_K2::PC_Enum || 
+			EdGraphPinType.PinCategory == UEdGraphSchema_K2::PC_Byte)
+	{
+		UEnum* Enum = Cast<UEnum>(EdGraphPinType.PinSubCategoryObject);
+		if (Enum == nullptr)
+		{
+			return true;
+		}
+
+		if (!GControlRigVariableNodeSpawnerAllowedEnumTypes.Contains(Enum->CppType))
+		{
+			return true;
+		}
+	}
+	else if (EdGraphPinType.PinCategory == UEdGraphSchema_K2::AllObjectTypes ||
+			EdGraphPinType.PinCategory == UEdGraphSchema_K2::PC_Object ||
+			EdGraphPinType.PinCategory == UEdGraphSchema_K2::PC_Delegate || 
+			EdGraphPinType.PinCategory == UEdGraphSchema_K2::PC_Interface)
+	{
+		// we don't allow objects, delegate or interfaces
+		return true;
+	}
+	return Super::IsTemplateNodeFilteredOut(Filter);
 }
 
 FEdGraphPinType UControlRigVariableNodeSpawner::GetVarType() const

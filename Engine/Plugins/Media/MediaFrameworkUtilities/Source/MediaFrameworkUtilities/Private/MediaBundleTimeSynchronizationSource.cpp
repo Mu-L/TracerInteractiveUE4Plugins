@@ -47,10 +47,10 @@ void UMediaBundleTimeSynchronizationSource::PostEditChangeProperty(FPropertyChan
 		if (bUseForSynchronization && MediaBundle && MediaBundle->GetMediaSource())
 		{
 			UTimeSynchronizableMediaSource* SynchronizableMediaSource = TimeSynchronizationSource::GetTimeSynchronizableMediaSource(MediaBundle);
-			if (SynchronizableMediaSource == nullptr || SynchronizableMediaSource->bUseTimeSynchronization)
+			if (SynchronizableMediaSource == nullptr || !SynchronizableMediaSource->bUseTimeSynchronization)
 			{
 				// Warn the user that the MediaSource he just added isn't set for using time synchronization
-				UE_LOG(LogMediaFrameworkUtilities, Warning, TEXT("MediaSource %s doesn't have the option to use time synchronization enabled."), *MediaBundle->MediaSource->GetName());
+				UE_LOG(LogMediaFrameworkUtilities, Warning, TEXT("MediaSource '%s' doesn't have the option to use time synchronization enabled."), *MediaBundle->MediaSource->GetName());
 			}
 		}
 	}
@@ -73,10 +73,11 @@ FFrameTime UMediaBundleTimeSynchronizationSource::GetNewestSampleTime() const
 		const TSharedPtr<IMediaPlayer, ESPMode::ThreadSafe>& Player = MediaBundle->GetMediaPlayer()->GetPlayerFacade()->GetPlayer();
 		if (Player.IsValid())
 		{
-			//If there is a sample in the Texture, we consider it as the next one to be used/rendered
-			if (MediaBundle->GetMediaTexture()->GetAvailableSampleCount() > 0)
+			//If there is a valid sample timestamp, we consider it as the next one to be used/rendered
+			const FTimespan NextAvailableTime = MediaBundle->GetMediaTexture()->GetNextSampleTime();
+			if (NextAvailableTime != FTimespan::MinValue())
 			{
-				UseTimespan = MediaBundle->GetMediaTexture()->GetNextSampleTime();
+				UseTimespan = NextAvailableTime;
 			}
 
 			if (Player->GetCache().GetSampleCount(EMediaCacheState::Loaded) > 0)
@@ -108,10 +109,11 @@ FFrameTime UMediaBundleTimeSynchronizationSource::GetOldestSampleTime() const
 		const TSharedPtr<IMediaPlayer, ESPMode::ThreadSafe>& Player = MediaBundle->GetMediaPlayer()->GetPlayerFacade()->GetPlayer();
 		if (Player.IsValid())
 		{
-			//If there is a sample in the Texture, we consider it as the next one to be used/rendered
-			if (MediaBundle->GetMediaTexture()->GetAvailableSampleCount() > 0)
+			//If there is a valid sample timestamp, we consider it as the next one to be used/rendered
+			const FTimespan NextAvailableTime = MediaBundle->GetMediaTexture()->GetNextSampleTime();
+			if (NextAvailableTime != FTimespan::MinValue())
 			{
-				UseTimespan = MediaBundle->GetMediaTexture()->GetNextSampleTime();
+				UseTimespan = NextAvailableTime;
 			}
 
 			if (Player->GetCache().GetSampleCount(EMediaCacheState::Loaded) > 0)
@@ -174,7 +176,7 @@ bool UMediaBundleTimeSynchronizationSource::Open(const FTimeSynchronizationOpenD
 			UTimeSynchronizableMediaSource* SynchronizableMediaSource = TimeSynchronizationSource::GetTimeSynchronizableMediaSource(MediaBundle);
 			if (bUseForSynchronization && (SynchronizableMediaSource == nullptr || !SynchronizableMediaSource->bUseTimeSynchronization))
 			{
-				UE_LOG(LogMediaFrameworkUtilities, Error, TEXT("MediaBundle %s doesn't support timecode synchronization"), *MediaBundle->GetName());
+				UE_LOG(LogMediaFrameworkUtilities, Error, TEXT("MediaBundle '%s' doesn't support timecode synchronization"), *MediaBundle->GetName());
 			}
 			else
 			{

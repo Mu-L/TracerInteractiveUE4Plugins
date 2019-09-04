@@ -5,6 +5,7 @@
 
 #include "IDetailTreeNode.h"
 #include "PropertyHandle.h"
+#include "IDetailPropertyRow.h"
 
 void UNiagaraStackPropertyRow::Initialize(FRequiredEntryData InRequiredEntryData, TSharedRef<IDetailTreeNode> InDetailTreeNode, FString InOwnerStackItemEditorDataKey, FString InOwnerStackEditorDataKey, UNiagaraNode* InOwningNiagaraNode)
 {
@@ -27,6 +28,12 @@ TSharedRef<IDetailTreeNode> UNiagaraStackPropertyRow::GetDetailTreeNode() const
 bool UNiagaraStackPropertyRow::GetIsEnabled() const
 {
 	return OwningNiagaraNode == nullptr || OwningNiagaraNode->GetDesiredEnabledState() == ENodeEnabledState::Enabled;
+}
+
+void UNiagaraStackPropertyRow::FinalizeInternal()
+{
+	Super::FinalizeInternal();
+	DetailTreeNode.Reset();
 }
 
 void UNiagaraStackPropertyRow::RefreshChildrenInternal(const TArray<UNiagaraStackEntry*>& CurrentChildren, TArray<UNiagaraStackEntry*>& NewChildren, TArray<FStackIssue>& NewIssues)
@@ -62,4 +69,16 @@ void UNiagaraStackPropertyRow::GetSearchItems(TArray<FStackSearchItem>& SearchIt
 	{
 		SearchItems.Add({ "PropertyRowFilterString", FText::FromString(FilterString) });
 	}
+
+	TSharedPtr<IDetailPropertyRow> DetailPropertyRow = DetailTreeNode->GetRow();
+	if (DetailPropertyRow.IsValid())
+	{
+		TSharedPtr<IPropertyHandle> PropertyHandle = DetailPropertyRow->GetPropertyHandle();
+		if (PropertyHandle)
+		{
+			FText PropertyRowHandleText;
+			PropertyHandle->GetValueAsDisplayText(PropertyRowHandleText);
+			SearchItems.Add({ "PropertyRowHandleText", PropertyRowHandleText });
+		}
+	}	
 }

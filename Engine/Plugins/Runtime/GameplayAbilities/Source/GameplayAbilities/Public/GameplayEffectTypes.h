@@ -1196,9 +1196,15 @@ struct GAMEPLAYABILITIES_API FGameplayTagCountContainer
 	{
 		if (CountDelta != 0)
 		{
+			bool bUpdatedAny = false;
 			for (auto TagIt = Container.CreateConstIterator(); TagIt; ++TagIt)
 			{
-				UpdateTagMap_Internal(*TagIt, CountDelta);
+				bUpdatedAny |= UpdateTagMap_Internal(*TagIt, CountDelta, true);
+			}
+
+			if (bUpdatedAny && CountDelta < 0)
+			{
+				ExplicitTags.FillParentTags();
 			}
 		}
 	}
@@ -1206,16 +1212,17 @@ struct GAMEPLAYABILITIES_API FGameplayTagCountContainer
 	/**
 	 * Update the specified tag by the specified delta, potentially causing an additional or removal from the explicit tag list
 	 * 
-	 * @param Tag			Tag to update
-	 * @param CountDelta	Delta of the tag count to apply
+	 * @param Tag						Tag to update
+	 * @param CountDelta				Delta of the tag count to apply
+	 * @param bDeferParentTagsOnRemove	Skip calling FillParentTags for performance (must be handled by calling code)
 	 * 
 	 * @return True if tag was *either* added or removed. (E.g., we had the tag and now dont. or didnt have the tag and now we do. We didn't just change the count (1 count -> 2 count would return false).
 	 */
-	FORCEINLINE bool UpdateTagCount(const FGameplayTag& Tag, int32 CountDelta)
+	FORCEINLINE bool UpdateTagCount(const FGameplayTag& Tag, int32 CountDelta, bool bDeferParentTagsOnRemove=false)
 	{
 		if (CountDelta != 0)
 		{
-			return UpdateTagMap_Internal(Tag, CountDelta);
+			return UpdateTagMap_Internal(Tag, CountDelta, bDeferParentTagsOnRemove);
 		}
 
 		return false;
@@ -1296,6 +1303,12 @@ struct GAMEPLAYABILITIES_API FGameplayTagCountContainer
 
 	void Reset();
 
+	/** Fills in ParentTags from GameplayTags */
+	void FillParentTags()
+	{
+		ExplicitTags.FillParentTags();
+	}
+
 private:
 
 	struct FDelegateInfo
@@ -1320,7 +1333,84 @@ private:
 	FGameplayTagContainer ExplicitTags;
 
 	/** Internal helper function to adjust the explicit tag list & corresponding maps/delegates/etc. as necessary */
-	bool UpdateTagMap_Internal(const FGameplayTag& Tag, int32 CountDelta);
+	bool UpdateTagMap_Internal(const FGameplayTag& Tag, int32 CountDelta, bool bDeferParentTagsOnRemove=false);
+};
+
+
+/**
+ * Struct used to update a blueprint property with a gameplay tag count.
+ * The property is automatically updated as the gameplay tag count changes.
+ * It only supports boolean, integer, and float properties.
+ */
+USTRUCT()
+struct GAMEPLAYABILITIES_API FGameplayTagBlueprintPropertyMapping
+{
+	GENERATED_BODY()
+
+public:
+
+	/** Gameplay tag being counted. */
+	UPROPERTY(EditAnywhere, Category = GameplayTagBlueprintProperty)
+	FGameplayTag TagToMap;
+
+	/** Property to update with the gameplay tag count. */
+	UPROPERTY(VisibleAnywhere, Category = GameplayTagBlueprintProperty)
+	UProperty* PropertyToEdit;
+
+	/** Name of property being edited. */
+	UPROPERTY(VisibleAnywhere, Category = GameplayTagBlueprintProperty)
+	FName PropertyName;
+
+	/** Guid of property being edited. */
+	UPROPERTY(VisibleAnywhere, Category = GameplayTagBlueprintProperty)
+	FGuid PropertyGuid;
+
+	/** Handle to delegate bound on the ability system component. */
+	FDelegateHandle DelegateHandle;
+};
+
+
+/**
+ * Struct used to manage gameplay tag blueprint property mappings.
+ * It registers the properties with delegates on an ability system component.
+ * This struct should not be used in containers (such as TArray) since it uses a raw pointer
+ * to bind the delegate and it's address could change causing an invalid binding.
+ */
+USTRUCT()
+struct GAMEPLAYABILITIES_API FGameplayTagBlueprintPropertyMap
+{
+	GENERATED_BODY()
+
+public:
+
+	FGameplayTagBlueprintPropertyMap();
+	~FGameplayTagBlueprintPropertyMap();
+
+	/** Call this to initialize and bind the properties with the ability system component. */
+	void Initialize(UObject* Owner, class UAbilitySystemComponent* ASC);
+
+#if WITH_EDITOR
+	/** This can optionally be called in the owner's IsDataValid() for data validation. */
+	EDataValidationResult IsDataValid(UObject* ContainingAsset, TArray<FText>& ValidationErrors);
+#endif // #if WITH_EDITOR
+
+protected:
+
+	void Unregister();
+
+	void GameplayTagEventCallback(const FGameplayTag Tag, int32 NewCount);
+
+	bool IsPropertyTypeValid(const UProperty* Property) const;
+
+	EGameplayTagEventType::Type GetGameplayTagEventType(const UProperty* Property) const;
+
+protected:
+
+	TWeakObjectPtr<UObject> CachedOwner;
+	TWeakObjectPtr<UAbilitySystemComponent> CachedASC;
+
+	UPROPERTY(EditAnywhere, Category = GameplayTagBlueprintProperty)
+	TArray<FGameplayTagBlueprintPropertyMapping> PropertyMappings;
 };
 
 

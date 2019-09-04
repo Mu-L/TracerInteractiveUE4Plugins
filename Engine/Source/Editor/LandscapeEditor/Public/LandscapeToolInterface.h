@@ -7,6 +7,7 @@
 #include "UObject/GCObject.h"
 #include "UnrealWidget.h"
 #include "EdMode.h"
+#include "LandscapeEdit.h"
 
 class FEditorViewportClient;
 class FPrimitiveDrawInterface;
@@ -136,18 +137,6 @@ struct FLandscapeBrushSet
 	}
 };
 
-namespace ELandscapeToolTargetType
-{
-	enum Type : int8
-	{
-		Heightmap  = 0,
-		Weightmap  = 1,
-		Visibility = 2,
-
-		Invalid    = -1, // only valid for LandscapeEdMode->CurrentToolTarget.TargetType
-	};
-}
-
 namespace ELandscapeToolTargetTypeMask
 {
 	enum Type : uint8
@@ -176,14 +165,12 @@ struct FLandscapeToolTarget
 	ELandscapeToolTargetType::Type TargetType;
 	TWeakObjectPtr<ULandscapeLayerInfoObject> LayerInfo;
 	FName LayerName;
-	int32 CurrentProceduralLayerIndex;
-
+	
 	FLandscapeToolTarget()
 		: LandscapeInfo()
 		, TargetType(ELandscapeToolTargetType::Heightmap)
 		, LayerInfo()
 		, LayerName(NAME_None)
-		, CurrentProceduralLayerIndex(INDEX_NONE)
 	{
 	}
 };
@@ -230,6 +217,15 @@ public:
 	virtual FVector GetWidgetLocation() const { return FVector::ZeroVector; }
 	virtual FMatrix GetWidgetRotation() const { return FMatrix::Identity; }
 	virtual bool DisallowMouseDeltaTracking() const { return false; }
+
+	/** Get override cursor visibility settings */
+	virtual bool GetOverrideCursorVisibility(bool& bWantsOverride, bool& bHardwareCursorVisible, bool bSoftwareCursorVisible) const { return false; }
+
+	/** Called before mouse movement is converted to drag/rot */
+	virtual bool PreConvertMouseMovement(FEditorViewportClient* InViewportClient) { return false; }
+
+	/** Called after mouse movement is converted to drag/rot */
+	virtual bool PostConvertMouseMovement(FEditorViewportClient* InViewportClient) { return false; }
 
 	virtual void SetCanToolBeActivated(bool Value) { }
 	virtual bool CanToolBeActivated() const { return true;  }

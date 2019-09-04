@@ -93,13 +93,6 @@ FMetalViewport::FMetalViewport(void* WindowHandle, uint32 InSizeX,uint32 InSizeY
 		Layer.frame = ContentRect;
 		Layer.magnificationFilter = kCAFilterNearest;
 		Layer.minificationFilter = kCAFilterNearest;
-#if WITH_EDITOR
-		if(GIsEditor)
-		{
-			// Default is YES - Mac Editor only - wait for drawable to be available - nextDrawable can still return nil on error or low memory
-			Layer.allowsNextDrawableTimeout = NO;
-		}
-#endif
 
 		[Layer setDevice:GetMetalDeviceContext().GetDevice()];
 		
@@ -233,12 +226,6 @@ void FMetalViewport::Resize(uint32 InSizeX, uint32 InSizeY, bool bInIsFullscreen
 		}
 		
 		[IOSView UpdateRenderWidth:InSizeX andHeight:InSizeY];
-
-		// check the size of the window
-		float ScalingFactor = [IOSView contentScaleFactor];
-		CGRect ViewFrame = [IOSView frame];
-		check(FMath::TruncToInt(ScalingFactor * ViewFrame.size.width) == InSizeX &&
-			  FMath::TruncToInt(ScalingFactor * ViewFrame.size.height) == InSizeY);
 	}
 #endif
 
@@ -249,7 +236,7 @@ void FMetalViewport::Resize(uint32 InSizeX, uint32 InSizeY, bool bInIsFullscreen
         FTexture2DRHIRef DoubleBuffer;
         if (GMetalSupportsIntermediateBackBuffer)
         {
-            NewBackBuffer = (FMetalTexture2D*)(FTexture2DRHIParamRef)GDynamicRHI->RHICreateTexture2D(InSizeX, InSizeY, Format, 1, 1, TexCreate_RenderTargetable, CreateInfo);
+            NewBackBuffer = (FMetalTexture2D*)(FRHITexture2D*)GDynamicRHI->RHICreateTexture2D(InSizeX, InSizeY, Format, 1, 1, TexCreate_RenderTargetable, CreateInfo);
             
             if (GMetalSeparatePresentThread)
             {
@@ -259,7 +246,7 @@ void FMetalViewport::Resize(uint32 InSizeX, uint32 InSizeY, bool bInIsFullscreen
         }
         else
         {
-            NewBackBuffer = (FMetalTexture2D*)(FTexture2DRHIParamRef)GDynamicRHI->RHICreateTexture2D(InSizeX, InSizeY, Format, 1, 1, TexCreate_RenderTargetable | TexCreate_Presentable, CreateInfo);
+            NewBackBuffer = (FMetalTexture2D*)(FRHITexture2D*)GDynamicRHI->RHICreateTexture2D(InSizeX, InSizeY, Format, 1, 1, TexCreate_RenderTargetable | TexCreate_Presentable, CreateInfo);
         }
         ((FMetalTexture2D*)NewBackBuffer.GetReference())->Surface.Viewport = this;
         
@@ -308,46 +295,6 @@ mtlpp::Drawable FMetalViewport::GetDrawable(EMetalViewportAccessFlag Accessor)
 			if (GMetalNonBlockingPresent == 0 || [((id<CAMetalLayerSPI>)CurrentLayer) isDrawableAvailable])
 			{
 				Drawable = CurrentLayer ? [CurrentLayer nextDrawable] : nil;
-				
-		#if WITH_EDITOR
-				// Try to confirm UE-72410 out of memory speculation - Mac Editor mode only
-				if(!Drawable && GIsEditor && CurrentLayer)
-				{
-					// Drawable can be nil when:
-					// 1) The layer has an invalid combination of drawable properties.
-  					// 2) All drawables in the swap queue are in-use and the 1 second timeout has elapsed. (except when `allowsNextDrawableTimeout' is set to NO)
-  					// 3) Process is out of memory.
-  					UE_LOG(LogMetal, Display, TEXT("FMetalViewport: Missing Drawable: nil returned from [CAMetalLayer nextDrawable] (CAMetalLayer.allowsNextDrawableTimeout=%d)"), CurrentLayer.allowsNextDrawableTimeout ? 1 : 0);
-					
-					// Blocking wait on next drawable is set - something has gone wrong - report current memory
-					if(CurrentLayer.allowsNextDrawableTimeout == NO)
-					{
-						// System
-						{
-							FPlatformMemoryStats MemoryStats = FPlatformMemory::GetStats();
-							uint64 SysTotalPhysical = MemoryStats.TotalPhysical / 1024 / 1024;
-							uint64 SysAvailPhysical = MemoryStats.AvailablePhysical / 1024 / 1024;
-							uint64 SysUsedPhysical = MemoryStats.UsedPhysical / 1024 / 1024;
-							
-							UE_LOG(LogMetal, Display, TEXT("System Memory Stats: TotalPhysical = %lluMB, AvailPhysical = %lluMB, UsedPhysical = %lluMB"), SysTotalPhysical, SysAvailPhysical, SysUsedPhysical);
-						}
-						
-						// GPU
-						TArray<FMacPlatformMisc::FGPUDescriptor> const& GPUDescriptors = FMacPlatformMisc::GetGPUDescriptors();
-						for(uint32 i = 0;i < GPUDescriptors.Num();++i)
-						{
-							FMacPlatformMisc::FGPUDescriptor const& Descriptor = GPUDescriptors[i];
-							TMap<FString, float> const& GPUStats = Descriptor.GetPerformanceStatistics();
-							
-							uint32 GPUTotalMemory = Descriptor.GPUMemoryMB;
-							int64 vramFree = ((int64)GPUStats[TEXT("vramFreeBytes")]) / 1024 / 1024;
-							int64 inUseVidMemory = ((int64)GPUStats[TEXT("inUseVidMemoryBytes")]) / 1024 / 1024;
-							
-							UE_LOG(LogMetal, Display, TEXT("GPU Memory Stats [Device=%d]: DeviceTotalMemory = %dMB, FreeVRAM = %lldMB, InUseVRAM = %lldMB"), i, GPUTotalMemory , vramFree, inUseVidMemory);
-						}
-					}
-				}
-		#endif
 			}
 			else
 			{
@@ -368,10 +315,17 @@ mtlpp::Drawable FMetalViewport::GetDrawable(EMetalViewportAccessFlag Accessor)
 			do
 			{
 				Drawable = [AppDelegate.IOSView MakeDrawable];
-				Size.width = ((id<CAMetalDrawable>)Drawable).texture.width;
-				Size.height = ((id<CAMetalDrawable>)Drawable).texture.height;
+				if (Drawable != nil)
+				{
+					Size.width = ((id<CAMetalDrawable>)Drawable).texture.width;
+					Size.height = ((id<CAMetalDrawable>)Drawable).texture.height;
+				}
+				else
+				{
+					FPlatformProcess::SleepNoStats(0.001f);
+				}
 			}
-			while (Size.width != BackBuffer[GetViewportIndex(Accessor)]->GetSizeX() || Size.height != BackBuffer[GetViewportIndex(Accessor)]->GetSizeY());
+			while (Drawable == nil || Size.width != BackBuffer[GetViewportIndex(Accessor)]->GetSizeX() || Size.height != BackBuffer[GetViewportIndex(Accessor)]->GetSizeY());
 			
 	#endif
 			
@@ -449,7 +403,6 @@ void FMetalViewport::Present(FMetalCommandQueue& CommandQueue, bool bLockToVsync
 	NSNumber* ScreenId = [View.window.screen.deviceDescription objectForKey:@"NSScreenNumber"];
 	DisplayID = ScreenId.unsignedIntValue;
 	bIsLiveResize = View.inLiveResize;
-	if (FMetalCommandQueue::SupportsFeature(EMetalFeaturesSupportsVSyncToggle))
 	{
 		FCAMetalLayer* CurrentLayer = (FCAMetalLayer*)[View layer];
 		static bool sVSyncSafe = FPlatformMisc::MacOSXVersionCompare(10,13,4) >= 0;
@@ -647,12 +600,12 @@ FViewportRHIRef FMetalDynamicRHI::RHICreateViewport(void* WindowHandle,uint32 Si
 	}
 }
 
-void FMetalDynamicRHI::RHIResizeViewport(FViewportRHIParamRef Viewport, uint32 SizeX, uint32 SizeY, bool bIsFullscreen)
+void FMetalDynamicRHI::RHIResizeViewport(FRHIViewport* Viewport, uint32 SizeX, uint32 SizeY, bool bIsFullscreen)
 {
 	RHIResizeViewport(Viewport, SizeX, SizeY, bIsFullscreen, PF_Unknown);
 }
 
-void FMetalDynamicRHI::RHIResizeViewport(FViewportRHIParamRef ViewportRHI,uint32 SizeX,uint32 SizeY,bool bIsFullscreen,EPixelFormat Format)
+void FMetalDynamicRHI::RHIResizeViewport(FRHIViewport* ViewportRHI,uint32 SizeX,uint32 SizeY,bool bIsFullscreen,EPixelFormat Format)
 {
 	@autoreleasepool {
 	check( IsInGameThread() );
@@ -671,12 +624,12 @@ void FMetalDynamicRHI::RHITick( float DeltaTime )
  *	Viewport functions.
  *=============================================================================*/
 
-void FMetalRHICommandContext::RHIBeginDrawingViewport(FViewportRHIParamRef ViewportRHI, FTextureRHIParamRef RenderTargetRHI)
+void FMetalRHICommandContext::RHIBeginDrawingViewport(FRHIViewport* ViewportRHI, FRHITexture* RenderTargetRHI)
 {
 	check(false);
 }
 
-void FMetalRHIImmediateCommandContext::RHIBeginDrawingViewport(FViewportRHIParamRef ViewportRHI, FTextureRHIParamRef RenderTargetRHI)
+void FMetalRHIImmediateCommandContext::RHIBeginDrawingViewport(FRHIViewport* ViewportRHI, FRHITexture* RenderTargetRHI)
 {
 	@autoreleasepool {
 	FMetalViewport* Viewport = ResourceCast(ViewportRHI);
@@ -698,12 +651,12 @@ void FMetalRHIImmediateCommandContext::RHIBeginDrawingViewport(FViewportRHIParam
 	}
 }
 
-void FMetalRHICommandContext::RHIEndDrawingViewport(FViewportRHIParamRef ViewportRHI,bool bPresent,bool bLockToVsync)
+void FMetalRHICommandContext::RHIEndDrawingViewport(FRHIViewport* ViewportRHI,bool bPresent,bool bLockToVsync)
 {
 	check(false);
 }
 
-void FMetalRHIImmediateCommandContext::RHIEndDrawingViewport(FViewportRHIParamRef ViewportRHI,bool bPresent,bool bLockToVsync)
+void FMetalRHIImmediateCommandContext::RHIEndDrawingViewport(FRHIViewport* ViewportRHI,bool bPresent,bool bLockToVsync)
 {
 	@autoreleasepool {
 	FMetalViewport* Viewport = ResourceCast(ViewportRHI);
@@ -711,7 +664,7 @@ void FMetalRHIImmediateCommandContext::RHIEndDrawingViewport(FViewportRHIParamRe
 	}
 }
 
-FTexture2DRHIRef FMetalDynamicRHI::RHIGetViewportBackBuffer(FViewportRHIParamRef ViewportRHI)
+FTexture2DRHIRef FMetalDynamicRHI::RHIGetViewportBackBuffer(FRHIViewport* ViewportRHI)
 {
 	@autoreleasepool {
 	FMetalViewport* Viewport = ResourceCast(ViewportRHI);
@@ -719,7 +672,7 @@ FTexture2DRHIRef FMetalDynamicRHI::RHIGetViewportBackBuffer(FViewportRHIParamRef
 	}
 }
 
-void FMetalDynamicRHI::RHIAdvanceFrameForGetViewportBackBuffer(FViewportRHIParamRef ViewportRHI)
+void FMetalDynamicRHI::RHIAdvanceFrameForGetViewportBackBuffer(FRHIViewport* ViewportRHI)
 {
 	if (GMetalSeparatePresentThread && (GRHISupportsRHIThread && IsRunningRHIInSeparateThread()))
 	{

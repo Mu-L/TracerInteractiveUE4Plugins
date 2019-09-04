@@ -2,23 +2,32 @@
 
 #include "OpenXRInput.h"
 #include "OpenXRHMD.h"
+#include "OpenXRHMDPrivate.h"
+#include "XRInputSettings.h"
 #include "UObject/UObjectIterator.h"
 #include "GameFramework/InputSettings.h"
 
+#if WITH_EDITOR
+#include "Editor/EditorEngine.h"
+#include "ISettingsModule.h"
+#include "ISettingsSection.h"
+#include "Editor.h"
+#endif
+
 #include <openxr/openxr.h>
 
-#define XR_ENSURE(x) ensure(XR_SUCCEEDED(x))
+#define LOCTEXT_NAMESPACE "OpenXR"
 
-// Hack to prefer emitting MotionController keys for action events
-static bool MatchKeyNamePrefix(const FKey& Key, const TCHAR* Prefix)
-{
-	return Key.GetFName().ToString().StartsWith(Prefix);
-};
+FSimpleMulticastDelegate UXRInputSettings::OnSuggestedBindingsChanged;
 
-static bool MatchKeyNameSuffix(const FKey& Key, const TCHAR* Suffix)
+#if WITH_EDITOR
+void UXRInputSettings::PostEditChangeChainProperty(struct FPropertyChangedChainEvent& PropertyChangedEvent)
 {
-	return Key.GetFName().ToString().EndsWith(Suffix);
-};
+	Super::PostEditChangeChainProperty(PropertyChangedEvent);
+
+	OnSuggestedBindingsChanged.Broadcast();
+}
+#endif
 
 FORCEINLINE XrPath GetPath(XrInstance Instance, const char* PathString)
 {
@@ -26,6 +35,12 @@ FORCEINLINE XrPath GetPath(XrInstance Instance, const char* PathString)
 	XrResult Result = xrStringToPath(Instance, PathString, &Path);
 	check(XR_SUCCEEDED(Result));
 	return Path;
+}
+
+FORCEINLINE XrPath GetPath(XrInstance Instance, FString PathString)
+{
+	FTCHARToUTF8 EngineNameConverter(*PathString);
+	return GetPath(Instance, EngineNameConverter.Get());
 }
 
 FORCEINLINE void FilterActionName(const char* InActionName, char* OutActionName)
@@ -76,16 +91,45 @@ void FOpenXRInputPlugin::StartupModule()
 	FOpenXRHMD* OpenXRHMD = GetOpenXRHMD();
 	if (OpenXRHMD)
 	{
-		InputDevice = TSharedPtr<FOpenXRInput>(new FOpenXRInputPlugin::FOpenXRInput(OpenXRHMD));
+		InputDevice = MakeShared<FOpenXRInput>(OpenXRHMD);
 	}
+
+#if WITH_EDITOR
+	ISettingsModule* SettingsModule = FModuleManager::GetModulePtr<ISettingsModule>("Settings");
+
+	// While this should usually be true, it's not guaranteed that the settings module will be loaded in the editor.
+	// UBT allows setting bBuildDeveloperTools to false while bBuildEditor can be true.
+	// The former option indirectly controls loading of the "Settings" module.
+	if (SettingsModule)
+	{
+		SettingsModule->RegisterSettings("Project", "Plugins", "OpenXR Input",
+			LOCTEXT("XRInputSettingsName", "OpenXR Input"),
+			LOCTEXT("XRInputSettingsDescription", "Configure input for OpenXR."),
+			GetMutableDefault<UXRInputSettings>()
+		);
+	}
+#endif
 }
 
-FOpenXRInputPlugin::FOpenXRAction::FOpenXRAction(XrActionSet InSet, XrActionType InType, const FName& InName)
-	: Set(InSet)
-	, Type(InType)
+void FOpenXRInputPlugin::ShutdownModule()
+{
+	IOpenXRInputPlugin::ShutdownModule();
+
+#if WITH_EDITOR
+	ISettingsModule* SettingsModule = FModuleManager::GetModulePtr<ISettingsModule>("Settings");
+	if (SettingsModule)
+	{
+		SettingsModule->UnregisterSettings("Project", "Plugins", "OpenXR Input");
+	}
+#endif
+}
+
+FOpenXRInputPlugin::FOpenXRAction::FOpenXRAction(XrActionSet InActionSet, XrActionType InActionType, const FName& InName)
+	: Set(InActionSet)
+	, Type(InActionType)
 	, Name(InName)
-	, ActionKey()
-	, Handle()
+	, Keys()
+	, Handle(XR_NULL_HANDLE)
 {
 	char ActionName[NAME_SIZE];
 	Name.GetPlainANSIString(ActionName);
@@ -98,25 +142,31 @@ FOpenXRInputPlugin::FOpenXRAction::FOpenXRAction(XrActionSet InSet, XrActionType
 	Info.countSubactionPaths = 0;
 	Info.subactionPaths = nullptr;
 	FCStringAnsi::Strcpy(Info.localizedActionName, XR_MAX_LOCALIZED_ACTION_NAME_SIZE, ActionName);
-	ensure(xrCreateAction(Set, &Info, &Handle) >= XR_SUCCESS);
+	XR_ENSURE(xrCreateAction(Set, &Info, &Handle));
 }
 
-FOpenXRInputPlugin::FOpenXRAction::FOpenXRAction(XrActionSet InSet, const FInputActionKeyMapping& InActionKey)
-	: FOpenXRAction(InSet, XR_INPUT_ACTION_TYPE_BOOLEAN, InActionKey.ActionName)
+FOpenXRInputPlugin::FOpenXRAction::FOpenXRAction(XrActionSet InSet, const TArray<FInputActionKeyMapping>& InActionKeys)
+	: FOpenXRAction(InSet, XR_ACTION_TYPE_BOOLEAN_INPUT, InActionKeys[0].ActionName)
 {
-	ActionKey = InActionKey.Key.GetFName();
+	for (auto Mapping : InActionKeys)
+	{
+		Keys.Add(Mapping.Key);
+	}
 }
 
-FOpenXRInputPlugin::FOpenXRAction::FOpenXRAction(XrActionSet InSet, const FInputAxisKeyMapping& InAxisKey)
-	: FOpenXRAction(InSet, XR_INPUT_ACTION_TYPE_VECTOR1F, InAxisKey.AxisName)
+FOpenXRInputPlugin::FOpenXRAction::FOpenXRAction(XrActionSet InSet, const TArray<FInputAxisKeyMapping>& InAxisKeys)
+	: FOpenXRAction(InSet, XR_ACTION_TYPE_FLOAT_INPUT, InAxisKeys[0].AxisName)
 {
-	ActionKey = InAxisKey.Key.GetFName();
+	for (auto Mapping : InAxisKeys)
+	{
+		Keys.Add(Mapping.Key);
+	}
 }
 
-FOpenXRInputPlugin::FOpenXRController::FOpenXRController(FOpenXRHMD* HMD, XrActionSet InSet, const char* InName)
-	: Set(InSet)
-	, Pose(XR_NULL_HANDLE)
-	, Vibration(XR_NULL_HANDLE)
+FOpenXRInputPlugin::FOpenXRController::FOpenXRController(FOpenXRHMD* HMD, XrActionSet InActionSet, const char* InName)
+	: ActionSet(InActionSet)
+	, Action(XR_NULL_HANDLE)
+	, VibrationAction(XR_NULL_HANDLE)
 	, DeviceId(-1)
 {
 	XrActionCreateInfo Info;
@@ -125,20 +175,20 @@ FOpenXRInputPlugin::FOpenXRController::FOpenXRController(FOpenXRHMD* HMD, XrActi
 	FCStringAnsi::Strcpy(Info.localizedActionName, XR_MAX_ACTION_NAME_SIZE, InName);
 	FCStringAnsi::Strcat(Info.localizedActionName, XR_MAX_ACTION_NAME_SIZE, " Pose");
 	FilterActionName(Info.localizedActionName, Info.actionName);
-	Info.actionType = XR_INPUT_ACTION_TYPE_POSE;
+	Info.actionType = XR_ACTION_TYPE_POSE_INPUT;
 	Info.countSubactionPaths = 0;
 	Info.subactionPaths = nullptr;
-	XR_ENSURE(xrCreateAction(Set, &Info, &Pose));
+	XR_ENSURE(xrCreateAction(ActionSet, &Info, &Action));
 
 	FCStringAnsi::Strcpy(Info.localizedActionName, XR_MAX_ACTION_NAME_SIZE, InName);
 	FCStringAnsi::Strcat(Info.localizedActionName, XR_MAX_ACTION_NAME_SIZE, " Vibration");
 	FilterActionName(Info.localizedActionName, Info.actionName);
-	Info.actionType = XR_OUTPUT_ACTION_TYPE_VIBRATION;
-	XR_ENSURE(xrCreateAction(Set, &Info, &Vibration));
+	Info.actionType = XR_ACTION_TYPE_VIBRATION_OUTPUT;
+	XR_ENSURE(xrCreateAction(ActionSet, &Info, &VibrationAction));
 
 	if (HMD)
 	{
-		DeviceId = HMD->AddActionDevice(Pose);
+		DeviceId = HMD->AddActionDevice(Action);
 	}
 }
 
@@ -147,57 +197,38 @@ FOpenXRInputPlugin::FOpenXRInput::FOpenXRInput(FOpenXRHMD* HMD)
 	, ActionSets()
 	, Actions()
 	, Controllers()
+	, bActionsBound(false)
 	, MessageHandler(new FGenericApplicationMessageHandler())
 {
 	IModularFeatures::Get().RegisterModularFeature(GetModularFeatureName(), this);
 	check(OpenXRHMD);
 
-	XrSession Session = OpenXRHMD->GetSession();
-	XrInstance Instance = OpenXRHMD->GetInstance();
-	check(Session && Instance);
+	InitActions();
+}
 
-	XrActionSet ActionSet;
+FOpenXRInputPlugin::FOpenXRInput::~FOpenXRInput()
+{
+	DestroyActions();
+}
+
+void FOpenXRInputPlugin::FOpenXRInput::InitActions()
+{
+	if (bActionsBound)
+		return;
+
+	XrInstance Instance = OpenXRHMD->GetInstance();
+	check(Instance);
+	DestroyActions();
+
+	XrActionSet ActionSet = XR_NULL_HANDLE;
 	XrActionSetCreateInfo SetInfo;
 	SetInfo.type = XR_TYPE_ACTION_SET_CREATE_INFO;
 	SetInfo.next = nullptr;
 	FCStringAnsi::Strcpy(SetInfo.actionSetName, XR_MAX_ACTION_SET_NAME_SIZE, "ue4");
 	FCStringAnsi::Strcpy(SetInfo.localizedActionSetName, XR_MAX_ACTION_SET_NAME_SIZE, "Unreal Engine 4");
-	XR_ENSURE(xrCreateActionSet(Session, &SetInfo, &ActionSet));
+	XR_ENSURE(xrCreateActionSet(Instance, &SetInfo, &ActionSet));
 
-	// Controller poses
-	TArray<XrActionSuggestedBinding> Bindings;
-	Controllers.Add(EControllerHand::Left, FOpenXRController(OpenXRHMD, ActionSet, "Left Controller"));
-	Controllers.Add(EControllerHand::Right, FOpenXRController(OpenXRHMD, ActionSet, "Right Controller"));
-
-	Bindings.Add(XrActionSuggestedBinding{ Controllers[EControllerHand::Left].Pose, GetPath(Instance, "/user/hand/left/input/palm") });
-	Bindings.Add(XrActionSuggestedBinding{ Controllers[EControllerHand::Right].Pose, GetPath(Instance, "/user/hand/right/input/palm") });
-
-	Bindings.Add(XrActionSuggestedBinding{ Controllers[EControllerHand::Left].Vibration, GetPath(Instance, "/user/hand/left/output/haptic") });
-	Bindings.Add(XrActionSuggestedBinding{ Controllers[EControllerHand::Right].Vibration, GetPath(Instance, "/user/hand/right/output/haptic") });
-
-	InteractionMappings.Add(FGamepadKeyNames::MotionController_Left_Shoulder, GetPath(Instance, "/user/hand/left/input/menu/click"));
-	InteractionMappings.Add(FGamepadKeyNames::MotionController_Left_Trigger, GetPath(Instance, "/user/hand/left/input/trigger"));
-	InteractionMappings.Add(FGamepadKeyNames::MotionController_Left_TriggerAxis, GetPath(Instance, "/user/hand/left/input/trigger"));
-	InteractionMappings.Add(FGamepadKeyNames::MotionController_Left_Grip1, GetPath(Instance, "/user/hand/left/input/grip"));
-	InteractionMappings.Add(FGamepadKeyNames::MotionController_Left_Grip1Axis, GetPath(Instance, "/user/hand/left/input/grip"));
-	InteractionMappings.Add(FGamepadKeyNames::MotionController_Left_Thumbstick_X, GetPath(Instance, "/user/hand/left/input/thumbstick/x"));
-	InteractionMappings.Add(FGamepadKeyNames::MotionController_Left_Thumbstick_Y, GetPath(Instance, "/user/hand/left/input/thumbstick/y"));
-	InteractionMappings.Add(FGamepadKeyNames::MotionController_Left_Thumbstick, GetPath(Instance, "/user/hand/left/input/thumbstick/click"));
-	InteractionMappings.Add(FGamepadKeyNames::MotionController_Left_FaceButton1, GetPath(Instance, "/user/hand/left/input/x/click"));
-	InteractionMappings.Add(FGamepadKeyNames::MotionController_Left_FaceButton1, GetPath(Instance, "/user/hand/left/input/y/click"));
-
-	InteractionMappings.Add(FGamepadKeyNames::MotionController_Right_Shoulder, GetPath(Instance, "/user/hand/right/input/menu/click"));
-	InteractionMappings.Add(FGamepadKeyNames::MotionController_Right_Trigger, GetPath(Instance, "/user/hand/right/input/trigger"));
-	InteractionMappings.Add(FGamepadKeyNames::MotionController_Right_TriggerAxis, GetPath(Instance, "/user/hand/right/input/trigger"));
-	InteractionMappings.Add(FGamepadKeyNames::MotionController_Right_Grip1, GetPath(Instance, "/user/hand/right/input/grip"));
-	InteractionMappings.Add(FGamepadKeyNames::MotionController_Right_Grip1Axis, GetPath(Instance, "/user/hand/right/input/grip"));
-	InteractionMappings.Add(FGamepadKeyNames::MotionController_Right_Thumbstick_X, GetPath(Instance, "/user/hand/right/input/thumbstick/x"));
-	InteractionMappings.Add(FGamepadKeyNames::MotionController_Right_Thumbstick_Y, GetPath(Instance, "/user/hand/right/input/thumbstick/y"));
-	InteractionMappings.Add(FGamepadKeyNames::MotionController_Right_Thumbstick, GetPath(Instance, "/user/hand/right/input/thumbstick/click"));
-	InteractionMappings.Add(FGamepadKeyNames::MotionController_Right_FaceButton1, GetPath(Instance, "/user/hand/right/input/a/click"));
-	InteractionMappings.Add(FGamepadKeyNames::MotionController_Right_FaceButton2, GetPath(Instance, "/user/hand/right/input/b/click"));
-
-	auto InputSettings = GetDefault<UInputSettings>();
+	const UInputSettings* InputSettings = GetDefault<UInputSettings>();
 	if (InputSettings != nullptr)
 	{
 		TArray<FName> ActionNames;
@@ -206,7 +237,7 @@ FOpenXRInputPlugin::FOpenXRInput::FOpenXRInput(FOpenXRHMD* HMD)
 		{
 			TArray<FInputActionKeyMapping> Mappings;
 			InputSettings->GetActionMappingByName(ActionName, Mappings);
-			AddAction(ActionSet, Mappings, Bindings);
+			Actions.Emplace(ActionSet, Mappings);
 		}
 
 		TArray<FName> AxisNames;
@@ -215,138 +246,201 @@ FOpenXRInputPlugin::FOpenXRInput::FOpenXRInput(FOpenXRHMD* HMD)
 		{
 			TArray<FInputAxisKeyMapping> Mappings;
 			InputSettings->GetAxisMappingByName(AxisName, Mappings);
-			AddAction(ActionSet, Mappings, Bindings);
-		}
-
-		// Open console
-		{
-			const FKey* ConsoleKey = InputSettings->ConsoleKeys.FindByPredicate([](FKey& Key) { return Key.IsValid(); });
-			if (ConsoleKey != nullptr)
-			{
-				Actions.Add(FOpenXRAction(ActionSet, FName(TEXT("Open Console")), ConsoleKey->GetFName()));
-			}
+			Actions.Emplace(ActionSet, Mappings);
 		}
 	}
 
-	TArray<XrPath> Profiles;
-	Profiles.Add(GetPath(Instance, "/interaction_profiles/khr/simple_controller"));
-	Profiles.Add(GetPath(Instance, "/interaction_profiles/microsoft/motion_controller"));
-	Profiles.Add(GetPath(Instance, "/interaction_profiles/oculus/touch_controller"));
-	Profiles.Add(GetPath(Instance, "/interaction_profiles/valve/knuckles_controller"));
+	const UXRInputSettings* XRInputSettings = GetDefault<UXRInputSettings>();
 
-	for (XrPath Profile : Profiles)
-	{
-		XrInteractionProfileSuggestedBinding InteractionProfile;
-		InteractionProfile.type = XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING;
-		InteractionProfile.next = nullptr;
-		InteractionProfile.interactionProfile = Profile;
-		InteractionProfile.countSuggestedBindings = Bindings.Num();
-		InteractionProfile.suggestedBindings = Bindings.GetData();
-		XR_ENSURE(xrSetInteractionProfileSuggestedBindings(Session, &InteractionProfile));
-	}
+	// Controller poses
+	Controllers.Add(EControllerHand::Left, FOpenXRController(OpenXRHMD, ActionSet, "Left Controller"));
+	Controllers.Add(EControllerHand::Right, FOpenXRController(OpenXRHMD, ActionSet, "Right Controller"));
+
+	SuggestedBindings(Instance, "/interaction_profiles/khr/simple_controller", XRInputSettings->SimpleController, XRInputSettings->SimpleBindings);
+	SuggestedBindings(Instance, "/interaction_profiles/google/daydream_controller", XRInputSettings->DaydreamController, XRInputSettings->DaydreamBindings);
+	SuggestedBindings(Instance, "/interaction_profiles/htc/vive_controller", XRInputSettings->ViveController, XRInputSettings->ViveBindings);
+	SuggestedBindings(Instance, "/interaction_profiles/htc/vive_pro", XRInputSettings->ViveProHeadset, XRInputSettings->ViveProBindings);
+	SuggestedBindings(Instance, "/interaction_profiles/microsoft/motion_controller", XRInputSettings->MixedRealityController, XRInputSettings->MixedRealityBindings);
+	SuggestedBindings(Instance, "/interaction_profiles/oculus/go_controller", XRInputSettings->OculusGoController, XRInputSettings->OculusGoBindings);
+	SuggestedBindings(Instance, "/interaction_profiles/oculus/touch_controller", XRInputSettings->OculusTouchController, XRInputSettings->OculusTouchBindings);
+	SuggestedBindings(Instance, "/interaction_profiles/valve/index_controller", XRInputSettings->ValveIndexController, XRInputSettings->ValveIndexBindings);
 
 	XrActiveActionSet ActiveSet;
-	ActiveSet.type = XR_TYPE_ACTIVE_ACTION_SET;
-	ActiveSet.next = nullptr;
 	ActiveSet.actionSet = ActionSet;
 	ActiveSet.subactionPath = XR_NULL_PATH;
 	ActionSets.Add(ActiveSet);
 }
 
-FOpenXRInputPlugin::FOpenXRInput::~FOpenXRInput()
+void FOpenXRInputPlugin::FOpenXRInput::DestroyActions()
 {
 	for (XrActiveActionSet& ActionSet : ActionSets)
 	{
-		xrDestroyActionSet(ActionSet.actionSet);
+		XR_ENSURE(xrDestroyActionSet(ActionSet.actionSet));
 	}
+	ActionSets.Empty();
+	Actions.Empty();
+	Controllers.Empty();
 }
 
-FORCEINLINE FName GetName(const FInputActionKeyMapping& ActionKey) { return ActionKey.ActionName; }
-FORCEINLINE FName GetName(const FInputAxisKeyMapping& AxisKey) { return AxisKey.AxisName; }
-
-template<typename T>
-void FOpenXRInputPlugin::FOpenXRInput::AddAction(XrActionSet ActionSet, const TArray<T>& Mappings, TArray<XrActionSuggestedBinding>& OutSuggestedBindings)
+void FOpenXRInputPlugin::FOpenXRInput::SuggestedBindings(XrInstance Instance, const char* Profile, const FXRInteractionProfileSettings& Settings, const TArray<FXRSuggestedBinding>& SuggestedBindings)
 {
-	// Find all the motion controller keys so we can suggest bindings for them
-	TArray<T> KeyMappings = Mappings.FilterByPredicate([](const T& Mapping)
+	if (!Settings.Supported)
 	{
-		return MatchKeyNamePrefix(Mapping.Key, TEXT("MotionController"));
-	});
-
-	// We need at least one key to be able to trigger the action
-	// TODO: Refactor the input API so we can trigger actions directly
-	if (KeyMappings.Num() == 0)
-	{
-		KeyMappings = Mappings.FilterByPredicate([](const T& Mapping) { return Mapping.Key.IsValid(); });
+		return;
 	}
 
-	if (KeyMappings.Num() > 0)
+	TArray<XrActionSuggestedBinding> Bindings;
+	for (const auto& Suggestion : SuggestedBindings)
 	{
-		// Build the action based on the primary mapping
-		FOpenXRAction Action(ActionSet, KeyMappings[0]);
-
-		// Add suggested bindings for every mapping
-		for (T InputKey : KeyMappings)
+		if (Suggestion.Path.IsEmpty())
 		{
-			XrPath* Path = InteractionMappings.Find(InputKey.Key.GetFName());
-			if (Path)
-			{
-				OutSuggestedBindings.Add(XrActionSuggestedBinding{ Action.Handle, *Path });
-			}
+			continue;
 		}
 
-		Actions.Add(Action);
+		const FKey& Key = Suggestion.Key;
+		const FOpenXRAction* Action = Actions.FindByPredicate([Key](FOpenXRAction& Mapping)
+		{
+			int32 Index;
+			if (Mapping.Keys.Find(Key, Index))
+			{
+				Mapping.Keys.Swap(0, Index);
+				return true;
+			}
+			return false;
+		});
+
+		if (Action)
+		{
+			XrActionSuggestedBinding Binding;
+			Binding.action = Action->Handle;
+			Binding.binding = GetPath(Instance, Suggestion.Path);
+			Bindings.Add(Binding);
+		}
 	}
+
+	if (Settings.HasControllers)
+	{
+		XrActionSuggestedBinding LeftBinding, RightBinding;
+		LeftBinding.action = Controllers[EControllerHand::Left].Action;
+		RightBinding.action = Controllers[EControllerHand::Right].Action;
+
+		if (Settings.ControllerPose == AimPose)
+		{
+			LeftBinding.binding = GetPath(Instance, "/user/hand/left/input/aim/pose");
+			RightBinding.binding = GetPath(Instance, "/user/hand/right/input/aim/pose");
+		}
+		else
+		{
+			LeftBinding.binding = GetPath(Instance, "/user/hand/left/input/grip/pose");
+			RightBinding.binding = GetPath(Instance, "/user/hand/right/input/grip/pose");
+		}
+
+		Bindings.Add(LeftBinding);
+		Bindings.Add(RightBinding);
+
+		if (Settings.HasHaptics)
+		{
+			Bindings.Add(XrActionSuggestedBinding{ Controllers[EControllerHand::Left].VibrationAction, GetPath(Instance, "/user/hand/left/output/haptic") });
+			Bindings.Add(XrActionSuggestedBinding{ Controllers[EControllerHand::Right].VibrationAction, GetPath(Instance, "/user/hand/right/output/haptic") });
+		}
+	}
+
+	XrInteractionProfileSuggestedBinding InteractionProfile;
+	InteractionProfile.type = XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING;
+	InteractionProfile.next = nullptr;
+	InteractionProfile.interactionProfile = GetPath(Instance, Profile);
+	InteractionProfile.countSuggestedBindings = Bindings.Num();
+	InteractionProfile.suggestedBindings = Bindings.GetData();
+	XR_ENSURE(xrSuggestInteractionProfileBindings(Instance, &InteractionProfile));
 }
 
 void FOpenXRInputPlugin::FOpenXRInput::Tick(float DeltaTime)
 {
+	XrSession Session = OpenXRHMD->GetSession();
+
 	if (OpenXRHMD->IsRunning())
 	{
-		XR_ENSURE(xrSyncActionData(OpenXRHMD->GetSession(), ActionSets.Num(), ActionSets.GetData()));
+		if (!bActionsBound)
+		{
+			TArray<XrActionSet> BindActionSets;
+			for (auto && BindActionSet : ActionSets)
+				BindActionSets.Add(BindActionSet.actionSet);
+
+			XrSessionActionSetsAttachInfo SessionActionSetsAttachInfo;
+			SessionActionSetsAttachInfo.type = XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO;
+			SessionActionSetsAttachInfo.next = nullptr;
+			SessionActionSetsAttachInfo.countActionSets = BindActionSets.Num();
+			SessionActionSetsAttachInfo.actionSets = BindActionSets.GetData();
+			XR_ENSURE(xrAttachSessionActionSets(Session, &SessionActionSetsAttachInfo));
+
+			bActionsBound = true;
+		}
+	}
+	else if (bActionsBound)
+	{
+		// If the session shut down, clean up.
+		bActionsBound = false;
+	}
+
+	if (OpenXRHMD->IsFocused())
+	{
+		XrActionsSyncInfo SyncInfo;
+		SyncInfo.type = XR_TYPE_ACTIONS_SYNC_INFO;
+		SyncInfo.next = nullptr;
+		SyncInfo.countActiveActionSets = ActionSets.Num();
+		SyncInfo.activeActionSets = ActionSets.GetData();
+		XR_ENSURE(xrSyncActions(Session, &SyncInfo));
 	}
 }
 
 void FOpenXRInputPlugin::FOpenXRInput::SendControllerEvents()
 {
-	if (!OpenXRHMD->IsRunning())
+	if (!bActionsBound)
 	{
 		return;
 	}
 
+	XrSession Session = OpenXRHMD->GetSession();
+
 	for (auto& Action : Actions)
 	{
+		XrActionStateGetInfo GetInfo;
+		GetInfo.type = XR_TYPE_ACTION_STATE_GET_INFO;
+		GetInfo.next = nullptr;
+		GetInfo.subactionPath = XR_NULL_PATH;
+		GetInfo.action = Action.Handle;
+
 		switch (Action.Type)
 		{
-		case XR_INPUT_ACTION_TYPE_BOOLEAN:
+		case XR_ACTION_TYPE_BOOLEAN_INPUT:
 		{
 			XrActionStateBoolean State;
 			State.type = XR_TYPE_ACTION_STATE_BOOLEAN;
 			State.next = nullptr;
-			XrResult Result = xrGetActionStateBoolean(Action.Handle, 0, XR_NULL_PATH, &State);
+			XrResult Result = xrGetActionStateBoolean(Session, &GetInfo, &State);
 
 			if (Result >= XR_SUCCESS && State.changedSinceLastSync)
 			{
 				if (State.currentState)
 				{
-					MessageHandler->OnControllerButtonPressed(Action.ActionKey, 0, /*IsRepeat =*/false);
+					MessageHandler->OnControllerButtonPressed(Action.Keys[0].GetFName(), 0, /*IsRepeat =*/false);
 				}
 				else
 				{
-					MessageHandler->OnControllerButtonReleased(Action.ActionKey, 0, /*IsRepeat =*/false);
+					MessageHandler->OnControllerButtonReleased(Action.Keys[0].GetFName(), 0, /*IsRepeat =*/false);
 				}
 			}
 		}
 		break;
-		case XR_INPUT_ACTION_TYPE_VECTOR1F:
+		case XR_ACTION_TYPE_FLOAT_INPUT:
 		{
-			XrActionStateVector1f State;
-			State.type = XR_TYPE_ACTION_STATE_VECTOR1F;
+			XrActionStateFloat State;
+			State.type = XR_TYPE_ACTION_STATE_FLOAT;
 			State.next = nullptr;
-			XrResult Result = xrGetActionStateVector1f(Action.Handle, 0, XR_NULL_PATH, &State);
+			XrResult Result = xrGetActionStateFloat(Session, &GetInfo, &State);
 			if (Result >= XR_SUCCESS && State.changedSinceLastSync)
 			{
-				MessageHandler->OnControllerAnalog(Action.ActionKey, 0, State.currentState);
+				MessageHandler->OnControllerAnalog(Action.Keys[0].GetFName(), 0, State.currentState);
 			}
 		}
 		break;
@@ -360,6 +454,11 @@ void FOpenXRInputPlugin::FOpenXRInput::SendControllerEvents()
 void FOpenXRInputPlugin::FOpenXRInput::SetMessageHandler(const TSharedRef< FGenericApplicationMessageHandler >& InMessageHandler)
 {
 	MessageHandler = InMessageHandler;
+
+	UXRInputSettings::OnSuggestedBindingsChanged.AddSP(this, &FOpenXRInputPlugin::FOpenXRInput::InitActions);
+#if WITH_EDITOR
+	FEditorDelegates::OnActionAxisMappingsChanged.AddSP(this, &FOpenXRInputPlugin::FOpenXRInput::InitActions);
+#endif
 }
 
 bool FOpenXRInputPlugin::FOpenXRInput::Exec(UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar)
@@ -428,35 +527,47 @@ ETrackingStatus FOpenXRInputPlugin::FOpenXRInput::GetControllerTrackingStatus(co
 // TODO: Refactor API to change the Hand type to EControllerHand
 void FOpenXRInputPlugin::FOpenXRInput::SetHapticFeedbackValues(int32 ControllerId, int32 Hand, const FHapticFeedbackValues& Values)
 {
-	XrHapticVibration hapticValue;
-	hapticValue.type = XR_TYPE_HAPTIC_VIBRATION;
-	hapticValue.next = nullptr;
-	hapticValue.duration = MaxFeedbackDuration;
-	hapticValue.frequency = Values.Frequency;
-	hapticValue.amplitude = Values.Amplitude;
+	XrSession Session = OpenXRHMD->GetSession();
+
+	XrHapticVibration HapticValue;
+	HapticValue.type = XR_TYPE_HAPTIC_VIBRATION;
+	HapticValue.next = nullptr;
+	HapticValue.duration = MaxFeedbackDuration;
+	HapticValue.frequency = Values.Frequency;
+	HapticValue.amplitude = Values.Amplitude;
 
 	if (ControllerId == 0)
 	{
 		if (Hand == (int32)EControllerHand::Left || Hand == (int32)EControllerHand::AnyHand)
 		{
+			XrHapticActionInfo HapticActionInfo;
+			HapticActionInfo.type = XR_TYPE_HAPTIC_ACTION_INFO;
+			HapticActionInfo.next = nullptr;
+			HapticActionInfo.subactionPath = XR_NULL_PATH;
+			HapticActionInfo.action = Controllers[EControllerHand::Left].VibrationAction;
 			if (Values.Amplitude <= 0.0f || Values.Frequency < XR_FREQUENCY_UNSPECIFIED)
 			{
-				XR_ENSURE(xrStopHapticFeedback(Controllers[EControllerHand::Left].Vibration, 0, nullptr));
+				XR_ENSURE(xrStopHapticFeedback(Session, &HapticActionInfo));
 			}
 			else
 			{
-				XR_ENSURE(xrApplyHapticFeedback(Controllers[EControllerHand::Left].Vibration, 0, nullptr, (XrHapticBaseHeader*)&hapticValue));
+				XR_ENSURE(xrApplyHapticFeedback(Session, &HapticActionInfo, (const XrHapticBaseHeader*)&HapticValue));
 			}
 		}
 		if (Hand == (int32)EControllerHand::Right || Hand == (int32)EControllerHand::AnyHand)
 		{
+			XrHapticActionInfo HapticActionInfo;
+			HapticActionInfo.type = XR_TYPE_HAPTIC_ACTION_INFO;
+			HapticActionInfo.next = nullptr;
+			HapticActionInfo.subactionPath = XR_NULL_PATH;
+			HapticActionInfo.action = Controllers[EControllerHand::Right].VibrationAction;
 			if (Values.Amplitude <= 0.0f || Values.Frequency < XR_FREQUENCY_UNSPECIFIED)
 			{
-				XR_ENSURE(xrStopHapticFeedback(Controllers[EControllerHand::Right].Vibration, 0, nullptr));
+				XR_ENSURE(xrStopHapticFeedback(Session, &HapticActionInfo));
 			}
 			else
 			{
-				XR_ENSURE(xrApplyHapticFeedback(Controllers[EControllerHand::Right].Vibration, 0, nullptr, (XrHapticBaseHeader*)&hapticValue));
+				XR_ENSURE(xrApplyHapticFeedback(Session, &HapticActionInfo, (const XrHapticBaseHeader*)&HapticValue));
 			}
 		}
 	}
@@ -472,3 +583,5 @@ float FOpenXRInputPlugin::FOpenXRInput::GetHapticAmplitudeScale() const
 {
 	return 1.0f;
 }
+
+#undef LOCTEXT_NAMESPACE

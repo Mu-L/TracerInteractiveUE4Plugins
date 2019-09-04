@@ -118,10 +118,9 @@ struct PropertyMenuData
 
 
 
-FSequencerObjectBindingNode::FSequencerObjectBindingNode(FName NodeName, const FText& InDisplayName, const FGuid& InObjectBinding, TSharedPtr<FSequencerDisplayNode> InParentNode, FSequencerNodeTree& InParentTree)
-	: FSequencerDisplayNode(NodeName, InParentNode, InParentTree)
+FSequencerObjectBindingNode::FSequencerObjectBindingNode(FName NodeName, const FGuid& InObjectBinding, FSequencerNodeTree& InParentTree)
+	: FSequencerDisplayNode(NodeName, InParentTree)
 	, ObjectBinding(InObjectBinding)
-	, DefaultDisplayName(InDisplayName)
 {
 	UMovieScene* MovieScene = GetSequencer().GetFocusedMovieSceneSequence()->GetMovieScene();
 
@@ -137,11 +136,8 @@ FSequencerObjectBindingNode::FSequencerObjectBindingNode(FName NodeName, const F
 	{
 		BindingType = EObjectBindingType::Unknown;
 	}
-}
 
-void FSequencerObjectBindingNode::AddTrackNode( TSharedRef<FSequencerTrackNode> NewChild )
-{
-	AddChildAndSetParent( NewChild );
+	SortType = EDisplayNodeSortType::ObjectBindings;
 }
 
 /* FSequencerDisplayNode interface
@@ -162,7 +158,8 @@ void FSequencerObjectBindingNode::BuildContextMenu(FMenuBuilder& MenuBuilder)
 
 	if (GetSequencer().IsLevelEditorSequencer())
 	{
-		UMovieScene* MovieScene = GetSequencer().GetFocusedMovieSceneSequence()->GetMovieScene();
+		FSequencer*  Sequencer  = &GetSequencer();
+		UMovieScene* MovieScene = Sequencer->GetFocusedMovieSceneSequence()->GetMovieScene();
 		FMovieSceneSpawnable* Spawnable = MovieScene->FindSpawnable(ObjectBinding);
 
 		if (Spawnable)
@@ -181,6 +178,55 @@ void FSequencerObjectBindingNode::BuildContextMenu(FMenuBuilder& MenuBuilder)
 				FNewMenuDelegate::CreateSP(this, &FSequencerObjectBindingNode::AddSpawnLevelMenu)
 			);
 
+			auto ContinuouslyRespawnCheckState = [Sequencer, MovieScene]
+			{
+				ECheckBoxState CheckState = ECheckBoxState::Undetermined;
+				for (TSharedRef<FSequencerDisplayNode> Node : Sequencer->GetSelection().GetSelectedOutlinerNodes())
+				{
+					if (Node->GetType() == ESequencerNode::Object)
+					{
+						FMovieSceneSpawnable* SelectedSpawnable = MovieScene->FindSpawnable(static_cast<const FSequencerObjectBindingNode&>(Node.Get()).GetObjectBinding());
+						if (SelectedSpawnable)
+						{
+							if (CheckState != ECheckBoxState::Undetermined && SelectedSpawnable->bContinuouslyRespawn != ( CheckState == ECheckBoxState::Checked ))
+							{
+								return ECheckBoxState::Undetermined;
+							}
+							CheckState = SelectedSpawnable->bContinuouslyRespawn ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+						}
+					}
+				}
+				return CheckState;
+			};
+
+			auto ToggleContinuouslyRespawn = [Sequencer, MovieScene, ContinuouslyRespawnCheckState]
+			{
+				FScopedTransaction Transaction(LOCTEXT("SetContinuouslyRespawn", "Set Continuously Respawn"));
+
+				bool bNewValue = ContinuouslyRespawnCheckState() == ECheckBoxState::Unchecked;
+				MovieScene->Modify();
+				for (TSharedRef<FSequencerDisplayNode> Node : Sequencer->GetSelection().GetSelectedOutlinerNodes())
+				{
+					if (Node->GetType() == ESequencerNode::Object)
+					{
+						FMovieSceneSpawnable* SelectedSpawnable = MovieScene->FindSpawnable(static_cast<const FSequencerObjectBindingNode&>(Node.Get()).GetObjectBinding());
+						if (SelectedSpawnable)
+						{
+							SelectedSpawnable->bContinuouslyRespawn = bNewValue;
+						}
+					}
+				}
+			};
+
+			MenuBuilder.AddMenuEntry(
+				LOCTEXT("ContinuouslyRespawn", "Continuously Respawn"),
+				LOCTEXT("ContinuouslyRespawnTooltip", "When enabled, this spawnable will always be respawned if it gets destroyed externally. When disabled, this object will only ever be spawned once for each spawn key even if it is destroyed externally"),
+				FSlateIcon(),
+				FUIAction(FExecuteAction::CreateLambda(ToggleContinuouslyRespawn), FCanExecuteAction(), FGetActionCheckState::CreateLambda(ContinuouslyRespawnCheckState)),
+				NAME_None,
+				EUserInterfaceActionType::ToggleButton
+			);
+
 			MenuBuilder.AddMenuEntry( FSequencerCommands::Get().SaveCurrentSpawnableState );
 			MenuBuilder.AddMenuEntry( FSequencerCommands::Get().ConvertToPossessable );
 
@@ -195,7 +241,7 @@ void FSequencerObjectBindingNode::BuildContextMenu(FMenuBuilder& MenuBuilder)
 				FFormatNamedArguments Args;
 
 				MenuBuilder.AddSubMenu(
-					FText::Format(LOCTEXT("Assign Actor", "Assign Actor"), Args),
+					FText::Format(LOCTEXT("AssignActor", "Assign Actor"), Args),
 					FText::Format(LOCTEXT("AssignActorTooltip", "Assign an actor to this track"), Args),
 					FNewMenuDelegate::CreateSP(this, &FSequencerObjectBindingNode::AddAssignActorMenu));
 			}
@@ -206,7 +252,7 @@ void FSequencerObjectBindingNode::BuildContextMenu(FMenuBuilder& MenuBuilder)
 		MenuBuilder.BeginSection("Import/Export", LOCTEXT("ImportExportMenuSectionName", "Import/Export"));
 		
 		MenuBuilder.AddMenuEntry(
-			LOCTEXT("Import FBX", "Import..."),
+			LOCTEXT("ImportFBX", "Import..."),
 			LOCTEXT("ImportFBXTooltip", "Import FBX animation to this object"),
 			FSlateIcon(),
 			FUIAction(
@@ -214,7 +260,7 @@ void FSequencerObjectBindingNode::BuildContextMenu(FMenuBuilder& MenuBuilder)
 			));
 
 		MenuBuilder.AddMenuEntry(
-			LOCTEXT("Export FBX", "Export..."),
+			LOCTEXT("ExportFBX", "Export..."),
 			LOCTEXT("ExportFBXTooltip", "Export FBX animation from this object"),
 			FSlateIcon(),
 			FUIAction(
@@ -222,7 +268,7 @@ void FSequencerObjectBindingNode::BuildContextMenu(FMenuBuilder& MenuBuilder)
 			));
 
 		MenuBuilder.AddMenuEntry(
-			LOCTEXT("Export to Camera Anim", "Export to Camera Anim..."),
+			LOCTEXT("ExportToCameraAnim", "Export to Camera Anim..."),
 			LOCTEXT("ExportToCameraAnimTooltip", "Exports the animation to a camera anim asset"),
 			FSlateIcon(),
 			FUIAction(
@@ -453,7 +499,7 @@ FText FSequencerObjectBindingNode::GetDisplayName() const
 		return MovieScene->GetObjectDisplayName(ObjectBinding);
 	}
 
-	return DefaultDisplayName;
+	return FText();
 }
 
 FLinearColor FSequencerObjectBindingNode::GetDisplayNameColor() const
@@ -885,6 +931,27 @@ TSharedRef<SWidget> FSequencerObjectBindingNode::HandleAddTrackComboButtonGetMen
 	UObject* BoundObject = GetSequencer().FindSpawnedObjectOrTemplate(ObjectBinding);
 	const UClass* ObjectClass = GetClassForObjectBinding();
 
+	TArray<FGuid> ObjectBindings;
+	ObjectBindings.Add(ObjectBinding);
+
+	// Add additionally selected object bindings
+	for (const TSharedRef<FSequencerDisplayNode>& Node : Sequencer.GetSelection().GetSelectedOutlinerNodes())
+	{
+		if (Node->GetType() != ESequencerNode::Object)
+		{
+			continue;
+		}
+
+		auto ObjectBindingNode = StaticCastSharedRef<FSequencerObjectBindingNode>(Node);
+
+		FGuid Guid = ObjectBindingNode->GetObjectBinding();
+		for (auto RuntimeObject : Sequencer.FindBoundObjects(Guid, Sequencer.GetFocusedTemplateID()))
+		{
+			ObjectBindings.AddUnique(Guid);
+			continue;
+		}
+	}
+
 	ISequencerModule& SequencerModule = FModuleManager::GetModuleChecked<ISequencerModule>( "Sequencer" );
 	TSharedRef<FUICommandList> CommandList(new FUICommandList);
 
@@ -892,7 +959,7 @@ TSharedRef<SWidget> FSequencerObjectBindingNode::HandleAddTrackComboButtonGetMen
 
 	for (const TSharedPtr<ISequencerTrackEditor>& TrackEditor : GetSequencer().GetTrackEditors())
 	{
-		TrackEditor->ExtendObjectBindingTrackMenu(Extender, ObjectBinding, ObjectClass);
+		TrackEditor->ExtendObjectBindingTrackMenu(Extender, ObjectBindings, ObjectClass);
 	}
 
 	FMenuBuilder AddTrackMenuBuilder(true, nullptr, Extender);
@@ -900,7 +967,7 @@ TSharedRef<SWidget> FSequencerObjectBindingNode::HandleAddTrackComboButtonGetMen
 	const int32 NumStartingBlocks = AddTrackMenuBuilder.GetMultiBox()->GetBlocks().Num();
 
 	AddTrackMenuBuilder.BeginSection("Tracks", LOCTEXT("TracksMenuHeader" , "Tracks"));
-	GetSequencer().BuildObjectBindingTrackMenu(AddTrackMenuBuilder, ObjectBinding, ObjectClass);
+	GetSequencer().BuildObjectBindingTrackMenu(AddTrackMenuBuilder, ObjectBindings, ObjectClass);
 	AddTrackMenuBuilder.EndSection();
 
 	TArray<FPropertyPath> KeyablePropertyPaths;
@@ -1131,7 +1198,7 @@ void FSequencerObjectBindingNode::HandleLabelsSubMenuCreate(FMenuBuilder& MenuBu
 void FSequencerObjectBindingNode::HandlePropertyMenuItemExecute(FPropertyPath PropertyPath)
 {
 	FSequencer& Sequencer = GetSequencer();
-	UObject* BoundObject = GetSequencer().FindSpawnedObjectOrTemplate(ObjectBinding);
+	UObject* BoundObject = Sequencer.FindSpawnedObjectOrTemplate(ObjectBinding);
 
 	TArray<UObject*> KeyableBoundObjects;
 	if (BoundObject != nullptr)
@@ -1139,6 +1206,25 @@ void FSequencerObjectBindingNode::HandlePropertyMenuItemExecute(FPropertyPath Pr
 		if (Sequencer.CanKeyProperty(FCanKeyPropertyParams(BoundObject->GetClass(), PropertyPath)))
 		{
 			KeyableBoundObjects.Add(BoundObject);
+		}
+	}
+
+	for (const TSharedRef<FSequencerDisplayNode>& Node : Sequencer.GetSelection().GetSelectedOutlinerNodes())
+	{
+		if (Node->GetType() != ESequencerNode::Object)
+		{
+			continue;
+		}
+
+		auto ObjectBindingNode = StaticCastSharedRef<FSequencerObjectBindingNode>(Node);
+
+		FGuid Guid = ObjectBindingNode->GetObjectBinding();
+		for (auto RuntimeObject : Sequencer.FindBoundObjects(Guid, Sequencer.GetFocusedTemplateID()))
+		{
+			if (Sequencer.CanKeyProperty(FCanKeyPropertyParams(RuntimeObject->GetClass(), PropertyPath)))
+			{
+				KeyableBoundObjects.AddUnique(RuntimeObject.Get());
+			}
 		}
 	}
 

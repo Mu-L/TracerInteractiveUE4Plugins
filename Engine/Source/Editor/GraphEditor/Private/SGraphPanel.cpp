@@ -18,6 +18,7 @@
 #include "DragAndDrop/ActorDragDropGraphEdOp.h"
 #include "DragAndDrop/AssetDragDropOp.h"
 #include "DragAndDrop/LevelDragDropOp.h"
+#include "DragAndDrop/GraphNodeDragDropOp.h"
 
 #include "GraphEditorActions.h"
 
@@ -171,6 +172,9 @@ int32 SGraphPanel::OnPaint( const FPaintArgs& Args, const FGeometry& AllottedGeo
 			if (bNodeIsVisible)
 			{
 				const bool bSelected = SelectionToVisualize->Contains( StaticCastSharedRef<SNodePanel::SNode>(CurWidget.Widget)->GetObjectBeingDisplayed() );
+				
+				UEdGraphNode* NodeObj = Cast<UEdGraphNode>(ChildNode->GetObjectBeingDisplayed());
+				float Alpha = 1.0f;
 
 				// Handle Node renaming once the node is visible
 				if( bSelected && ChildNode->IsRenamePending() )
@@ -191,7 +195,9 @@ int32 SGraphPanel::OnPaint( const FPaintArgs& Args, const FGeometry& AllottedGeo
 						OutDrawElements,
 						ShadowLayerId,
 						CurWidget.Geometry.ToInflatedPaintGeometry(NodeShadowSize),
-						ShadowBrush
+						ShadowBrush,
+						ESlateDrawEffect::None,
+						FLinearColor(1.0f, 1.0f, 1.0f, Alpha)
 						);
 				}
 
@@ -215,8 +221,6 @@ int32 SGraphPanel::OnPaint( const FPaintArgs& Args, const FGeometry& AllottedGeo
 
 				int32 CurWidgetsMaxLayerId;
 				{
-					UEdGraphNode* NodeObj = Cast<UEdGraphNode>(ChildNode->GetObjectBeingDisplayed());
-
 					/** When diffing nodes, nodes that are different between revisions are opaque, nodes that have not changed are faded */
 					FGraphDiffControl::FNodeMatch NodeMatch = FGraphDiffControl::FindNodeMatch(GraphObjToDiff, NodeObj, NodeMatches);
 					if (NodeMatch.IsValid())
@@ -228,7 +232,10 @@ int32 SGraphPanel::OnPaint( const FPaintArgs& Args, const FGeometry& AllottedGeo
 					/* When dragging off a pin, we want to duck the alpha of some nodes */
 					TSharedPtr< SGraphPin > OnlyStartPin = (1 == PreviewConnectorFromPins.Num()) ? PreviewConnectorFromPins[0].FindInGraphPanel(*this) : TSharedPtr< SGraphPin >();
 					const bool bNodeIsNotUsableInCurrentContext = Schema->FadeNodeWhenDraggingOffPin(NodeObj, OnlyStartPin.IsValid() ? OnlyStartPin.Get()->GetPinObj() : nullptr);
-					const FWidgetStyle& NodeStyleToUse = (bNodeIsDifferent && !bNodeIsNotUsableInCurrentContext)? InWidgetStyle : FadedStyle;
+					
+					const FWidgetStyle& NodeStyle = (bNodeIsDifferent && !bNodeIsNotUsableInCurrentContext)? InWidgetStyle : FadedStyle;
+					FWidgetStyle NodeStyleToUse = NodeStyle;
+					NodeStyleToUse.BlendColorAndOpacityTint(FLinearColor(1.0f, 1.0f, 1.0f, Alpha));
 
 					// Draw the node.O
 					CurWidgetsMaxLayerId = CurWidget.Widget->Paint(NewArgs, CurWidget.Geometry, MyCullingRect, OutDrawElements, ChildLayerId, NodeStyleToUse, !DisplayAsReadOnly.Get() && ShouldBeEnabled( bParentEnabled ) );
@@ -260,7 +267,9 @@ int32 SGraphPanel::OnPaint( const FPaintArgs& Args, const FGeometry& AllottedGeo
 									OutDrawElements,
 									CurWidgetsMaxLayerId,
 									BouncedGeometry,
-									OverlayBrush
+									OverlayBrush,
+									ESlateDrawEffect::None,
+									FLinearColor(1.0f, 1.0f, 1.0f, Alpha)
 									);
 							}
 
@@ -950,6 +959,13 @@ FReply SGraphPanel::OnDrop( const FGeometry& MyGeometry, const FDragDropEvent& D
 	{
 		TSharedPtr<FLevelDragDropOp> LevelOp = StaticCastSharedPtr<FLevelDragDropOp>(Operation);
 		OnDropStreamingLevel.ExecuteIfBound(LevelOp->StreamingLevelsToDrop, GraphObj, NodeAddPosition);
+		return FReply::Handled();
+	}
+
+	else if (Operation->IsOfType<FGraphNodeDragDropOp>())
+	{
+		TSharedPtr<FGraphNodeDragDropOp> NodeDropOp = StaticCastSharedPtr<FGraphNodeDragDropOp>(Operation);
+		NodeDropOp->OnPerformDropToGraph.ExecuteIfBound(NodeDropOp, GraphObj, NodeAddPosition, DragDropEvent.GetScreenSpacePosition());
 		return FReply::Handled();
 	}
 	else
@@ -1708,6 +1724,11 @@ void SGraphPanel::AddReferencedObjects(FReferenceCollector& Collector)
 {
 	Collector.AddReferencedObject( GraphObj );
 	Collector.AddReferencedObject( GraphObjToDiff );
+}
+
+FString SGraphPanel::GetReferencerName() const
+{
+	return TEXT("SGraphPanel");
 }
 
 EActiveTimerReturnType SGraphPanel::InvalidatePerTick(double InCurrentTime, float InDeltaTime)

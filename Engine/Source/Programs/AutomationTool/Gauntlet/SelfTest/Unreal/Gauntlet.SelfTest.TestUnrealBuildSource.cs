@@ -30,7 +30,7 @@ namespace Gauntlet.SelfTest
 		public override void TickTest()
 		{
 			// create the build source
-			UnrealBuildSource BuildSource = new UnrealBuildSource(GameName, UsesSharedBuildType, Environment.CurrentDirectory, BuildPath, new string[] { "" });
+			UnrealBuildSource BuildSource = new UnrealBuildSource(ProjectFile, this.UnrealPath, UsesSharedBuildType, BuildPath, new string[] { "" });
 
 			// check editor and statged info is valid
 			CheckResult(BuildSource.EditorValid, "Editor build was invalid");
@@ -46,7 +46,7 @@ namespace Gauntlet.SelfTest
 			CheckResult(ContainsEditor, "{0", string.Join(", ", Reasons));
 
 			// now actually try to create it
-			UnrealAppConfig Config = BuildSource.CreateConfiguration(EditorRole);
+			UnrealAppConfig Config = BuildSource.CreateConfiguration(EditorRole, new UnrealSessionRole[] { });
 			CheckResult(Config != null, "Build source did not return a config for {0}", EditorRole.ToString());
 
 			ValidateEditorConfig(Config, BuildSource);

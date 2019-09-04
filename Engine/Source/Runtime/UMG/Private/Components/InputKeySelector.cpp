@@ -6,18 +6,42 @@
 #include "UObject/FrameworkObjectVersion.h"
 #include "Widgets/DeclarativeSyntaxSupport.h"
 #include "Widgets/Input/SInputKeySelector.h"
+#include "Internationalization/Internationalization.h"
+
+#define LOCTEXT_NAMESPACE "UMG"
+
+static FButtonStyle* DefaultInputKeySelectorButtonStyle = nullptr;
+static FTextBlockStyle* DefaultInputKeySelectorTextStyle = nullptr;
 
 UInputKeySelector::UInputKeySelector( const FObjectInitializer& ObjectInitializer )
 	: Super(ObjectInitializer)
 {
-	SInputKeySelector::FArguments InputKeySelectorDefaults;
-	WidgetStyle = *InputKeySelectorDefaults._ButtonStyle;
-	TextStyle = *InputKeySelectorDefaults._TextStyle;
-	KeySelectionText = InputKeySelectorDefaults._KeySelectionText;
-	NoKeySpecifiedText = InputKeySelectorDefaults._NoKeySpecifiedText;
-	SelectedKey = InputKeySelectorDefaults._SelectedKey.Get();
-	bAllowModifierKeys = InputKeySelectorDefaults._AllowModifierKeys;
-	bAllowGamepadKeys = InputKeySelectorDefaults._AllowGamepadKeys;
+	if (DefaultInputKeySelectorButtonStyle == nullptr)
+	{
+		// HACK: THIS SHOULD NOT COME FROM CORESTYLE AND SHOULD INSTEAD BE DEFINED BY ENGINE TEXTURES/PROJECT SETTINGS
+		DefaultInputKeySelectorButtonStyle = new FButtonStyle(FCoreStyle::Get().GetWidgetStyle<FButtonStyle>("Button"));
+
+		// Unlink UMG default colors from the editor settings colors.
+		DefaultInputKeySelectorButtonStyle->UnlinkColors();
+	}
+
+	if (DefaultInputKeySelectorTextStyle == nullptr)
+	{
+		// HACK: THIS SHOULD NOT COME FROM CORESTYLE AND SHOULD INSTEAD BE DEFINED BY ENGINE TEXTURES/PROJECT SETTINGS
+		DefaultInputKeySelectorTextStyle = new FTextBlockStyle(FCoreStyle::Get().GetWidgetStyle<FTextBlockStyle>("NormalText"));
+
+		// Unlink UMG default colors from the editor settings colors.
+		DefaultInputKeySelectorTextStyle->UnlinkColors();
+	}
+
+	WidgetStyle = *DefaultInputKeySelectorButtonStyle;
+	TextStyle = *DefaultInputKeySelectorTextStyle;
+
+	KeySelectionText = NSLOCTEXT("InputKeySelector", "DefaultKeySelectionText", "...");
+	NoKeySpecifiedText = NSLOCTEXT("InputKeySelector", "DefaultEmptyText", "Empty");
+	SelectedKey = FInputChord(EKeys::Invalid);
+	bAllowModifierKeys = true;
+	bAllowGamepadKeys = false;
 
 	EscapeKeys.AddUnique(EKeys::Gamepad_Special_Right); // In most (if not all) cases this is going to be the menu button
 
@@ -113,6 +137,12 @@ void UInputKeySelector::SetEscapeKeys(const TArray<FKey>& InKeys)
 	}
 	EscapeKeys = InKeys;
 }
+#if WITH_EDITOR
+const FText UInputKeySelector::GetPaletteCategory()
+{
+	return LOCTEXT("Advanced", "Advanced");
+}
+#endif
 
 void UInputKeySelector::SynchronizeProperties()
 {
@@ -172,3 +202,5 @@ void UInputKeySelector::SetTextBlockVisibility(const ESlateVisibility InVisibili
 		MyInputKeySelector->SetTextBlockVisibility(SlateVisibility);
 	}
 }
+
+#undef LOCTEXT_NAMESPACE

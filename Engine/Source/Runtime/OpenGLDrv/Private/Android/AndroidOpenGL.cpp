@@ -93,6 +93,12 @@ PFNGLSAMPLERPARAMETERIPROC				glSamplerParameteri = NULL;
 PFNGLBINDSAMPLERPROC					glBindSampler = NULL;
 PFNGLPROGRAMPARAMETERIPROC				glProgramParameteri = NULL;
 
+PFNGLMEMORYBARRIERPROC					glMemoryBarrier = NULL;
+PFNGLDISPATCHCOMPUTEPROC				glDispatchCompute = NULL;
+PFNGLDISPATCHCOMPUTEINDIRECTPROC		glDispatchComputeIndirect = NULL;
+PFNGLBINDIMAGETEXTUREPROC				glBindImageTexture = NULL;
+
+
 PFNGLFRAMEBUFFERTEXTUREMULTIVIEWOVRPROC glFramebufferTextureMultiviewOVR = NULL;
 PFNGLFRAMEBUFFERTEXTUREMULTISAMPLEMULTIVIEWOVRPROC glFramebufferTextureMultisampleMultiviewOVR = NULL;
 
@@ -107,6 +113,10 @@ PFNeglQueryTimestampSupportedANDROID eglGetFrameTimestampsSupportedANDROID_p = N
 
 int32 FAndroidOpenGL::GLMajorVerion = 0;
 int32 FAndroidOpenGL::GLMinorVersion = 0;
+
+GLint FAndroidOpenGL::MaxComputeTextureImageUnits = -1;
+GLint FAndroidOpenGL::MaxComputeUniformComponents = -1;
+
 
 struct FPlatformOpenGLDevice
 {
@@ -133,8 +143,8 @@ FPlatformOpenGLDevice::FPlatformOpenGLDevice()
 {
 }
 
-// call out to JNI to see if the application was packaged for Gear VR
-extern bool AndroidThunkCpp_IsGearVRApplication();
+// call out to JNI to see if the application was packaged for Oculus Mobile
+extern bool AndroidThunkCpp_IsOculusMobileApplication();
 
 
 // RenderDoc
@@ -148,7 +158,7 @@ void FPlatformOpenGLDevice::Init()
 	bRunningUnderRenderDoc = glIsEnabled(GL_DEBUG_TOOL_EXT) != GL_FALSE;
 
 	FPlatformMisc::LowLevelOutputDebugString(TEXT("FPlatformOpenGLDevice:Init"));
-	bool bCreateSurface = !AndroidThunkCpp_IsGearVRApplication();
+	bool bCreateSurface = !AndroidThunkCpp_IsOculusMobileApplication();
 	AndroidEGL::GetInstance()->InitSurface(false, bCreateSurface);
 	PlatformRenderingContextSetup(this);
 
@@ -302,10 +312,24 @@ bool PlatformInitOpenGL()
 			// If we're here and there's no ES2 data then we're in trouble.
 			if (!bBuildForES2)
 			{
-				Message.Append(TEXT("This device only supports OpenGL ES 2 but the app was not packaged with ES2 support."));
-				FPlatformMisc::LowLevelOutputDebugString(*Message);
-				FAndroidMisc::MessageBoxExt(EAppMsgType::Ok, *Message, TEXT("Unable to run on this device!"));
-				checkf(bBuildForES2, TEXT("This device only supports OpenGL ES 2 but the app was not packaged with ES2 support."));
+				if (bES31Supported)
+				{
+					Message.Append(TEXT("This device does not support Vulkan but the app was not packaged with either OpenGL ES 2 or ES 3.1 support."));
+					if (FAndroidMisc::GetAndroidBuildVersion() < 26)
+					{
+						Message.Append(TEXT(" Updating to a newer Android version may resolve this issue."));
+					}
+					FPlatformMisc::LowLevelOutputDebugString(*Message);
+					FAndroidMisc::MessageBoxExt(EAppMsgType::Ok, *Message, TEXT("Unable to run on this device!"));
+					checkf(bBuildForES2, TEXT("This device does not support Vulkan but the app was not packaged with either OpenGL ES 2 or ES 3.1 support."));
+				}
+				else
+				{
+					Message.Append(TEXT("This device only supports OpenGL ES 2 but the app was not packaged with ES2 support."));
+					FPlatformMisc::LowLevelOutputDebugString(*Message);
+					FAndroidMisc::MessageBoxExt(EAppMsgType::Ok, *Message, TEXT("Unable to run on this device!"));
+					checkf(bBuildForES2, TEXT("This device does not support Vulkan but the app was not packaged with either OpenGL ES 2 or ES 3.1 support."));
+				}
 			}
 		}
 	}
@@ -349,14 +373,16 @@ void FPlatformOpenGLDevice::LoadEXT()
 	eglGetCompositorTimingSupportedANDROID_p = (PFNeglQueryTimestampSupportedANDROID)((void*)eglGetProcAddress("eglGetCompositorTimingSupportedANDROID"));
 	eglGetFrameTimestampsSupportedANDROID_p = (PFNeglQueryTimestampSupportedANDROID)((void*)eglGetProcAddress("eglGetFrameTimestampsSupportedANDROID"));
 
+	const TCHAR* NotAvailable = TEXT("NOT Available");
+	const TCHAR* Present = TEXT("Present");
 
-	UE_LOG(LogRHI, Log, TEXT("Extension %s %s"), TEXT("eglPresentationTimeANDROID"), eglPresentationTimeANDROID_p  ? TEXT("Present") : TEXT("Not Present"));
-	UE_LOG(LogRHI, Log, TEXT("Extension %s %s"), TEXT("eglGetNextFrameIdANDROID"), eglGetNextFrameIdANDROID_p ? TEXT("Present") : TEXT("Not Present"));
-	UE_LOG(LogRHI, Log, TEXT("Extension %s %s"), TEXT("eglGetCompositorTimingANDROID"), eglGetCompositorTimingANDROID_p  ? TEXT("Present") : TEXT("Not Present"));
-	UE_LOG(LogRHI, Log, TEXT("Extension %s %s"), TEXT("eglGetFrameTimestampsANDROID"), eglGetFrameTimestampsANDROID_p  ? TEXT("Present") : TEXT("Not Present"));
-	UE_LOG(LogRHI, Log, TEXT("Extension %s %s"), TEXT("eglQueryTimestampSupportedANDROID"), eglQueryTimestampSupportedANDROID_p ? TEXT("Present") : TEXT("Not Present"));
-	UE_LOG(LogRHI, Log, TEXT("Extension %s %s"), TEXT("eglGetCompositorTimingSupportedANDROID"), eglGetCompositorTimingSupportedANDROID_p ? TEXT("Present") : TEXT("Not Present"));
-	UE_LOG(LogRHI, Log, TEXT("Extension %s %s"), TEXT("eglGetFrameTimestampsSupportedANDROID"), eglGetFrameTimestampsSupportedANDROID_p ? TEXT("Present") : TEXT("Not Present"));
+	UE_LOG(LogRHI, Log, TEXT("Extension %s %s"), TEXT("eglPresentationTimeANDROID"), eglPresentationTimeANDROID_p  ? Present : NotAvailable);
+	UE_LOG(LogRHI, Log, TEXT("Extension %s %s"), TEXT("eglGetNextFrameIdANDROID"), eglGetNextFrameIdANDROID_p ? Present : NotAvailable);
+	UE_LOG(LogRHI, Log, TEXT("Extension %s %s"), TEXT("eglGetCompositorTimingANDROID"), eglGetCompositorTimingANDROID_p  ? Present : NotAvailable);
+	UE_LOG(LogRHI, Log, TEXT("Extension %s %s"), TEXT("eglGetFrameTimestampsANDROID"), eglGetFrameTimestampsANDROID_p  ? Present : NotAvailable);
+	UE_LOG(LogRHI, Log, TEXT("Extension %s %s"), TEXT("eglQueryTimestampSupportedANDROID"), eglQueryTimestampSupportedANDROID_p ? Present : NotAvailable);
+	UE_LOG(LogRHI, Log, TEXT("Extension %s %s"), TEXT("eglGetCompositorTimingSupportedANDROID"), eglGetCompositorTimingSupportedANDROID_p ? Present : NotAvailable);
+	UE_LOG(LogRHI, Log, TEXT("Extension %s %s"), TEXT("eglGetFrameTimestampsSupportedANDROID"), eglGetFrameTimestampsSupportedANDROID_p ? Present : NotAvailable);
 
 	glDebugMessageControlKHR = (PFNGLDEBUGMESSAGECONTROLKHRPROC)((void*)eglGetProcAddress("glDebugMessageControlKHR"));
 
@@ -890,6 +916,12 @@ void FAndroidOpenGL::ProcessExtensions(const FString& ExtensionsString)
 		MaxMSAASamplesTileMem = 1;
 	}
 
+	if (bES31Support)
+	{
+		GET_GL_INT(GL_MAX_COMPUTE_TEXTURE_IMAGE_UNITS, 0, MaxComputeTextureImageUnits);
+		GET_GL_INT(GL_MAX_COMPUTE_UNIFORM_COMPONENTS, 0, MaxComputeUniformComponents);
+	}
+
 	bSupportsETC2 = bES30Support;
 	bUseES30ShadingLanguage = bES30Support;
 
@@ -1082,6 +1114,12 @@ void FAndroidOpenGL::ProcessExtensions(const FString& ExtensionsString)
 		}
 
 		GSupportsDepthRenderTargetWithoutColorRenderTarget = true;
+
+		//
+		glMemoryBarrier = (PFNGLMEMORYBARRIERPROC)((void*)eglGetProcAddress("glMemoryBarrier"));
+		glDispatchCompute = (PFNGLDISPATCHCOMPUTEPROC)((void*)eglGetProcAddress("glDispatchCompute"));
+		glDispatchComputeIndirect = (PFNGLDISPATCHCOMPUTEINDIRECTPROC)((void*)eglGetProcAddress("glDispatchComputeIndirect"));
+		glBindImageTexture = (PFNGLBINDIMAGETEXTUREPROC)((void*)eglGetProcAddress("glBindImageTexture"));
 	}
 
 	if (bES30Support || bIsAdrenoBased)

@@ -177,6 +177,7 @@ DEFINE_STAT(STAT_UpdatePrimitiveTransformRenderThreadTime);
 DEFINE_STAT(STAT_RemoveScenePrimitiveGT);
 DEFINE_STAT(STAT_AddScenePrimitiveGT);
 DEFINE_STAT(STAT_UpdatePrimitiveTransformGT);
+DEFINE_STAT(STAT_UpdateCustomPrimitiveDataGT);
 
 DEFINE_STAT(STAT_Scene_SetShaderMapsOnMaterialResources_RT);
 DEFINE_STAT(STAT_Scene_UpdateStaticDrawLists_RT);
@@ -309,3 +310,5 @@ RENDERCORE_API bool IsHDRAllowed()
 
 	return false;
 }
+
+FMatrix FVirtualTextureUniformData::Invalid = FMatrix::Identity;

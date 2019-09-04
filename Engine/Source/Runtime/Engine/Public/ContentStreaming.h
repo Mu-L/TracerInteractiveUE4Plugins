@@ -13,9 +13,12 @@ class AActor;
 class FSoundSource;
 class UPrimitiveComponent;
 class USoundWave;
+class ICompressedAudioInfo;
 class UTexture2D;
-struct FStreamingManagerTexture;
+struct FRenderAssetStreamingManager;
 struct FWaveInstance;
+class UAnimStreamable;
+struct FCompressedAnimSequence;
 
 /*-----------------------------------------------------------------------------
 	Stats.
@@ -25,10 +28,13 @@ struct FWaveInstance;
 class UPrimitiveComponent;
 class AActor;
 class UTexture2D;
+class UStaticMesh;
+class USkeletalMesh;
+class UStreamableRenderAsset;
 class FSoundSource;
 class USoundWave;
 struct FWaveInstance;
-struct FStreamingManagerTexture;
+struct FRenderAssetStreamingManager;
 
 /** Helper function to flush resource streaming. */
 void FlushResourceStreaming();
@@ -79,7 +85,7 @@ struct FStreamingViewInfo
 /**
  * Pure virtual base class of a streaming manager.
  */
-struct IStreamingManager
+struct ENGINE_VTABLE IStreamingManager
 {
 	IStreamingManager()
 	:	NumWantingResources(0)
@@ -337,16 +343,16 @@ protected:
 };
 
 /**
- * Interface to add functions specifically related to texture streaming
+ * Interface to add functions specifically related to texture/mesh streaming
  */
-struct ITextureStreamingManager : public IStreamingManager
+struct IRenderAssetStreamingManager : public IStreamingManager
 {
 	/**
-	* Updates streaming for an individual texture, taking into account all view infos.
+	* Updates streaming for an individual texture/mesh, taking into account all view infos.
 	*
-	* @param Texture		Texture to update
+	* @param RenderAsset		Texture or mesh to update
 	*/
-	virtual void UpdateIndividualTexture(UTexture2D* Texture) = 0;
+	virtual void UpdateIndividualRenderAsset(UStreamableRenderAsset* RenderAsset) = 0;
 
 	/**
 	* Temporarily boosts the streaming distance factor by the specified number.
@@ -355,34 +361,44 @@ struct ITextureStreamingManager : public IStreamingManager
 	virtual void BoostTextures(AActor* Actor, float BoostFactor) = 0;
 
 	/**
-	*	Try to stream out texture mip-levels to free up more memory.
+	*	Try to stream out texture/mesh mip-levels to free up more memory.
 	*	@param RequiredMemorySize	- Required minimum available texture memory
 	*	@return						- Whether it succeeded or not
 	**/
-	virtual bool StreamOutTextureData(int64 RequiredMemorySize) = 0;
+	virtual bool StreamOutRenderAssetData(int64 RequiredMemorySize) = 0;
 
-	/** Adds a new texture to the streaming manager. */
-	virtual void AddStreamingTexture(UTexture2D* Texture) = 0;
+	/** Adds a new texture/mesh to the streaming manager. */
+	virtual void AddStreamingRenderAsset(UTexture2D* Texture) = 0;
+	virtual void AddStreamingRenderAsset(UStaticMesh* StaticMesh) = 0;
+	virtual void AddStreamingRenderAsset(USkeletalMesh* SkeletalMesh) = 0;
 
-	/** Removes a texture from the streaming manager. */
-	virtual void RemoveStreamingTexture(UTexture2D* Texture) = 0;
+	/** Removes a texture/mesh from the streaming manager. */
+	virtual void RemoveStreamingRenderAsset(UStreamableRenderAsset* RenderAsset) = 0;
 
 	virtual int64 GetMemoryOverBudget() const = 0;
 
 	/** Pool size for streaming. */
 	virtual int64 GetPoolSize() const = 0;
 
-	/** Max required textures ever seen in bytes. */
+	/** Max required textures/meshes ever seen in bytes. */
 	virtual int64 GetMaxEverRequired() const = 0;
 
-	/** Resets the max ever required textures.  For possibly when changing resolutions or screen pct. */
+	/** Resets the max ever required textures/meshes.  For possibly when changing resolutions or screen pct. */
 	virtual void ResetMaxEverRequired() = 0;
 
-	/** Set current pause state for texture streaming */
-	virtual void PauseTextureStreaming(bool bInShouldPause) = 0;
+	/** Set current pause state for texture/mesh streaming */
+	virtual void PauseRenderAssetStreaming(bool bInShouldPause) = 0;
 
 	/** Return all bounds related to the ref object */
 	ENGINE_API virtual void GetObjectReferenceBounds(const UObject* RefObject, TArray<FBox>& AssetBoxes) = 0;
+
+	//BEGIN: APIs for backward compatibility
+	ENGINE_API void UpdateIndividualTexture(UTexture2D* Texture);
+	ENGINE_API bool StreamOutTextureData(int64 RequiredMemorySize);
+	ENGINE_API void AddStreamingTexture(UTexture2D* Texture);
+	ENGINE_API void RemoveStreamingTexture(UTexture2D* Texture);
+	ENGINE_API void PauseTextureStreaming(bool bInShouldPause);
+	//END: APIs for backward compatibility
 };
 
 /**
@@ -395,6 +411,12 @@ struct IAudioStreamingManager : public IStreamingManager
 
 	/** Removes a Sound Wave from the streaming manager. */
 	virtual void RemoveStreamingSoundWave(USoundWave* SoundWave) = 0;
+
+	/** Adds the decoder to the streaming manager to prevent stream chunks from getting reaped from underneath it */
+	virtual void AddDecoder(ICompressedAudioInfo* CompressedAudioInfo) = 0;
+
+	/** Removes the decoder from the streaming manager. */
+	virtual void RemoveDecoder(ICompressedAudioInfo* CompressedAudioInfo) = 0;
 
 	/** Returns true if this is a Sound Wave that is managed by the streaming manager. */
 	virtual bool IsManagedStreamingSoundWave(const USoundWave* SoundWave) const = 0;
@@ -424,10 +446,31 @@ struct IAudioStreamingManager : public IStreamingManager
 };
 
 /**
+ * Interface to add functions specifically related to animation streaming
+ */
+struct IAnimationStreamingManager : public IStreamingManager
+{
+	/** Adds a new Streamable Anim to the streaming manager. */
+	virtual void AddStreamingAnim(UAnimStreamable* Anim) = 0;
+
+	/** Removes a Streamable Anim from the streaming manager. */
+	virtual bool RemoveStreamingAnim(UAnimStreamable* Anim) = 0;
+
+	/**
+	 * Gets a pointer to a chunk of animation data
+	 *
+	 * @param Anim			AnimStreamable we want a chunk from
+	 * @param ChunkIndex	Index of the chunk we want
+	 * @return Either the desired chunk or NULL if it's not loaded
+	 */
+	virtual const FCompressedAnimSequence* GetLoadedChunk(const UAnimStreamable* Anim, uint32 ChunkIndex) const = 0;
+};
+
+/**
  * Streaming manager collection, routing function calls to streaming managers that have been added
  * via AddStreamingManager.
  */
-struct FStreamingManagerCollection : public IStreamingManager
+struct ENGINE_VTABLE FStreamingManagerCollection : public IStreamingManager
 {
 	/** Default constructor, initializing all member variables. */
 	ENGINE_API FStreamingManagerCollection();
@@ -499,12 +542,17 @@ struct FStreamingManagerCollection : public IStreamingManager
 	/**
 	 * Gets a reference to the Texture Streaming Manager interface
 	 */
-	ENGINE_API ITextureStreamingManager& GetTextureStreamingManager() const;
+	ENGINE_API IRenderAssetStreamingManager& GetTextureStreamingManager() const;
 
 	/**
 	 * Gets a reference to the Audio Streaming Manager interface
 	 */
 	ENGINE_API IAudioStreamingManager& GetAudioStreamingManager() const;
+
+	/**
+	 * Gets a reference to the Animation Streaming Manager interface
+	 */
+	ENGINE_API IAnimationStreamingManager& GetAnimationStreamingManager() const;
 
 	/**
 	 * Adds a streaming manager to the array of managers to route function calls to.
@@ -592,9 +640,12 @@ protected:
 	float LoadMapTimeLimit;
 
 	/** The currently added texture streaming manager. Can be NULL*/
-	FStreamingManagerTexture* TextureStreamingManager;
+	FRenderAssetStreamingManager* TextureStreamingManager;
 
 	/** The audio streaming manager, should always exist */
 	IAudioStreamingManager* AudioStreamingManager;
+
+	/** The animation streaming manager, should always exist */
+	IAnimationStreamingManager* AnimationStreamingManager;
 };
 

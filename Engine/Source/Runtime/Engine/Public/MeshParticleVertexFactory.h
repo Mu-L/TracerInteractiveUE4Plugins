@@ -84,6 +84,7 @@ public:
 	/** Default constructor. */
 	FMeshParticleVertexFactory(EParticleVertexFactoryType InType, ERHIFeatureLevel::Type InFeatureLevel, int32 InDynamicVertexStride, int32 InDynamicParameterVertexStride)
 		: FParticleVertexFactoryBase(InType, InFeatureLevel)
+		, LODIdx(0xff)
 		, DynamicVertexStride(InDynamicVertexStride)
 		, DynamicParameterVertexStride(InDynamicParameterVertexStride)
 		, InstanceVerticesCPU(nullptr)
@@ -91,6 +92,7 @@ public:
 
 	FMeshParticleVertexFactory()
 		: FParticleVertexFactoryBase(PVFT_MAX, ERHIFeatureLevel::Num)
+		, LODIdx(0xff)
 		, DynamicVertexStride(-1)
 		, DynamicParameterVertexStride(-1)
 		, InstanceVerticesCPU(nullptr)
@@ -137,7 +139,7 @@ public:
 	/**
 	 * Retrieve the uniform buffer for this vertex factory.
 	 */
-	FORCEINLINE FUniformBufferRHIParamRef GetUniformBuffer()
+	FORCEINLINE FRHIUniformBuffer* GetUniformBuffer()
 	{
 		return MeshParticleUniformBuffer;
 	}
@@ -164,7 +166,7 @@ public:
 
 	uint8* LockPreviousTransformBuffer(uint32 ParticleCount);
 	void UnlockPreviousTransformBuffer();
-	FShaderResourceViewRHIParamRef GetPreviousTransformBufferSRV() const;
+	FRHIShaderResourceView* GetPreviousTransformBufferSRV() const;
 
 	/**
 	* Copy the data from another vertex factory
@@ -184,15 +186,27 @@ public:
 		return InstanceVerticesCPU;
 	}
 
+	void SetLODIdx(uint8 InLODIdx)
+	{
+		LODIdx = InLODIdx;
+	}
+
+	uint8 GetLODIdx() const
+	{
+		return LODIdx;
+	}
+
 protected:
 	FDataType Data;
 	
+	uint8 LODIdx;
+
 	/** Stride information for instanced mesh particles */
 	int32 DynamicVertexStride;
 	int32 DynamicParameterVertexStride;
 	
 	/** Uniform buffer with mesh particle parameters. */
-	FUniformBufferRHIParamRef MeshParticleUniformBuffer;
+	FRHIUniformBuffer* MeshParticleUniformBuffer;
 
 	FDynamicReadBuffer PrevTransformBuffer;
 

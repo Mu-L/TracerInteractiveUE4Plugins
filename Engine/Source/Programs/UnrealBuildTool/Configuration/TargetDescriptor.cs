@@ -53,6 +53,18 @@ namespace UnrealBuildTool
 		public Dictionary<string, int> HotReloadModuleNameToSuffix = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
 		/// <summary>
+		/// Export the actions for the target to a file
+		/// </summary>
+		[CommandLine("-WriteActions=")]
+		public List<FileReference> WriteActionFiles = new List<FileReference>();
+
+		/// <summary>
+		/// Path to a file containing a list of modules that may be modified for live coding.
+		/// </summary>
+		[CommandLine("-LiveCodingModules=")]
+		public FileReference LiveCodingModules = null;
+
+		/// <summary>
 		/// Path to the manifest for passing info about the output to live coding
 		/// </summary>
 		[CommandLine("-LiveCodingManifest=")]
@@ -213,17 +225,12 @@ namespace UnrealBuildTool
 
 					// Try to parse them as platforms
 					UnrealTargetPlatform ParsedPlatform;
-					if(Enum.TryParse(InlineArguments[0], true, out ParsedPlatform) && ParsedPlatform != UnrealTargetPlatform.Unknown)
+					if(UnrealTargetPlatform.TryParse(InlineArguments[0], out ParsedPlatform))
 					{
 						Platforms.Add(ParsedPlatform);
 						for(int InlineArgumentIdx = 1; InlineArgumentIdx < InlineArguments.Length; InlineArgumentIdx++)
 						{
-							string InlineArgument = InlineArguments[InlineArgumentIdx];
-							if(!Enum.TryParse(InlineArgument, true, out ParsedPlatform) || ParsedPlatform == UnrealTargetPlatform.Unknown)
-							{
-								throw new BuildException("Invalid platform '{0}'", InlineArgument);
-							}
-							Platforms.Add(ParsedPlatform);
+							Platforms.Add(UnrealTargetPlatform.Parse(InlineArguments[InlineArgumentIdx]));
 						}
 						continue;
 					}
@@ -273,6 +280,19 @@ namespace UnrealBuildTool
 			// Expand all the platforms, architectures and configurations
 			foreach(UnrealTargetPlatform Platform in Platforms)
 			{
+				// Make sure the platform is valid
+				if (!InstalledPlatformInfo.IsValid(null, Platform, null, EProjectType.Code, InstalledPlatformState.Downloaded))
+				{
+					if (!InstalledPlatformInfo.IsValid(null, Platform, null, EProjectType.Code, InstalledPlatformState.Supported))
+					{
+						throw new BuildException("The {0} platform is not supported from this engine distribution.", Platform);
+					}
+					else
+					{
+						throw new BuildException("Missing files required to build {0} targets. Enable {0} as an optional download component in the Epic Games Launcher.", Platform);
+					}
+				}
+
 				// Parse the architecture parameter, or get the default for the platform
 				List<string> Architectures = new List<string>(Arguments.GetValues("-Architecture=", '+'));
 				if(Architectures.Count == 0)

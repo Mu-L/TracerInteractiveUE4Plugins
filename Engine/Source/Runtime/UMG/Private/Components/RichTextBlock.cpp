@@ -11,15 +11,42 @@
 #include "Framework/Text/RichTextMarkupProcessing.h"
 #include "Framework/Text/IRichTextMarkupParser.h"
 #include "Framework/Text/IRichTextMarkupWriter.h"
+#include "RenderingThread.h"
+#include "Editor/WidgetCompilerLog.h"
 
 #define LOCTEXT_NAMESPACE "UMG"
 
 /////////////////////////////////////////////////////
 // URichTextBlock
 
+template< class ObjectType >
+struct FDeferredDeletor : public FDeferredCleanupInterface
+{
+public:
+	FDeferredDeletor(ObjectType* InInnerObjectToDelete)
+		: InnerObjectToDelete(InInnerObjectToDelete)
+	{
+	}
+
+	virtual ~FDeferredDeletor()
+	{
+		delete InnerObjectToDelete;
+	}
+
+private:
+	ObjectType* InnerObjectToDelete;
+};
+
+template< class ObjectType >
+FORCEINLINE SharedPointerInternals::FRawPtrProxy< ObjectType > MakeShareableDeferredCleanup(ObjectType* InObject)
+{
+	return MakeShareable(InObject, [](ObjectType* ObjectToDelete) { BeginCleanup(new FDeferredDeletor<ObjectType>(ObjectToDelete)); });
+}
+
 URichTextBlock::URichTextBlock(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
+	Visibility = ESlateVisibility::SelfHitTestInvisible;
 }
 
 void URichTextBlock::ReleaseSlateResources(bool bReleaseChildren)
@@ -41,7 +68,7 @@ TSharedRef<SWidget> URichTextBlock::RebuildWidget()
 
 	MyRichTextBlock =
 		SNew(SRichTextBlock)
-		.TextStyle(&DefaultTextStyle)
+		.TextStyle(bOverrideDefaultStyle ? &DefaultTextStyleOverride : &DefaultTextStyle)
 		.Marshaller(Marshaller);
 	
 	return MyRichTextBlock.ToSharedRef();
@@ -65,23 +92,7 @@ void URichTextBlock::UpdateStyleData()
 
 	if (!StyleInstance.IsValid())
 	{
-		StyleInstance = MakeShareable(new FSlateStyleSet(TEXT("RichTextStyle")));
-
-		if (TextStyleSet && TextStyleSet->GetRowStruct()->IsChildOf(FRichTextStyleRow::StaticStruct()))
-		{
-			for (const auto& Entry : TextStyleSet->GetRowMap())
-			{
-				FName SubStyleName = Entry.Key;
-				FRichTextStyleRow* RichTextStyle = (FRichTextStyleRow*)Entry.Value;
-
-				if (SubStyleName == FName(TEXT("Default")))
-				{
-					DefaultTextStyle = RichTextStyle->TextStyle;
-				}
-
-				StyleInstance->Set(SubStyleName, RichTextStyle->TextStyle);
-			}
-		}
+		RebuildStyleInstance();
 
 		for (TSubclassOf<URichTextBlockDecorator> DecoratorClass : DecoratorClasses)
 		{
@@ -97,6 +108,16 @@ void URichTextBlock::UpdateStyleData()
 	}
 }
 
+FText URichTextBlock::GetText() const
+{
+	if (MyRichTextBlock.IsValid())
+	{
+		return MyRichTextBlock->GetText();
+	}
+
+	return Text;
+}
+
 void URichTextBlock::SetText(const FText& InText)
 {
 	Text = InText;
@@ -106,10 +127,50 @@ void URichTextBlock::SetText(const FText& InText)
 	}
 }
 
+void URichTextBlock::RebuildStyleInstance()
+{
+	StyleInstance = MakeShareableDeferredCleanup(new FSlateStyleSet(TEXT("RichTextStyle")));
+
+	if (TextStyleSet && TextStyleSet->GetRowStruct()->IsChildOf(FRichTextStyleRow::StaticStruct()))
+	{
+		for (const auto& Entry : TextStyleSet->GetRowMap())
+		{
+			FName SubStyleName = Entry.Key;
+			FRichTextStyleRow* RichTextStyle = (FRichTextStyleRow*)Entry.Value;
+
+			if (SubStyleName == FName(TEXT("Default")))
+			{
+				DefaultTextStyle = RichTextStyle->TextStyle;
+			}
+
+			StyleInstance->Set(SubStyleName, RichTextStyle->TextStyle);
+		}
+	}
+}
+
+void URichTextBlock::SetTextStyleSet(class UDataTable* NewTextStyleSet)
+{
+	if (TextStyleSet != NewTextStyleSet)
+	{
+		TextStyleSet = NewTextStyleSet;
+
+		RebuildStyleInstance();
+
+		MyRichTextBlock->SetDecoratorStyleSet(StyleInstance.Get());
+		MyRichTextBlock->SetTextStyle(DefaultTextStyle);
+	}
+}
+
 const FTextBlockStyle& URichTextBlock::GetDefaultTextStyle() const
 {
 	ensure(StyleInstance.IsValid());
 	return DefaultTextStyle;
+}
+
+const FTextBlockStyle& URichTextBlock::GetCurrentDefaultTextStyle() const
+{
+	ensure(StyleInstance.IsValid());
+	return bOverrideDefaultStyle ? DefaultTextStyleOverride : DefaultTextStyle;
 }
 
 URichTextBlockDecorator* URichTextBlock::GetDecoratorByClass(TSubclassOf<URichTextBlockDecorator> DecoratorClass)
@@ -142,12 +203,22 @@ void URichTextBlock::CreateDecorators(TArray< TSharedRef< class ITextDecorator >
 
 TSharedPtr< IRichTextMarkupParser > URichTextBlock::CreateMarkupParser()
 {
-	return FDefaultRichTextMarkupParser::Create();
+	return FDefaultRichTextMarkupParser::GetStaticInstance();
 }
 
 TSharedPtr< IRichTextMarkupWriter > URichTextBlock::CreateMarkupWriter()
 {
 	return FDefaultRichTextMarkupWriter::Create();
+}
+
+void URichTextBlock::BeginDefaultStyleOverride()
+{
+	if (!bOverrideDefaultStyle)
+	{
+		// If we aren't already overriding, make sure override style starts off matching the existing default
+		bOverrideDefaultStyle = true;
+		DefaultTextStyleOverride = DefaultTextStyle;
+	}
 }
 
 #if WITH_EDITOR
@@ -162,7 +233,107 @@ void URichTextBlock::OnCreationFromPalette()
 	//Decorators.Add(NewObject<URichTextBlockDecorator>(this, NAME_None, RF_Transactional));
 }
 
-#endif
+void URichTextBlock::ValidateCompiledDefaults(IWidgetCompilerLog& CompileLog) const
+{
+	Super::ValidateCompiledDefaults(CompileLog);
+
+	if (TextStyleSet && !TextStyleSet->GetRowStruct()->IsChildOf(FRichTextStyleRow::StaticStruct()))
+	{
+		CompileLog.Warning(FText::Format(
+			LOCTEXT("RichTextBlock_InvalidTextStyle", "{0} Text Style Set property expects a Data Table with a Rich Text Style Row structure (currently set to {1})."), 
+			FText::FromString(GetName()), 
+			FText::AsCultureInvariant(TextStyleSet->GetPathName())));
+	}
+}
+
+#endif //if WITH_EDITOR
+
+void URichTextBlock::SetDefaultTextStyle(const FTextBlockStyle& InDefaultTextStyle)
+{
+	BeginDefaultStyleOverride();
+	DefaultTextStyleOverride = InDefaultTextStyle;
+	ApplyUpdatedDefaultTextStyle();
+}
+
+void URichTextBlock::ClearAllDefaultStyleOverrides()
+{
+	if (bOverrideDefaultStyle)
+	{
+		bOverrideDefaultStyle = false;
+		ApplyUpdatedDefaultTextStyle();
+	}
+}
+
+void URichTextBlock::SetDefaultColorAndOpacity(FSlateColor InColorAndOpacity)
+{
+	BeginDefaultStyleOverride();
+	DefaultTextStyleOverride.ColorAndOpacity = InColorAndOpacity;
+	ApplyUpdatedDefaultTextStyle();
+}
+
+
+void URichTextBlock::SetDefaultShadowColorAndOpacity(FLinearColor InShadowColorAndOpacity)
+{
+	BeginDefaultStyleOverride();
+	DefaultTextStyleOverride.ShadowColorAndOpacity = InShadowColorAndOpacity;
+	ApplyUpdatedDefaultTextStyle();
+}
+
+void URichTextBlock::SetDefaultShadowOffset(FVector2D InShadowOffset)
+{
+	BeginDefaultStyleOverride();
+	DefaultTextStyleOverride.ShadowOffset = InShadowOffset;
+	ApplyUpdatedDefaultTextStyle();
+}
+
+void URichTextBlock::SetDefaultFont(FSlateFontInfo InFontInfo)
+{
+	BeginDefaultStyleOverride();
+	DefaultTextStyleOverride.Font = InFontInfo;
+	ApplyUpdatedDefaultTextStyle();
+}
+
+void URichTextBlock::SetDefaultStrikeBrush(FSlateBrush& InStrikeBrush)
+{
+	BeginDefaultStyleOverride();
+	DefaultTextStyleOverride.StrikeBrush = InStrikeBrush;
+	ApplyUpdatedDefaultTextStyle();
+}
+
+void URichTextBlock::SetJustification(ETextJustify::Type InJustification)
+{
+	Justification = InJustification;
+	if (MyRichTextBlock.IsValid())
+	{
+		MyRichTextBlock->SetJustification(InJustification);
+	}
+}
+
+void URichTextBlock::SetMinDesiredWidth(float InMinDesiredWidth)
+{
+	MinDesiredWidth = InMinDesiredWidth;
+	if (MyRichTextBlock.IsValid())
+	{
+		MyRichTextBlock->SetMinDesiredWidth(InMinDesiredWidth);
+	}
+}
+
+void URichTextBlock::SetAutoWrapText(bool InAutoTextWrap)
+{
+	AutoWrapText = InAutoTextWrap;
+	if (MyRichTextBlock.IsValid())
+	{
+		MyRichTextBlock->SetAutoWrapText(InAutoTextWrap);
+	}
+}
+
+void URichTextBlock::ApplyUpdatedDefaultTextStyle()
+{
+	if (MyRichTextBlock.IsValid())
+	{
+		MyRichTextBlock->SetTextStyle(bOverrideDefaultStyle ? DefaultTextStyleOverride : DefaultTextStyle);
+	}
+}
 
 /////////////////////////////////////////////////////
 

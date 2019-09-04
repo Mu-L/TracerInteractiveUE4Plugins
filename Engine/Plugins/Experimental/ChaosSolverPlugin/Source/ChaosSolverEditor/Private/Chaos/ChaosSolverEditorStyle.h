@@ -12,8 +12,9 @@ public:
 		const FVector2D Icon16x16(16.f, 16.f);
 		const FVector2D Icon64x64(64.f, 64.f);
 
-		FString PluginBasePath = FPaths::GetPath(FModuleManager::Get().GetModuleFilename("ChaosSolverEditor"));
-		SetContentRoot(PluginBasePath / TEXT("../../Resources"));
+#if !IS_MONOLITHIC
+		SetContentRoot(FPaths::EnginePluginsDir() / TEXT("Experimental/ChaosSolverPlugin/Resources"));
+#endif
 
 		Set("ClassIcon.ChaosSolver", new FSlateImageBrush(RootToContentDir(TEXT("ChaosSolver_16x.png")), Icon16x16));
 		Set("ClassThumbnail.ChaosSolver", new FSlateImageBrush(RootToContentDir(TEXT("ChaosSolver_64x.png")), Icon64x64));

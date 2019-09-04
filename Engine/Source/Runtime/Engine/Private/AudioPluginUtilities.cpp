@@ -6,49 +6,92 @@
 #include "CoreGlobals.h"
 
 
+/************************************************************************/
+/* Plugin Utilities                                                     */
+/************************************************************************/
 /** Platform config section for each platform's target settings. */
-FORCEINLINE const TCHAR* GetPlatformConfigSection(EAudioPlatform AudioPlatform)
+const TCHAR* AudioPluginUtilities::GetPlatformConfigSection(EAudioPlatform AudioPlatform)
 {
+	static const FString UnknownConfig = TEXT("");
+
 	switch (AudioPlatform)
 	{
 		case EAudioPlatform::Windows:
-			return TEXT("/Script/WindowsTargetPlatform.WindowsTargetSettings");
+		{
+			static const FString WindowsConfig = TEXT("/Script/WindowsTargetPlatform.WindowsTargetSettings");
+			return *WindowsConfig;
+		}
 
 		case EAudioPlatform::Mac:
-			return TEXT("/Script/MacTargetPlatform.MacTargetSettings");
+		{
+			static const FString MacConfig = TEXT("/Script/MacTargetPlatform.MacTargetSettings");
+			return *MacConfig;
+		}
 
 		case EAudioPlatform::Linux:
-			return TEXT("/Script/LinuxTargetPlatform.LinuxTargetSettings");
+		{
+			static const FString LinuxConfig = TEXT("/Script/LinuxTargetPlatform.LinuxTargetSettings");
+			return *LinuxConfig;
+		}
 
 		case EAudioPlatform::IOS:
-			return TEXT("/Script/IOSRuntimeSettings.IOSRuntimeSettings");
+		{
+			static const FString IOSConfig = TEXT("/Script/IOSRuntimeSettings.IOSRuntimeSettings");
+			return *IOSConfig;
+		}
 
 		case EAudioPlatform::Android:
-			return TEXT("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings");
+		{
+			static const FString AndroidConfig = TEXT("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings");
+			return *AndroidConfig;
+		}
 
 		case EAudioPlatform::XboxOne:
-			return TEXT("/Script/XboxOnePlatformEditor.XboxOneTargetSettings");
+		{
+			static const FString XBoxConfig = TEXT("/Script/XboxOnePlatformEditor.XboxOneTargetSettings");
+			return *XBoxConfig;
+		}
 
 		case EAudioPlatform::Playstation4:
-			return TEXT("/Script/PS4PlatformEditor.PS4TargetSettings");
+		{
+			static const FString Playstation4Config = TEXT("/Script/PS4PlatformEditor.PS4TargetSettings");
+			return *Playstation4Config;
+		}
 
 		case EAudioPlatform::Switch:
-			return TEXT("/Script/SwitchRuntimeSettings.SwitchRuntimeSettings");
+		{
+			static const FString SwitchConfig = TEXT("/Script/SwitchRuntimeSettings.SwitchRuntimeSettings");
+			return *SwitchConfig;
+		}
 
 		case EAudioPlatform::HTML5:
-			return TEXT("/Script/HTML5PlatformEditor.HTML5TargetSettings");
+		{
+			static const FString HTML5Config = TEXT("/Script/HTML5PlatformEditor.HTML5TargetSettings");
+			return *HTML5Config;
+		}
 
 		case EAudioPlatform::Lumin:
-			return TEXT("/Script/LuminRuntimeSettings.LuminRuntimeSettings");
+		{
+			static FString LuminConfig = TEXT("/Script/LuminRuntimeSettings.LuminRuntimeSettings");
+			return *LuminConfig;
+		}
+
+		case EAudioPlatform::HoloLens:
+			return TEXT("/Script/HoloLensRuntimeSettings.HoloLensRuntimeSettings");
 
 		case EAudioPlatform::Unknown:
-			return TEXT("");
+		{
+			return *UnknownConfig;
+		}
 
 		default:
+		{
 			checkf(false, TEXT("Undefined audio platform."));
 			break;
+		}
 	}
-	return TEXT("");
+
+	return *UnknownConfig;
 }
 
 /** Get the target setting name for each platform type. */
@@ -65,15 +108,15 @@ FORCEINLINE const TCHAR* GetPluginConfigName(EAudioPlugin PluginType)
 		case EAudioPlugin::OCCLUSION:
 			return TEXT("OcclusionPlugin");
 
+		case EAudioPlugin::MODULATION:
+			return TEXT("ModulationPlugin");
+
 		default:
 			checkf(false, TEXT("Undefined audio plugin type."));
 			return TEXT("");
 	}
 }
 
-/************************************************************************/
-/* Plugin Utilities                                                     */
-/************************************************************************/
 IAudioSpatializationFactory* AudioPluginUtilities::GetDesiredSpatializationPlugin(EAudioPlatform AudioPlatform)
 {
 	//Get the name of the desired spatialization plugin:
@@ -126,6 +169,26 @@ IAudioOcclusionFactory* AudioPluginUtilities::GetDesiredOcclusionPlugin(EAudioPl
 	{
 		//if this plugin's name matches the name found in the platform settings, use it:
 		if (PluginFactory->GetDisplayName().Equals(DesiredOcclusionPlugin))
+		{
+			return PluginFactory;
+		}
+	}
+
+	return nullptr;
+}
+
+IAudioModulationFactory* AudioPluginUtilities::GetDesiredModulationPlugin(EAudioPlatform AudioPlatform)
+{
+	//Get the name of the desired spatialization plugin:
+	FString DesiredModulationPlugin = GetDesiredPluginName(EAudioPlugin::MODULATION, AudioPlatform);
+
+	TArray<IAudioModulationFactory *> ModulationPluginFactories = IModularFeatures::Get().GetModularFeatureImplementations<IAudioModulationFactory>(IAudioModulationFactory::GetModularFeatureName());
+
+	//Iterate through all of the plugins we've discovered:
+	for (IAudioModulationFactory* PluginFactory : ModulationPluginFactories)
+	{
+		//if this plugin's name matches the name found in the platform settings, use it:
+		if (PluginFactory->GetDisplayName().Equals(DesiredModulationPlugin))
 		{
 			return PluginFactory;
 		}

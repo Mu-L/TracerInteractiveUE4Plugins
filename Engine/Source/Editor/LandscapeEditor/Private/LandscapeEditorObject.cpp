@@ -21,6 +21,7 @@ ULandscapeEditorObject::ULandscapeEditorObject(const FObjectInitializer& ObjectI
 	, bUseWeightTargetValue(false)
 	, WeightTargetValue(1.0f)
 	, MaximumValueRadius(10000.0f)
+	, bCombinedLayersOperation(true)
 
 	, FlattenMode(ELandscapeToolFlattenMode::Both)
 	, bUseSlopeFlatten(false)
@@ -28,6 +29,9 @@ ULandscapeEditorObject::ULandscapeEditorObject(const FObjectInitializer& ObjectI
 	, bUseFlattenTarget(false)
 	, FlattenTarget(0)
 	, bShowFlattenTargetPreview(true)
+	
+	, TerraceInterval(1.0f)
+	, TerraceSmooth(0.0001f)
 
 	, RampWidth(2000)
 	, RampSideFalloff(0.4f)
@@ -100,6 +104,7 @@ ULandscapeEditorObject::ULandscapeEditorObject(const FObjectInitializer& ObjectI
 	, BrushComponentSize(1)
 	, TargetDisplayOrder(ELandscapeLayerDisplayMode::Default)
 	, ShowUnusedLayers(true)
+	, CurrentLayerIndex(INDEX_NONE)
 {
 	// Structure to hold one-time initialization
 	struct FConstructorStatics
@@ -223,8 +228,13 @@ void ULandscapeEditorObject::Load()
 	bUseFlattenTarget = InbUseFlattenTarget;
 	GConfig->GetFloat(TEXT("LandscapeEdit"), TEXT("FlattenTarget"), FlattenTarget, GEditorPerProjectIni);
 
+	GConfig->GetFloat(TEXT("LandscapeEdit"), TEXT("TerraceSmooth"), TerraceSmooth, GEditorPerProjectIni);
+	GConfig->GetFloat(TEXT("LandscapeEdit"), TEXT("TerraceInterval"), TerraceInterval, GEditorPerProjectIni);
+
 	GConfig->GetFloat(TEXT("LandscapeEdit"), TEXT("RampWidth"), RampWidth, GEditorPerProjectIni);
 	GConfig->GetFloat(TEXT("LandscapeEdit"), TEXT("RampSideFalloff"), RampSideFalloff, GEditorPerProjectIni);
+
+	GConfig->GetBool(TEXT("LandscapeEdit"), TEXT("bCombinedLayersOperation"), bCombinedLayersOperation, GEditorPerProjectIni);
 
 	GConfig->GetInt(TEXT("LandscapeEdit"), TEXT("ErodeThresh"), ErodeThresh, GEditorPerProjectIni);
 	GConfig->GetInt(TEXT("LandscapeEdit"), TEXT("ErodeIterationNum"), ErodeIterationNum, GEditorPerProjectIni);
@@ -343,8 +353,13 @@ void ULandscapeEditorObject::Save()
 	GConfig->SetBool(TEXT("LandscapeEdit"), TEXT("bUseFlattenTarget"), bUseFlattenTarget, GEditorPerProjectIni);
 	GConfig->SetFloat(TEXT("LandscapeEdit"), TEXT("FlattenTarget"), FlattenTarget, GEditorPerProjectIni);
 
+	GConfig->SetFloat(TEXT("LandscapeEdit"), TEXT("TerraceSmooth"), TerraceSmooth, GEditorPerProjectIni);
+	GConfig->SetFloat(TEXT("LandscapeEdit"), TEXT("TerraceInterval"), TerraceInterval, GEditorPerProjectIni);
+
 	GConfig->SetFloat(TEXT("LandscapeEdit"), TEXT("RampWidth"), RampWidth, GEditorPerProjectIni);
 	GConfig->SetFloat(TEXT("LandscapeEdit"), TEXT("RampSideFalloff"), RampSideFalloff, GEditorPerProjectIni);
+
+	GConfig->SetBool(TEXT("LandscapeEdit"), TEXT("bCombinedLayersOperation"), bCombinedLayersOperation, GEditorPerProjectIni);
 
 	GConfig->SetInt(TEXT("LandscapeEdit"), TEXT("ErodeThresh"), ErodeThresh, GEditorPerProjectIni);
 	GConfig->SetInt(TEXT("LandscapeEdit"), TEXT("ErodeIterationNum"), ErodeIterationNum, GEditorPerProjectIni);
@@ -448,7 +463,7 @@ bool ULandscapeEditorObject::SetAlphaTexture(UTexture2D* InTexture, EColorChanne
 {
 	bool Result = true;
 
-	TArray<uint8> NewTextureData;
+	TArray64<uint8> NewTextureData;
 	UTexture2D* NewAlphaTexture = InTexture;
 
 	// No texture or no source art, try to use the previous texture.
@@ -516,7 +531,7 @@ void ULandscapeEditorObject::ImportLandscapeData()
 {
 	ILandscapeEditorModule& LandscapeEditorModule = FModuleManager::GetModuleChecked<ILandscapeEditorModule>("LandscapeEditor");
 	const ILandscapeHeightmapFileFormat* HeightmapFormat = LandscapeEditorModule.GetHeightmapFormatByExtension(*FPaths::GetExtension(ImportLandscape_HeightmapFilename, true));
-
+	
 	if (HeightmapFormat)
 	{
 		FLandscapeHeightmapImportData HeightmapImportData = HeightmapFormat->Import(*ImportLandscape_HeightmapFilename, {ImportLandscape_Width, ImportLandscape_Height});
@@ -524,7 +539,7 @@ void ULandscapeEditorObject::ImportLandscapeData()
 		ImportLandscape_HeightmapErrorMessage = HeightmapImportData.ErrorMessage;
 		ImportLandscape_Data = MoveTemp(HeightmapImportData.Data);
 	}
-	else
+	else if (!ImportLandscape_HeightmapFilename.IsEmpty())
 	{
 		ImportLandscape_HeightmapImportResult = ELandscapeImportResult::Error;
 		ImportLandscape_HeightmapErrorMessage = NSLOCTEXT("LandscapeEditor.NewLandscape", "Import_UnknownFileType", "File type not recognised");

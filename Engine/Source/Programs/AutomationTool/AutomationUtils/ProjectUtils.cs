@@ -118,12 +118,9 @@ namespace AutomationTool
 		/// <param name="RawProjectPath">Full project path.</param>
 		/// <param name="Platform">Platform type.</param>
 		/// <returns>Path to the binaries folder.</returns>
-		public static DirectoryReference GetProjectClientBinariesFolder(DirectoryReference ProjectClientBinariesPath, UnrealTargetPlatform Platform = UnrealTargetPlatform.Unknown)
+		public static DirectoryReference GetProjectClientBinariesFolder(DirectoryReference ProjectClientBinariesPath, UnrealTargetPlatform Platform)
 		{
-			if (Platform != UnrealTargetPlatform.Unknown)
-			{
-				ProjectClientBinariesPath = DirectoryReference.Combine(ProjectClientBinariesPath, Platform.ToString());
-			}
+			ProjectClientBinariesPath = DirectoryReference.Combine(ProjectClientBinariesPath, Platform.ToString());
 			return ProjectClientBinariesPath;
 		}
 
@@ -190,12 +187,9 @@ namespace AutomationTool
 			{
 				// No client target platforms, add all in
 				TargetPlatforms = new List<UnrealTargetPlatform>();
-				foreach (UnrealTargetPlatform TargetPlatformType in Enum.GetValues(typeof(UnrealTargetPlatform)))
+				foreach (UnrealTargetPlatform TargetPlatformType in UnrealTargetPlatform.GetValidPlatforms())
 				{
-					if (TargetPlatformType != UnrealTargetPlatform.Unknown)
-					{
-						TargetPlatforms.Add(TargetPlatformType);
-					}
+					TargetPlatforms.Add(TargetPlatformType);
 				}
 			}
 
@@ -398,22 +392,13 @@ namespace AutomationTool
 			{
 				CommandUtils.LogVerbose("Loading ini files for {0}", RawProjectPath);
 
-				foreach (UnrealTargetPlatform TargetPlatformType in Enum.GetValues(typeof(UnrealTargetPlatform)))
+				foreach (UnrealTargetPlatform TargetPlatformType in UnrealTargetPlatform.GetValidPlatforms())
 				{
-					if (TargetPlatformType != UnrealTargetPlatform.Unknown)
-					{
-						ConfigHierarchy Config = ConfigCache.ReadHierarchy(ConfigHierarchyType.Engine, RawProjectPath.Directory, TargetPlatformType);
-						Properties.EngineConfigs.Add(TargetPlatformType, Config);
-					}
-				}
+					ConfigHierarchy EngineConfig = ConfigCache.ReadHierarchy(ConfigHierarchyType.Engine, RawProjectPath.Directory, TargetPlatformType);
+					Properties.EngineConfigs.Add(TargetPlatformType, EngineConfig);
 
-				foreach (UnrealTargetPlatform TargetPlatformType in Enum.GetValues(typeof(UnrealTargetPlatform)))
-				{
-					if (TargetPlatformType != UnrealTargetPlatform.Unknown)
-					{
-						ConfigHierarchy Config = ConfigCache.ReadHierarchy(ConfigHierarchyType.Game, RawProjectPath.Directory, TargetPlatformType);
-						Properties.GameConfigs.Add(TargetPlatformType, Config);
-					}
+					ConfigHierarchy GameConfig = ConfigCache.ReadHierarchy(ConfigHierarchyType.Game, RawProjectPath.Directory, TargetPlatformType);
+					Properties.GameConfigs.Add(TargetPlatformType, GameConfig);
 				}
 			}
 
@@ -659,6 +644,81 @@ namespace AutomationTool
 			{
 				CommandUtils.DeleteDirectoryContents(RulesFolder);
 			}
+		}
+
+		/// <summary>
+		/// Takes a game name (e.g "ShooterGame") and tries to find the path to the project file
+		/// </summary>
+		/// <param name="GameName"></param>
+		/// <returns></returns>
+		public static FileReference FindProjectFileFromName(string GameName)
+		{
+			// if they passed in a path then easy.
+			if (File.Exists(GameName))
+			{
+				return new FileReference(GameName);
+			}
+
+			// Start with the gamename regardless of what they passed in
+			GameName = Path.GetFileNameWithoutExtension(GameName);
+
+			// Turn Foo into Foo.uproject
+			string ProjectFile = GameName;
+
+			if (string.IsNullOrEmpty(Path.GetExtension(ProjectFile)))
+			{
+				// if project was specified but had no extension then just add it.
+				ProjectFile = Path.ChangeExtension(GameName, ".uproject");
+			}
+
+			// Turn Foo.uproject into Foo/Foo.uproject
+			ProjectFile = Path.Combine(GameName, ProjectFile);
+
+			GameName = Path.GetFileNameWithoutExtension(GameName);
+
+			// check for sibling to engine
+			if (File.Exists(ProjectFile))
+			{
+				return new FileReference(ProjectFile);
+			}
+
+			// Search NativeProjects (sibling folders).
+			IEnumerable<FileReference> Projects = NativeProjects.EnumerateProjectFiles();
+
+			FileReference ProjectPath = Projects.Where(R => string.Equals(R.GetFileName(), ProjectFile, StringComparison.OrdinalIgnoreCase)).FirstOrDefault();
+
+			if (ProjectPath == null)
+			{
+				// read .uprojectdirs
+				List<string> SearchPaths = new List<string>();
+				SearchPaths.Add("");
+				string ProjectDirsFile = Directory.EnumerateFiles(Environment.CurrentDirectory, "*.uprojectdirs").FirstOrDefault();
+				if (ProjectDirsFile != null)
+				{
+					foreach (string FilePath in File.ReadAllLines(ProjectDirsFile))
+					{
+						string Trimmed = FilePath.Trim();
+						if (!Trimmed.StartsWith("./", StringComparison.OrdinalIgnoreCase) &&
+							!Trimmed.StartsWith(";", StringComparison.OrdinalIgnoreCase) &&
+							Trimmed.IndexOfAny(Path.GetInvalidPathChars()) < 0)
+						{
+							SearchPaths.Add(Trimmed);
+						}
+					}
+
+					string ResolvedFile = SearchPaths.Select(P => Path.Combine(P, ProjectFile))
+											.Where(P => File.Exists(P))
+											.FirstOrDefault();
+
+					if (ResolvedFile != null)
+					{
+						ProjectPath = new FileReference(ResolvedFile);
+					}
+				}
+			}
+						
+			// either valid or we're out of ideas...
+			return ProjectPath;
 		}
 	}
 

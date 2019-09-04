@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Stats/Stats.h"
+#include "Misc/IEngineCrypto.h"
 
 /**
  * Generic result type for cryptographic functions.

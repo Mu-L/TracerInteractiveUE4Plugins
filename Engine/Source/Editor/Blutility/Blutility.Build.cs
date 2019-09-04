@@ -10,6 +10,11 @@ public class Blutility : ModuleRules
 
 		PrivateIncludePathModuleNames.Add("AssetTools");
 
+        PublicDependencyModuleNames.AddRange(new string[] {
+			"EditorSubsystem",
+			"MainFrame"
+		});
+
 		PrivateDependencyModuleNames.AddRange(
 			new string[] {
 				"Core",

@@ -35,13 +35,24 @@ class SEQUENCER_API IKeyArea : public TSharedFromThis<IKeyArea>
 {
 public:
 
+	/** Serial number of the node tree from the last time this key area was seen */
+	uint32 TreeSerialNumber;
+
 	/**
 	 * Constructor
 	 *
 	 * @param InSection The section that owns the channel that this key area represents
 	 * @param InChannel Handle to the channel this key area represents
 	 */
-	IKeyArea(UMovieSceneSection& InSection, FMovieSceneChannelHandle InChannel);
+	IKeyArea(UMovieSceneSection* InSection, FMovieSceneChannelHandle InChannel);
+
+	/**
+	 * Reinitialize this key area with a new channel
+	 *
+	 * @param InSection The section that owns the channel that this key area represents
+	 * @param InChannel Handle to the channel this key area represents
+	 */
+	void Reinitialize(UMovieSceneSection* InSection, FMovieSceneChannelHandle InChannel);
 
 public:
 

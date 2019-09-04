@@ -10,6 +10,7 @@
 #include "RenderingThread.h"
 #include "MaterialShared.h"
 #include "Materials/MaterialInstance.h"
+#include "HAL/LowLevelMemTracker.h"
 
 class UTexture;
 
@@ -24,7 +25,7 @@ void CacheMaterialInstanceUniformExpressions(const UMaterialInstance* MaterialIn
  * WARNING: This function is a noop outside of the Editor!
  * @param ParentMaterial - The parent material to look for.
  */
-void RecacheMaterialInstanceUniformExpressions(const UMaterialInterface* ParentMaterial);
+void RecacheMaterialInstanceUniformExpressions(const UMaterialInterface* ParentMaterial, bool bRecreateUniformBuffer);
 
 /** Protects the members of a UMaterialInstanceConstant from re-entrance. */
 class FMICReentranceGuard
@@ -117,6 +118,8 @@ public:
 	template <typename ValueType>
 	void RenderThread_UpdateParameter(const FMaterialParameterInfo& ParameterInfo, const ValueType& Value )
 	{
+		LLM_SCOPE(ELLMTag::MaterialInstance);
+
 		InvalidateUniformExpressionCache(false);
 		TArray<TNamedParameter<ValueType> >& ValueArray = GetValueArray<ValueType>();
 		const int32 ParameterCount = ValueArray.Num();

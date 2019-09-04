@@ -7,6 +7,8 @@
 #include "IInputDeviceModule.h"
 #include "HAL/OutputDevices.h"
 #include "Misc/AssertionMacros.h"
+#include "Android/AndroidPlatformMisc.h"
+#include "Misc/CoreDelegates.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogAndroidApplication, Log, All);
 
@@ -91,6 +93,52 @@ void FAndroidApplication::PollGameDeviceState( const float TimeDelta )
 
 		bWindowSizeChanged = false;
 	}
+    
+    HandleDeviceOrientation();
+}
+
+void FAndroidApplication::HandleDeviceOrientation()
+{
+#if USE_ANDROID_JNI
+    JNIEnv* JEnv = AndroidJavaEnv::GetJavaEnv();
+    if (JEnv)
+    {
+        static jmethodID getOrientationMethod = 0;
+        const auto PreviousDeviceOrientation = DeviceOrientation;
+        
+        if (getOrientationMethod == 0)
+        {
+            jclass MainClass = AndroidJavaEnv::FindJavaClassGlobalRef("com/epicgames/ue4/GameActivity");
+            if (MainClass != nullptr)
+            {
+                getOrientationMethod = JEnv->GetMethodID(MainClass, "AndroidThunkJava_GetDeviceOrientation", "()I");
+                JEnv->DeleteGlobalRef(MainClass);
+            }
+        }
+        
+        if (getOrientationMethod != 0)
+        {
+            const int Orientation = JEnv->CallIntMethod(AndroidJavaEnv::GetGameActivityThis(), getOrientationMethod);
+            switch (Orientation)
+            {
+                case 0: DeviceOrientation = EDeviceScreenOrientation::Portrait;             break;
+                case 1: DeviceOrientation = EDeviceScreenOrientation::LandscapeLeft;        break;
+                case 2: DeviceOrientation = EDeviceScreenOrientation::PortraitUpsideDown;   break;
+                case 3: DeviceOrientation = EDeviceScreenOrientation::LandscapeRight;       break;
+            }
+        }
+        
+        FAndroidMisc::SetDeviceOrientation(DeviceOrientation);
+        
+        if (PreviousDeviceOrientation != DeviceOrientation)
+        {
+            FCoreDelegates::ApplicationReceivedScreenOrientationChangedNotificationDelegate.Broadcast((int32)DeviceOrientation);
+               
+            //we also want to fire off the safe frame event
+            FCoreDelegates::OnSafeFrameChangedEvent.Broadcast();
+        }
+    }
+#endif
 }
 
 FPlatformRect FAndroidApplication::GetWorkArea( const FPlatformRect& CurrentWindow ) const
@@ -140,16 +188,33 @@ void FDisplayMetrics::RebuildDisplayMetrics( FDisplayMetrics& OutDisplayMetrics 
 	float Inset_Right = -1.0f;
 	float Inset_Bottom = -1.0f;
 
-	if (FString* SafeZoneLandscape = FAndroidMisc::GetConfigRulesVariable(TEXT("SafeZone_Landscape")))
+	bool bIsPortrait = FAndroidWindow::IsPortraitOrientation();
+
+	// ConfigRules values override values from device
+	if (FString* SafeZoneVar = FAndroidMisc::GetConfigRulesVariable(bIsPortrait ? TEXT("SafeZone_Portrait") : TEXT("SafeZone_Landscape")))
 	{
 		TArray<FString> ZoneVector;
-		if (SafeZoneLandscape->ParseIntoArray(ZoneVector, TEXT(","), true) == 4)
+		int ZoneParseCount = SafeZoneVar->ParseIntoArray(ZoneVector, TEXT(","), true);
+		ensureMsgf(ZoneParseCount == 4, TEXT("SafeZone variable not properly formatted."));
+
+		if (ZoneParseCount == 4)
 		{
+			// these are already in pixels
 			Inset_Left = FCString::Atof(*ZoneVector[0]);
 			Inset_Top = FCString::Atof(*ZoneVector[1]);
 			Inset_Right = FCString::Atof(*ZoneVector[2]);
 			Inset_Bottom = FCString::Atof(*ZoneVector[3]);
 		}
+	}
+	else
+	{
+		FVector4 SafeZoneRect = FAndroidWindow::GetSafezone(bIsPortrait);
+
+		// These values will be negative if there is not a safe zone set by GameActivity and need scaling
+		Inset_Left = SafeZoneRect.X * OutDisplayMetrics.PrimaryDisplayWidth;
+		Inset_Top = SafeZoneRect.Y * OutDisplayMetrics.PrimaryDisplayHeight;
+		Inset_Right = SafeZoneRect.Z * OutDisplayMetrics.PrimaryDisplayWidth;
+		Inset_Bottom = SafeZoneRect.W * OutDisplayMetrics.PrimaryDisplayHeight;
 	}
 
 	OutDisplayMetrics.TitleSafePaddingSize.X = (Inset_Left >= 0.0f) ? Inset_Left : OutDisplayMetrics.TitleSafePaddingSize.X;

@@ -239,6 +239,33 @@ struct FGenericPlatformProperties
 		return true;
 	}
 
+	static FORCEINLINE bool SupportsMeshLODStreaming()
+	{
+		return false;
+	}
+
+	static FORCEINLINE bool SupportsMemoryMappedFiles()
+	{
+		return false;
+	}
+	static FORCEINLINE bool SupportsMemoryMappedAudio()
+	{
+		return false;
+	}
+	static FORCEINLINE bool SupportsMemoryMappedAnimation()
+	{
+		return false;
+	}
+	static FORCEINLINE int64 GetMemoryMappingAlignment()
+	{
+		return 0;
+	}
+	
+	static FORCEINLINE bool SupportsVirtualTextureStreaming()
+	{
+		return false; // Currently VT is opt-in
+	}
+
 	/**
 	 * Gets whether user settings should override the resolution or not
 	 */

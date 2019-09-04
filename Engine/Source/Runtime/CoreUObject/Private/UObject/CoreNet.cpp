@@ -10,9 +10,6 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogCoreNet, Log, All);
 
-DEFINE_STAT(STAT_NetSerializeFastArray);
-DEFINE_STAT(STAT_NetSerializeFastArray_BuildMap);
-
 /*-----------------------------------------------------------------------------
 	FClassNetCache implementation.
 -----------------------------------------------------------------------------*/
@@ -314,13 +311,14 @@ bool UPackageMap::StaticSerializeName(FArchive& Ar, FName& InName)
 	}
 	else if (Ar.IsSaving())
 	{
-		uint8 bHardcoded = InName.GetComparisonIndex() <= MAX_NETWORKED_HARDCODED_NAME;
+		const EName* InEName = InName.ToEName();
+		uint8 bHardcoded = InEName && ShouldReplicateAsInteger(*InEName);
 		Ar.SerializeBits(&bHardcoded, 1);
-		if (bHardcoded)
+		if (bHardcoded && /* silence static analyzer */ InEName)
 		{
 			// send by hardcoded index
 			checkSlow(InName.GetNumber() <= 0); // hardcoded names should never have a Number
-			uint32 NameIndex = uint32(InName.GetComparisonIndex());
+			uint32 NameIndex = *InEName;
 			Ar.SerializeIntPacked(NameIndex);
 		}
 		else
@@ -369,6 +367,14 @@ void SerializeChecksum(FArchive &Ar, uint32 x, bool ErrorOK)
 	{
 		uint32 Magic = x;
 		Ar << Magic;
+	}
+}
+
+void FPropertyRetirement::CountBytes(FArchive& Ar) const
+{
+	for (const FPropertyRetirement* NextRetirement = Next; NextRetirement; NextRetirement = NextRetirement->Next)
+	{
+		Ar.CountBytes(sizeof(FPropertyRetirement), sizeof(FPropertyRetirement));
 	}
 }
 
@@ -529,4 +535,29 @@ const TCHAR* LexToString(const EChannelCloseReason Value)
 	}
 
 	return TEXT("Unknown");
+}
+
+void INetSerializeCB::NetSerializeStruct(
+	class UScriptStruct* Struct,
+	class FBitArchive& Ar,
+	class UPackageMap* Map,
+	void* Data,
+	bool& bHasUnmapped)
+{
+	FNetDeltaSerializeInfo Params;
+	Params.Struct = Struct;
+	Params.Map = Map;
+	Params.Data = Data;
+
+	if (Ar.IsSaving())
+	{
+		Params.Writer = static_cast<FBitWriter*>(&Ar);
+	}
+	else
+	{
+		Params.Reader = static_cast<FBitReader*>(&Ar);
+	}
+
+	NetSerializeStruct(Params);
+	bHasUnmapped = Params.bOutHasMoreUnmapped;
 }

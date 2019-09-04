@@ -24,6 +24,7 @@
 #include "UnrealEngine.h"
 #include "Engine/LocalPlayer.h"
 #include "GameFramework/PlayerInput.h"
+#include "EngineUtils.h"
 
 #if WITH_EDITOR
 #include "Editor/GameplayDebuggerEdMode.h"
@@ -52,6 +53,7 @@ void UGameplayDebuggerLocalController::Initialize(AGameplayDebuggerCategoryRepli
 	if (GIsEditor)
 	{
 		USelection::SelectionChangedEvent.AddUObject(this, &UGameplayDebuggerLocalController::OnSelectionChanged);
+		USelection::SelectObjectEvent.AddUObject(this, &UGameplayDebuggerLocalController::OnSelectedObject);
 	}
 #endif
 
@@ -102,6 +104,7 @@ void UGameplayDebuggerLocalController::Cleanup()
 {
 #if WITH_EDITOR
 	USelection::SelectionChangedEvent.RemoveAll(this);
+	USelection::SelectObjectEvent.RemoveAll(this);
 
 	if (bSimulateMode)
 	{
@@ -621,10 +624,9 @@ void UGameplayDebuggerLocalController::OnSelectActorTick()
 		float BestScore = MinViewDirDot;
 		
 		const FVector ViewDir = CameraRotation.Vector();
-		for (FConstPawnIterator It = OwnerPC->GetWorld()->GetPawnIterator(); It; ++It)
+		for (APawn* TestPawn  : TActorRange<APawn>(OwnerPC->GetWorld()))
 		{
-			APawn* TestPawn = It->Get();
-			if (TestPawn && !TestPawn->bHidden && TestPawn->GetActorEnableCollision() &&
+			if (!TestPawn->bHidden && TestPawn->GetActorEnableCollision() &&
 				!TestPawn->IsA(ASpectatorPawn::StaticClass()) &&
 				TestPawn != OwnerPC->GetPawn())
 			{
@@ -653,7 +655,7 @@ void UGameplayDebuggerLocalController::OnSelectActorTick()
 		if (DebugActorCandidate != BestCandidate)
 		{
 			DebugActorCandidate = BestCandidate;
-			CachedReplicator->SetDebugActor(BestCandidate);
+			CachedReplicator->SetDebugActor(BestCandidate, true);
 		}
 	}
 }
@@ -701,7 +703,21 @@ void UGameplayDebuggerLocalController::OnSelectionChanged(UObject* Object)
 			}
 		}
 
-		CachedReplicator->SetDebugActor(SelectedPawn);
+		if (SelectedPawn)
+		{
+			CachedReplicator->SetDebugActor(SelectedPawn, false);
+			CachedReplicator->CollectCategoryData(/*bForce=*/true);
+		}
+	}
+}
+
+void UGameplayDebuggerLocalController::OnSelectedObject(UObject* Object)
+{
+	AController* SelectedController = Cast<AController>(Object);
+	APawn* SelectedPawn = SelectedController ? SelectedController->GetPawn() : Cast<APawn>(Object);
+	if (CachedReplicator && SelectedPawn && SelectedPawn->IsSelected())
+	{
+		CachedReplicator->SetDebugActor(SelectedPawn, false);
 		CachedReplicator->CollectCategoryData(/*bForce=*/true);
 	}
 }

@@ -16,6 +16,7 @@
 #include "ScreenRendering.h"
 #include "PipelineStateCache.h"
 #include "CommonRenderResources.h"
+#include "RenderTargetPool.h"
 
 int32 GFrameGrabberFrameLatency = 0;
 static FAutoConsoleVariableRef CVarFrameGrabberFrameLatency(
@@ -120,7 +121,7 @@ void FViewportSurfaceReader::ResolveRenderTarget(FViewportSurfaceReader* RenderT
 			false);
 
 		TRefCountPtr<IPooledRenderTarget> ResampleTexturePooledRenderTarget;
-		RendererModule->RenderTargetPoolFindFreeElement(RHICmdList, OutputDesc, ResampleTexturePooledRenderTarget, TEXT("ResampleTexture"));
+		GRenderTargetPool.FindFreeElement(RHICmdList, OutputDesc, ResampleTexturePooledRenderTarget, TEXT("ResampleTexture"));
 		check(ResampleTexturePooledRenderTarget);
 
 		const FSceneRenderTargetItem& DestRenderTarget = ResampleTexturePooledRenderTarget->GetRenderTargetItem();
@@ -198,7 +199,6 @@ void FViewportSurfaceReader::ResolveRenderTarget(FViewportSurfaceReader* RenderT
 FFrameGrabber::FFrameGrabber(TSharedRef<FSceneViewport> Viewport, FIntPoint DesiredBufferSize, EPixelFormat InPixelFormat, uint32 NumSurfaces)
 {
 	State = EFrameGrabberState::Inactive;
-	bIsFirstCaptureFrame = false;
 
 	TargetSize = DesiredBufferSize;
 
@@ -227,7 +227,7 @@ FFrameGrabber::FFrameGrabber(TSharedRef<FSceneViewport> Viewport, FIntPoint Desi
 			FWidgetPath WidgetPath(Window.ToSharedRef(), JustWindow);
 			if (WidgetPath.ExtendPathTo(FWidgetMatcher(ViewportWidget.ToSharedRef()), EVisibility::Visible))
 			{
-				FArrangedWidget ArrangedWidget = WidgetPath.FindArrangedWidget(ViewportWidget.ToSharedRef()).Get(FArrangedWidget::NullWidget);
+				FArrangedWidget ArrangedWidget = WidgetPath.FindArrangedWidget(ViewportWidget.ToSharedRef()).Get(FArrangedWidget::GetNullWidget());
 
 				FVector2D Position = ArrangedWidget.Geometry.GetAbsolutePosition();
 				FVector2D Size = ArrangedWidget.Geometry.GetAbsoluteSize();
@@ -266,6 +266,11 @@ FFrameGrabber::~FFrameGrabber()
 	{
 		FSlateApplication::Get().GetRenderer()->OnBackBufferReadyToPresent().Remove(OnBackBufferReadyToPresent);
 	}
+
+	if (OutstandingFrameCount.GetValue() > 0)
+	{
+		FlushRenderingCommands();
+	}
 }
 
 void FFrameGrabber::StartCapturingFrames()
@@ -276,7 +281,6 @@ void FFrameGrabber::StartCapturingFrames()
 	}
 
 	State = EFrameGrabberState::Active;
-	bIsFirstCaptureFrame = true;
 
 	OnBackBufferReadyToPresent = FSlateApplication::Get().GetRenderer()->OnBackBufferReadyToPresent().AddRaw(this, &FFrameGrabber::OnBackBufferReadyToPresentCallback);
 }
@@ -293,19 +297,14 @@ void FFrameGrabber::CaptureThisFrame(FFramePayloadPtr Payload)
 		return;
 	}
 
-	// Callbacks to OnBackBufferReadyToPresentCallback() are coming from the RenderThread, which may still be running when we get here, so we need to wait
-	// until it is done before we increment OutstandingFrameCount here and start capturing frames, otherwise we may end up capturing a frame too early.
-	if (bIsFirstCaptureFrame)
-	{
-		bIsFirstCaptureFrame = false;
-
-		FlushRenderingCommands();
-	}
-
 	OutstandingFrameCount.Increment();
 
-	FScopeLock Lock(&PendingFramePayloadsMutex);
-	PendingFramePayloads.Add(Payload);
+	ENQUEUE_RENDER_COMMAND(FrameGrabber_AppendFramePayload)(
+		[this, Payload](FRHICommandListImmediate& RHICmdList)
+		{
+			this->RenderThread_PendingFramePayloads.Add(Payload);
+		}
+	);
 }
 
 void FFrameGrabber::StopCapturingFrames()
@@ -316,8 +315,6 @@ void FFrameGrabber::StopCapturingFrames()
 	}
 
 	State = EFrameGrabberState::PendingShutdown;
-
-	bIsFirstCaptureFrame = false;
 }
 
 void FFrameGrabber::Shutdown()
@@ -377,17 +374,19 @@ void FFrameGrabber::OnBackBufferReadyToPresentCallback(SWindow& SlateWindow, con
 		return;
 	}
 
+	ensure(IsInRenderingThread());
+
 	FFramePayloadPtr Payload;
 
 	{
-		FScopeLock Lock(&PendingFramePayloadsMutex);
-		if (!PendingFramePayloads.Num())
+		if (!RenderThread_PendingFramePayloads.Num())
 		{
 			// No frames to capture
 			return;
 		}
-		Payload = PendingFramePayloads[0];
-		PendingFramePayloads.RemoveAt(0, 1, false);
+
+		Payload = RenderThread_PendingFramePayloads[0];
+		RenderThread_PendingFramePayloads.RemoveAt(0, 1, false);
 	}
 
 	if (FrameGrabLatency != GFrameGrabberFrameLatency)

@@ -31,7 +31,10 @@ D3D12_RESOURCE_DESC CreateIndexBufferResourceDesc(uint32 Size, uint32 InUsage)
 
 FD3D12IndexBuffer::~FD3D12IndexBuffer()
 {
-	UpdateBufferStats<FD3D12IndexBuffer>(&ResourceLocation, false);
+	if (ResourceLocation.IsValid())
+	{
+		UpdateBufferStats<FD3D12IndexBuffer>(&ResourceLocation, false);
+	}
 }
 
 void FD3D12IndexBuffer::Rename(FD3D12ResourceLocation& NewLocation)
@@ -59,8 +62,35 @@ void FD3D12IndexBuffer::RenameLDAChain(FD3D12ResourceLocation& NewLocation)
 	}
 }
 
+void FD3D12IndexBuffer::Swap(FD3D12IndexBuffer& Other)
+{
+	check(!LockedData.bLocked && !Other.LockedData.bLocked);
+	FRHIIndexBuffer::Swap(Other);
+	FD3D12BaseShaderResource::Swap(Other);
+	FD3D12TransientResource::Swap(Other);
+	FD3D12LinkedAdapterObject<FD3D12IndexBuffer>::Swap(Other);
+}
+
+void FD3D12IndexBuffer::ReleaseUnderlyingResource()
+{
+	check(!LockedData.bLocked && ResourceLocation.IsValid());
+	UpdateBufferStats<FD3D12IndexBuffer>(&ResourceLocation, false);
+	ResourceLocation.Clear();
+	FRHIIndexBuffer::ReleaseUnderlyingResource();
+	FD3D12IndexBuffer* NextIB = GetNextObject();
+	if (NextIB)
+	{
+		NextIB->ReleaseUnderlyingResource();
+	}
+}
+
 FIndexBufferRHIRef FD3D12DynamicRHI::RHICreateIndexBuffer(uint32 Stride, uint32 Size, uint32 InUsage, FRHIResourceCreateInfo& CreateInfo)
 {
+	if (CreateInfo.bWithoutNativeResource)
+	{
+		return new FD3D12IndexBuffer();
+	}
+
 	const D3D12_RESOURCE_DESC Desc = CreateIndexBufferResourceDesc(Size, InUsage);
 	const uint32 Alignment = 4;
 
@@ -74,18 +104,38 @@ FIndexBufferRHIRef FD3D12DynamicRHI::RHICreateIndexBuffer(uint32 Stride, uint32 
 	return Buffer;
 }
 
-void* FD3D12DynamicRHI::RHILockIndexBuffer(FIndexBufferRHIParamRef IndexBufferRHI, uint32 Offset, uint32 Size, EResourceLockMode LockMode)
+void* FD3D12DynamicRHI::RHILockIndexBuffer(FRHIIndexBuffer* IndexBufferRHI, uint32 Offset, uint32 Size, EResourceLockMode LockMode)
 {
 	return LockBuffer(nullptr, FD3D12DynamicRHI::ResourceCast(IndexBufferRHI), Offset, Size, LockMode);
 }
 
-void FD3D12DynamicRHI::RHIUnlockIndexBuffer(FIndexBufferRHIParamRef IndexBufferRHI)
+void FD3D12DynamicRHI::RHIUnlockIndexBuffer(FRHIIndexBuffer* IndexBufferRHI)
 {
 	UnlockBuffer(nullptr, FD3D12DynamicRHI::ResourceCast(IndexBufferRHI));
 }
 
+void FD3D12DynamicRHI::RHITransferIndexBufferUnderlyingResource(FRHIIndexBuffer* DestIndexBuffer, FRHIIndexBuffer* SrcIndexBuffer)
+{
+	check(DestIndexBuffer);
+	FD3D12IndexBuffer* Dest = ResourceCast(DestIndexBuffer);
+	if (!SrcIndexBuffer)
+	{
+		Dest->ReleaseUnderlyingResource();
+	}
+	else
+	{
+		FD3D12IndexBuffer* Src = ResourceCast(SrcIndexBuffer);
+		Dest->Swap(*Src);
+	}
+}
+
 FIndexBufferRHIRef FD3D12DynamicRHI::CreateIndexBuffer_RenderThread(class FRHICommandListImmediate& RHICmdList, uint32 Stride, uint32 Size, uint32 InUsage, FRHIResourceCreateInfo& CreateInfo)
 {
+	if (CreateInfo.bWithoutNativeResource)
+	{
+		return new FD3D12IndexBuffer();
+	}
+
 	const D3D12_RESOURCE_DESC Desc = CreateIndexBufferResourceDesc(Size, InUsage);
 	const uint32 Alignment = 4;
 
@@ -99,12 +149,12 @@ FIndexBufferRHIRef FD3D12DynamicRHI::CreateIndexBuffer_RenderThread(class FRHICo
 	return Buffer;
 }
 
-void* FD3D12DynamicRHI::LockIndexBuffer_RenderThread(class FRHICommandListImmediate& RHICmdList, FIndexBufferRHIParamRef IndexBufferRHI, uint32 Offset, uint32 SizeRHI, EResourceLockMode LockMode)
+void* FD3D12DynamicRHI::LockIndexBuffer_RenderThread(class FRHICommandListImmediate& RHICmdList, FRHIIndexBuffer* IndexBufferRHI, uint32 Offset, uint32 SizeRHI, EResourceLockMode LockMode)
 {
 	return LockBuffer(&RHICmdList, FD3D12DynamicRHI::ResourceCast(IndexBufferRHI), Offset, SizeRHI, LockMode);
 }
 
-void FD3D12DynamicRHI::UnlockIndexBuffer_RenderThread(class FRHICommandListImmediate& RHICmdList, FIndexBufferRHIParamRef IndexBufferRHI)
+void FD3D12DynamicRHI::UnlockIndexBuffer_RenderThread(class FRHICommandListImmediate& RHICmdList, FRHIIndexBuffer* IndexBufferRHI)
 {
 	// Pull down the above RHI implementation so that we can flush only when absolutely necessary
 	QUICK_SCOPE_CYCLE_COUNTER(STAT_FDynamicRHI_UnlockIndexBuffer_RenderThread);

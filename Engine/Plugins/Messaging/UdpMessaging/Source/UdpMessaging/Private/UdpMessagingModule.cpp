@@ -230,6 +230,9 @@ public:
 			return;
 		}
 
+		// Hook to the PreExit callback, needed to execute UObject related shutdowns
+		FCoreDelegates::OnPreExit.AddRaw(this, &FUdpMessagingModule::HandleAppPreExit);
+
 #if WITH_EDITOR
 		// register settings
 		ISettingsModule* SettingsModule = FModuleManager::GetModulePtr<ISettingsModule>("Settings");
@@ -249,6 +252,9 @@ public:
 		}
 #endif // WITH_EDITOR
 
+		// parse additional command line args
+		ParseCommandLine(GetMutableDefault<UUdpMessagingSettings>(), FCommandLine::Get());
+
 		// register application events
 		FCoreDelegates::ApplicationHasReactivatedDelegate.AddRaw(this, &FUdpMessagingModule::HandleApplicationHasReactivated);
 		FCoreDelegates::ApplicationWillDeactivateDelegate.AddRaw(this, &FUdpMessagingModule::HandleApplicationWillDeactivate);
@@ -261,6 +267,10 @@ public:
 		// unregister application events
 		FCoreDelegates::ApplicationHasReactivatedDelegate.RemoveAll(this);
 		FCoreDelegates::ApplicationWillDeactivateDelegate.RemoveAll(this);
+
+		// Unhook AppPreExit and call it
+		FCoreDelegates::OnPreExit.RemoveAll(this);
+		HandleAppPreExit();
 
 #if WITH_EDITOR
 		// unregister settings
@@ -334,9 +344,11 @@ protected:
 
 		UE_LOG(LogUdpMessaging, Log, TEXT("Initializing bridge on interface %s to multicast group %s."), *UnicastEndpoint.ToString(), *MulticastEndpoint.ToText().ToString());
 
+		TSharedRef<FUdpMessageTransport, ESPMode::ThreadSafe> Transport = MakeShared<FUdpMessageTransport, ESPMode::ThreadSafe>(UnicastEndpoint, MulticastEndpoint, Settings->MulticastTimeToLive);
+		WeakBridgeTransport = Transport;
 		MessageBridge = FMessageBridgeBuilder()
-			.UsingTransport(MakeShareable(new FUdpMessageTransport(UnicastEndpoint, MulticastEndpoint, Settings->MulticastTimeToLive)));
-	}
+			.UsingTransport(Transport);
+}
 
 #if PLATFORM_DESKTOP
 	/** Initializes the message tunnel with the current settings. */
@@ -427,6 +439,20 @@ protected:
 	}
 
 	/**
+	 * Parse command line arguments to override UdpMessagingSettings
+	 */
+	void ParseCommandLine(UUdpMessagingSettings* Settings, const TCHAR* CommandLine)
+	{
+		if (Settings && CommandLine)
+		{
+			// Parse value overrides (if present)
+			FParse::Bool(CommandLine, TEXT("-UDPMESSAGING_TRANSPORT_ENABLE="), Settings->EnableTransport);
+			FParse::Value(CommandLine, TEXT("-UDPMESSAGING_TRANSPORT_UNICAST="), Settings->UnicastEndpoint);
+			FParse::Value(CommandLine, TEXT("-UDPMESSAGING_TRANSPORT_MULTICAST="), Settings->MulticastEndpoint);
+		}
+	}
+
+	/**
 	 * Checks whether networked message transport is supported.
 	 *
 	 * @return true if networked transport is supported, false otherwise.
@@ -501,10 +527,21 @@ private:
 		return true;
 	}
 
+	void HandleAppPreExit()
+	{
+		if (TSharedPtr<FUdpMessageTransport, ESPMode::ThreadSafe> UdpTransport = WeakBridgeTransport.Pin())
+		{
+			UdpTransport->OnAppPreExit();
+		}
+	}
+
 private:
 
 	/** Holds the message bridge if present. */
 	TSharedPtr<IMessageBridge, ESPMode::ThreadSafe> MessageBridge;
+
+	/** Holds the bridge transport if present.  */
+	TWeakPtr<FUdpMessageTransport, ESPMode::ThreadSafe> WeakBridgeTransport;
 
 #if PLATFORM_DESKTOP
 	/** Holds the message tunnel if present. */

@@ -1,12 +1,12 @@
 // Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
 
-#if WITH_DEV_AUTOMATION_TESTS 
-
 #include "Misc/Char.h"
 #include "Misc/AutomationTest.h"
 #include <locale.h>
 #include <ctype.h>
 #include <wctype.h>
+
+#if WITH_DEV_AUTOMATION_TESTS 
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(TCharTest, "System.Core.Misc.Char", EAutomationTestFlags::ApplicationContextMask | EAutomationTestFlags::SmokeFilter)
 
@@ -32,10 +32,16 @@ void RunCharTests(FAutomationTestBase& Test, uint32 MaxChar)
 
 bool TCharTest::RunTest(const FString& Parameters)
 {
-	TestTrue(TEXT("C locale not used"), strcmp("C", setlocale(LC_CTYPE, nullptr)) == 0);
-
-	RunCharTests<ANSICHAR>(*this, 128);
-	RunCharTests<WIDECHAR>(*this, 65536);
+	const char* CurrentLocale = setlocale(LC_CTYPE, nullptr);
+	if (strcmp("C", CurrentLocale))
+	{
+		AddError(FString::Printf(TEXT("Locale is \"%s\" but should be \"C\". Did something call setlocale()?"), CurrentLocale));
+	}
+	else
+	{
+		RunCharTests<ANSICHAR>(*this, 128);
+		RunCharTests<WIDECHAR>(*this, 65536);
+	}
 
 	return true;
 }

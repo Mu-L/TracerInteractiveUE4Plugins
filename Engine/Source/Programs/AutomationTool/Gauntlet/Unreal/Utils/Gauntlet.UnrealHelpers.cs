@@ -91,12 +91,11 @@ namespace Gauntlet
 	{
 		public static UnrealTargetPlatform GetPlatformFromString(string PlatformName)
 		{
-			UnrealTargetPlatform UnrealPlatform = UnrealTargetPlatform.Unknown;
-
-			if (Enum.TryParse<UnrealTargetPlatform>(PlatformName, true, out UnrealPlatform))
-			{
-				return UnrealPlatform;
-			}
+			UnrealTargetPlatform UnrealPlatform;
+			if (UnrealTargetPlatform.TryParse(PlatformName, out UnrealPlatform))
+            {
+	            return UnrealPlatform;
+            }
 			
 			throw new AutomationException("Unable convert platform {0} into a valid Unreal Platform", PlatformName);
 		}
@@ -229,14 +228,13 @@ namespace Gauntlet
 		internal class ConfigInfo
 		{
 			public UnrealTargetRole 				RoleType;
-			public UnrealTargetPlatform 		Platform;
+			public UnrealTargetPlatform? 		Platform;
 			public UnrealTargetConfiguration 	Configuration;
 			public bool							SharedBuild;
 
 			public ConfigInfo()
 			{
 				RoleType = UnrealTargetRole.Unknown;
-				Platform = UnrealTargetPlatform.Unknown;
 				Configuration = UnrealTargetConfiguration.Unknown;
 			}
 		}
@@ -260,7 +258,7 @@ namespace Gauntlet
 			// FortniteGame, FortniteClient, FortniteServer
 			// Or EngineTest-WIn64-Shipping, FortniteClient-Win64-Shipping etc
 			// So we need to search for the project name minus 'Game', with the form, build-type, and platform all optional :(
-			string RegExMatch = string.Format(@"{0}(Game|Client|Server|)(?:-(.+?)-(Test|Shipping))?", ShortName);
+			string RegExMatch = string.Format(@"{0}(Game|Client|Server|)(?:-(.+?)-(Debug|Test|Shipping))?", ShortName);
 
 			// Format should be something like
 			// FortniteClient
@@ -298,16 +296,11 @@ namespace Gauntlet
 					Config.Configuration = UnrealTargetConfiguration.Development;   // Development has no string
 				}
 
-				if (PlatformName.Length > 0)
+				UnrealTargetPlatform Platform;
+				if (PlatformName.Length > 0 && UnrealTargetPlatform.TryParse(PlatformName, out Platform))
 				{
-					Enum.TryParse(ConfigType, true, out Config.Platform);
+					Config.Platform = Platform;
 				}
-				else
-				{
-					Config.Platform = UnrealTargetPlatform.Unknown;
-				}
-
-				
 			}
 
 			return Config;
@@ -322,52 +315,44 @@ namespace Gauntlet
 		{
 			return GetUnrealConfigFromFileName(InProjectName, InName).RoleType;
 		}
-
-		static public string GetProjectPath(string InProjectName)
-		{
-			if (File.Exists(InProjectName))
-			{
-				return InProjectName;
-			}
-
-			string ShortName = Path.GetFileNameWithoutExtension(InProjectName);
-		
-			var RootDirs = Directory.EnumerateDirectories(Environment.CurrentDirectory);
-
-			var ProjectDirs = "UE4Games.uprojectdirs";
-
-			if (File.Exists(ProjectDirs))
-			{
-				var ExtraPaths = File.ReadAllLines(ProjectDirs).AsEnumerable();
-
-				ExtraPaths = ExtraPaths.Where(P =>
-				{
-					string Trimmed = P.Trim();
-					Trimmed = Trimmed.Replace('/', Path.DirectorySeparatorChar);
-					Trimmed = Trimmed.Replace('\\', Path.DirectorySeparatorChar);
-					return Trimmed.StartsWith(";") == false && Trimmed.StartsWith(".") == false;
-				});
-
-				RootDirs = RootDirs.Union(ExtraPaths.Select(P => Path.Combine(Environment.CurrentDirectory, P)));
-			}
-
-			foreach (var Dir in RootDirs)
-			{
-				// check both this dir and a subdir with the project name
-				string ProjectName = Path.Combine(Dir, InProjectName) + ".uproject";
-				if (File.Exists(ProjectName))
-				{
-					return ProjectName;
-				}
-
-				ProjectName = Path.Combine(Dir, InProjectName, InProjectName) + ".uproject";
-				if (File.Exists(ProjectName))
-				{
-					return ProjectName;
-				}
-			}
-
-			return "";
-		}
 	}
+
+	/// <summary>
+	/// Automatically maps root drive to proper platform specific path
+	/// </summary>
+	public class EpicRoot
+	{
+		string PlatformPath;
+
+		public EpicRoot(string Path)
+		{
+			PlatformPath = Path;
+
+			if (BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Mac)
+			{
+				if (!Path.Contains("P:"))
+				{
+					PlatformPath = Regex.Replace(Path, @"\\\\epicgames.net\\root", "/Volumes/epicgames.net/root", RegexOptions.IgnoreCase);
+				}
+				else 
+				{
+					PlatformPath = Regex.Replace(Path, "P:", "/Volumes/epicgames.net/root", RegexOptions.IgnoreCase);					
+				}				
+				
+				PlatformPath = PlatformPath.Replace(@"\", "/");
+			}
+
+		}
+
+		public static implicit operator string(EpicRoot Path)
+		{
+			return Path.PlatformPath;
+		}
+		public static implicit operator EpicRoot(string Path)
+		{
+			return new EpicRoot(Path);
+		}
+
+	}
+
 }

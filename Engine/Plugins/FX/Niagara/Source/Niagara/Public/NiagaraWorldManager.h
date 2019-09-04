@@ -9,6 +9,7 @@
 #include "NiagaraDataSet.h"
 #include "NiagaraScriptExecutionContext.h"
 #include "NiagaraSystemSimulation.h"
+#include "NiagaraSystemInstance.h"
 #include "GlobalDistanceFieldParameters.h"
 #include "NiagaraDataInterfaceSkeletalMesh.h"
 
@@ -32,39 +33,23 @@ public:
 		ViewUniformBuffer = Params.ViewUniformBuffer;
 		SceneNormalTexture = Params.NormalTexture;
 		SceneTexturesUniformParams = Params.SceneTexturesUniformParams;
-		GlobalDistanceFieldParams = Params.GlobalDistanceFieldParams;
-
-		PreSceneRenderValues = FPreSceneRenderValues();
 	}
 
-	void OnPreSceneRenderCalled(FPreSceneRenderValues& OutValues) const
-	{
-		OutValues.bUsesGlobalDistanceField |= PreSceneRenderValues.bUsesGlobalDistanceField;
-	}
-
-	void SetGlobalDistanceFieldUsage()
-	{
-		PreSceneRenderValues.bUsesGlobalDistanceField = true;
-	}
-
-	FTexture2DRHIParamRef GetSceneDepthTexture() { return SceneDepthTexture; }
-	FTexture2DRHIParamRef GetSceneNormalTexture() { return SceneNormalTexture; }
-	FUniformBufferRHIParamRef GetViewUniformBuffer() { return ViewUniformBuffer; }
+	FRHITexture2D* GetSceneDepthTexture() { return SceneDepthTexture; }
+	FRHITexture2D* GetSceneNormalTexture() { return SceneNormalTexture; }
+	FRHIUniformBuffer* GetViewUniformBuffer() { return ViewUniformBuffer; }
 	TUniformBufferRef<FSceneTexturesUniformParameters> GetSceneTextureUniformParameters() { return SceneTexturesUniformParams; }
-	const FGlobalDistanceFieldParameterData* GetGlobalDistanceFieldParameters() { return GlobalDistanceFieldParams; }
 
 	virtual void InitDynamicRHI() override;
 
 	virtual void ReleaseDynamicRHI() override;
 
 private:
-	FTexture2DRHIParamRef SceneDepthTexture;
-	FTexture2DRHIParamRef SceneNormalTexture;
-	FUniformBufferRHIParamRef ViewUniformBuffer;
-	FPreSceneRenderValues PreSceneRenderValues;	
+	FRHITexture2D* SceneDepthTexture;
+	FRHITexture2D* SceneNormalTexture;
+	FRHIUniformBuffer* ViewUniformBuffer;
 
 	TUniformBufferRef<FSceneTexturesUniformParameters> SceneTexturesUniformParams;
-	const FGlobalDistanceFieldParameterData* GlobalDistanceFieldParams;
 	FPostOpaqueRenderDelegate PostOpaqueDelegate;
 };
 
@@ -82,7 +67,8 @@ public:
 	static FNiagaraWorldManager* Get(UWorld* World);
 
 	//~ GCObject Interface
-	void AddReferencedObjects(FReferenceCollector& Collector);
+	virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
+	virtual FString GetReferencerName() const override;
 	//~ GCObject Interface
 	
 	UNiagaraParameterCollectionInstance* GetParameterCollection(UNiagaraParameterCollection* Collection);
@@ -90,12 +76,20 @@ public:
 	void CleanupParameterCollections();
 	TSharedRef<FNiagaraSystemSimulation, ESPMode::ThreadSafe> GetSystemSimulation(UNiagaraSystem* System);
 	void DestroySystemSimulation(UNiagaraSystem* System);
+	void DestroySystemInstance(TUniquePtr<FNiagaraSystemInstance>& InPtr);
+
+	// Gamethread callback to cleanup references to the given batcher before it gets deleted on the renderthread.
+	void OnBatcherDestroyed(NiagaraEmitterInstanceBatcher* InBatcher);
 
 	void Tick(float DeltaSeconds);
 
 	void OnWorldCleanup(bool bSessionEnded, bool bCleanupResources);
 	
 	FORCEINLINE FNDI_SkeletalMesh_GeneratedData& GetSkeletalMeshGeneratedData() { return SkeletalMeshGeneratedData; }
+
+	bool CachedPlayerViewLocationsValid() const { return bCachedPlayerViewLocationsValid; }
+	TArrayView<const FVector> GetCachedPlayerViewLocations() const { check(bCachedPlayerViewLocationsValid); return MakeArrayView(CachedPlayerViewLocations); }
+
 private:
 	UWorld* World;
 
@@ -105,7 +99,22 @@ private:
 
 	int32 CachedEffectsQuality;
 
+	bool bCachedPlayerViewLocationsValid = false;
+	TArray<FVector, TInlineAllocator<8> > CachedPlayerViewLocations;
+
 	/** Generated data used by data interfaces*/
 	FNDI_SkeletalMesh_GeneratedData SkeletalMeshGeneratedData;
+
+	// Deferred deletion queue for system instances
+	// We need to make sure that any enqueued GPU ticks have been processed before we remove the system instances
+	struct FDeferredDeletionQueue
+	{
+		FRenderCommandFence							Fence;
+		TArray<TUniquePtr<FNiagaraSystemInstance>>	Queue;
+	};
+
+	static constexpr int NumDeferredQueues = 3;
+	int DeferredDeletionQueueIndex = 0;
+	FDeferredDeletionQueue DeferredDeletionQueue[NumDeferredQueues];
 };
 

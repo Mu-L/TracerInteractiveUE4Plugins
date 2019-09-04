@@ -17,7 +17,7 @@ namespace UnrealBuildTool.Rules
                     "Engine",
                     "RenderCore",
                     "RHI",
-					"HeadMountedDisplay"
+					"PhysicsCore"
 				}
 			);
 

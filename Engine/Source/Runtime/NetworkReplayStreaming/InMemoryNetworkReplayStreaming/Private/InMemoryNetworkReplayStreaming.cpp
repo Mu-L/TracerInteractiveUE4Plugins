@@ -5,7 +5,9 @@
 #include "Misc/Guid.h"
 #include "Misc/DateTime.h"
 #include "HAL/IConsoleManager.h"
-#include "Misc/NetworkVersion.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
+#include "Engine/LocalPlayer.h"
 
 DEFINE_LOG_CATEGORY_STATIC( LogMemoryReplay, Log, All );
 
@@ -14,19 +16,14 @@ static FString GetAutomaticDemoName()
 	return FGuid::NewGuid().ToString();
 }
 
-void FInMemoryNetworkReplayStreamer::StartStreaming(const FString& CustomName, const FString& FriendlyName, const TArray< int32 >& UserIndices, bool bRecord, const FNetworkReplayVersion& ReplayVersion, const FStartStreamingCallback& Delegate)
-{
-	StartStreaming(CustomName, FriendlyName, TArray<FString>(), bRecord, ReplayVersion, Delegate);
-}
-
-void FInMemoryNetworkReplayStreamer::StartStreaming( const FString& CustomName, const FString& FriendlyName, const TArray< FString >& UserNames, bool bRecord, const FNetworkReplayVersion& ReplayVersion, const FStartStreamingCallback& Delegate )
+void FInMemoryNetworkReplayStreamer::StartStreaming(const FStartStreamingParameters& Params, const FStartStreamingCallback& Delegate)
 {
 	FStartStreamingResult Result;
-	Result.bRecording = bRecord;
+	Result.bRecording = Params.bRecord;
 
-	if ( CustomName.IsEmpty() )
+	if ( Params.CustomName.IsEmpty() )
 	{
-		if ( bRecord )
+		if ( Params.bRecord )
 		{
 			// If we're recording and the caller didn't provide a name, generate one automatically
 			CurrentStreamName = GetAutomaticDemoName();
@@ -41,10 +38,10 @@ void FInMemoryNetworkReplayStreamer::StartStreaming( const FString& CustomName, 
 	}
 	else
 	{
-		CurrentStreamName = CustomName;
+		CurrentStreamName = Params.CustomName;
 	}
 
-	if ( !bRecord )
+	if ( !Params.bRecord )
 	{
 		FInMemoryReplay* FoundReplay = GetCurrentReplay();
 		if (FoundReplay == nullptr)
@@ -55,8 +52,8 @@ void FInMemoryNetworkReplayStreamer::StartStreaming( const FString& CustomName, 
 		}
 
 		FileAr.Reset(new FInMemoryReplayStreamArchive(FoundReplay->StreamChunks));
-		FileAr->SetIsSaving(bRecord);
-		FileAr->SetIsLoading(!bRecord);
+		FileAr->SetIsSaving(Params.bRecord);
+		FileAr->SetIsLoading(!Params.bRecord);
 		HeaderAr.Reset(new FMemoryReader(FoundReplay->Header));
 		StreamerState = EStreamerState::Playback;
 	}
@@ -66,16 +63,16 @@ void FInMemoryNetworkReplayStreamer::StartStreaming( const FString& CustomName, 
 		TUniquePtr<FInMemoryReplay> NewReplay(new FInMemoryReplay);
 
 		NewReplay->StreamInfo.Name = CurrentStreamName;
-		NewReplay->StreamInfo.FriendlyName = FriendlyName;
+		NewReplay->StreamInfo.FriendlyName = Params.FriendlyName;
 		NewReplay->StreamInfo.Timestamp = FDateTime::Now();
 		NewReplay->StreamInfo.bIsLive = true;
-		NewReplay->StreamInfo.Changelist = ReplayVersion.Changelist;
-		NewReplay->NetworkVersion = ReplayVersion.NetworkVersion;
+		NewReplay->StreamInfo.Changelist = Params.ReplayVersion.Changelist;
+		NewReplay->NetworkVersion = Params.ReplayVersion.NetworkVersion;
 
 		// Open archives for writing
 		FileAr.Reset(new FInMemoryReplayStreamArchive(NewReplay->StreamChunks));
-		FileAr->SetIsSaving(bRecord);
-		FileAr->SetIsLoading(!bRecord);
+		FileAr->SetIsSaving(Params.bRecord);
+		FileAr->SetIsLoading(!Params.bRecord);
 		HeaderAr.Reset(new FMemoryWriter(NewReplay->Header));
 
 		OwningFactory->Replays.Add(CurrentStreamName, MoveTemp(NewReplay));
@@ -195,11 +192,6 @@ void FInMemoryNetworkReplayStreamer::DeleteFinishedStream( const FString& Stream
 
 void FInMemoryNetworkReplayStreamer::EnumerateRecentStreams(const FNetworkReplayVersion& ReplayVersion, const int32 UserIndex, const FEnumerateStreamsCallback& Delegate)
 {
-	EnumerateRecentStreams(ReplayVersion, FString(), Delegate);
-}
-
-void FInMemoryNetworkReplayStreamer::EnumerateRecentStreams(const FNetworkReplayVersion& ReplayVersion, const FString& RecentViewer, const FEnumerateStreamsCallback& Delegate)
-{
 	UE_LOG(LogMemoryReplay, Log, TEXT("FInMemoryNetworkReplayStreamer::EnumerateRecentStreams is currently unsupported."));
 	FEnumerateStreamsResult Result;
 	Result.Result = EStreamingOperationResult::Unsupported;
@@ -207,16 +199,6 @@ void FInMemoryNetworkReplayStreamer::EnumerateRecentStreams(const FNetworkReplay
 }
 
 void FInMemoryNetworkReplayStreamer::EnumerateStreams(const FNetworkReplayVersion& ReplayVersion, const int32 UserIndex, const FString& MetaString, const TArray< FString >& ExtraParms, const FEnumerateStreamsCallback& Delegate)
-{
-	EnumerateStreams(ReplayVersion, FString(), MetaString, ExtraParms, Delegate);
-}
-
-void FInMemoryNetworkReplayStreamer::EnumerateStreams( const FNetworkReplayVersion& ReplayVersion, const FString& UserString, const FString& MetaString, const FEnumerateStreamsCallback& Delegate )
-{
-	EnumerateStreams( ReplayVersion, UserString, MetaString, TArray< FString >(), Delegate );
-}
-
-void FInMemoryNetworkReplayStreamer::EnumerateStreams( const FNetworkReplayVersion& ReplayVersion, const FString& UserString, const FString& MetaString, const TArray< FString >& ExtraParms, const FEnumerateStreamsCallback& Delegate )
 {
 	FEnumerateStreamsResult Result;
 	Result.Result = EStreamingOperationResult::Success;
@@ -283,6 +265,24 @@ void FInMemoryNetworkReplayStreamer::RequestEventData(const FString& ReplayName,
 void FInMemoryNetworkReplayStreamer::RequestEventData(const FString& ReplayName, const FString& EventID, const int32 UserIndex, const FRequestEventDataCallback& Delegate)
 {
 	RequestEventData(EventID, Delegate);
+}
+
+void FInMemoryNetworkReplayStreamer::RequestEventGroupData(const FString& Group, const FRequestEventGroupDataCallback& Delegate)
+{
+	UE_LOG(LogMemoryReplay, Log, TEXT("FInMemoryNetworkReplayStreamer::RequestEventGroupData is currently unsupported."));
+	FRequestEventGroupDataResult Result;
+	Result.Result = EStreamingOperationResult::Unsupported;
+	Delegate.Execute(Result);
+}
+
+void FInMemoryNetworkReplayStreamer::RequestEventGroupData(const FString& ReplayName, const FString& Group, const FRequestEventGroupDataCallback& Delegate)
+{
+	RequestEventGroupData(Group, Delegate);
+}
+
+void FInMemoryNetworkReplayStreamer::RequestEventGroupData(const FString& ReplayName, const FString& Group, const int32 UserIndex, const FRequestEventGroupDataCallback& Delegate)
+{
+	RequestEventGroupData(Group, Delegate);
 }
 
 void FInMemoryNetworkReplayStreamer::SearchEvents(const FString& EventGroup, const FSearchEventsCallback& Delegate)
@@ -425,7 +425,7 @@ void FInMemoryNetworkReplayStreamer::FlushCheckpoint(const uint32 TimeInMS)
 	FoundReplay->StreamChunks.Add(NewChunk);
 }
 
-void FInMemoryNetworkReplayStreamer::GotoCheckpointIndex(const int32 CheckpointIndex, const FGotoCallback& Delegate)
+void FInMemoryNetworkReplayStreamer::GotoCheckpointIndex(const int32 CheckpointIndex, const FGotoCallback& Delegate, EReplayCheckpointType CheckpointType)
 {
 	GotoCheckpointIndexInternal(CheckpointIndex, Delegate, -1);
 }
@@ -509,7 +509,7 @@ FInMemoryReplay* FInMemoryNetworkReplayStreamer::GetCurrentReplayChecked() const
 	return FoundReplay;
 }
 
-void FInMemoryNetworkReplayStreamer::GotoTimeInMS(const uint32 TimeInMS, const FGotoCallback& Delegate)
+void FInMemoryNetworkReplayStreamer::GotoTimeInMS(const uint32 TimeInMS, const FGotoCallback& Delegate, EReplayCheckpointType CheckpointType)
 {
 	int32 CheckpointIndex = -1;
 
@@ -558,6 +558,28 @@ void FInMemoryNetworkReplayStreamer::Tick(float DeltaSeconds)
 TStatId FInMemoryNetworkReplayStreamer::GetStatId() const
 {
 	RETURN_QUICK_DECLARE_CYCLE_STAT(FInMemoryNetworkReplayStreamer, STATGROUP_Tickables);
+}
+
+const int32 FInMemoryNetworkReplayStreamer::GetUserIndexFromUserString(const FString& UserString)
+{
+	if (!UserString.IsEmpty() && GEngine != nullptr)
+	{
+		if (UWorld* World = GWorld.GetReference())
+		{
+			for (auto ConstIt = GEngine->GetLocalPlayerIterator(World); ConstIt; ++ConstIt)
+			{
+				if (ULocalPlayer const * const LocalPlayer = *ConstIt)
+				{
+					if (UserString.Equals(LocalPlayer->GetPreferredUniqueNetId().ToString()))
+					{
+						return LocalPlayer->GetControllerId();
+					}
+				}
+			}
+		}
+	}
+
+	return INDEX_NONE;
 }
 
 void FInMemoryReplayStreamArchive::Serialize(void* V, int64 Length) 

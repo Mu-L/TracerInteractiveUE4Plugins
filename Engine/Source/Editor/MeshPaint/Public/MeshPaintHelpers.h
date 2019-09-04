@@ -53,7 +53,7 @@ public:
 	static bool PropagateColorsToRawMesh(UStaticMesh* StaticMesh, int32 LODIndex, FStaticMeshComponentLODInfo& ComponentLODInfo);	
 
 	/** Retrieves the Vertex Color buffer size for the given LOD level in the Static Mesh */
-	static uint32 GetVertexColorBufferSize(UStaticMeshComponent* MeshComponent, int32 LODIndex, bool bInstance);
+	static uint32 GetVertexColorBufferSize(UMeshComponent* MeshComponent, int32 LODIndex, bool bInstance);
 
 	/** Retrieves the vertex positions from the given LOD level in the Static Mesh */
 	static TArray<FVector> GetVerticesForLOD(const UStaticMesh* StaticMesh, int32 LODIndex);
@@ -71,7 +71,8 @@ public:
 	static void SetInstanceColorDataForLOD(UStaticMeshComponent* MeshComponent, int32 LODIndex, const FColor FillColor, const FColor MaskColor);
 	
 	/** Fills all vertex colors for all LODs found in the given mesh component with Fill Color */
-	static void FillVertexColors(UMeshComponent* MeshComponent, const FColor FillColor, const FColor MaskColor, bool bInstanced = false);
+	static void FillStaticMeshVertexColors(UStaticMeshComponent* MeshComponent, int32 LODIndex, const FColor FillColor, const FColor MaskColor);
+	static void FillSkeletalMeshVertexColors(USkeletalMeshComponent* MeshComponent, int32 LODIndex, const FColor FillColor, const FColor MaskColor);
 	
 	/** Sets all vertex colors for a specific LOD level in the SkeletalMesh to FillColor */
 	static void SetColorDataForLOD(USkeletalMesh* SkeletalMesh, int32 LODIndex, const FColor FillColor, const FColor MaskColor);
@@ -107,6 +108,9 @@ public:
 
 	/** Returns the number of Mesh LODs for the given MeshComponent */
 	static int32 GetNumberOfLODs(const UMeshComponent* MeshComponent);
+
+	/** OutNumLODs is set to number of Mesh LODs for the given MeshComponent and returns true, or returns false of given mesh component has no valid LODs */
+	static bool TryGetNumberOfLODs(const UMeshComponent* MeshComponent, int32& OutNumLODs);
 	
 	/** Returns the number of Texture Coordinates for the given MeshComponent */
 	static int32 GetNumberOfUVs(const UMeshComponent* MeshComponent, int32 LODIndex);

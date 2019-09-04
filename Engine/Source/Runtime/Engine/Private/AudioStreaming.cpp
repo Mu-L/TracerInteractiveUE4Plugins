@@ -16,6 +16,7 @@ AudioStreaming.cpp: Implementation of audio streaming classes.
 #include "Misc/ScopeLock.h"
 #include "HAL/IConsoleManager.h"
 #include "HAL/LowLevelMemTracker.h"
+#include "AudioDecompress.h"
 
 static int32 SpoofFailedStreamChunkLoad = 0;
 FAutoConsoleVariableRef CVarSpoofFailedStreamChunkLoad(
@@ -23,6 +24,14 @@ FAutoConsoleVariableRef CVarSpoofFailedStreamChunkLoad(
 	SpoofFailedStreamChunkLoad,
 	TEXT("Forces failing to load streamed chunks.\n")
 	TEXT("0: Not Enabled, 1: Enabled"),
+	ECVF_Default);
+
+static int32 MaxConcurrentStreamsCvar = 0;
+FAutoConsoleVariableRef CVarMaxConcurrentStreams(
+	TEXT("au.MaxConcurrentStreams"),
+	MaxConcurrentStreamsCvar,
+	TEXT("Overrides the max concurrent streams.\n")
+	TEXT("0: Not Overridden, >0 Overridden"),
 	ECVF_Default);
 
 
@@ -89,6 +98,11 @@ FStreamingWaveData::FStreamingWaveData()
 
 FStreamingWaveData::~FStreamingWaveData()
 {
+	check(IORequestHandle == nullptr);
+}
+
+void FStreamingWaveData::FreeResources()
+{
 	// Make sure there are no pending requests in flight.
 	for (int32 Pass = 0; Pass < 3; Pass++)
 	{
@@ -99,6 +113,7 @@ FStreamingWaveData::~FStreamingWaveData()
 		}
 		check(Pass < 2); // we should be done after two passes. Pass 0 will start anything we need and pass 1 will complete those requests
 	}
+
 	for (FLoadedAudioChunk& LoadedChunk : LoadedChunks)
 	{
 		FreeLoadedChunk(LoadedChunk);
@@ -507,8 +522,15 @@ void FAudioStreamingManager::ProcessPendingAsyncFileResults()
 		const int32 LoadedAudioChunkIndex = AudioChunkLoadResult->LoadedAudioChunkIndex;
 
 		check(AudioChunkLoadResult->StreamingWaveData != nullptr);
-		check(LoadedAudioChunkIndex != INDEX_NONE);
-		check(LoadedAudioChunkIndex < AudioChunkLoadResult->StreamingWaveData->LoadedChunks.Num());
+
+		if (LoadedAudioChunkIndex == INDEX_NONE || LoadedAudioChunkIndex >= AudioChunkLoadResult->StreamingWaveData->LoadedChunks.Num())
+		{
+			UE_LOG(LogAudio, Warning, TEXT("Loaded streaming chunk index %d is invalid. Current number of loaded chunks is: %d"), LoadedAudioChunkIndex, AudioChunkLoadResult->StreamingWaveData->LoadedChunks.Num());
+
+			delete AudioChunkLoadResult;
+			AudioChunkLoadResult = nullptr;
+			continue;
+		}
 
 		FLoadedAudioChunk* ChunkStorage = &AudioChunkLoadResult->StreamingWaveData->LoadedChunks[LoadedAudioChunkIndex];
 
@@ -573,6 +595,33 @@ void FAudioStreamingManager::UpdateResourceStreaming(float DeltaTime, bool bProc
 			}
 		}
 	}
+
+	for (ICompressedAudioInfo* Decoder : CompressedAudioInfos)
+	{
+		USoundWave* SoundWave = Decoder->GetStreamingSoundWave();
+		if (SoundWave)
+		{
+			FStreamingWaveData** WaveDataPtr = StreamingSoundWaves.Find(SoundWave);
+			if (WaveDataPtr && (*WaveDataPtr)->PendingChunkChangeRequestStatus.GetValue() == AudioState_ReadyFor_Requests)
+			{
+				FStreamingWaveData* WaveData = *WaveDataPtr;
+				// Request the chunk the source is using and the one after that
+				FWaveRequest& WaveRequest = GetWaveRequest(SoundWave);
+				int32 SourceChunk = Decoder->GetCurrentChunkIndex();
+				if (SourceChunk >= 0 && SourceChunk < SoundWave->RunningPlatformData->NumChunks)
+				{
+					WaveRequest.RequiredIndices.AddUnique(SourceChunk);
+					WaveRequest.RequiredIndices.AddUnique((SourceChunk + 1) % SoundWave->RunningPlatformData->NumChunks);
+					WaveRequest.bPrioritiseRequest = true;
+				}
+				else
+				{
+					UE_LOG(LogAudio, Log, TEXT("Invalid chunk request curIndex=%d numChunks=%d\n"), SourceChunk, SoundWave->RunningPlatformData->NumChunks);
+				}
+			}
+		}
+	}
+
 	for (auto Iter = WaveRequests.CreateIterator(); Iter; ++Iter)
 	{
 		USoundWave* Wave = Iter.Key();
@@ -682,9 +731,40 @@ void FAudioStreamingManager::RemoveStreamingSoundWave(USoundWave* SoundWave)
 	if (WaveData)
 	{
 		StreamingSoundWaves.Remove(SoundWave);
+
+		// Free the resources of the streaming wave data. This blocks pending IO requests
+		WaveData->FreeResources();
+
+		{
+			// Then we need to remove any results from those pending requests before we delete so that we don't process them
+			FScopeLock StreamChunkResults(&ChunkResultCriticalSection);
+			for (int32 i = AsyncAudioStreamChunkResults.Num() - 1 ; i >= 0; --i)
+			{
+				FASyncAudioChunkLoadResult* LoadResult = AsyncAudioStreamChunkResults[i];
+				FStreamingWaveData* StreamingWaveData = LoadResult->StreamingWaveData;
+				if (StreamingWaveData == WaveData)
+				{
+					delete LoadResult;
+					
+					AsyncAudioStreamChunkResults.RemoveAtSwap(i, 1, false);
+				}
+			}
+		}
 		delete WaveData;
 	}
 	WaveRequests.Remove(SoundWave);
+}
+
+void FAudioStreamingManager::AddDecoder(ICompressedAudioInfo* InCompressedAudioInfo)
+{
+	FScopeLock Lock(&CriticalSection);
+	CompressedAudioInfos.AddUnique(InCompressedAudioInfo);
+}
+
+void FAudioStreamingManager::RemoveDecoder(ICompressedAudioInfo* InCompressedAudioInfo)
+{
+	FScopeLock Lock(&CriticalSection);
+	CompressedAudioInfos.Remove(InCompressedAudioInfo);
 }
 
 bool FAudioStreamingManager::IsManagedStreamingSoundWave(const USoundWave* SoundWave) const
@@ -709,7 +789,11 @@ bool FAudioStreamingManager::CanCreateSoundSource(const FWaveInstance* WaveInsta
 	check(WaveInstance);
 	check(WaveInstance->IsStreaming());
 
-	int32 MaxStreams = GetDefault<UAudioSettings>()->MaximumConcurrentStreams;
+	int32 MaxStreams = MaxConcurrentStreamsCvar;
+	if (!MaxStreams)
+	{
+		MaxStreams = GetDefault<UAudioSettings>()->MaximumConcurrentStreams;
+	}
 
 	FScopeLock Lock(&CriticalSection);
 
@@ -743,7 +827,11 @@ void FAudioStreamingManager::AddStreamingSoundSource(FSoundSource* SoundSource)
 	const FWaveInstance* WaveInstance = SoundSource->GetWaveInstance();
 	if (WaveInstance && WaveInstance->IsStreaming())
 	{
-		int32 MaxStreams = GetDefault<UAudioSettings>()->MaximumConcurrentStreams;
+		int32 MaxStreams = MaxConcurrentStreamsCvar;
+		if (!MaxStreams)
+		{
+			MaxStreams = GetDefault<UAudioSettings>()->MaximumConcurrentStreams;
+		}
 
 		FScopeLock Lock(&CriticalSection);
 
@@ -805,11 +893,10 @@ const uint8* FAudioStreamingManager::GetLoadedChunk(const USoundWave* SoundWave,
 		return nullptr;
 	}
 
-	// Get a critical section lock, but don't block others. This avoids rare conditions of deadlocking in this streaming manager with UpdateStreamingResources.
-	// But allows us to make sure we can get the requested loaded chunk. Most of the time, this function is called in an async task.
-	while (!CriticalSection.TryLock())
+	// If we fail at getting the critical section here, early out. 
+	if (!CriticalSection.TryLock())
 	{
-		FPlatformProcess::Sleep(0.001f);
+		return nullptr;
 	}
 
 	const FStreamingWaveData* WaveData = StreamingSoundWaves.FindRef(SoundWave);

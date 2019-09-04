@@ -56,6 +56,17 @@ enum class ESlateDebuggingStateChangeEvent : uint8
 	MouseCaptureLost,
 };
 
+UENUM()
+enum class ESlateDebuggingNavigationMethod : uint8
+{
+	Unknown,
+	Explicit,
+	CustomDelegateBound,
+	CustomDelegateUnbound,
+	NextOrPrevious,
+	HitTestGrid
+};
+
 struct SLATECORE_API FSlateDebuggingInputEventArgs
 {
 public:
@@ -102,13 +113,20 @@ public:
 		const FNavigationEvent& InNavigationEvent,
 		const FNavigationReply& InNavigationReply,
 		const FWidgetPath& InNavigationSource,
-		const TSharedPtr<SWidget>& InDestinationWidget
+		const TSharedPtr<SWidget>& InDestinationWidget,
+		const ESlateDebuggingNavigationMethod InNavigationMethod
 	);
 
 	const FNavigationEvent& NavigationEvent;
 	const FNavigationReply& NavigationReply;
 	const FWidgetPath& NavigationSource;
 	const TSharedPtr<SWidget>& DestinationWidget;
+	const ESlateDebuggingNavigationMethod NavigationMethod;
+};
+
+struct SLATECORE_API FSlateDebuggingExecuteNavigationEventArgs
+{
+public:
 };
 
 struct SLATECORE_API FSlateDebuggingWarningEventArgs
@@ -127,10 +145,16 @@ struct SLATECORE_API FSlateDebuggingMouseCaptureEventArgs
 {
 public:
 	FSlateDebuggingMouseCaptureEventArgs(
+		bool InCaptured,
+		uint32 InUserIndex,
+		uint32 InPointerIndex,
 		const TSharedPtr<SWidget>& InCapturingWidget
 	);
 
-	const TSharedPtr<SWidget>& CapturingWidget;
+	bool Captured;
+	uint32 UserIndex;
+	uint32 PointerIndex;
+	const TSharedPtr<SWidget>& CaptureWidget;
 };
 
 
@@ -192,17 +216,24 @@ public:
 
 public:
 	/**  */
-	DECLARE_MULTICAST_DELEGATE_OneParam(FWidgetNavigationEvent, const FSlateDebuggingNavigationEventArgs& /*EventArgs*/);
-	static FWidgetNavigationEvent NavigationEvent;
+	DECLARE_MULTICAST_DELEGATE_OneParam(FWidgetAttemptNavigationEvent, const FSlateDebuggingNavigationEventArgs& /*EventArgs*/);
+	static FWidgetAttemptNavigationEvent AttemptNavigationEvent;
 
-	static void AttemptNavigation(const FNavigationEvent& InNavigationEvent, const FNavigationReply& InNavigationReply, const FWidgetPath& InNavigationSource, const TSharedPtr<SWidget>& InDestinationWidget);
+	static void BroadcastAttemptNavigation(const FNavigationEvent& InNavigationEvent, const FNavigationReply& InNavigationReply, const FWidgetPath& InNavigationSource, const TSharedPtr<SWidget>& InDestinationWidget, ESlateDebuggingNavigationMethod InNavigationMethod);
+
+	/**  */
+	DECLARE_MULTICAST_DELEGATE_OneParam(FWidgetExecuteNavigationEvent, const FSlateDebuggingExecuteNavigationEventArgs& /*EventArgs*/);
+	static FWidgetExecuteNavigationEvent ExecuteNavigationEvent;
+
+	static void BroadcastExecuteNavigation();
 
 public:
 	/**  */
 	DECLARE_MULTICAST_DELEGATE_OneParam(FWidgetMouseCaptureEvent, const FSlateDebuggingMouseCaptureEventArgs& /*EventArgs*/);
 	static FWidgetMouseCaptureEvent MouseCaptureEvent;
 
-	static void MouseCapture(const TSharedPtr<SWidget>& InCapturingWidget);
+	static void BroadcastMouseCapture(uint32 UserIndex, uint32 PointerIndex, const TSharedPtr<SWidget>& InCapturingWidget);
+	static void BroadcastMouseCaptureLost(uint32 UserIndex, uint32 PointerIndex, const TSharedPtr<SWidget>& InWidgetLostCapture);
 
 public:
 	/**  */

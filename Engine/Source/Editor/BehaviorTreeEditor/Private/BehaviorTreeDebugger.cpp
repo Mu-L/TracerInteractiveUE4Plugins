@@ -21,6 +21,7 @@
 #include "BehaviorTreeGraphNode_Service.h"
 #include "BehaviorTree/BehaviorTree.h"
 #include "BehaviorTreeDelegates.h"
+#include "Framework/Application/SlateApplication.h"
 
 FBehaviorTreeDebugger::FBehaviorTreeDebugger()
 {
@@ -738,13 +739,33 @@ void FBehaviorTreeDebugger::FindLockedDebugActor(UWorld* World)
 void FBehaviorTreeDebugger::FindMatchingTreeInstance()
 {
 	KnownInstances.Reset();
-	if (GEditor->PlayWorld == NULL)
+
+    // Find the world for the dedicated server if any, otherwise fallback to the PIE world
+	UWorld* PlayWorld = nullptr;
+	for (const FWorldContext& PieContext : GEditor->GetWorldContexts())
+	{
+		if (PieContext.WorldType == EWorldType::PIE && PieContext.World() != nullptr)
+		{
+			if (PieContext.RunAsDedicated)
+			{
+				PlayWorld = PieContext.World();
+				break;
+			}
+			else if(!PlayWorld)
+			{
+				PlayWorld = PieContext.World();
+				// Need to continue to see if their is a dedicated server.
+			}
+		}
+	}
+	 
+	if (PlayWorld == NULL)
 	{
 		return;
 	}
 
 	UBehaviorTreeComponent* MatchingComp = NULL;
-	for (FActorIterator It(GEditor->PlayWorld); It; ++It)
+	for (FActorIterator It(PlayWorld); It; ++It)
 	{
 		AActor* TestActor = *It;
 		UBehaviorTreeComponent* TestComp = TestActor ? TestActor->FindComponentByClass<UBehaviorTreeComponent>() : nullptr;
@@ -815,9 +836,31 @@ void FBehaviorTreeDebugger::StepForwardInto()
 #endif
 }
 
+void ForEachGameWorld(const TFunction<void(UWorld*)>& Func)
+{
+	for (const FWorldContext& PieContext : GUnrealEd->GetWorldContexts())
+	{
+		UWorld* PlayWorld = PieContext.World();
+		if (PlayWorld && PlayWorld->IsGameWorld())
+		{
+			Func(PlayWorld);
+		}
+	}
+}
+
+bool AreAllGameWorldPaused()
+{
+	bool bPaused = true;
+	ForEachGameWorld([&](UWorld* World)
+	{ 
+		bPaused = bPaused && World->bDebugPauseExecution; 
+	});
+	return bPaused;
+}
+
 bool FBehaviorTreeDebugger::CanStepForwardInto() const
 {
-	return GUnrealEd->PlayWorld && GUnrealEd->PlayWorld->bDebugPauseExecution && (StepForwardIntoIdx != INDEX_NONE);
+	return AreAllGameWorldPaused() && (StepForwardIntoIdx != INDEX_NONE);
 }
 
 void FBehaviorTreeDebugger::StepForwardOver()
@@ -829,7 +872,7 @@ void FBehaviorTreeDebugger::StepForwardOver()
 
 bool FBehaviorTreeDebugger::CanStepForwardOver() const
 {
-	return GUnrealEd->PlayWorld && GUnrealEd->PlayWorld->bDebugPauseExecution && (StepForwardOverIdx != INDEX_NONE);
+	return AreAllGameWorldPaused() && (StepForwardOverIdx != INDEX_NONE);
 }
 
 void FBehaviorTreeDebugger::StepOut()
@@ -841,7 +884,7 @@ void FBehaviorTreeDebugger::StepOut()
 
 bool FBehaviorTreeDebugger::CanStepOut() const
 {
-	return GUnrealEd->PlayWorld && GUnrealEd->PlayWorld->bDebugPauseExecution && (StepOutIdx != INDEX_NONE);
+	return AreAllGameWorldPaused() && (StepOutIdx != INDEX_NONE);
 }
 
 void FBehaviorTreeDebugger::StepBackInto()
@@ -853,7 +896,7 @@ void FBehaviorTreeDebugger::StepBackInto()
 
 bool FBehaviorTreeDebugger::CanStepBackInto() const
 {
-	return GUnrealEd->PlayWorld && GUnrealEd->PlayWorld->bDebugPauseExecution && (StepBackIntoIdx != INDEX_NONE);
+	return AreAllGameWorldPaused() && (StepBackIntoIdx != INDEX_NONE);
 }
 
 void FBehaviorTreeDebugger::StepBackOver()
@@ -865,7 +908,7 @@ void FBehaviorTreeDebugger::StepBackOver()
 
 bool FBehaviorTreeDebugger::CanStepBackOver() const
 {
-	return GUnrealEd->PlayWorld && GUnrealEd->PlayWorld->bDebugPauseExecution && (StepBackOverIdx != INDEX_NONE);
+	return AreAllGameWorldPaused() && (StepBackOverIdx != INDEX_NONE);
 }
 
 void FBehaviorTreeDebugger::UpdateCurrentStep(int32 PrevStepIdx, int32 NewStepIdx)
@@ -976,6 +1019,11 @@ void FBehaviorTreeDebugger::OnActiveNodeChanged(const TArray<uint16>& ActivePath
 
 	if (bShouldPause)
 	{
+		if (EditorOwner.IsValid())
+		{
+			EditorOwner.Pin()->FocusWindow(TreeAsset);
+		}
+
 		PausePlaySession();
 	}
 }
@@ -985,35 +1033,65 @@ void FBehaviorTreeDebugger::StopPlaySession()
 	if (GUnrealEd->PlayWorld)
 	{
 		GEditor->RequestEndPlayMap();
+ 
+		// @TODO: we need a unified flow to leave debugging mode from the different debuggers to prevent strong coupling between modules.
+		// Each debugger (Blueprint & BehaviorTree for now) could then take the appropriate actions to resume the session.
+  		if (FSlateApplication::Get().InKismetDebuggingMode())
+  		{
+  			FSlateApplication::Get().LeaveDebuggingMode();
+  		}
 	}
 }
 
 void FBehaviorTreeDebugger::PausePlaySession()
 {
-	if (GUnrealEd->PlayWorld && !GUnrealEd->PlayWorld->bDebugPauseExecution)
+	bool bPaused = false;
+	ForEachGameWorld([&](UWorld* World)
 	{
-		GUnrealEd->PlayWorld->bDebugPauseExecution = true;
+		if (!World->bDebugPauseExecution)
+		{
+			World->bDebugPauseExecution = true;
+			bPaused = true;
+		}
+	});
+	if (bPaused)
+	{
 		GUnrealEd->PlaySessionPaused();
 	}
 }
 
 void FBehaviorTreeDebugger::ResumePlaySession()
 {
-	if (GUnrealEd->PlayWorld && GUnrealEd->PlayWorld->bDebugPauseExecution)
+	bool bResumed = false;
+	ForEachGameWorld([&](UWorld* World)
 	{
-		GUnrealEd->PlayWorld->bDebugPauseExecution = false;
+		if (World->bDebugPauseExecution)
+		{
+			World->bDebugPauseExecution = false;
+			bResumed = true;
+		}
+	});
+	if(bResumed)
+	{
+		// @TODO: we need a unified flow to leave debugging mode from the different debuggers to prevent strong coupling between modules.
+		// Each debugger (Blueprint & BehaviorTree for now) could then take the appropriate actions to resume the session.
+		if (FSlateApplication::Get().InKismetDebuggingMode())
+		{
+			FSlateApplication::Get().LeaveDebuggingMode();
+		}
+
 		GUnrealEd->PlaySessionResumed();
 	}
 }
 
 bool FBehaviorTreeDebugger::IsPlaySessionPaused()
 {
-	return GUnrealEd->PlayWorld && GUnrealEd->PlayWorld->bDebugPauseExecution;
+	return AreAllGameWorldPaused();
 }
 
 bool FBehaviorTreeDebugger::IsPlaySessionRunning()
 {
-	return GUnrealEd->PlayWorld && !GUnrealEd->PlayWorld->bDebugPauseExecution;
+	return !AreAllGameWorldPaused();
 }
 
 bool FBehaviorTreeDebugger::IsPIESimulating()

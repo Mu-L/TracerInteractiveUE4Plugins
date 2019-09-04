@@ -31,15 +31,17 @@ public:
 	// SGraphNode interface
 	virtual TSharedRef<SWidget> CreateTitleWidget(TSharedPtr<SNodeTitle> NodeTitle) override;
 	virtual bool UseLowDetailNodeTitles() const override;
+	virtual void EndUserInteraction() const override;
 	virtual void AddPin( const TSharedRef<SGraphPin>& PinToAdd ) override;
 	virtual void SetDefaultTitleAreaWidget(TSharedRef<SOverlay> DefaultTitleAreaWidget) override
 	{
 		TitleAreaWidget = DefaultTitleAreaWidget;
 	}
+	virtual const FSlateBrush * GetNodeBodyBrush() const override;
 
 	virtual TSharedRef<SWidget> CreateNodeContentArea() override;
 	virtual TSharedPtr<SGraphPin> GetHoveredPin( const FGeometry& MyGeometry, const FPointerEvent& MouseEvent ) const override;
-
+	virtual void GetNodeInfoPopups(FNodeInfoContext* Context, TArray<FGraphInformationPopupInfo>& Popups) const override;
 private:
 	bool ParentUseLowDetailNodeTitles() const
 	{
@@ -47,6 +49,8 @@ private:
 	}
 
 	EVisibility GetTitleVisibility() const;
+
+	EVisibility GetExecutionTreeVisibility() const;
 
 	EVisibility GetInputTreeVisibility() const;
 
@@ -71,6 +75,9 @@ private:
 private:
 	/** Cached widget title area */
 	TSharedPtr<SOverlay> TitleAreaWidget;
+
+	/** Widget representing collapsible execution pins */
+	TSharedPtr<STreeView<TSharedRef<FControlRigField>>> ExecutionTree;
 
 	/** Widget representing collapsible input pins */
 	TSharedPtr<STreeView<TSharedRef<FControlRigField>>> InputTree;

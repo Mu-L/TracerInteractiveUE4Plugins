@@ -140,6 +140,7 @@ FArchive& operator<<(FArchive& Ar,FRawIndexBuffer16or32& I)
 
 FRawStaticIndexBuffer::FRawStaticIndexBuffer(bool InNeedsCPUAccess)
 	: IndexStorage(InNeedsCPUAccess)
+	, CachedNumIndices(-1)
 	, b32Bit(false)
 {
 }
@@ -168,6 +169,7 @@ void FRawStaticIndexBuffer::SetIndices(const TArray<uint32>& InIndices, EIndexBu
 	int32 IndexStride = bShouldUse32Bit ? sizeof(uint32) : sizeof(uint16);
 	IndexStorage.Empty(IndexStride * NumIndices);
 	IndexStorage.AddUninitialized(IndexStride * NumIndices);
+	CachedNumIndices = NumIndices;
 
 	// Store them!
 	if (bShouldUse32Bit)
@@ -197,6 +199,7 @@ void FRawStaticIndexBuffer::InsertIndices( const uint32 At, const uint32* Indice
 		const uint32 IndexStride = b32Bit ? sizeof( uint32 ) : sizeof( uint16 );
 
 		IndexStorage.InsertUninitialized( At * IndexStride, NumIndicesToAppend * IndexStride );
+		CachedNumIndices = IndexStorage.Num() / static_cast<int32>(IndexStride);
 		uint8* const DestIndices = &IndexStorage[ At * IndexStride ];
 
 		if( IndicesToAppend )
@@ -235,6 +238,7 @@ void FRawStaticIndexBuffer::RemoveIndicesAt( const uint32 At, const uint32 NumIn
 	{
 		const int32 IndexStride = b32Bit ? sizeof( uint32 ) : sizeof( uint16 );
 		IndexStorage.RemoveAt( At * IndexStride, NumIndicesToRemove * IndexStride );
+		CachedNumIndices = IndexStorage.Num() / IndexStride;
 	}
 }
 
@@ -277,17 +281,48 @@ FIndexArrayView FRawStaticIndexBuffer::GetArrayView() const
 	return FIndexArrayView(IndexStorage.GetData(),NumIndices,b32Bit);
 }
 
-void FRawStaticIndexBuffer::InitRHI()
+template <bool bRenderThread>
+FIndexBufferRHIRef FRawStaticIndexBuffer::CreateRHIBuffer_Internal()
 {
-	uint32 IndexStride = b32Bit ? sizeof(uint32) : sizeof(uint16);
-	uint32 SizeInBytes = IndexStorage.Num();
+	const uint32 IndexStride = b32Bit ? sizeof(uint32) : sizeof(uint16);
+	const uint32 SizeInBytes = IndexStorage.Num();
 
-	if (SizeInBytes > 0)
+	if (GetNumIndices() > 0)
 	{
+		// When bAllowCPUAccess is true, the meshes is likely going to be used for Niagara to spawn particles on mesh surface.
+		// And it can be the case for CPU *and* GPU access: no differenciation today. That is why we create a SRV in this case.
+		// This also avoid setting lots of states on all the members of all the different buffers used by meshes. Follow up: https://jira.it.epicgames.net/browse/UE-69376.
+		bool bSRV = IndexStorage.GetAllowCPUAccess();
+		uint32 BufferFlags = BUF_Static | (bSRV ? BUF_ShaderResource : BUF_None);
+
 		// Create the index buffer.
 		FRHIResourceCreateInfo CreateInfo(&IndexStorage);
-		IndexBufferRHI = RHICreateIndexBuffer(IndexStride,SizeInBytes,BUF_Static,CreateInfo);
-	}    
+		CreateInfo.bWithoutNativeResource = !SizeInBytes;
+		if (bRenderThread)
+		{
+			return RHICreateIndexBuffer(IndexStride, SizeInBytes, BufferFlags, CreateInfo);
+		}
+		else
+		{
+			return RHIAsyncCreateIndexBuffer(IndexStride, SizeInBytes, BufferFlags, CreateInfo);
+		}
+	}
+	return nullptr;
+}
+
+FIndexBufferRHIRef FRawStaticIndexBuffer::CreateRHIBuffer_RenderThread()
+{
+	return CreateRHIBuffer_Internal<true>();
+}
+
+FIndexBufferRHIRef FRawStaticIndexBuffer::CreateRHIBuffer_Async()
+{
+	return CreateRHIBuffer_Internal<false>();
+}
+
+void FRawStaticIndexBuffer::InitRHI()
+{
+	IndexBufferRHI = CreateRHIBuffer_RenderThread();
 }
 
 void FRawStaticIndexBuffer::Serialize(FArchive& Ar, bool bNeedsCPUAccess)
@@ -311,12 +346,19 @@ void FRawStaticIndexBuffer::Serialize(FArchive& Ar, bool bNeedsCPUAccess)
 		Ar << b32Bit;
 		IndexStorage.BulkSerialize(Ar);
 	}
+	CachedNumIndices = IndexStorage.Num() / (b32Bit ? 4 : 2);
+}
+
+void FRawStaticIndexBuffer::SerializeMetaData(FArchive& Ar)
+{
+	Ar << CachedNumIndices << b32Bit;
 }
 
 void FRawStaticIndexBuffer::Discard()
 {
     IndexStorage.SetAllowCPUAccess(false);
     IndexStorage.Discard();
+	CachedNumIndices = IndexStorage.Num() / (b32Bit ? 4 : 2);
 }
 
 /*-----------------------------------------------------------------------------

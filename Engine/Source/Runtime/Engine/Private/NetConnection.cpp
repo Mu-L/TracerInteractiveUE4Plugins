@@ -34,6 +34,7 @@
 #include "UObject/ObjectKey.h"
 #include "UObject/UObjectIterator.h"
 #include "Net/NetworkGranularMemoryLogging.h"
+#include "SocketSubsystem.h"
 
 static TAutoConsoleVariable<int32> CVarPingExcludeFrameTime( TEXT( "net.PingExcludeFrameTime" ), 0, TEXT( "Calculate RTT time between NIC's of server and client." ) );
 
@@ -50,6 +51,16 @@ static TAutoConsoleVariable<int32> CVarMaxChannelSize(TEXT("net.MaxChannelSize")
 #if !UE_BUILD_SHIPPING
 static TAutoConsoleVariable<int32> CVarForceNetFlush(TEXT("net.ForceNetFlush"), 0, TEXT("Immediately flush send buffer when written to (helps trace packet writes - WARNING: May be unstable)."));
 #endif
+
+static TAutoConsoleVariable<int32> CVarNetDoPacketOrderCorrection(TEXT("net.DoPacketOrderCorrection"), 0, TEXT("Whether or not to try to fix 'out of order' packet sequences, by caching packets and waiting for the missing sequence."));
+
+static TAutoConsoleVariable<int32> CVarNetPacketOrderCorrectionEnableThreshold(TEXT("net.PacketOrderCorrectionEnableThreshold"), 1, TEXT("The number of 'out of order' packet sequences that need to occur, before correction is enabled."));
+
+static TAutoConsoleVariable<int32> CVarNetPacketOrderMaxMissingPackets(TEXT("net.PacketOrderMaxMissingPackets"), 3, TEXT("The maximum number of missed packet sequences that is allowed, before treating missing packets as lost."));
+
+static TAutoConsoleVariable<int32> CVarNetPacketOrderMaxCachedPackets(TEXT("net.PacketOrderMaxCachedPackets"), 32, TEXT("(NOTE: Must be power of 2!) The maximum number of packets to cache while waiting for missing packet sequences, before treating missing packets as lost."));
+
+TAutoConsoleVariable<int32> CVarNetEnableDetailedScopeCounters(TEXT("net.EnableDetailedScopeCounters"), 1, TEXT("Enables detailed networking scope cycle counters. There are often lots of these which can negatively impact performance."));
 
 extern int32 GNetDormancyValidate;
 
@@ -97,6 +108,7 @@ UNetConnection::UNetConnection(const FObjectInitializer& ObjectInitializer)
 ,   OwningActor			( nullptr )
 ,	MaxPacket			( 0 )
 ,	InternalAck			( false )
+,	RemoteAddr			( nullptr )
 ,	MaxPacketHandlerBits ( 0 )
 ,	State				( USOCK_Invalid )
 ,	Handler()
@@ -106,6 +118,7 @@ UNetConnection::UNetConnection(const FObjectInitializer& ObjectInitializer)
 
 ,	QueuedBits			( 0 )
 ,	TickCount			( 0 )
+,	LastProcessedFrame	( 0 )
 ,	ConnectTime			( 0.0 )
 
 ,	AllowMerge			( false )
@@ -151,29 +164,48 @@ UNetConnection::UNetConnection(const FObjectInitializer& ObjectInitializer)
 ,	InitInReliable		( 0 )
 ,	EngineNetworkProtocolVersion( FNetworkVersion::GetEngineNetworkProtocolVersion() )
 ,	GameNetworkProtocolVersion( FNetworkVersion::GetGameNetworkProtocolVersion() )
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
 ,	bResendAllDataSinceOpen( false )
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
+,	ResendAllDataState( EResendAllDataState::None )
 #if !UE_BUILD_SHIPPING
 ,	ReceivedRawPacketDel()
 #endif
 ,	PlayerOnlinePlatformName( NAME_None )
 ,	ClientWorldPackageName( NAME_None )
 ,	LastNotifiedPacketId( -1 )
+,	OutTotalNotifiedPackets(0)
 ,	HasDirtyAcks(0u)
 ,	bHasWarnedAboutChannelLimit(false)
+,	bConnectionPendingCloseDueToSocketSendFailure(false)
+,	TotalOutOfOrderPackets(0)
+,	PacketOrderCache()
+,	PacketOrderCacheStartIdx(0)
+,	PacketOrderCacheCount(0)
+,	bFlushingPacketOrderCache(false)
 {
+	// This isn't ideal, because it won't capture memory derived classes are creating dynamically.
+	// The allocations could *probably* be moved somewhere else (like InitBase), but that
+	// causes failure to connect for some reason, and for now this is easier.
+	LLM_SCOPE(ELLMTag::Networking);
+
 	MaxChannelSize = CVarMaxChannelSize.GetValueOnAnyThread();
 	if (MaxChannelSize <= 0)
 	{
 		UE_LOG(LogNet, Warning, TEXT("CVarMaxChannelSize of %d is less than or equal to 0, using the default number of channels."), MaxChannelSize);
 		MaxChannelSize = DEFAULT_MAX_CHANNEL_SIZE;
 	}
+	
+	
+	if (!HasAnyFlags(EObjectFlags::RF_ClassDefaultObject | EObjectFlags::RF_ArchetypeObject))
+	{
+		Channels.AddDefaulted(MaxChannelSize);
+		OutReliable.AddDefaulted(MaxChannelSize);
+		InReliable.AddDefaulted(MaxChannelSize);
+		PendingOutRec.AddDefaulted(MaxChannelSize);
 
-	Channels.AddDefaulted(MaxChannelSize);
-	OutReliable.AddDefaulted(MaxChannelSize);
-	InReliable.AddDefaulted(MaxChannelSize);
-	PendingOutRec.AddDefaulted(MaxChannelSize);
-
-	PacketNotify.Init(InPacketId, OutPacketId);
+		PacketNotify.Init(InPacketId, OutPacketId);
+	}	
 }
 
 /**
@@ -320,6 +352,11 @@ void UNetConnection::InitHandler()
 		{
 			Handler::Mode Mode = Driver->ServerConnection != nullptr ? Handler::Mode::Client : Handler::Mode::Server;
 
+			PRAGMA_DISABLE_DEPRECATION_WARNINGS
+			Handler->InitializeAddressSerializer([this](const FString& InAddress){
+				return Driver->GetSocketSubsystem()->GetAddressFromString(InAddress);
+			});
+			PRAGMA_ENABLE_DEPRECATION_WARNINGS
 			Handler->InitializeDelegates(FPacketHandlerLowLevelSendTraits::CreateUObject(this, &UNetConnection::LowLevelSend));
 			Handler->NotifyAnalyticsProvider(Driver->AnalyticsProvider, Driver->AnalyticsAggregator);
 			Handler->Initialize(Mode, MaxPacket * 8, false, nullptr, nullptr, Driver->NetDriverName);
@@ -498,7 +535,6 @@ void UNetConnection::Serialize( FArchive& Ar )
 	{
 		// TODO: We don't currently track:
 		//		StatelessConnectComponents
-		//		PacketHandlers
 		//		AnalyticsVars
 		//		AnalyticsData
 		//		Histogram data.
@@ -509,8 +545,11 @@ void UNetConnection::Serialize( FArchive& Ar )
 		GRANULAR_NETWORK_MEMORY_TRACKING_TRACK("Challenge", Challenge.CountBytes(Ar));
 		GRANULAR_NETWORK_MEMORY_TRACKING_TRACK("ClientResponse", ClientResponse.CountBytes(Ar));
 		GRANULAR_NETWORK_MEMORY_TRACKING_TRACK("RequestURL", RequestURL.CountBytes(Ar));
+
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
 		GRANULAR_NETWORK_MEMORY_TRACKING_TRACK("CDKeyHash", CDKeyHash.CountBytes(Ar));
 		GRANULAR_NETWORK_MEMORY_TRACKING_TRACK("CDKeyResponse", CDKeyResponse.CountBytes(Ar));
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
 
 		GRANULAR_NETWORK_MEMORY_TRACKING_TRACK("SendBuffer", SendBuffer.CountMemory(Ar));
 
@@ -554,6 +593,14 @@ void UNetConnection::Serialize( FArchive& Ar )
 
 		GRANULAR_NETWORK_MEMORY_TRACKING_TRACK("LastOut", LastOut.CountMemory(Ar));
 		GRANULAR_NETWORK_MEMORY_TRACKING_TRACK("SendBunchHeader", SendBunchHeader.CountMemory(Ar));
+
+		GRANULAR_NETWORK_MEMORY_TRACKING_TRACK("PacketHandler",
+			if (Handler.IsValid())
+			{
+				// PacketHandler already counts its size.
+				Handler->CountBytes(Ar);
+			}
+		);
 
 #if DO_ENABLE_NET_TEST
 		GRANULAR_NETWORK_MEMORY_TRACKING_TRACK("Delayed",
@@ -624,7 +671,7 @@ void UNetConnection::CleanUp()
 
 	Close();
 
-	if (Driver != NULL)
+	if (Driver != nullptr)
 	{
 		// Remove from driver.
 		if (Driver->ServerConnection)
@@ -798,9 +845,6 @@ void UNetConnection::AssertValid()
 	// Make sure this connection is in a reasonable state.
 	check(State==USOCK_Closed || State==USOCK_Pending || State==USOCK_Open);
 
-}
-void UNetConnection::SendPackageMap()
-{
 }
 
 bool UNetConnection::ClientHasInitializedLevelFor(const AActor* TestActor) const
@@ -1107,6 +1151,9 @@ void UNetConnection::ReceivedRawPacket( void* InData, int32 Count )
 			if (Reader.GetBitsLeft() > 0)
 			{
 				ReceivedPacket(Reader);
+
+				// Check if the out of order packet cache needs flushing
+				FlushPacketOrderCache();
 			}
 		}
 		// MalformedPacket - Received a packet with 0's in the last byte
@@ -1119,6 +1166,48 @@ void UNetConnection::ReceivedRawPacket( void* InData, int32 Count )
 	else 
 	{
 		CLOSE_CONNECTION_DUE_TO_SECURITY_VIOLATION(this, ESecurityEvent::Malformed_Packet, TEXT("Received zero-size packet"));
+	}
+}
+
+void UNetConnection::FlushPacketOrderCache(bool bFlushWholeCache/*=false*/)
+{
+	if (PacketOrderCache.IsSet() && PacketOrderCacheCount > 0)
+	{
+		TCircularBuffer<TUniquePtr<FBitReader>>& Cache = PacketOrderCache.GetValue();
+		int32 CacheEndIdx = PacketOrderCache->GetPreviousIndex(PacketOrderCacheStartIdx);
+		bool bEndOfCacheSet = Cache[CacheEndIdx].IsValid();
+
+		bFlushingPacketOrderCache = true;
+
+		// If the end of the cache has had its value set, this forces the flushing of the whole cache, no matter how many missing sequences there are.
+		// The reason for this (other than making space in the cache), is that when we receive a sequence that is out of range of the cache,
+		// it is stored at the end, and so the cache index no longer lines up with the sequence number - which it needs to.
+		bFlushWholeCache = bFlushWholeCache || bEndOfCacheSet;
+
+		while (PacketOrderCacheCount > 0)
+		{
+			TUniquePtr<FBitReader>& CurCachePacket = Cache[PacketOrderCacheStartIdx];
+
+			if (CurCachePacket.IsValid())
+			{
+				UE_LOG(LogNet, VeryVerbose, TEXT("'Out of Order' Packet Cache, replaying packet with cache index: %i (bFlushWholeCache: %i)"), PacketOrderCacheStartIdx, (int32)bFlushWholeCache);
+
+				ReceivedPacket(*CurCachePacket.Get());
+
+				CurCachePacket.Reset();
+
+				PacketOrderCacheCount--;
+			}
+			// Advance the cache only up to the first missing packet, unless flushing the whole cache
+			else if (!bFlushWholeCache)
+			{
+				break;
+			}
+
+			PacketOrderCacheStartIdx = PacketOrderCache->GetNextIndex(PacketOrderCacheStartIdx);
+		}
+
+		bFlushingPacketOrderCache = false;
 	}
 }
 
@@ -1522,6 +1611,34 @@ bool UNetConnection::ReadPacketInfo(FBitReader& Reader)
 	return true;
 }
 
+FNetworkGUID UNetConnection::GetActorGUIDFromOpenBunch(FInBunch& Bunch)
+{
+	// NOTE: This could break if this is a PartialBunch and the ActorGUID wasn't serialized.
+	//			Seems unlikely given the aggressive Flushing + increased MTU on InternalAck.
+
+	// Any GUIDs / Exports will have been read already for InternalAck connections,
+	// but we may have to skip over must-be-mapped GUIDs before we can read the actor GUID.
+
+	if (Bunch.bHasMustBeMappedGUIDs)
+	{
+		uint16 NumMustBeMappedGUIDs = 0;
+		Bunch << NumMustBeMappedGUIDs;
+
+		for (int32 i = 0; i < NumMustBeMappedGUIDs; i++)
+		{
+			FNetworkGUID NetGUID;
+			Bunch << NetGUID;
+		}
+	}
+
+	NET_CHECKSUM( Bunch );
+
+	FNetworkGUID ActorGUID;
+	Bunch << ActorGUID;
+
+	return ActorGUID;
+}
+
 void UNetConnection::ReceivedPacket( FBitReader& Reader )
 {
 	SCOPED_NAMED_EVENT(UNetConnection_ReceivedPacket, FColor::Green);
@@ -1533,6 +1650,9 @@ void UNetConnection::ReceivedPacket( FBitReader& Reader )
 		ensureMsgf(false, TEXT("Packet too small") );
 		return;
 	}
+
+
+	FBitReaderMark ResetReaderMark(Reader);
 
 	ValidateSendBuffer();
 
@@ -1558,11 +1678,102 @@ void UNetConnection::ReceivedPacket( FBitReader& Reader )
 			return;
 		}
 
+
+		bool bPacketOrderCacheActive = !bFlushingPacketOrderCache && PacketOrderCache.IsSet();
+		bool bCheckForMissingSequence = bPacketOrderCacheActive && PacketOrderCacheCount == 0;
+		bool bFillingPacketOrderCache = bPacketOrderCacheActive && PacketOrderCacheCount > 0;
+		int32 MaxMissingPackets = (bCheckForMissingSequence ? CVarNetPacketOrderMaxMissingPackets.GetValueOnAnyThread() : 0);
+		int32 PacketSequenceDelta = PacketNotify.GetSequenceDelta(Header);
+
+		if (PacketSequenceDelta > 0)
+		{
+			const int32 MissingPacketCount = PacketSequenceDelta - 1;
+
+			// Cache the packet if we are already caching, and begin caching if we just encountered a missing sequence, within range
+			if (bFillingPacketOrderCache || (bCheckForMissingSequence && MissingPacketCount > 0 && MissingPacketCount <= MaxMissingPackets))
+			{
+				int32 LinearCacheIdx = PacketSequenceDelta - 1;
+				int32 CacheCapacity = PacketOrderCache->Capacity();
+				bool bLastCacheEntry = LinearCacheIdx >= (CacheCapacity - 1);
+
+				// The last cache entry is only set, when we've reached capacity or when we receive a sequence which is out of bounds of the cache
+				LinearCacheIdx = bLastCacheEntry ? (CacheCapacity - 1) : LinearCacheIdx;
+
+				int32 CiruclarCacheIdx = PacketOrderCacheStartIdx;
+
+				for (int32 LinearDec=LinearCacheIdx; LinearDec > 0; LinearDec--)
+				{
+					CiruclarCacheIdx = PacketOrderCache->GetNextIndex(CiruclarCacheIdx);
+				}
+
+				TUniquePtr<FBitReader>& CurCachePacket = PacketOrderCache.GetValue()[CiruclarCacheIdx];
+
+				// Reset the reader to its initial position, and cache the packet
+				if (!CurCachePacket.IsValid())
+				{
+					UE_LOG(LogNet, VeryVerbose, TEXT("'Out of Order' Packet Cache, caching sequence order '%i' (capacity: %i)"), LinearCacheIdx, CacheCapacity);
+
+					CurCachePacket = MakeUnique<FBitReader>(Reader);
+					PacketOrderCacheCount++;
+
+					ResetReaderMark.Pop(*CurCachePacket);
+				}
+				else
+				{
+					TotalOutOfOrderPackets++;
+					Driver->InOutOfOrderPackets++;
+				}
+
+				return;
+			}
+
+
+			if (MissingPacketCount > 10)
+			{
+				UE_LOG(LogNetTraffic, Verbose, TEXT("High single frame packet loss. PacketsLost: %i %s" ), MissingPacketCount, *Describe());
+			}
+
+			InPacketsLost += MissingPacketCount;
+			InTotalPacketsLost += MissingPacketCount;
+			Driver->InPacketsLost += MissingPacketCount;
+			Driver->InTotalPacketsLost += MissingPacketCount;
+			InPacketId += PacketSequenceDelta;
+		}
+		else
+		{
+			TotalOutOfOrderPackets++;
+			Driver->InOutOfOrderPackets++;
+
+			if (!PacketOrderCache.IsSet() && CVarNetDoPacketOrderCorrection.GetValueOnAnyThread() != 0)
+			{
+				int32 EnableThreshold = CVarNetPacketOrderCorrectionEnableThreshold.GetValueOnAnyThread();
+
+				if (TotalOutOfOrderPackets >= EnableThreshold)
+				{
+					UE_LOG(LogNet, Verbose, TEXT("Hit threshold of %i 'out of order' packet sequences. Enabling out of order packet correction."), EnableThreshold);
+
+					int32 CacheSize = FMath::RoundUpToPowerOfTwo(CVarNetPacketOrderMaxCachedPackets.GetValueOnAnyThread());
+
+					PacketOrderCache.Emplace(CacheSize);
+				}
+			}
+
+			// Protect against replay attacks
+			// We already protect against this for reliable bunches, and unreliable properties
+			// The only bunch we would process would be unreliable RPC's, which could allow for replay attacks
+			// So rather than add individual protection for unreliable RPC's as well, just kill it at the source, 
+			// which protects everything in one fell swoop
+			return;
+		}
+
+
 		// Lambda to dispatch delivery notifications, 
 		auto HandlePacketNotification = [&Header, this](FNetPacketNotify::SequenceNumberT AckedSequence, bool bDelivered)
 		{
 			// Increase LastNotifiedPacketId, this is a full packet Id
 			++LastNotifiedPacketId;
+			++OutTotalNotifiedPackets;
+			Driver->IncreaseOutTotalNotifiedPackets();
 
 			// Sanity check
 			if (FNetPacketNotify::SequenceNumberT(LastNotifiedPacketId) != AckedSequence)
@@ -1583,40 +1794,16 @@ void UNetConnection::ReceivedPacket( FBitReader& Reader )
 
 		// Update incoming sequence data and deliver packet notifications
 		// Packet is only accepted if both the incoming sequence number and incoming ack data are valid
-		int PacketSequenceDelta = PacketNotify.Update(Header, HandlePacketNotification);
-		if (PacketSequenceDelta > 0)
-		{
-			const int32 PacketsLost = PacketSequenceDelta - 1;
-		
-			if ( PacketsLost > 10 )
-			{
-				UE_LOG( LogNetTraffic, Verbose, TEXT( "High single frame packet loss. PacketsLost: %i %s" ), PacketsLost, *Describe() );
-			}
+		PacketNotify.Update(Header, HandlePacketNotification);
 
-			InPacketsLost += PacketsLost;
-			InTotalPacketsLost += PacketsLost;
-			Driver->InPacketsLost += PacketsLost;
-			Driver->InTotalPacketsLost += PacketsLost;
-			InPacketId += PacketSequenceDelta;
-
-			// Extra information associated with the header
-			if (!ReadPacketInfo(Reader))
-			{
-				CLOSE_CONNECTION_DUE_TO_SECURITY_VIOLATION(this, ESecurityEvent::Malformed_Packet, TEXT("Failed to read PacketHeader"));
-				return;
-			}
-		}
-		else
+		// Extra information associated with the header (read only after acks have been processed)
+		if (PacketSequenceDelta > 0 && !ReadPacketInfo(Reader))
 		{
-			Driver->InOutOfOrderPackets++;
-			// Protect against replay attacks
-			// We already protect against this for reliable bunches, and unreliable properties
-			// The only bunch we would process would be unreliable RPC's, which could allow for replay attacks
-			// So rather than add individual protection for unreliable RPC's as well, just kill it at the source, 
-			// which protects everything in one fell swoop
+			CLOSE_CONNECTION_DUE_TO_SECURITY_VIOLATION(this, ESecurityEvent::Malformed_Packet, TEXT("Failed to read PacketHeader"));
 			return;
 		}
 	}
+
 
 	const bool bIgnoreRPCs = Driver->ShouldIgnoreRPCs();
 
@@ -1873,28 +2060,16 @@ PRAGMA_ENABLE_DEPRECATION_WARNINGS
 
 				if (bNewlyOpenedActorChannel)
 				{
-					// NOTE: This could break if this is a PartialBunch and the ActorGUID wasn't serialized.
-					//			Seems unlikely given the aggressive Flushing + increased MTU on InternalAck.
+					FNetworkGUID ActorGUID = GetActorGUIDFromOpenBunch(Bunch);
 
-					// Any GUIDs / Exports will have been read already for InternalAck connections,
-					// but we may have to skip over must-be-mapped GUIDs before we can read the actor GUID.
-
-					if (Bunch.bHasMustBeMappedGUIDs)
+					if (!Bunch.IsError())
 					{
-						uint16 NumMustBeMappedGUIDs = 0;
-						Bunch << NumMustBeMappedGUIDs;
-
-						for (int32 i = 0; i < NumMustBeMappedGUIDs; i++)
-						{
-							FNetworkGUID NetGUID;
-							Bunch << NetGUID;
-						}
+						IgnoringChannels.Add(Bunch.ChIndex, ActorGUID);
 					}
-
-					FNetworkGUID ActorGUID;
-					Bunch << ActorGUID;
-
-					IgnoringChannels.Add(Bunch.ChIndex, ActorGUID);
+					else
+					{
+						UE_LOG(LogNetTraffic, Error, TEXT("UNetConnection::ReceivedPacket: Unable to read actor GUID for ignored bunch. (Channel %d)"), Bunch.ChIndex);
+					}
 				}
 
 				if (IgnoringChannels.Contains(Bunch.ChIndex))
@@ -1916,6 +2091,8 @@ PRAGMA_ENABLE_DEPRECATION_WARNINGS
 							}
 						}
 					}
+
+					UE_LOG(LogNetTraffic, Log, TEXT("Ignoring bunch for already open channel: %i"), Bunch.ChIndex);
 					continue;
 				}
 			}
@@ -1973,6 +2150,54 @@ PRAGMA_ENABLE_DEPRECATION_WARNINGS
 					// Unknown type.
 					CLOSE_CONNECTION_DUE_TO_SECURITY_VIOLATION(this, ESecurityEvent::Invalid_Data, TEXT( "UNetConnection::ReceivedPacket: Connection unknown channel type (%s)" ), *Bunch.ChName.ToString());
 					return;
+				}
+
+				// Ignore incoming data on channel types that the client are not allowed to create. This can occur if we have in-flight data when server is closing a channel
+				if ( Driver->IsServer() && (Driver->ChannelDefinitionMap[Bunch.ChName].bClientOpen == false) )
+				{
+					UE_LOG(LogNetTraffic, Warning, TEXT("      Ignoring Bunch Create received from client since only server is allowed to create this type of channel: Bunch  %i: ChName %s, ChSequence: %i, bReliable: %i, bPartial: %i, bPartialInitial: %i, bPartialFinal: %i"), Bunch.ChIndex, *Bunch.ChName.ToString(), Bunch.ChSequence, (int)Bunch.bReliable, (int)Bunch.bPartial, (int)Bunch.bPartialInitial, (int)Bunch.bPartialFinal );
+					RejectedChans.AddUnique(Bunch.ChIndex);
+					continue;
+				}
+
+				// peek for guid
+				if (InternalAck && bIgnoreActorBunches)
+				{
+					if (Bunch.bOpen && (!Bunch.bPartial || Bunch.bPartialInitial) && (Bunch.ChName == NAME_Actor))
+					{
+						FBitReaderMark Mark(Bunch);
+						FNetworkGUID ActorGUID = GetActorGUIDFromOpenBunch(Bunch);
+						Mark.Pop(Bunch);
+
+						if (ActorGUID.IsValid() && !ActorGUID.IsDefault())
+						{
+							if (IgnoredBunchGuids.Contains(ActorGUID))
+							{
+								UE_LOG(LogNetTraffic, Verbose, TEXT("Adding Channel: %i to ignore list, ignoring guid: %s"), Bunch.ChIndex, *ActorGUID.ToString());
+								IgnoredBunchChannels.Add(Bunch.ChIndex);
+								continue;
+							}
+							else
+							{
+								if (IgnoredBunchChannels.Remove(Bunch.ChIndex))
+								{
+									UE_LOG(LogNetTraffic, Verbose, TEXT("Removing Channel: %i from ignore list, got new guid: %s"), Bunch.ChIndex, *ActorGUID.ToString());
+								}
+							}
+						}
+						else
+						{
+							UE_LOG(LogNetTraffic, Warning, TEXT("Open bunch with invalid actor guid, Channel: %i"), Bunch.ChIndex);
+						}
+					}
+					else
+					{
+						if (IgnoredBunchChannels.Contains(Bunch.ChIndex))
+						{
+							UE_LOG(LogNetTraffic, Verbose, TEXT("Ignoring bunch on channel: %i"), Bunch.ChIndex);
+							continue;
+						}
+					}
 				}
 
 				// Reliable (either open or later), so create new channel.
@@ -2075,6 +2300,20 @@ void UNetConnection::SetIgnoreAlreadyOpenedChannels(bool bInIgnoreAlreadyOpenedC
 	check(InternalAck);
 	bIgnoreAlreadyOpenedChannels = bInIgnoreAlreadyOpenedChannels;
 	IgnoringChannels.Reset();
+}
+
+void UNetConnection::SetIgnoreActorBunches(bool bInIgnoreActorBunches, TSet<FNetworkGUID>&& InIgnoredBunchGuids)
+{
+	check(InternalAck);
+	bIgnoreActorBunches = bInIgnoreActorBunches;
+
+	IgnoredBunchChannels.Empty();
+	InIgnoredBunchGuids.Empty();
+
+	if (bIgnoreActorBunches)
+	{
+		IgnoredBunchGuids = MoveTemp(InIgnoredBunchGuids);
+	}
 }
 
 int32 UNetConnection::WriteBitsToSendBuffer( 
@@ -2465,6 +2704,18 @@ void UNetConnection::Tick()
 	}
 
 	FrameTime = CurrentRealtimeSeconds - LastTime;
+	const int32 MaxNetTickRate = Driver->MaxNetTickRate;
+	const float MaxNetTickRateFloat = MaxNetTickRate > 0 ? float(MaxNetTickRate) : FLT_MAX;
+	const float DesiredTickRate = FMath::Clamp(GEngine->GetMaxTickRate(0.0f, false), 0.0f, MaxNetTickRateFloat);
+	if (!InternalAck && MaxNetTickRate > 0 && DesiredTickRate > 0.0f)
+	{
+		const float MinNetFrameTime = 1.0f/DesiredTickRate;
+		if (FrameTime < MinNetFrameTime)
+		{
+			return;
+		}
+	}
+
 	LastTime = CurrentRealtimeSeconds;
 	CumulativeTime += FrameTime;
 	CountedFrames++;
@@ -2535,6 +2786,15 @@ void UNetConnection::Tick()
 		OutBytes = 0;
 		InPackets = 0;
 		OutPackets = 0;
+	}
+
+	if (bConnectionPendingCloseDueToSocketSendFailure)
+	{
+		Close();
+		bConnectionPendingCloseDueToSocketSendFailure = false;
+
+		// early out
+		return;
 	}
 
 	// Compute time passed since last update.
@@ -2721,9 +2981,10 @@ void UNetConnection::Tick()
 	// Update queued byte count.
 	// this should be at the end so that the cap is applied *after* sending (and adjusting QueuedBytes for) any remaining data for this tick
 
+	SaturationAnalytics.TrackFrame(!IsNetReady(false));
+
 	// Clamp DeltaTime for bandwidth limiting so that if there is a hitch, we don't try to send
 	// a large burst on the next frame, which can cause another hitch if a lot of additional replication occurs.
-	const float DesiredTickRate = GEngine->GetMaxTickRate(0.0f, false);
 	float BandwidthDeltaTime = DeltaTime;
 	if (DesiredTickRate != 0.0f)
 	{
@@ -3214,6 +3475,66 @@ void UNetConnection::CleanupStaleDormantReplicators()
 			It.RemoveCurrent();
 		}
 	}
+}
+
+
+void UNetConnection::SetPendingCloseDueToSocketSendFailure()
+{
+	bConnectionPendingCloseDueToSocketSendFailure = true;
+}
+
+void UNetConnection::ConsumeQueuedActorDelinquencyAnalytics(FNetQueuedActorDelinquencyAnalytics& Out)
+{
+	if (UPackageMapClient* PackageMapClient = Cast<UPackageMapClient>(PackageMap))
+	{
+		return PackageMapClient->ConsumeQueuedActorDelinquencyAnalytics(Out);
+	}
+	else
+	{
+		Out.Reset();
+	}
+}
+
+const FNetQueuedActorDelinquencyAnalytics& UNetConnection::GetQueuedActorDelinquencyAnalytics() const
+{
+	static FNetQueuedActorDelinquencyAnalytics Empty;
+
+	if (UPackageMapClient const * const PackageMapClient = Cast<UPackageMapClient>(PackageMap))
+	{
+		return PackageMapClient->GetQueuedActorDelinquencyAnalytics();
+	}
+	
+	return Empty;
+}
+
+void UNetConnection::ResetQueuedActorDelinquencyAnalytics()
+{
+	if (UPackageMapClient* PackageMapClient = Cast<UPackageMapClient>(PackageMap))
+	{
+		PackageMapClient->ResetQueuedActorDelinquencyAnalytics();
+	}
+}
+
+void UNetConnection::ConsumeSaturationAnalytics(FNetConnectionSaturationAnalytics& Out)
+{
+	Out = MoveTemp(SaturationAnalytics);
+	SaturationAnalytics.Reset();
+}
+
+const FNetConnectionSaturationAnalytics& UNetConnection::GetSaturationAnalytics() const
+{
+	return SaturationAnalytics;
+}
+
+void UNetConnection::ResetSaturationAnalytics()
+{
+	SaturationAnalytics.Reset();
+}
+
+void UNetConnection::TrackReplicationForAnalytics(const bool bWasSaturated)
+{
+	++TickCount;
+	SaturationAnalytics.TrackReplication(bWasSaturated);
 }
 
 /*-----------------------------------------------------------------------------

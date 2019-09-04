@@ -29,14 +29,20 @@ FCoreDelegates::FOnPreMainInit& FCoreDelegates::GetPreMainInitDelegate()
 FCoreDelegates::FOnMountAllPakFiles FCoreDelegates::OnMountAllPakFiles;
 FCoreDelegates::FOnMountPak FCoreDelegates::OnMountPak;
 FCoreDelegates::FOnUnmountPak FCoreDelegates::OnUnmountPak;
+FCoreDelegates::FOnOptimizeMemoryUsageForMountedPaks FCoreDelegates::OnOptimizeMemoryUsageForMountedPaks;
+
 FCoreDelegates::FPakFileMountedDelegate FCoreDelegates::PakFileMountedCallback;
+FCoreDelegates::FNewFileAddedDelegate FCoreDelegates::NewFileAddedDelegate;
 FCoreDelegates::FNoPakFilesMountedDelegate FCoreDelegates::NoPakFilesMountedDelegate;
+FCoreDelegates::FOnFileOpenedForReadFromPakFile FCoreDelegates::OnFileOpenedForReadFromPakFile;
+
 FCoreDelegates::FOnUserLoginChangedEvent FCoreDelegates::OnUserLoginChangedEvent;
 FCoreDelegates::FOnUserControllerConnectionChange FCoreDelegates::OnControllerConnectionChange;
 FCoreDelegates::FOnUserControllerPairingChange FCoreDelegates::OnControllerPairingChange;
 FCoreDelegates::FOnSafeFrameChangedEvent FCoreDelegates::OnSafeFrameChangedEvent;
 FCoreDelegates::FOnHandleSystemEnsure FCoreDelegates::OnHandleSystemEnsure;
 FCoreDelegates::FOnHandleSystemError FCoreDelegates::OnHandleSystemError;
+
 FCoreDelegates::FOnActorLabelChanged FCoreDelegates::OnActorLabelChanged;
 
 FCoreDelegates::FRegisterMovieStreamerDelegate FCoreDelegates::RegisterMovieStreamerDelegate;
@@ -114,11 +120,15 @@ FCoreDelegates::FPreLoadConfigFileDelegate FCoreDelegates::PreLoadConfigFileDele
 FCoreDelegates::FPreSaveConfigFileDelegate FCoreDelegates::PreSaveConfigFileDelegate;
 FCoreDelegates::FOnFConfigFileCreated FCoreDelegates::OnFConfigCreated;
 FCoreDelegates::FOnFConfigFileCreated FCoreDelegates::OnFConfigDeleted;
+FCoreDelegates::FOnConfigValueRead FCoreDelegates::OnConfigValueRead;
+FCoreDelegates::FOnConfigSectionRead FCoreDelegates::OnConfigSectionRead;
+FCoreDelegates::FOnConfigSectionRead FCoreDelegates::OnConfigSectionNameRead;
 FCoreDelegates::FOnApplyCVarFromIni FCoreDelegates::OnApplyCVarFromIni;
 FCoreDelegates::FOnSystemResolutionChanged FCoreDelegates::OnSystemResolutionChanged;
 
 #if WITH_EDITOR
 FCoreDelegates::FOnTargetPlatformChangedSupportedFormats FCoreDelegates::OnTargetPlatformChangedSupportedFormats;
+FCoreDelegates::FOnFeatureLevelDisabled FCoreDelegates::OnFeatureLevelDisabled;
 #endif 
 
 FCoreDelegates::FStatCheckEnabled FCoreDelegates::StatCheckEnabled;

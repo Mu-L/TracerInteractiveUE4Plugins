@@ -539,10 +539,43 @@ class GAMEPLAYABILITIES_API UAbilitySystemComponent : public UGameplayTasksCompo
 	/** Update the number of instances of a given tag and calls callback */
 	FORCEINLINE void UpdateTagMap(const FGameplayTagContainer& Container, int32 CountDelta)
 	{
-		for (auto TagIt = Container.CreateConstIterator(); TagIt; ++TagIt)
+		// For removal, reorder calls so that FillParentTags is only called once
+		if (CountDelta > 0)
 		{
-			const FGameplayTag& Tag = *TagIt;
-			UpdateTagMap(Tag, CountDelta);
+			for (auto TagIt = Container.CreateConstIterator(); TagIt; ++TagIt)
+			{
+				const FGameplayTag& Tag = *TagIt;
+				if (GameplayTagCountContainer.UpdateTagCount(Tag, CountDelta))
+				{
+					OnTagUpdated(Tag, true);
+				}
+			}
+		}
+		else if (CountDelta < 0)
+		{
+			// Defer FillParentTags until all Tags have been removed
+			TArray<FGameplayTag> RemovedTags;
+			RemovedTags.Reserve(Container.Num()); // pre-allocate max number (if all are removed)
+
+			for (auto TagIt = Container.CreateConstIterator(); TagIt; ++TagIt)
+			{
+				const FGameplayTag& Tag = *TagIt;
+				if (GameplayTagCountContainer.UpdateTagCount(Tag, CountDelta, true))
+				{
+					RemovedTags.Add(Tag);
+				}
+			}
+			
+			if (RemovedTags.Num() > 0)
+			{
+				GameplayTagCountContainer.FillParentTags();
+			}
+
+			// Notify last in case OnTagUpdated queries this container
+			for (FGameplayTag& Tag : RemovedTags)
+			{
+				OnTagUpdated(Tag, false);
+			}
 		}
 	}
 
@@ -615,8 +648,11 @@ class GAMEPLAYABILITIES_API UAbilitySystemComponent : public UGameplayTasksCompo
 	/** Allow events to be registered for specific gameplay tags being added or removed */
 	FOnGameplayEffectTagCountChanged& RegisterGameplayTagEvent(FGameplayTag Tag, EGameplayTagEventType::Type EventType=EGameplayTagEventType::NewOrRemoved);
 
+	/** Unregister previously added events */
+	void UnregisterGameplayTagEvent(FDelegateHandle DelegateHandle, FGameplayTag Tag, EGameplayTagEventType::Type EventType=EGameplayTagEventType::NewOrRemoved);
+
 	/** Register a tag event and immediately call it */
-	void RegisterAndCallGameplayTagEvent(FGameplayTag Tag, FOnGameplayEffectTagCountChanged::FDelegate Delegate, EGameplayTagEventType::Type EventType=EGameplayTagEventType::NewOrRemoved);
+	FDelegateHandle RegisterAndCallGameplayTagEvent(FGameplayTag Tag, FOnGameplayEffectTagCountChanged::FDelegate Delegate, EGameplayTagEventType::Type EventType=EGameplayTagEventType::NewOrRemoved);
 
 	/** Returns multicast delegate that is invoked whenever a tag is added or removed (but not if just count is increased. Only for 'new' and 'removed' events) */
 	FOnGameplayEffectTagCountChanged& RegisterGenericGameplayTagEvent();

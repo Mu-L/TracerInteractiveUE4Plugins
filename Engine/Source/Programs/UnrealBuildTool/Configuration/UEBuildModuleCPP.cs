@@ -28,6 +28,7 @@ namespace UnrealBuildTool
 			public readonly List<FileItem> CCFiles = new List<FileItem>();
 			public readonly List<FileItem> MMFiles = new List<FileItem>();
 			public readonly List<FileItem> RCFiles = new List<FileItem>();
+			public readonly List<FileItem> ISPCFiles = new List<FileItem>();
 		}
 
 		/// <summary>
@@ -168,33 +169,36 @@ namespace UnrealBuildTool
 		private void AddDefaultIncludePaths()
 		{
 			// Add the module's parent directory to the public include paths, so other modules may include headers from it explicitly.
-			PublicIncludePaths.Add(ModuleDirectory.ParentDirectory);
-
-			// Add the base directory to the legacy include paths.
-			LegacyPublicIncludePaths.Add(ModuleDirectory);
-
-			// Add the 'classes' directory, if it exists
-			DirectoryReference ClassesDirectory = DirectoryReference.Combine(ModuleDirectory, "Classes");
-			if (DirectoryLookupCache.DirectoryExists(ClassesDirectory))
+			foreach (DirectoryReference ModuleDir in ModuleDirectories)
 			{
-				PublicIncludePaths.Add(ClassesDirectory);
-			}
+				PublicIncludePaths.Add(ModuleDir.ParentDirectory);
 
-			// Add all the public directories
-			DirectoryReference PublicDirectory = DirectoryReference.Combine(ModuleDirectory, "Public");
-			if (DirectoryLookupCache.DirectoryExists(PublicDirectory))
-			{
-				PublicIncludePaths.Add(PublicDirectory);
+				// Add the base directory to the legacy include paths.
+				LegacyPublicIncludePaths.Add(ModuleDir);
 
-				ReadOnlyHashSet<string> ExcludeNames = UEBuildPlatform.GetBuildPlatform(Rules.Target.Platform).GetExcludedFolderNames();
-				EnumerateLegacyIncludePaths(DirectoryItem.GetItemByDirectoryReference(PublicDirectory), ExcludeNames, LegacyPublicIncludePaths);
-			}
+				// Add the 'classes' directory, if it exists
+				DirectoryReference ClassesDirectory = DirectoryReference.Combine(ModuleDir, "Classes");
+				if (DirectoryLookupCache.DirectoryExists(ClassesDirectory))
+				{
+					PublicIncludePaths.Add(ClassesDirectory);
+				}
 
-			// Add the base private directory for this module
-			DirectoryReference PrivateDirectory = DirectoryReference.Combine(ModuleDirectory, "Private");
-			if(DirectoryLookupCache.DirectoryExists(PrivateDirectory))
-			{
-				PrivateIncludePaths.Add(PrivateDirectory);
+				// Add all the public directories
+				DirectoryReference PublicDirectory = DirectoryReference.Combine(ModuleDir, "Public");
+				if (DirectoryLookupCache.DirectoryExists(PublicDirectory))
+				{
+					PublicIncludePaths.Add(PublicDirectory);
+
+					ReadOnlyHashSet<string> ExcludeNames = UEBuildPlatform.GetBuildPlatform(Rules.Target.Platform).GetExcludedFolderNames();
+					EnumerateLegacyIncludePaths(DirectoryItem.GetItemByDirectoryReference(PublicDirectory), ExcludeNames, LegacyPublicIncludePaths);
+				}
+
+				// Add the base private directory for this module
+				DirectoryReference PrivateDirectory = DirectoryReference.Combine(ModuleDir, "Private");
+				if (DirectoryLookupCache.DirectoryExists(PrivateDirectory))
+				{
+					PrivateIncludePaths.Add(PrivateDirectory);
+				}
 			}
 		}
 
@@ -249,7 +253,7 @@ namespace UnrealBuildTool
 		// UEBuildModule interface.
 		public override List<FileItem> Compile(ReadOnlyTargetRules Target, UEToolChain ToolChain, CppCompileEnvironment BinaryCompileEnvironment, ISourceFileWorkingSet WorkingSet, TargetMakefile Makefile)
 		{
-			UEBuildPlatform BuildPlatform = UEBuildPlatform.GetBuildPlatformForCPPTargetPlatform(BinaryCompileEnvironment.Platform);
+			UEBuildPlatform BuildPlatform = UEBuildPlatform.GetBuildPlatform(BinaryCompileEnvironment.Platform);
 
 			List<FileItem> LinkInputFiles = new List<FileItem>();
 
@@ -346,6 +350,13 @@ namespace UnrealBuildTool
 
 			// Set up the environment with which to compile the CPP files
 			CppCompileEnvironment CompileEnvironment = ModuleCompileEnvironment;
+
+			// Generate ISPC headers first so C++ can consume them
+			if (InputFiles.ISPCFiles.Count > 0)
+			{
+				CreateHeadersForISPC(ToolChain, CompileEnvironment, InputFiles.ISPCFiles, IntermediateDirectory, Makefile.Actions);
+			}
+
 			if (Target.bUsePCHFiles && Rules.PCHUsage != ModuleRules.PCHUsageMode.NoPCHs)
 			{
 				// If this module doesn't need a shared PCH, configure that
@@ -382,6 +393,7 @@ namespace UnrealBuildTool
 						{
 							// Remove the module _API definition for cases where there are circular dependencies between the shared PCH module and modules using it
 							Writer.WriteLine("#undef {0}", ModuleApiDefine);
+							Writer.WriteLine("#undef {0}", ModuleVTableDefine);
 
 							// Games may choose to use shared PCHs from the engine, so allow them to change the value of these macros
 							if(!Rules.bTreatAsEngineModule)
@@ -474,6 +486,12 @@ namespace UnrealBuildTool
 						LinkInputFiles.AddRange(ToolChain.CompileCPPFiles(GeneratedCPPCompileEnvironment, GeneratedFileItems, IntermediateDirectory, Name, Makefile.Actions).ObjectFiles);
 					}
 				}
+			}
+
+			// Compile ISPC files directly
+			if (InputFiles.ISPCFiles.Count > 0)
+			{
+				LinkInputFiles.AddRange(ToolChain.CompileISPCFiles(CompileEnvironment, InputFiles.ISPCFiles, IntermediateDirectory, Makefile.Actions).ObjectFiles);
 			}
 
 			// Compile C files directly. Do not use a PCH here, because a C++ PCH is not compatible with C source files.
@@ -830,6 +848,9 @@ namespace UnrealBuildTool
 
 		static CPPOutput CompileAdaptiveNonUnityFiles(UEToolChain ToolChain, CppCompileEnvironment CompileEnvironment, List<FileItem> Files, DirectoryReference IntermediateDirectory, string ModuleName, List<Action> Actions)
 		{
+			// Write all the definitions out to a separate file
+			CreateHeaderForDefinitions(CompileEnvironment, IntermediateDirectory, "Adaptive");
+
 			// Compile the files
 			return ToolChain.CompileCPPFiles(CompileEnvironment, Files, IntermediateDirectory, ModuleName, Actions);
 		}
@@ -927,6 +948,17 @@ namespace UnrealBuildTool
 		}
 
 		/// <summary>
+		/// Creates header files from ISPC for inclusion and adds them as dependencies.
+		/// </summary>
+		static void CreateHeadersForISPC(UEToolChain ToolChain, CppCompileEnvironment CompileEnvironment, List<FileItem> InputFiles, DirectoryReference IntermediateDirectory, List<Action> Actions)
+		{
+			CPPOutput Output = ToolChain.GenerateISPCHeaders(CompileEnvironment, InputFiles, IntermediateDirectory, Actions);
+
+			CompileEnvironment.AdditionalPrerequisites.AddRange(Output.GeneratedHeaderFiles);
+			CompileEnvironment.UserIncludePaths.Add(IntermediateDirectory);
+		}
+
+		/// <summary>
 		/// Create a header file containing the module definitions, which also includes the PCH itself. Including through another file is necessary on 
 		/// Clang, since we get warnings about #pragma once otherwise, but it also allows us to consistently define the preprocessor state on all 
 		/// platforms.
@@ -943,7 +975,7 @@ namespace UnrealBuildTool
 			{
 				Writer.WriteLine("// PCH for {0}", IncludedFile.AbsolutePath);
 				WriteDefinitions(Definitions, Writer);
-				Writer.WriteLine("#include \"{0}\"", IncludedFile.AbsolutePath);
+				Writer.WriteLine("#include \"{0}\"", IncludedFile.AbsolutePath.Replace('\\', '/'));
 			}
 
 			// Create the item
@@ -1043,8 +1075,6 @@ namespace UnrealBuildTool
 				case "MetalRHI":
 				case "PS4RHI":
                 case "Gnmx":
-				case "OnlineSubsystemIOS":
-				case "OnlineSubsystemLive":
 					return true;
 			}
 			return false;
@@ -1231,10 +1261,14 @@ namespace UnrealBuildTool
 			ReadOnlyHashSet<string> ExcludedNames = UEBuildPlatform.GetBuildPlatform(Platform).GetExcludedFolderNames();
 
 			InputFileCollection InputFiles = new InputFileCollection();
-			DirectoryItem ModuleDirectoryItem = DirectoryItem.GetItemByDirectoryReference(ModuleDirectory);
 
 			SourceDirectories = new HashSet<DirectoryReference>();
-			FindInputFilesFromDirectoryRecursive(ModuleDirectoryItem, ExcludedNames, SourceDirectories, Makefile.DirectoryToSourceFiles, InputFiles);
+			foreach (DirectoryReference Dir in ModuleDirectories)
+			{
+				DirectoryItem ModuleDirectoryItem = DirectoryItem.GetItemByDirectoryReference(Dir);
+				FindInputFilesFromDirectoryRecursive(ModuleDirectoryItem, ExcludedNames, SourceDirectories, Makefile.DirectoryToSourceFiles, InputFiles);
+				Makefile.SourceDirectories.Add(ModuleDirectoryItem);
+			}
 
 			return InputFiles;
 		}
@@ -1304,6 +1338,11 @@ namespace UnrealBuildTool
 				{
 					SourceFiles.Add(InputFile);
 					InputFiles.RCFiles.Add(InputFile);
+				}
+				else if (InputFile.HasExtension(".ispc"))
+				{
+					SourceFiles.Add(InputFile);
+					InputFiles.ISPCFiles.Add(InputFile);
 				}
 			}
 			return SourceFiles.ToArray();

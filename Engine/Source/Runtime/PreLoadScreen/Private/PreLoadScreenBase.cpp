@@ -12,7 +12,9 @@ void FPreLoadScreenBase::Init()
 }
 
 void FPreLoadScreenBase::InitSettingsFromConfig(const FString& ConfigFileName)
-{
+{	
+	SCOPED_BOOT_TIMING("FPreLoadScreenBase::InitSettingsFromConfig");
+
     const FString UIConfigSection = TEXT("PreLoadScreen.UISettings");
 
     //Find plugin content path from name by going through enabled content plugins and see if one matches.
@@ -36,6 +38,11 @@ void FPreLoadScreenBase::InitSettingsFromConfig(const FString& ConfigFileName)
         float TimeToDisplayEachBackground = 5.0f;
         Config->GetFloat(*UIConfigSection, TEXT("TimeToDisplayEachBackground"), TimeToDisplayEachBackground);
         FPreLoadSettingsContainerBase::Get().TimeToDisplayEachBackground = TimeToDisplayEachBackground;
+
+		//Parse LoadingGroups. You want to do this before ScreenGroupings and CustomImageBrushes
+		TArray<FString> LoadingGroups;
+		Config->GetArray(*UIConfigSection, TEXT("LoadingGroups"), LoadingGroups);
+		SettingsContainer->ParseLoadingGroups(LoadingGroups);
 
         //Parse custom brushes
         TArray<FString> CustomImageBrushes;
@@ -69,10 +76,16 @@ void FPreLoadScreenBase::InitSettingsFromConfig(const FString& ConfigFileName)
             SettingsContainer->ParseFontConfigEntry(FontEntry);
         }
 
-        //Parse Screen Grouping order
-        TArray<FString> ScreenGroupingDisplayOrder;
-        Config->GetArray(*UIConfigSection, TEXT("ScreenDisplayOrder"), ScreenGroupingDisplayOrder);
-        SettingsContainer->ScreenDisplayOrder = ScreenGroupingDisplayOrder;
+		TArray<FString> ScreenOrders;
+		Config->GetArray(*UIConfigSection, TEXT("ScreenOrders"), ScreenOrders);
+		//Support old format of ScreenDisplayOrder=
+		if (ScreenOrders.Num() == 0)
+		{
+			Config->GetArray(*UIConfigSection, TEXT("ScreenDisplayOrder"), ScreenOrders);
+		}
+		SettingsContainer->ParseAllScreenOrderEntries(LoadingGroups, ScreenOrders);
+
+		SettingsContainer->PerformInitialAssetLoad();
     }
 }
 

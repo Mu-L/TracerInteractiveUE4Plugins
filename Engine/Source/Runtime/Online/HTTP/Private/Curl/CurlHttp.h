@@ -8,16 +8,17 @@
 #include "IHttpThreadedRequest.h"
 #include "Containers/Queue.h"
 #include "GenericPlatform/HttpRequestPayload.h"
+#include "HAL/ThreadSafeBool.h"
 
 class FCurlHttpResponse;
 
 #if WITH_LIBCURL
-#if PLATFORM_WINDOWS
+#if PLATFORM_WINDOWS || PLATFORM_HOLOLENS
 #include "Windows/WindowsHWrapper.h"
 #include "Windows/AllowWindowsPlatformTypes.h"
 #endif
 	#include "curl/curl.h"
-#if PLATFORM_WINDOWS
+#if PLATFORM_WINDOWS || PLATFORM_HOLOLENS
 #include "Windows/HideWindowsPlatformTypes.h"
 #endif
 
@@ -179,8 +180,8 @@ public:
 	 */
 	inline void MarkAsCompleted(CURLcode InCurlCompletionResult)
 	{
-		bCurlRequestCompleted = true;
 		CurlCompletionResult = InCurlCompletionResult;
+		bCurlRequestCompleted = true;
 	}
 	
 	/** 
@@ -328,7 +329,7 @@ private:
 	/** Set to true if request has been canceled */
 	bool			bCanceled;
 	/** Set to true when request has been completed */
-	bool			bCurlRequestCompleted;
+	FThreadSafeBool	bCurlRequestCompleted;
 	/** Set to true when request has "30* Multiple Choices" (e.g. 301 Moved Permanently, 302 temporary redirect, 308 Permanent Redirect, etc.) */
 	bool			bRedirected;
 	/** Set to true if request failed to be added to curl multi */

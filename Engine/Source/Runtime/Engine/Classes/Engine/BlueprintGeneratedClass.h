@@ -541,7 +541,7 @@ struct ENGINE_API FBlueprintCookedComponentInstancingData
 
 	/** Flag indicating whether or not this contains valid cooked data. Note that an empty changed property list can also be a valid template data context. */
 	UPROPERTY()
-	bool bIsValid;
+	bool bHasValidCookedData;
 
 	/** List of property info records with values that differ between the template and the component class CDO. This list will be generated at cook time. */
 	UPROPERTY()
@@ -559,7 +559,7 @@ struct ENGINE_API FBlueprintCookedComponentInstancingData
 	/** Default constructor. */
 	FBlueprintCookedComponentInstancingData()
 	{
-		bIsValid = false;
+		bHasValidCookedData = false;
 		ComponentTemplateClass = nullptr;
 		ComponentTemplateFlags = RF_NoFlags;
 	}
@@ -702,9 +702,9 @@ public:
 	virtual void FlushCompilationQueueForLevel() override;
 	virtual UObject* GetArchetypeForCDO() const override;
 #endif //WITH_EDITOR
-	virtual void SerializeDefaultObject(UObject* Object, FArchive& Ar) override;
+	virtual void SerializeDefaultObject(UObject* Object, FStructuredArchive::FSlot Slot) override;
 	virtual void PostLoadDefaultObject(UObject* Object) override;
-	virtual bool IsFunctionImplementedInBlueprint(FName InFunctionName) const override;
+	virtual bool IsFunctionImplementedInScript(FName InFunctionName) const override;
 	virtual uint8* GetPersistentUberGraphFrame(UObject* Obj, UFunction* FuncToCheck) const override;
 	virtual void CreatePersistentUberGraphFrame(UObject* Obj, bool bCreateOnlyIfEmpty = false, bool bSkipSuperClass = false, UClass* OldClass = nullptr) const override;
 	virtual void DestroyPersistentUberGraphFrame(UObject* Obj, bool bSkipSuperClass = false) const override;

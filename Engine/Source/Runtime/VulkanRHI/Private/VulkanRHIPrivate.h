@@ -11,6 +11,7 @@
 #include "Misc/ScopeLock.h"
 #include "RHI.h"
 #include "RenderUtils.h"
+#include "RHIValidation.h"
 
 // let the platform set up the headers and some defines
 #include "VulkanPlatform.h"
@@ -35,7 +36,12 @@
 	#endif
 #endif
 
-#include "VulkanRHI.h"
+#include "VulkanGlobals.h"
+#include "VulkanState.h"
+#include "VulkanResources.h"
+#include "VulkanUtil.h"
+#include "VulkanViewport.h"
+#include "VulkanDynamicRHI.h"
 #include "VulkanGlobalUniformBuffer.h"
 #include "RHI.h"
 #include "VulkanDevice.h"
@@ -53,6 +59,8 @@ class FVulkanGfxPipeline;
 class FVulkanRenderPass;
 class FVulkanCommandBufferManager;
 struct FInputAttachmentData;
+class FValidationContext;
+
 
 inline VkShaderStageFlagBits UEFrequencyToVKStageBit(EShaderFrequency InStage)
 {
@@ -90,10 +98,11 @@ inline EShaderFrequency VkStageBitToUEFrequency(VkShaderStageFlagBits FlagBits)
 	return SF_NumFrequencies;
 }
 
+
 class FVulkanRenderTargetLayout
 {
 public:
-	FVulkanRenderTargetLayout(const FGraphicsPipelineStateInitializer& Initializer, const TArray<FInputAttachmentData>& InputAttachmentData);
+	FVulkanRenderTargetLayout(const FGraphicsPipelineStateInitializer& Initializer);
 	FVulkanRenderTargetLayout(FVulkanDevice& InDevice, const FRHISetRenderTargetsInfo& RTInfo);
 	FVulkanRenderTargetLayout(FVulkanDevice& InDevice, const FRHIRenderPassInfo& RPInfo);
 
@@ -115,16 +124,14 @@ public:
 	inline bool GetHasResolveAttachments() const { return bHasResolveAttachments != 0; }
 	inline uint32 GetNumAttachmentDescriptions() const { return NumAttachmentDescriptions; }
 	inline uint32 GetNumSamples() const { return NumSamples; }
-	inline uint32 GetNumUsedClearValues() const
-	{
-		return NumUsedClearValues;
-	}
+	inline uint32 GetNumUsedClearValues() const { return NumUsedClearValues; }
+	inline bool GetIsMultiView() const { return bIsMultiView != 0; }
 
 	inline const VkAttachmentReference* GetColorAttachmentReferences() const { return NumColorAttachments > 0 ? ColorReferences : nullptr; }
 	inline const VkAttachmentReference* GetResolveAttachmentReferences() const { return bHasResolveAttachments ? ResolveReferences : nullptr; }
 	inline const VkAttachmentReference* GetDepthStencilAttachmentReference() const { return bHasDepthStencil ? &DepthStencilReference : nullptr; }
 
-	uint16 SetupSubpasses(VkSubpassDescription* OutDescs, uint32 MaxDescs, VkSubpassDependency* OutDeps, uint32 MaxDeps, uint32& OutNumDependencies) const;
+	inline const ESubpassHint GetSubpassHint() const { return SubpassHint; }
 
 protected:
 	VkAttachmentReference ColorReferences[MaxSimultaneousRenderTargets];
@@ -141,7 +148,11 @@ protected:
 	uint8 bHasResolveAttachments;
 	uint8 NumSamples;
 	uint8 NumUsedClearValues;
+	ESubpassHint SubpassHint = ESubpassHint::None;
+	uint8 bIsMultiView;
 	uint8 Pad0 = 0;
+	uint8 Pad1 = 0;
+	uint8 Pad2 = 0;
 
 	// Hash for a compatible RenderPass
 	uint32 RenderPassCompatibleHash = 0;
@@ -168,6 +179,7 @@ protected:
 		Extent.Extent3D.width = 0;
 		Extent.Extent3D.height = 0;
 		Extent.Extent3D.depth = 0;
+		bIsMultiView = 0;
 	}
 
 	bool bCalculatedHash = false;
@@ -248,6 +260,7 @@ private:
 	// Save image off for comparison, in case it gets aliased.
 	uint32 NumColorAttachments;
 	VkImage ColorRenderTargetImages[MaxSimultaneousRenderTargets];
+	VkImage ColorResolveTargetImages[MaxSimultaneousRenderTargets];
 	VkImage DepthStencilRenderTargetImage;
 
 	// Predefined set of barriers, when executes ensuring all writes are finished
@@ -287,6 +300,26 @@ private:
 	uint32						NumUsedClearValues;
 	FVulkanDevice&				Device;
 };
+
+union UNvidiaDriverVersion
+{
+	struct
+	{
+#if PLATFORM_LITTLE_ENDIAN
+		uint32 Tertiary		: 6;
+		uint32 Secondary	: 8;
+		uint32 Minor		: 8;
+		uint32 Major		: 10;
+#else
+		uint32 Major		: 10;
+		uint32 Minor		: 8;
+		uint32 Secondary	: 8;
+		uint32 Tertiary		: 6;
+#endif
+	};
+	uint32 Packed;
+};
+
 
 namespace VulkanRHI
 {
@@ -339,7 +372,7 @@ inline void VulkanSetImageLayoutSimple(VkCommandBuffer CmdBuffer, VkImage Image,
 	VulkanSetImageLayout(CmdBuffer, Image, OldLayout, NewLayout, SubresourceRange);
 }
 
-void VulkanResolveImage(VkCommandBuffer Cmd, FTextureRHIParamRef SourceTextureRHI, FTextureRHIParamRef DestTextureRHI);
+void VulkanResolveImage(VkCommandBuffer Cmd, FRHITexture* SourceTextureRHI, FRHITexture* DestTextureRHI);
 
 // Stats
 DECLARE_STATS_GROUP(TEXT("Vulkan RHI"), STATGROUP_VulkanRHI, STATCAT_Advanced);
@@ -359,6 +392,7 @@ DECLARE_DWORD_ACCUMULATOR_STAT_EXTERN(TEXT("Num Frame Buffers"), STAT_VulkanNumF
 DECLARE_DWORD_ACCUMULATOR_STAT_EXTERN(TEXT("Num Buffer Views"), STAT_VulkanNumBufferViews, STATGROUP_VulkanRHI, );
 DECLARE_DWORD_ACCUMULATOR_STAT_EXTERN(TEXT("Num Image Views"), STAT_VulkanNumImageViews, STATGROUP_VulkanRHI, );
 DECLARE_DWORD_ACCUMULATOR_STAT_EXTERN(TEXT("Num Physical Mem Allocations"), STAT_VulkanNumPhysicalMemAllocations, STATGROUP_VulkanRHI, );
+DECLARE_MEMORY_STAT_EXTERN(TEXT("Frame Temp Memory"), STAT_VulkanTempFrameAllocationBuffer, STATGROUP_VulkanRHI, );
 DECLARE_DWORD_COUNTER_STAT_EXTERN(TEXT("Dynamic VB Size"), STAT_VulkanDynamicVBSize, STATGROUP_VulkanRHI, );
 DECLARE_DWORD_COUNTER_STAT_EXTERN(TEXT("Dynamic IB Size"), STAT_VulkanDynamicIBSize, STATGROUP_VulkanRHI, );
 DECLARE_CYCLE_STAT_EXTERN(TEXT("Dynamic VB Lock/Unlock time"), STAT_VulkanDynamicVBLockTime, STATGROUP_VulkanRHI, );
@@ -382,6 +416,8 @@ DECLARE_CYCLE_STAT_EXTERN(TEXT("Acquire Backbuffer"), STAT_VulkanAcquireBackBuff
 DECLARE_CYCLE_STAT_EXTERN(TEXT("Staging Buffer Mgmt"), STAT_VulkanStagingBuffer, STATGROUP_VulkanRHI, );
 DECLARE_CYCLE_STAT_EXTERN(TEXT("VkCreateDescriptorPool"), STAT_VulkanVkCreateDescriptorPool, STATGROUP_VulkanRHI, );
 DECLARE_DWORD_ACCUMULATOR_STAT_EXTERN(TEXT("Num Created DescSet Pools"), STAT_VulkanNumDescPools, STATGROUP_VulkanRHI, );
+DECLARE_CYCLE_STAT_EXTERN(TEXT("UpdateUniformBuffers"), STAT_VulkanUpdateUniformBuffers, STATGROUP_VulkanRHI, );
+DECLARE_CYCLE_STAT_EXTERN(TEXT("UpdateUniformBuffersRename"), STAT_VulkanUpdateUniformBuffersRename, STATGROUP_VulkanRHI, );
 #if VULKAN_ENABLE_AGGRESSIVE_STATS
 DECLARE_CYCLE_STAT_EXTERN(TEXT("Update DescriptorSets"), STAT_VulkanUpdateDescriptorSets, STATGROUP_VulkanRHI, );
 DECLARE_DWORD_COUNTER_STAT_EXTERN(TEXT("Num Desc Sets Updated"), STAT_VulkanNumDescSets, STATGROUP_VulkanRHI, );
@@ -829,6 +865,19 @@ namespace VulkanRHI
 		}
 #endif
 	}
+
+	FVulkanCommandListContext& GetVulkanContext(FValidationContext& CmdContext);
+
+	inline FVulkanCommandListContext& GetVulkanContext(IRHICommandContext& CmdContext)
+	{
+#if ENABLE_RHI_VALIDATION
+		if (GValidationRHI)
+		{
+			return GetVulkanContext((FValidationContext&)CmdContext);
+		}
+#endif
+		return (FVulkanCommandListContext&)CmdContext;
+	}
 }
 
 extern int32 GVulkanSubmitAfterEveryEndRenderPass;
@@ -840,3 +889,5 @@ extern bool GRenderDocFound;
 #endif
 
 const int GMaxCrashBufferEntries = 2048;
+
+extern class FVulkanDynamicRHI*	GVulkanRHI;

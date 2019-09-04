@@ -821,7 +821,7 @@ bool FGameplayTagContainer::AddLeafTag(const FGameplayTag& TagToAdd)
 
 DECLARE_CYCLE_STAT(TEXT("FGameplayTagContainer::RemoveTag"), STAT_FGameplayTagContainer_RemoveTag, STATGROUP_GameplayTags);
 
-bool FGameplayTagContainer::RemoveTag(FGameplayTag TagToRemove)
+bool FGameplayTagContainer::RemoveTag(FGameplayTag TagToRemove, bool bDeferParentTags)
 {
 	SCOPE_CYCLE_COUNTER(STAT_FGameplayTagContainer_RemoveTag);
 
@@ -829,8 +829,11 @@ bool FGameplayTagContainer::RemoveTag(FGameplayTag TagToRemove)
 
 	if (NumChanged > 0)
 	{
-		// Have to recompute parent table from scratch because there could be duplicates providing the same parent tag
-		FillParentTags();
+		if (!bDeferParentTags)
+		{
+			// Have to recompute parent table from scratch because there could be duplicates providing the same parent tag
+			FillParentTags();
+		}
 		return true;
 	}
 	return false;
@@ -887,7 +890,7 @@ bool FGameplayTagContainer::Serialize(FArchive& Ar)
 		{
 			// Rename any tags that may have changed by the ini file.  Redirects can happen regardless of version.
 			// Regardless of version, want loading to have a chance to handle redirects
-			UGameplayTagsManager::Get().RedirectTagsForContainer(*this, Ar.GetSerializedProperty());
+			UGameplayTagsManager::Get().GameplayTagContainerLoaded(*this, Ar.GetSerializedProperty());
 		}
 
 		FillParentTags();
@@ -1308,7 +1311,7 @@ void FGameplayTag::PostSerialize(const FArchive& Ar)
 	if (Ar.IsLoading() && Ar.IsPersistent() && !(Ar.GetPortFlags() & PPF_Duplicate) && !(Ar.GetPortFlags() & PPF_DuplicateForPIE))
 	{
 		// Rename any tags that may have changed by the ini file.
-		UGameplayTagsManager::Get().RedirectSingleGameplayTag(*this, Ar.GetSerializedProperty());
+		UGameplayTagsManager::Get().SingleGameplayTagLoaded(*this, Ar.GetSerializedProperty());
 	}
 
 	if (Ar.IsSaving() && IsValid())
@@ -1338,7 +1341,10 @@ bool FGameplayTag::ImportTextItem(const TCHAR*& Buffer, int32 PortFlags, UObject
 	if (ImportedTag[0] == '(')
 	{
 		// Let normal ImportText handle this. It appears to be prepared for it.
-		return false;
+		UScriptStruct* ScriptStruct = FGameplayTag::StaticStruct();
+		Buffer = ScriptStruct->ImportText(Buffer, this, Parent, PortFlags, ErrorText, ScriptStruct->GetName(), false);
+		UGameplayTagsManager::Get().ImportSingleGameplayTag(*this, TagName);
+		return true;
 	}
 
 	return UGameplayTagsManager::Get().ImportSingleGameplayTag(*this, FName(*ImportedTag));

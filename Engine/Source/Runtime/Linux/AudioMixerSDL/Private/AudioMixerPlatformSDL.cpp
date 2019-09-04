@@ -113,7 +113,7 @@ namespace Audio
 		DesiredSpec.format = AUDIO_S16;
 		DesiredSpec.channels = 2;
 #endif
-		
+
 		DesiredSpec.samples = PlatformSettings.CallbackBufferFrameSize;
 		DesiredSpec.callback = OnBufferEnd;
 		DesiredSpec.userdata = (void*)this;
@@ -212,7 +212,15 @@ namespace Audio
 			DeviceName = SDL_GetAudioDeviceName(OpenStreamParams.OutputDeviceIndex, 0);
 		}
 
-		AudioDeviceID = SDL_OpenAudioDevice(DeviceName, 0, &AudioSpecPrefered, &AudioSpecReceived, 0);
+		FString CurrentDeviceName = GetCurrentDeviceName();
+		if (CurrentDeviceName.Len() <= 0)
+		{
+			AudioDeviceID = SDL_OpenAudioDevice(DeviceName, 0, &AudioSpecPrefered, &AudioSpecReceived, 0);
+		}
+		else
+		{
+			AudioDeviceID = SDL_OpenAudioDevice(TCHAR_TO_ANSI(*CurrentDeviceName), 0, &AudioSpecPrefered, &AudioSpecReceived, 0);
+		}
 
 		if (!AudioDeviceID)
 		{
@@ -239,6 +247,11 @@ namespace Audio
 		return true;
 	}
 
+	FString FMixerPlatformSDL::GetCurrentDeviceName() const
+	{
+		return {};
+	}
+
 	bool FMixerPlatformSDL::CloseAudioStream()
 	{
 		if (AudioStreamInfo.StreamState == EAudioOutputStreamState::Closed)
@@ -253,7 +266,12 @@ namespace Audio
 
 		if (AudioDeviceID != INDEX_NONE)
 		{
+			FScopeLock ScopedLock(&OutputBufferMutex);
+
 			SDL_CloseAudioDevice(AudioDeviceID);
+
+			OutputBuffer = nullptr;
+			OutputBufferByteLength = 0;
 		}
 
 		AudioStreamInfo.StreamState = EAudioOutputStreamState::Closed;
@@ -303,6 +321,9 @@ namespace Audio
 
 	void FMixerPlatformSDL::SubmitBuffer(const uint8* Buffer)
 	{
+		// Need to prevent the case in which we close down the audio stream leaving this point to potentially corrupt the free'ed pointer
+		FScopeLock ScopedLock(&OutputBufferMutex);
+
 		if (OutputBuffer)
 		{
 			FMemory::Memcpy(OutputBuffer, Buffer, OutputBufferByteLength);
@@ -324,12 +345,19 @@ namespace Audio
 
 	FName FMixerPlatformSDL::GetRuntimeFormat(USoundWave* InSoundWave)
 	{
+		static FName NAME_OGG(TEXT("OGG"));
+		static FName NAME_OPUS(TEXT("OPUS"));
+		static FName NAME_ADPCM(TEXT("ADPCM"));
+
 		if (InSoundWave->IsStreaming())
 		{
-			return FName(TEXT("OPUS"));
-		}
+			if (InSoundWave->IsSeekableStreaming())
+			{
+				return NAME_ADPCM;
+			}
 
-		static FName NAME_OGG(TEXT("OGG"));
+			return NAME_OPUS;
+		}
 		return NAME_OGG;
 	}
 
@@ -344,6 +372,11 @@ namespace Audio
 
 		if (InSoundWave->IsStreaming())
 		{
+			if (InSoundWave->IsSeekableStreaming())
+			{
+				return new FADPCMAudioInfo();
+			}
+
 			return new FOpusAudioInfo();
 		}
 
@@ -388,12 +421,7 @@ namespace Audio
 		return FAudioPlatformSettings::GetPlatformSettings(TEXT("/Script/LinuxTargetPlatform.LinuxTargetSettings"));
 #else
 		// On HTML5 and Windows, use default parameters.
-		FAudioPlatformSettings Settings;
-		Settings.SampleRate = 48000;
-		Settings.MaxChannels = 0;
-		Settings.NumBuffers = 2;
-		Settings.CallbackBufferFrameSize = 1024;
-		return Settings;
+		return FAudioPlatformSettings();
 #endif
 	}
 }

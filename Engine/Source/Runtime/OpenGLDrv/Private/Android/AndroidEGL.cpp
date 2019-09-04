@@ -13,6 +13,7 @@
 #include <android/native_window_jni.h>
 #endif
 #include "OpenGLDrvPrivate.h"
+#include "Misc/ScopeLock.h"
 
 
 AndroidEGL* AndroidEGL::Singleton = NULL;
@@ -23,10 +24,23 @@ static TAutoConsoleVariable<int32> CVarAllowFrameTimestamps(
 	1,
 	TEXT("True to allow the use use eglGetFrameTimestampsANDROID et al for frame pacing or spew."));
 
+static TAutoConsoleVariable<int32> CVarTimeStampErrorRetryCount(
+	TEXT("a.TimeStampErrorRetryCount"),
+	100,
+	TEXT("Number of consecutive frames eglGetFrameTimestampsANDROID can fail before reverting to the naive frame pacer.\n")
+	TEXT("Retry count is reset after any successful eglGetFrameTimestampsANDROID calls or a change to sync interval."));
+
 #define ENABLE_CONFIG_FILTER 1
 #define ENABLE_EGL_DEBUG 0
 #define ENABLE_VERIFY_EGL 0
 #define ENABLE_VERIFY_EGL_TRACE 0
+
+#if USE_ANDROID_EGL_NO_ERROR_CONTEXT
+#ifndef EGL_KHR_create_context_no_error
+#define EGL_KHR_create_context_no_error 1
+#define EGL_CONTEXT_OPENGL_NO_ERROR_KHR   0x31B3
+#endif // EGL_KHR_create_context_no_error
+#endif // USE_ANDROID_EGL_NO_ERROR_CONTEXT
 
 #if ENABLE_VERIFY_EGL
 
@@ -234,6 +248,7 @@ validConfig (0)
 AndroidEGL::AndroidEGL()
 :	bSupportsKHRCreateContext(false)
 ,	bSupportsKHRSurfacelessContext(false)
+,	bSupportsKHRNoErrorContext(false)
 ,	ContextAttributes(nullptr)
 {
 	PImplData = new AndroidESPImpl();
@@ -467,6 +482,7 @@ void AndroidEGL::InitEGL(APIVariant API)
 
 	bSupportsKHRCreateContext = Extensions.Contains(TEXT("EGL_KHR_create_context"));
 	bSupportsKHRSurfacelessContext = Extensions.Contains(TEXT("EGL_KHR_surfaceless_context"));
+	bSupportsKHRNoErrorContext = Extensions.Contains(TEXT("EGL_KHR_create_context_no_error"));
 
 	if (API == AV_OpenGLES)
 	{
@@ -689,14 +705,14 @@ void AndroidEGL::InitSurface(bool bUseSmallSurface, bool bCreateWndSurface)
 	PImplData->SingleThreadedContext.eglSurface = PImplData->eglSurface;
 }
 
-// call out to JNI to see if the application was packaged for Gear VR
-extern bool AndroidThunkCpp_IsGearVRApplication();
+// call out to JNI to see if the application was packaged for Oculus Mobile
+extern bool AndroidThunkCpp_IsOculusMobileApplication();
 
 void AndroidEGL::ReInit()
 {
 	FPlatformMisc::LowLevelOutputDebugString(TEXT("AndroidEGL::ReInit()"));
 	SetCurrentContext(EGL_NO_CONTEXT, EGL_NO_SURFACE);
-	bool bCreateSurface = !AndroidThunkCpp_IsGearVRApplication();
+	bool bCreateSurface = !AndroidThunkCpp_IsOculusMobileApplication();
 	InitSurface(false, bCreateSurface);
 	SetCurrentSharedContext();
 }
@@ -719,11 +735,18 @@ void AndroidEGL::Init(APIVariant API, uint32 MajorVersion, uint32 MinorVersion, 
 
 		ContextAttributes = new int[MaxElements];
 		uint32 Element = 0;
-		
+
 		ContextAttributes[Element++] = EGL_CONTEXT_MAJOR_VERSION_KHR;
 		ContextAttributes[Element++] = MajorVersion;
 		ContextAttributes[Element++] = EGL_CONTEXT_MINOR_VERSION_KHR;
 		ContextAttributes[Element++] = MinorVersion;
+#if USE_ANDROID_EGL_NO_ERROR_CONTEXT
+		if (bSupportsKHRNoErrorContext && AndroidThunkCpp_IsOculusMobileApplication())
+		{
+			ContextAttributes[Element++] = EGL_CONTEXT_OPENGL_NO_ERROR_KHR;
+			ContextAttributes[Element++] = EGL_TRUE;
+		}
+#endif // USE_ANDROID_EGL_NO_ERROR_CONTEXT
 		if (API == AV_OpenGLCore)
 		{
 			ContextAttributes[Element++] = EGL_CONTEXT_OPENGL_PROFILE_MASK_KHR;
@@ -958,13 +981,29 @@ static TAutoConsoleVariable<int32> CVarDisableOpenGLGPUSync(
 	TEXT("When true, android OpenGL will not prevent the GPU from running more than one frame behind. This will allow higher performance on some devices but increase input latency."),
 	ECVF_RenderThreadSafe);
 
+static bool GGetTimeStampsSucceededThisFrame = true;
+static uint32 GGetTimeStampsRetryCount = 0;
+
+static bool CanUseGetFrameTimestamps()
+{
+	return CVarUseGetFrameTimestamps.GetValueOnAnyThread()
+		&& eglGetFrameTimestampsANDROID_p
+		&& eglGetNextFrameIdANDROID_p
+		&& eglPresentationTimeANDROID_p
+		&& (GGetTimeStampsRetryCount < CVarTimeStampErrorRetryCount.GetValueOnAnyThread());
+}
+static bool CanUseGetFrameTimestampsForThisFrame()
+{
+	return CanUseGetFrameTimestamps() && GGetTimeStampsSucceededThisFrame;
+}
+
 bool ShouldUseGPUFencesToLimitLatency()
 {
 	if (ShouldUseChoreographer())
 	{
 		return false; // this method does its own GPU fences as part of the swap.
 	}
-	if (CVarUseGetFrameTimestamps.GetValueOnAnyThread())
+	if (CanUseGetFrameTimestampsForThisFrame())
 	{
 		return true; // this method requires a GPU fence to give steady results
 	}
@@ -974,7 +1013,6 @@ bool ShouldUseGPUFencesToLimitLatency()
 
 bool AndroidEGL::SwapBuffers(int32 SyncInterval)
 {
-	//SyncInterval = 3;
 #if !UE_BUILD_SHIPPING
 	if (CVarStallSwap.GetValueOnAnyThread() > 0.0f)
 	{
@@ -1034,6 +1072,8 @@ bool AndroidEGL::SwapBuffers(int32 SyncInterval)
 	bool bPrintMethod = false;
 	if (PImplData->DesiredSyncIntervalRelativeTo60Hz != SyncInterval)
 	{
+		GGetTimeStampsRetryCount = 0;
+
 		bPrintMethod = true;
 		PImplData->DesiredSyncIntervalRelativeTo60Hz = SyncInterval;
 		PImplData->DriverRefreshRate = 60.0f;
@@ -1187,50 +1227,58 @@ bool AndroidEGL::SwapBuffers(int32 SyncInterval)
 	{
 		TheChoreographerFramePacer.StopChoreographer();
 	}
-	if (!bUseChoreographer && eglPresentationTimeANDROID_p && CVarUseGetFrameTimestamps.GetValueOnAnyThread())
+	if (!bUseChoreographer && CanUseGetFrameTimestamps())
 	{
-		if (eglGetFrameTimestampsANDROID_p && eglGetNextFrameIdANDROID_p)
-		{
-			UE_CLOG(bPrintMethod, LogRHI, Display, TEXT("Using eglGetFrameTimestampsANDROID method for frame pacing"));
+		UE_CLOG(bPrintMethod, LogRHI, Display, TEXT("Using eglGetFrameTimestampsANDROID method for frame pacing"));
 
-			//static bool bPrintOnce = true;
-			if (FrameIDs[(int32(NextFrameIDSlot) - 1) % NUM_FRAMES_TO_MONITOR])
-				// not supported   && eglGetFrameTimestampsSupportedANDROID_p && eglGetFrameTimestampsSupportedANDROID_p(PImplData->eglDisplay, PImplData->eglSurface, EGL_FIRST_COMPOSITION_START_TIME_ANDROID))
+		//static bool bPrintOnce = true;
+		if (FrameIDs[(int32(NextFrameIDSlot) - 1) % NUM_FRAMES_TO_MONITOR])
+			// not supported   && eglGetFrameTimestampsSupportedANDROID_p && eglGetFrameTimestampsSupportedANDROID_p(PImplData->eglDisplay, PImplData->eglSurface, EGL_FIRST_COMPOSITION_START_TIME_ANDROID))
+		{
+			//UE_CLOG(bPrintOnce, LogRHI, Log, TEXT("eglGetFrameTimestampsSupportedANDROID retured true for EGL_FIRST_COMPOSITION_START_TIME_ANDROID"));
+			EGLint TimestampList = EGL_FIRST_COMPOSITION_START_TIME_ANDROID;
+			//EGLint TimestampList = EGL_COMPOSITION_LATCH_TIME_ANDROID;
+			//EGLint TimestampList = EGL_LAST_COMPOSITION_START_TIME_ANDROID;
+			//EGLint TimestampList = EGL_DISPLAY_PRESENT_TIME_ANDROID;
+			EGLnsecsANDROID Result = 0;
+			int32 DeltaFrameIndex = 1;
+			for (int32 Index = int32(NextFrameIDSlot) - 1; Index >= int32(NextFrameIDSlot) - NUM_FRAMES_TO_MONITOR && Index >= 0; Index--)
 			{
-				//UE_CLOG(bPrintOnce, LogRHI, Log, TEXT("eglGetFrameTimestampsSupportedANDROID retured true for EGL_FIRST_COMPOSITION_START_TIME_ANDROID"));
-				EGLint TimestampList = EGL_FIRST_COMPOSITION_START_TIME_ANDROID;
-				//EGLint TimestampList = EGL_COMPOSITION_LATCH_TIME_ANDROID;
-				//EGLint TimestampList = EGL_LAST_COMPOSITION_START_TIME_ANDROID;
-				//EGLint TimestampList = EGL_DISPLAY_PRESENT_TIME_ANDROID;
-				EGLnsecsANDROID Result = 0;
-				int32 DeltaFrameIndex = 1;
-				for (int32 Index = int32(NextFrameIDSlot) - 1; Index >= int32(NextFrameIDSlot) - NUM_FRAMES_TO_MONITOR && Index >= 0; Index--)
+				Result = 0;
+				if (FrameIDs[Index % NUM_FRAMES_TO_MONITOR])
 				{
-					Result = 0;
-					if (FrameIDs[Index % NUM_FRAMES_TO_MONITOR])
-					{
-						eglGetFrameTimestampsANDROID_p(PImplData->eglDisplay, PImplData->eglSurface, FrameIDs[Index % NUM_FRAMES_TO_MONITOR], 1, &TimestampList, &Result);
-					}
-					if (Result > 0)
-					{
-						break;
-					}
-					DeltaFrameIndex++;
+					eglGetFrameTimestampsANDROID_p(PImplData->eglDisplay, PImplData->eglSurface, FrameIDs[Index % NUM_FRAMES_TO_MONITOR], 1, &TimestampList, &Result);
 				}
 				if (Result > 0)
 				{
-					EGLnsecsANDROID FudgeFactor = 0; //  8333 * 1000;
-					EGLnsecsANDROID DeltaNanos = EGLnsecsANDROID(PImplData->DesiredSyncIntervalRelativeToDevice) * EGLnsecsANDROID(DeltaFrameIndex) * PImplData->DriverRefreshNanos;
-					EGLnsecsANDROID PresentationTime = Result + DeltaNanos + FudgeFactor;
-					eglPresentationTimeANDROID_p(PImplData->eglDisplay, PImplData->eglSurface, PresentationTime);
+					break;
 				}
+				DeltaFrameIndex++;
+			}
+
+			GGetTimeStampsSucceededThisFrame = Result > 0;
+			if (GGetTimeStampsSucceededThisFrame)
+			{
+				EGLnsecsANDROID FudgeFactor = 0; //  8333 * 1000;
+				EGLnsecsANDROID DeltaNanos = EGLnsecsANDROID(PImplData->DesiredSyncIntervalRelativeToDevice) * EGLnsecsANDROID(DeltaFrameIndex) * PImplData->DriverRefreshNanos;
+				EGLnsecsANDROID PresentationTime = Result + DeltaNanos + FudgeFactor;
+				eglPresentationTimeANDROID_p(PImplData->eglDisplay, PImplData->eglSurface, PresentationTime);
+				GGetTimeStampsRetryCount = 0;
 			}
 			else
 			{
-				//UE_CLOG(bPrintOnce, LogRHI, Log, TEXT("eglGetFrameTimestampsSupportedANDROID doesn't exist or retured false for EGL_FIRST_COMPOSITION_START_TIME_ANDROID, discarding eglGetNextFrameIdANDROID_p and eglGetFrameTimestampsANDROID_p"));
+				GGetTimeStampsRetryCount++;
+				if (GGetTimeStampsRetryCount == CVarTimeStampErrorRetryCount.GetValueOnAnyThread())
+				{
+					UE_LOG(LogRHI, Log, TEXT("eglGetFrameTimestampsANDROID_p failed for %d consecutive frames, reverting to naive frame pacer."), GGetTimeStampsRetryCount);
+				}
 			}
-			//bPrintOnce = false;
 		}
+		else
+		{
+			//UE_CLOG(bPrintOnce, LogRHI, Log, TEXT("eglGetFrameTimestampsSupportedANDROID doesn't exist or retured false for EGL_FIRST_COMPOSITION_START_TIME_ANDROID, discarding eglGetNextFrameIdANDROID_p and eglGetFrameTimestampsANDROID_p"));
+		}
+		//bPrintOnce = false;
 	}
 
 	PImplData->LastTimeEmulatedSync = FPlatformTime::Seconds();
@@ -1239,7 +1287,7 @@ bool AndroidEGL::SwapBuffers(int32 SyncInterval)
 		QUICK_SCOPE_CYCLE_COUNTER(STAT_eglSwapBuffers);
 
 		FrameIDs[(NextFrameIDSlot) % NUM_FRAMES_TO_MONITOR] = 0;
-		if (eglGetNextFrameIdANDROID_p && (CVarUseGetFrameTimestamps.GetValueOnAnyThread() || CVarSpewGetFrameTimestamps.GetValueOnAnyThread()))
+		if (eglGetNextFrameIdANDROID_p && (CanUseGetFrameTimestamps() || CVarSpewGetFrameTimestamps.GetValueOnAnyThread()))
 		{
 			eglGetNextFrameIdANDROID_p(PImplData->eglDisplay, PImplData->eglSurface, &FrameIDs[(NextFrameIDSlot) % NUM_FRAMES_TO_MONITOR]);
 		}

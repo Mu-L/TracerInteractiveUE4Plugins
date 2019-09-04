@@ -51,7 +51,7 @@ public:
 	virtual const FXmppUserJid& GetUserJid() const override;
 
 	virtual FOnXmppLoginComplete& OnLoginComplete() override { return OnXmppLoginCompleteDelegate; }
-	virtual FOnXmppLogingChanged& OnLoginChanged() override { return OnXmppLogingChangedDelegate; }
+	virtual FOnXmppLoginChanged& OnLoginChanged() override { return OnXmppLoginChangedDelegate; }
 	virtual FOnXmppLogoutComplete& OnLogoutComplete() override { return OnXmppLogoutCompleteDelegate; }
 
 	virtual IXmppMessagesPtr Messages() override;
@@ -59,6 +59,8 @@ public:
 	virtual IXmppPresencePtr Presence() override;
 	virtual IXmppChatPtr PrivateChat() override;
 	virtual IXmppPubSubPtr PubSub() override;
+
+	virtual void DumpState() const override;
 
 	// FTickerObjectBase
 	virtual bool Tick(float DeltaTime) override;
@@ -81,6 +83,10 @@ public:
 
 	/** Get the MUC domain that was saved right before we connected */
 	const FString& GetMucDomain() const { return MucDomain; }
+
+private:
+	/** Notify that Login was triggered again while already connected */
+	void ReconnectLogin();
 
 protected:
 	/** XMPP Context to use across this connection */
@@ -112,7 +118,7 @@ protected:
 
 	/** Login status delegates */
 	FOnXmppLoginComplete OnXmppLoginCompleteDelegate;
-	FOnXmppLogingChanged OnXmppLogingChangedDelegate;
+	FOnXmppLoginChanged OnXmppLoginChangedDelegate;
 	FOnXmppLogoutComplete OnXmppLogoutCompleteDelegate;
 
 	/** XMPP Implementation Shared Pointers */

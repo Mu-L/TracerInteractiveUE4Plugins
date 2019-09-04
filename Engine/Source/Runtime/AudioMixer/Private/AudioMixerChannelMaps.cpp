@@ -294,6 +294,37 @@ namespace Audio
 				}
 			}
 		}
+		// Quad has a special-case to map input channels 0 1 2 3 to 0 1 4 5: 
+		else if (NumSourceChannels == 4)
+		{
+			const int32 FrontLeftChannel = 0;
+			for (int32 OutputChannel = 0; OutputChannel < NumOutputChannels; ++OutputChannel)
+			{
+				const int32 Index = OutputChannel * AUDIO_MIXER_MAX_OUTPUT_CHANNELS + FrontLeftChannel;
+				OutChannelMap.Add(Matrix[Index]);
+			}
+
+			const int32 FrontRightChannel = 1;
+			for (int32 OutputChannel = 0; OutputChannel < NumOutputChannels; ++OutputChannel)
+			{
+				const int32 Index = OutputChannel * AUDIO_MIXER_MAX_OUTPUT_CHANNELS + FrontRightChannel;
+				OutChannelMap.Add(Matrix[Index]);
+			}
+
+			const int32 SurroundLeftChannel = 4;
+			for (int32 OutputChannel = 0; OutputChannel < NumOutputChannels; ++OutputChannel)
+			{
+				const int32 Index = OutputChannel * AUDIO_MIXER_MAX_OUTPUT_CHANNELS + SurroundLeftChannel;
+				OutChannelMap.Add(Matrix[Index]);
+			}
+
+			const int32 SurroundRightChannel = 5;
+			for (int32 OutputChannel = 0; OutputChannel < NumOutputChannels; ++OutputChannel)
+			{
+				const int32 Index = OutputChannel * AUDIO_MIXER_MAX_OUTPUT_CHANNELS + SurroundRightChannel;
+				OutChannelMap.Add(Matrix[Index]);
+			}
+		}
 		else
 		{
 			// Compute a vorbis channel map only for 5.1 source files
@@ -394,8 +425,8 @@ namespace Audio
 		DefaultChannelAzimuthPosition[EAudioMixerChannel::FrontLeftOfCenter] = { EAudioMixerChannel::FrontLeftOfCenter, 15 };
 		DefaultChannelAzimuthPosition[EAudioMixerChannel::FrontRightOfCenter] = { EAudioMixerChannel::FrontRightOfCenter, 345 };
 		DefaultChannelAzimuthPosition[EAudioMixerChannel::BackCenter] = { EAudioMixerChannel::BackCenter, 180 };
-		DefaultChannelAzimuthPosition[EAudioMixerChannel::SideLeft] = { EAudioMixerChannel::SideLeft, 270 };
-		DefaultChannelAzimuthPosition[EAudioMixerChannel::SideRight] = { EAudioMixerChannel::SideRight, 90 };
+		DefaultChannelAzimuthPosition[EAudioMixerChannel::SideLeft] = { EAudioMixerChannel::SideLeft, 250 };
+		DefaultChannelAzimuthPosition[EAudioMixerChannel::SideRight] = { EAudioMixerChannel::SideRight, 110 };
 
 		// Check any engine ini overrides for these default positions
 		if (NumChannels != 2)
@@ -511,7 +542,10 @@ namespace Audio
 
 		// ambisonics is special cased and uses a plugin.
 		TArray<FChannelPositionInfo> FirstOrderAmbisonicsPositions;
-		FirstOrderAmbisonicsPositions.Add(DefaultChannelAzimuthPosition[EAudioMixerChannel::FrontCenter]);
+		FirstOrderAmbisonicsPositions.Add(DefaultChannelAzimuthPosition[EAudioMixerChannel::FrontLeft]);
+		FirstOrderAmbisonicsPositions.Add(DefaultChannelAzimuthPosition[EAudioMixerChannel::FrontRight]);
+		FirstOrderAmbisonicsPositions.Add(DefaultChannelAzimuthPosition[EAudioMixerChannel::SideLeft]);
+		FirstOrderAmbisonicsPositions.Add(DefaultChannelAzimuthPosition[EAudioMixerChannel::SideRight]);
 		FirstOrderAmbisonicsPositions.Sort(FCompareByAzimuth());
 		ChannelAzimuthPositions.Add(ESubmixChannelFormat::Ambisonics, FirstOrderAmbisonicsPositions);
 		OutputChannels[int32(ESubmixChannelFormat::Ambisonics)] = FirstOrderAmbisonicsPositions.Num();

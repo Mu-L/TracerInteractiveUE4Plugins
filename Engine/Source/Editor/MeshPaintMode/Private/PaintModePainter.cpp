@@ -387,6 +387,8 @@ void FPaintModePainter::PasteVertexColors()
 			}
 		}
 	}
+
+	UpdateCachedVertexDataSize();
 }
 
 void FPaintModePainter::FixVertexColors()
@@ -407,6 +409,8 @@ void FPaintModePainter::RemoveVertexColors()
 	{
 		MeshPaintHelpers::RemoveComponentInstanceVertexColors(Component);
 	}
+
+	UpdateCachedVertexDataSize();
 }
 
 void FPaintModePainter::PropagateVertexColorsToLODs()
@@ -493,6 +497,24 @@ void FPaintModePainter::CycleMeshLODs(int32 Direction)
 		const int32 AdjustedLODIndex = NewLODIndex < 0 ? MaxLODIndex + NewLODIndex : NewLODIndex % MaxLODIndex;
 		PaintSettings->VertexPaintSettings.LODIndex = AdjustedLODIndex;
 		PaintLODChanged();
+	}
+}
+
+void FPaintModePainter::UpdateCachedVertexDataSize()
+{
+	if (PaintSettings->PaintMode == EPaintMode::Vertices)
+	{
+		CachedVertexDataSize = 0;
+
+		const bool bInstance = true;
+		for (UMeshComponent* SelectedComponent : PaintableComponents)
+		{
+			int32 NumLODs = MeshPaintHelpers::GetNumberOfLODs(SelectedComponent);
+			for (int32 LODIndex = 0; LODIndex < NumLODs; ++LODIndex)
+			{
+				CachedVertexDataSize += MeshPaintHelpers::GetVertexColorBufferSize(SelectedComponent, LODIndex, bInstance);
+			}
+		}
 	}
 }
 
@@ -783,6 +805,9 @@ void FPaintModePainter::FinishPainting()
 	{
 		PropagateVertexColorsToLODs();
 	}
+
+	UpdateCachedVertexDataSize();
+
 }
 
 bool FPaintModePainter::PaintInternal(const FVector& InCameraOrigin, const TArrayView<TPair<FVector, FVector>>& Rays, EMeshPaintAction PaintAction, float PaintStrength)
@@ -1166,7 +1191,12 @@ int32 FPaintModePainter::GetMaxLODIndexToPaint() const
 
 	for (const UMeshComponent* MeshComponent : SelectedComponents )
 	{
-		LODMin = FMath::Min(LODMin, MeshPaintHelpers::GetNumberOfLODs(MeshComponent) - 1);
+		int32 NumMeshLODs = 0;
+		if (MeshPaintHelpers::TryGetNumberOfLODs(MeshComponent, NumMeshLODs))
+		{
+			ensure(NumMeshLODs > 0);
+			LODMin = FMath::Min(LODMin, NumMeshLODs - 1);
+		}
 	}
 
 	if (LODMin == TNumericLimits<int32>::Max())
@@ -2019,7 +2049,14 @@ void FPaintModePainter::FillWithVertexColor()
 			(*MeshAdapter)->PreEdit();
 		}
 		
-		MeshPaintHelpers::FillVertexColors(Component, FillColor, MaskColor, true);
+		if (Component->IsA<UStaticMeshComponent>())
+		{
+			MeshPaintHelpers::FillStaticMeshVertexColors(Cast<UStaticMeshComponent>(Component), PaintSettings->VertexPaintSettings.bPaintOnSpecificLOD ? PaintSettings->VertexPaintSettings.LODIndex : -1, FillColor, MaskColor);
+		}
+		else if (Component->IsA<USkeletalMeshComponent>())
+		{
+			MeshPaintHelpers::FillSkeletalMeshVertexColors(Cast<USkeletalMeshComponent>(Component), PaintSettings->VertexPaintSettings.bPaintOnSpecificLOD ? PaintSettings->VertexPaintSettings.LODIndex : -1, FillColor, MaskColor);
+		}
 
 		if (MeshAdapter)
 		{
@@ -2165,7 +2202,9 @@ void FPaintModePainter::Tick(FEditorViewportClient* ViewportClient, float DeltaT
 		bRefreshCachedData = false;
 		CacheSelectionData();
 		CacheTexturePaintData();
-		
+
+		UpdateCachedVertexDataSize();
+
 		bDoRestoreRenTargets = true;
 	}
 

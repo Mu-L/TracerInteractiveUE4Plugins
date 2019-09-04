@@ -36,7 +36,7 @@ DEFINE_STAT(STAT_PixelBufferMemory);
 
 static FAutoConsoleVariable CVarUseVulkanRealUBs(
 	TEXT("r.Vulkan.UseRealUBs"),
-	0,
+	1,
 	TEXT("0: Emulate uniform buffers on Vulkan SM4/SM5 (debugging ONLY)\n")
 	TEXT("1: Use real uniform buffers [default]"),
 	ECVF_ReadOnly
@@ -48,6 +48,18 @@ static TAutoConsoleVariable<int32> CVarDisableEngineAndAppRegistration(
 	TEXT("If true, disables engine and app registration, to disable GPU driver optimizations during debugging and development\n")
 	TEXT("Changes will only take effect in new game/editor instances - can't be changed at runtime.\n"),
 	ECVF_Default);
+
+static TAutoConsoleVariable<int32> CVarGraphicsAdapter(
+	TEXT("r.GraphicsAdapter"),
+	-1,
+	TEXT("User request to pick a specific graphics adapter (e.g. when using a integrated graphics card with a discrete one)\n")
+	TEXT("For Windows D3D, unless a specific adapter is chosen we reject Microsoft adapters because we don't want the software emulation.\n")
+	TEXT("This takes precedence over -prefer{AMD|NVidia|Intel} when the value is >= 0.\n")
+	TEXT(" -2: Take the first one that fulfills the criteria\n")
+	TEXT(" -1: Favour non integrated because there are usually faster (default)\n")
+	TEXT("  0: Adapter #0\n")
+	TEXT("  1: Adapter #1, ..."),
+	ECVF_ReadOnly | ECVF_RenderThreadSafe);
 
 
 const FString FResourceTransitionUtility::ResourceTransitionAccessStrings[(int32)EResourceTransitionAccess::EMaxAccess + 1] =
@@ -95,6 +107,7 @@ static FAutoConsoleCommandWithOutputDevice GDumpRHIMemoryCmd(
 //Static init order is undefined and you will likely end up with bad values on some platforms.
 const FClearValueBinding FClearValueBinding::None(EClearBinding::ENoneBound);
 const FClearValueBinding FClearValueBinding::Black(FLinearColor(0.0f, 0.0f, 0.0f, 1.0f));
+const FClearValueBinding FClearValueBinding::BlackMaxAlpha(FLinearColor(0.0f, 0.0f, 0.0f, FLT_MAX));
 const FClearValueBinding FClearValueBinding::White(FLinearColor(1.0f, 1.0f, 1.0f, 1.0f));
 const FClearValueBinding FClearValueBinding::Transparent(FLinearColor(0.0f, 0.0f, 0.0f, 0.0f));
 const FClearValueBinding FClearValueBinding::DepthOne(1.0f, 0);
@@ -483,6 +496,7 @@ bool GRHISupportsLazyShaderCodeLoading = false;
 TRHIGlobal<int32> GMaxShadowDepthBufferSizeX(2048);
 TRHIGlobal<int32> GMaxShadowDepthBufferSizeY(2048);
 TRHIGlobal<int32> GMaxTextureDimensions(2048);
+TRHIGlobal<int32> GMaxVolumeTextureDimensions(2048);
 TRHIGlobal<int32> GMaxCubeTextureDimensions(2048);
 int32 GMaxTextureArrayLayers = 256;
 int32 GMaxTextureSamplers = 16;
@@ -673,38 +687,33 @@ static FName NAME_PLATFORM_MAC(TEXT("Mac"));
 static FName NAME_PLATFORM_SWITCH(TEXT("Switch"));
 static FName NAME_PLATFORM_TVOS(TEXT("TVOS"));
 
+// @todo platplug: This is still here, only being used now by UMaterialShaderQualitySettings::GetOrCreatePlatformSettings
+// since I have moved the other uses to FindTargetPlatformWithSupport
+// But I'd like to delete it anyway!
 FName ShaderPlatformToPlatformName(EShaderPlatform Platform)
 {
 	switch(Platform)
 	{
 	case SP_PCD3D_SM4:
-	case SP_PCD3D_SM5:
-		return NAME_PLATFORM_WINDOWS;
-	case SP_PS4:
-		return NAME_PLATFORM_PS4;
-	case SP_XBOXONE_D3D12:
-		return NAME_PLATFORM_XBOXONE;
+	case SP_PCD3D_SM5: return NAME_PLATFORM_WINDOWS;
+	case SP_PS4: return NAME_PLATFORM_PS4;
+	case SP_XBOXONE_D3D12: return NAME_PLATFORM_XBOXONE;
 	case SP_OPENGL_ES3_1_ANDROID:
-	case SP_VULKAN_ES3_1_ANDROID:
-		return NAME_PLATFORM_ANDROID;
+	case SP_VULKAN_ES3_1_ANDROID: return NAME_PLATFORM_ANDROID;
 	case SP_METAL:
 	case SP_METAL_MRT:
         return NAME_PLATFORM_IOS;
 	case SP_METAL_TVOS:
-	case SP_METAL_MRT_TVOS:
-		return NAME_PLATFORM_TVOS;
+	case SP_METAL_MRT_TVOS: return NAME_PLATFORM_TVOS;
 	case SP_METAL_SM5:
 	case SP_METAL_SM5_NOTESS:
 	case SP_METAL_MACES3_1:
 	case SP_METAL_MACES2:
-	case SP_METAL_MRT_MAC:
-		return NAME_PLATFORM_MAC;
+	case SP_METAL_MRT_MAC: return NAME_PLATFORM_MAC;
 	case SP_SWITCH:
-	case SP_SWITCH_FORWARD:
-		return NAME_PLATFORM_SWITCH;
+	case SP_SWITCH_FORWARD: return NAME_PLATFORM_SWITCH;
 
-	default:
-		return FName();
+	default: return FName();
 	}
 }
 
@@ -796,7 +805,7 @@ RHI_API bool RHISupportsTessellation(const EShaderPlatform Platform)
 {
 	if (IsFeatureLevelSupported(Platform, ERHIFeatureLevel::SM5))
 	{
-		return (Platform == SP_PCD3D_SM5) || (Platform == SP_XBOXONE_D3D12) || (Platform == SP_OPENGL_SM5) || (Platform == SP_OPENGL_ES31_EXT) || (Platform == SP_METAL_SM5) /*|| (IsVulkanSM5Platform(Platform))*/;
+		return (Platform == SP_PCD3D_SM5) || (Platform == SP_XBOXONE_D3D12) || (Platform == SP_OPENGL_SM5) || (Platform == SP_OPENGL_ES31_EXT) || (Platform == SP_METAL_SM5) || (IsVulkanSM5Platform(Platform));
 	}
 	return false;
 }
@@ -812,7 +821,8 @@ RHI_API bool RHISupportsPixelShaderUAVs(const EShaderPlatform Platform)
 
 RHI_API bool RHISupportsIndexBufferUAVs(const EShaderPlatform Platform)
 {
-	return Platform == SP_PCD3D_SM5 || IsVulkanPlatform(Platform) || IsMetalSM5Platform(Platform) || Platform == SP_XBOXONE_D3D12 || Platform == SP_PS4;
+	return Platform == SP_PCD3D_SM5 || IsVulkanPlatform(Platform) || IsMetalSM5Platform(Platform) || Platform == SP_XBOXONE_D3D12 || Platform == SP_PS4 
+		|| FDataDrivenShaderPlatformInfo::GetInfo(Platform).bSupportsIndexBufferUAVs;
 }
 
 
@@ -866,6 +876,14 @@ void FRHIRenderPassInfo::ConvertToRenderTargetsInfo(FRHISetRenderTargetsInfo& Ou
 		++OutRTInfo.NumColorRenderTargets;
 
 		OutRTInfo.bClearColor |= (LoadAction == ERenderTargetLoadAction::EClear);
+
+		ensure(!OutRTInfo.bHasResolveAttachments || ColorRenderTargets[Index].ResolveTarget);
+		if (ColorRenderTargets[Index].ResolveTarget)
+		{
+			OutRTInfo.bHasResolveAttachments = true;
+			OutRTInfo.ColorResolveRenderTarget[Index] = OutRTInfo.ColorRenderTarget[Index];
+			OutRTInfo.ColorResolveRenderTarget[Index].Texture = ColorRenderTargets[Index].ResolveTarget;
+		}
 	}
 
 	ERenderTargetActions DepthActions = GetDepthActions(DepthStencilRenderTarget.Action);
@@ -896,6 +914,14 @@ void FRHIRenderPassInfo::ConvertToRenderTargetsInfo(FRHISetRenderTargetsInfo& Ou
 		}
 		OutRTInfo.NumUAVs = NumUAVs;
 	}
+}
+
+void FRHIRenderPassInfo::OnVerifyNumUAVsFailed(int32 InNumUAVs)
+{
+	bTooManyUAVs = true;
+	UE_LOG(LogRHI, Warning, TEXT("NumUAVs is %d which is greater the max %d. Trailing UAVs will be dropped"), InNumUAVs, MaxSimultaneousUAVs);
+	// Trigger an ensure to get callstack in dev builds
+	ensure(InNumUAVs <= MaxSimultaneousUAVs);
 }
 
 #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
@@ -994,11 +1020,20 @@ void FRHIRenderPassInfo::Validate() const
 			// this check is incorrect for mobile, depth/stencil is intermediate and we don't want to store it to main memory
 			//ensure(StencilStore == ERenderTargetStoreAction::EStore);
 		}
+		
+		if (SubpassHint == ESubpassHint::DepthReadSubpass)
+		{
+			// for depth read sub-pass
+			// 1. render pass must have depth target
+			// 2. depth target must support InputAttachement
+			ensure((DepthStencilRenderTarget.DepthStencilTarget->GetFlags() & TexCreate_InputAttachmentRead) != 0);
+		}
 	}
 	else
 	{
 		ensure(DepthStencilRenderTarget.Action == EDepthStencilTargetActions::DontLoad_DontStore);
 		ensure(DepthStencilRenderTarget.ExclusiveDepthStencil == FExclusiveDepthStencil::DepthNop_StencilNop);
+		ensure(SubpassHint != ESubpassHint::DepthReadSubpass);
 	}
 }
 #endif
@@ -1007,4 +1042,154 @@ static FRHIPanicEvent RHIPanicEvent;
 FRHIPanicEvent& RHIGetPanicDelegate()
 {
 	return RHIPanicEvent;
+}
+
+
+
+
+
+#include "Misc/DataDrivenPlatformInfoRegistry.h"
+
+FString LexToString(EShaderPlatform Platform)
+{
+	switch (Platform)
+	{
+	case SP_PCD3D_SM5: return TEXT("PCD3D_SM5");
+	case SP_PCD3D_SM4: return TEXT("PCD3D_SM4");
+	case SP_PCD3D_ES3_1: return TEXT("PCD3D_ES3_1");
+	case SP_PCD3D_ES2: return TEXT("PCD3D_ES2");
+	case SP_OPENGL_SM4: return TEXT("OPENGL_SM4");
+	case SP_OPENGL_SM5: return TEXT("OPENGL_SM5");
+	case SP_OPENGL_PCES2: return TEXT("OPENGL_PCES2");
+	case SP_OPENGL_PCES3_1: return TEXT("OPENGL_PCES3_1");
+	case SP_OPENGL_ES2_ANDROID: return TEXT("OPENGL_ES2_ANDROID");
+	case SP_OPENGL_ES2_WEBGL: return TEXT("OPENGL_ES2_WEBGL");
+	case SP_OPENGL_ES2_IOS: return TEXT("OPENGL_ES2_IOS");
+	case SP_OPENGL_ES31_EXT: return TEXT("OPENGL_ES31_EXT");
+	case SP_OPENGL_ES3_1_ANDROID: return TEXT("OPENGL_ES3_1_ANDROID");
+	case SP_PS4: return TEXT("PS4");
+	case SP_XBOXONE_D3D12: return TEXT("XBOXONE_D3D12");
+	case SP_SWITCH: return TEXT("SWITCH");
+	case SP_SWITCH_FORWARD: return TEXT("SWITCH_FORWARD");
+	case SP_METAL: return TEXT("METAL");
+	case SP_METAL_MRT: return TEXT("METAL_MRT");
+	case SP_METAL_TVOS: return TEXT("METAL_TVOS");
+	case SP_METAL_MRT_TVOS: return TEXT("METAL_MRT_TVOS");
+	case SP_METAL_MRT_MAC: return TEXT("METAL_MRT_MAC");
+	case SP_METAL_SM5: return TEXT("METAL_SM5");
+	case SP_METAL_SM5_NOTESS: return TEXT("METAL_SM5_NOTESS");
+	case SP_METAL_MACES3_1: return TEXT("METAL_MACES3_1");
+	case SP_METAL_MACES2: return TEXT("METAL_MACES2");
+	case SP_VULKAN_ES3_1_ANDROID: return TEXT("VULKAN_ES3_1_ANDROID");
+	case SP_VULKAN_ES3_1_LUMIN: return TEXT("VULKAN_ES3_1_LUMIN");
+	case SP_VULKAN_PCES3_1: return TEXT("VULKAN_PCES3_1");
+	case SP_VULKAN_SM4:	return TEXT("VULKAN_SM4");
+	case SP_VULKAN_SM5: return TEXT("VULKAN_SM5");
+	case SP_VULKAN_SM5_LUMIN: return TEXT("VULKAN_SM5_LUMIN");
+
+#ifdef DDPI_EXTRA_SHADERPLATFORM_LEXTOSTRING
+		DDPI_EXTRA_SHADERPLATFORM_LEXTOSTRING
+#endif
+
+	default:
+		checkf(0, TEXT("Unknown EShaderPlatform %d!"), (int32)Platform);
+		return TEXT("");
+	}
+}
+
+void LexFromString(EShaderPlatform& Value, const TCHAR* String)
+{
+	Value = EShaderPlatform::SP_NumPlatforms;
+
+	for (uint8 i = 0; i < (uint8)EShaderPlatform::SP_NumPlatforms; ++i)
+	{
+		if (LexToString((EShaderPlatform)i).Equals(String))
+		{
+			Value = (EShaderPlatform)i;
+			return;
+		}
+	}
+}
+
+
+FName LANGUAGE_D3D("D3D");
+FName LANGUAGE_Metal("Metal");
+FName LANGUAGE_OpenGL("OpenGL");
+FName LANGUAGE_Vulkan("Vulkan");
+FName LANGUAGE_Sony("Sony");
+FName LANGUAGE_Nintendo("Nintendo");
+
+RHI_API FDataDrivenShaderPlatformInfo FDataDrivenShaderPlatformInfo::Infos[SP_NumPlatforms];
+
+// Gets a string from a section, or empty string if it didn't exist
+FString GetSectionString(const FConfigSection& Section, FName Key)
+{
+	return Section.FindRef(Key).GetValue();
+}
+
+// Gets a bool from a section, or false if it didn't exist
+bool GetSectionBool(const FConfigSection& Section, FName Key)
+{
+	return FCString::ToBool(*GetSectionString(Section, Key));
+}
+
+inline void ParseDataDrivenShaderInfo(const FConfigSection& Section, FDataDrivenShaderPlatformInfo& Info)
+{
+	Info.Language = *GetSectionString(Section, "Language");
+	GetFeatureLevelFromName(*GetSectionString(Section, "MaxFeatureLevel"), Info.MaxFeatureLevel);
+
+	Info.bIsMobile = GetSectionBool(Section, "bIsMobile");
+	Info.bIsMetalMRT = GetSectionBool(Section, "bIsMetalMRT");
+	Info.bIsPC = GetSectionBool(Section, "bIsPC");
+	Info.bIsConsole = GetSectionBool(Section, "bIsConsole");
+	Info.bIsAndroidOpenGLES = GetSectionBool(Section, "bIsAndroidOpenGLES");
+	Info.bSupportsDrawIndirect = GetSectionBool(Section, "bSupportsDrawIndirect");
+	Info.bSupportsMobileMultiView = GetSectionBool(Section, "bSupportsMobileMultiView");
+	Info.bSupportsVolumeTextureCompression = GetSectionBool(Section, "bSupportsVolumeTextureCompression");
+	Info.bSupportsDistanceFields = GetSectionBool(Section, "bSupportsDistanceFields");
+	Info.bSupportsDiaphragmDOF = GetSectionBool(Section, "bSupportsDiaphragmDOF");
+	Info.bSupportsRGBColorBuffer = GetSectionBool(Section, "bSupportsRGBColorBuffer");
+	Info.bSupportsCapsuleShadows = GetSectionBool(Section, "bSupportsCapsuleShadows");
+	Info.bSupportsVolumetricFog = GetSectionBool(Section, "bSupportsVolumetricFog");
+	Info.bSupportsIndexBufferUAVs = GetSectionBool(Section, "bSupportsIndexBufferUAVs");
+	Info.bSupportsInstancedStereo = GetSectionBool(Section, "bSupportsInstancedStereo");
+	Info.bSupportsMultiView = GetSectionBool(Section, "bSupportsMultiView");
+	Info.bSupportsMSAA = GetSectionBool(Section, "bSupportsMSAA");
+	Info.bSupports4ComponentUAVReadWrite = GetSectionBool(Section, "bSupports4ComponentUAVReadWrite");
+	Info.bTargetsTiledGPU = GetSectionBool(Section, "bTargetsTiledGPU");
+	Info.bNeedsOfflineCompiler = GetSectionBool(Section, "bNeedsOfflineCompiler");
+}
+
+void FDataDrivenShaderPlatformInfo::Initialize()
+{
+	// look for the standard DataDriven ini files
+	int32 NumDDInfoFiles = FDataDrivenPlatformInfoRegistry::GetNumDataDrivenIniFiles();
+	for (int32 Index = 0; Index < NumDDInfoFiles; Index++)
+	{
+		FConfigFile IniFile;
+		FString PlatformName;
+
+		FDataDrivenPlatformInfoRegistry::LoadDataDrivenIniFile(Index, IniFile, PlatformName);
+
+		// now walk over the file, looking for ShaderPlatformInfo sections
+		for (auto Section : IniFile)
+		{
+			if (Section.Key.StartsWith(TEXT("ShaderPlatform ")))
+			{
+				const FString& SectionName = Section.Key;
+
+				EShaderPlatform ShaderPlatform;
+				// get enum value for the string name
+				LexFromString(ShaderPlatform, *SectionName.Mid(15));
+				if (ShaderPlatform == EShaderPlatform::SP_NumPlatforms)
+				{
+					UE_LOG(LogRHI, Warning, TEXT("Found an unknown shader platform %s in a DataDriven ini file"), *SectionName.Mid(15));
+					continue;
+				}
+				
+				// at this point, we can start pulling information out
+				ParseDataDrivenShaderInfo(Section.Value, Infos[ShaderPlatform]);	
+			}
+		}
+	}
 }

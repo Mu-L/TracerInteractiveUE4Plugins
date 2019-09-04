@@ -68,21 +68,31 @@ void FFrameNumberDetailsCustomization::CustomizeChildren(TSharedRef<IPropertyHan
 FText FFrameNumberDetailsCustomization::OnGetTimeText() const
 {
 	int32 CurrentValue = 0.0;
-	FrameNumberProperty->GetValue(CurrentValue);
+	FPropertyAccess::Result Result = FrameNumberProperty->GetValue(CurrentValue);
 
+	if (Result == FPropertyAccess::MultipleValues)
+	{
+		return LOCTEXT("MultipleValues", "Multiple Values");
+	}
 	return FText::FromString(NumericTypeInterface->ToString(CurrentValue));
 }
 
 void FFrameNumberDetailsCustomization::OnTimeTextCommitted(const FText& InText, ETextCommit::Type CommitInfo)
 {
-	int32 ExistingValue = 0.0;
-	FrameNumberProperty->GetValue(ExistingValue);
-	TOptional<double> TickResolution = NumericTypeInterface->FromString(InText.ToString(), ExistingValue);
-	if (TickResolution.IsSet())
+	TArray<FString> PerObjectValueStrs;
+	FrameNumberProperty->GetPerObjectValues(PerObjectValueStrs);
+
+	for (FString& ValueStr : PerObjectValueStrs)
 	{
-		double ClampedValue = FMath::Clamp(TickResolution.GetValue(), (double)UIClampMin, (double)UIClampMax);
-		FrameNumberProperty->SetValue((int32)ClampedValue);
+		int32 ExistingValue = FCString::Atoi(*ValueStr);
+		TOptional<double> TickResolution = NumericTypeInterface->FromString(InText.ToString(), ExistingValue);
+		if (TickResolution.IsSet())
+		{
+			double ClampedValue = FMath::Clamp(TickResolution.GetValue(), (double)UIClampMin, (double)UIClampMax);
+			ValueStr = FString::FromInt((int32)ClampedValue);
+		}
 	}
+	FrameNumberProperty->SetPerObjectValues(PerObjectValueStrs);
 }
 
 #undef LOCTEXT_NAMESPACE

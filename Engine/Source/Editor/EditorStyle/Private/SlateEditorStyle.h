@@ -70,6 +70,12 @@ public:
 
 		void Initialize();
 		void SetupGeneralStyles();
+		void SetupLevelGeneralStyles();
+		void SetupWorldBrowserStyles();
+		void SetupSequencerStyles();
+		void SetupViewportStyles();
+		void SetupNotificationBarStyles();
+		void SetupMenuBarStyles();
 		void SetupGeneralIcons();
 		void SetupWindowStyles();
 		void SetupProjectBadgeStyle();
@@ -125,6 +131,7 @@ public:
 		const TSharedRef< FLinearColor > SelectionColor_Subdued_LinearRef;
 		const TSharedRef< FLinearColor > SelectionColor_Inactive_LinearRef;
 		const TSharedRef< FLinearColor > SelectionColor_Pressed_LinearRef;
+		const TSharedRef< FLinearColor > HighlightColor_LinearRef;
 
 		const TSharedRef< FLinearColor > LogColor_Background_LinearRef;
 		const TSharedRef< FLinearColor > LogColor_SelectionBackground_LinearRef;
@@ -141,6 +148,7 @@ public:
 		const FSlateColor SelectionColor_Subdued;
 		const FSlateColor SelectionColor_Inactive;
 		const FSlateColor SelectionColor_Pressed;
+		const FSlateColor HighlightColor;
 
 		const FSlateColor LogColor_Background;
 		const FSlateColor LogColor_SelectionBackground;

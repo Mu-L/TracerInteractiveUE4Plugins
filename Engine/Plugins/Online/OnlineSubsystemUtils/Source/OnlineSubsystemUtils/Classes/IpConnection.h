@@ -22,10 +22,6 @@ class ONLINESUBSYSTEMUTILS_API UIpConnection : public UNetConnection
     GENERATED_UCLASS_BODY()
 	// Variables.
 
-	// @todo #JIRA UENET-883: This should be moved down to UNetConnection, now that GetInternetAddr is a thing.
-	//			A lot of platforms reinvent the wheel in their own inefficient way here, despite having their own FInternetAddr type
-	TSharedPtr<FInternetAddr>	RemoteAddr;
-
 	class FSocket*				Socket;
 	class FResolveInfo*			ResolveInfo;
 
@@ -36,12 +32,9 @@ class ONLINESUBSYSTEMUTILS_API UIpConnection : public UNetConnection
 	virtual void LowLevelSend(void* Data, int32 CountBits, FOutPacketTraits& Traits) override;
 	FString LowLevelGetRemoteAddress(bool bAppendPort=false) override;
 	FString LowLevelDescribe() override;
-	virtual int32 GetAddrAsInt(void) override;
-	virtual int32 GetAddrPort(void) override;
-	virtual TSharedPtr<FInternetAddr> GetInternetAddr() override;
-	virtual FString RemoteAddressToString() override;
 	virtual void Tick() override;
 	virtual void CleanUp() override;
+	virtual void ReceivedRawPacket(void* Data, int32 Count) override;
 	//~ End NetConnection Interface
 
 	/**
@@ -79,6 +72,21 @@ private:
 	 */
 	FGraphEventRef LastSendTask;
 
+	/** Instead of disconnecting immediately on a socket error, wait for some time to see if we can recover. Specified in Seconds. */
+	UPROPERTY(Config)
+	float SocketErrorDisconnectDelay;
+
+	/** Cached time of the first send socket error that will be used to compute disconnect delay. */
+	float SocketError_SendDelayStartTime;
+
+	/** Cached time of the first recv socket error that will be used to compute disconnect delay. */
+	float SocketError_RecvDelayStartTime;
+
+	friend class FIpConnectionHelper;
+
 	/** Handles any SendTo errors on the game thread. */
 	void HandleSocketSendResult(const FSocketSendResult& Result, ISocketSubsystem* SocketSubsystem);
+
+	/** Notifies us that we've encountered an error while receiving a packet. */
+	void HandleSocketRecvError(class UNetDriver* NetDriver, const FString& ErrorString);
 };

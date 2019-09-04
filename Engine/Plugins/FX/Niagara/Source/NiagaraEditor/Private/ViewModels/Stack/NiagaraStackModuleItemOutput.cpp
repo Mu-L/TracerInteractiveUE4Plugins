@@ -39,17 +39,17 @@ FText UNiagaraStackModuleItemOutput::GetTooltipText() const
 	{
 		UNiagaraScriptSource* Source = Cast<UNiagaraScriptSource>(FunctionCallNode->FunctionScript->GetSource());
 		const UEdGraphSchema_Niagara* NiagaraSchema = GetDefault<UEdGraphSchema_Niagara>();
-		const FNiagaraVariableMetaData* MetaData = nullptr;
+		TOptional<FNiagaraVariableMetaData> MetaData;
 		if (FNiagaraConstants::IsNiagaraConstant(ValueVariable))
 		{
-			MetaData = FNiagaraConstants::GetConstantMetaData(ValueVariable);
+			MetaData = *FNiagaraConstants::GetConstantMetaData(ValueVariable);
 		}
 		else if (Source->NodeGraph != nullptr)
 		{
 			MetaData = Source->NodeGraph->GetMetaData(ValueVariable);
 		}
 
-		if (MetaData != nullptr)
+		if (MetaData.IsSet())
 		{
 			return MetaData->Description;
 		}
@@ -65,6 +65,12 @@ bool UNiagaraStackModuleItemOutput::GetIsEnabled() const
 UNiagaraStackEntry::EStackRowStyle UNiagaraStackModuleItemOutput::GetStackRowStyle() const
 {
 	return EStackRowStyle::ItemContent;
+}
+
+void UNiagaraStackModuleItemOutput::GetSearchItems(TArray<FStackSearchItem>& SearchItems) const
+{
+	SearchItems.Add({ FName("DisplayName"), GetDisplayName() });
+	SearchItems.Add({ FName("OutputParamHandleText"), GetOutputParameterHandleText() });
 }
 
 const FNiagaraParameterHandle& UNiagaraStackModuleItemOutput::GetOutputParameterHandle() const

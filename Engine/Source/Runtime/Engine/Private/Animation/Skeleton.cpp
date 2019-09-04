@@ -744,19 +744,14 @@ FName USkeleton::GetRetargetSourceForMesh(USkeletalMesh* InMesh) const
 
 #endif
 
-int32 USkeleton::GetAnimationTrackIndex(const int32 InSkeletonBoneIndex, const UAnimSequence* InAnimSeq, const bool bUseRawData)
+int32 USkeleton::GetRawAnimationTrackIndex(const int32 InSkeletonBoneIndex, const UAnimSequence* InAnimSeq)
 {
-	const TArray<FTrackToSkeletonMap>& TrackToSkelMap = bUseRawData ? InAnimSeq->GetRawTrackToSkeletonMapTable() : InAnimSeq->GetCompressedTrackToSkeletonMapTable();
 	if( InSkeletonBoneIndex != INDEX_NONE )
 	{
-		for (int32 TrackIndex = 0; TrackIndex<TrackToSkelMap.Num(); ++TrackIndex)
+		return InAnimSeq->GetRawTrackToSkeletonMapTable().IndexOfByPredicate([&](const FTrackToSkeletonMap& TrackToSkel)
 		{
-			const FTrackToSkeletonMap& TrackToSkeleton = TrackToSkelMap[TrackIndex];
-			if( TrackToSkeleton.BoneTreeIndex == InSkeletonBoneIndex )
-			{
-				return TrackIndex;
-			}
-		}
+			return TrackToSkel.BoneTreeIndex == InSkeletonBoneIndex;
+		});
 	}
 
 	return INDEX_NONE;
@@ -1543,10 +1538,17 @@ void USkeleton::AccumulateCurveMetaData(FName CurveName, bool bMaterialSet, bool
 			if (Mapping->Exists(CurveName))
 			{
 				FCurveMetaData* CurveMetaData = GetCurveMetaData(CurveName);
+				bool bOldMaterial = CurveMetaData->Type.bMaterial;
+				bool bOldMorphtarget = CurveMetaData->Type.bMorphtarget;
 				// we don't want to undo previous flags, if it was true, we just alolw more to it. 
 				CurveMetaData->Type.bMaterial |= bMaterialSet;
 				CurveMetaData->Type.bMorphtarget |= bMorphtargetSet;
-				MarkPackageDirty();
+
+				if (bOldMaterial != CurveMetaData->Type.bMaterial 
+					|| bOldMorphtarget != CurveMetaData->Type.bMorphtarget)
+				{
+					MarkPackageDirty();
+				}
 			}
 		}
 	}
@@ -1660,8 +1662,13 @@ void USkeleton::HandleVirtualBoneChanges()
 		USkeletalMesh* SkelMesh = *ItMesh;
 		if (SkelMesh->Skeleton == this)
 		{
+			// also have to update retarget base pose
 			SkelMesh->RefSkeleton.RebuildRefSkeleton(this, bRebuildNameMap);
 			RebuildLinkup(SkelMesh);
+#if WITH_EDITOR
+			// whole bone count has changed, so it has to recalculate retarget base pose
+			SkelMesh->ReallocateRetargetBasePose();
+#endif // #if WITH_EDITOR
 		}
 	}
 

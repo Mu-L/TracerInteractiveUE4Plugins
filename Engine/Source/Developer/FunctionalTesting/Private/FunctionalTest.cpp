@@ -24,6 +24,7 @@
 #include "Engine/DebugCameraController.h"
 #include "TraceQueryTestResults.h"
 #include "Misc/RuntimeErrors.h"
+#include "FunctionalTestBase.h"
 
 namespace
 {
@@ -83,10 +84,12 @@ namespace
 	}
 }
 
+
 AFunctionalTest::AFunctionalTest( const FObjectInitializer& ObjectInitializer )
 	: Super(ObjectInitializer)
 	, bIsEnabled(true)
-	, bWarningsAsErrors(false)
+	, LogErrorHandling(EFunctionalTestLogHandling::ProjectDefault)
+	, LogWarningHandling(EFunctionalTestLogHandling::ProjectDefault)
 	, Result(EFunctionalTestResult::Invalid)
 	, PreparationTimeLimit(15.0f)
 	, TimeLimit(60.0f)
@@ -140,7 +143,6 @@ AFunctionalTest::AFunctionalTest( const FObjectInitializer& ObjectInitializer )
 
 #if WITH_EDITORONLY_DATA
 	RenderComp = CreateDefaultSubobject<UFuncTestRenderingComponent>(TEXT("RenderComp"));
-	RenderComp->PostPhysicsComponentTick.bCanEverTick = false;
 	RenderComp->SetupAttachment(RootComponent);
 #endif // WITH_EDITORONLY_DATA
 
@@ -161,7 +163,6 @@ AFunctionalTest::AFunctionalTest( const FObjectInitializer& ObjectInitializer )
 		TestName->SetHorizontalAlignment(EHTA_Center);
 		TestName->SetRelativeLocation(FVector(0, 0, 80));
 		TestName->SetRelativeRotation(FRotator(0, 0, 0));
-		TestName->PostPhysicsComponentTick.bCanEverTick = false;
 		TestName->SetupAttachment(RootComponent);
 	}
 #endif
@@ -194,7 +195,27 @@ bool AFunctionalTest::RunTest(const TArray<FString>& Params)
 {
 	ensure(GetWorld()->HasBegunPlay());
 
-	FAutomationTestFramework::Get().SetTreatWarningsAsErrors(bWarningsAsErrors);
+	FFunctionalTestBase* FunctionalTest = static_cast<FFunctionalTestBase*>(FAutomationTestFramework::Get().GetCurrentTest());
+
+	// Set handling of warnings/errors based on this test. Tests can either specify an explicit option or choose to go with the
+	// project defaults.
+	TOptional<bool> bLogErrorsAreErrors, bLogWarningsAreErrors;
+
+	if (LogErrorHandling != EFunctionalTestLogHandling::ProjectDefault)
+	{
+		bLogErrorsAreErrors = LogErrorHandling == EFunctionalTestLogHandling::OutputIsError ? true : false;
+	}
+
+	if (LogWarningHandling != EFunctionalTestLogHandling::ProjectDefault)
+	{
+		bLogWarningsAreErrors = LogWarningHandling == EFunctionalTestLogHandling::OutputIsError ? true : false;
+	}
+
+	if (FunctionalTest)
+	{
+		FunctionalTest->SetLogErrorAndWarningHandling(bLogErrorsAreErrors, bLogWarningsAreErrors);
+		FunctionalTest->SetFunctionalTestRunning(true);
+	}
 
 	FailureMessage = TEXT("");
 	
@@ -302,18 +323,55 @@ bool AFunctionalTest::IsReady_Implementation()
 
 void AFunctionalTest::FinishTest(EFunctionalTestResult TestResult, const FString& Message)
 {
-	const static UEnum* FTestResultTypeEnum = StaticEnum<EFunctionalTestResult>();
-	
 	if (bIsRunning == false)
 	{
 		// ignore
 		return;
 	}
-
-	//Force GC at the end of every test.
-	GEngine->ForceGarbageCollection();
-
+	
+	// Do reporting first. When we start cleaning things up internal states that capture results
+	// are reset.
+	
 	Result = TestResult;
+	
+	const static UEnum* FTestResultTypeEnum = StaticEnum<EFunctionalTestResult>();
+	
+	const FText ResultText = FTestResultTypeEnum->GetDisplayNameTextByValue( (int64)TestResult );
+	
+	//Output map and test name along with results
+	UWorld* World = GetWorld();
+	FString WorldName = (World ? UWorld::RemovePIEPrefix(World->GetMapName()) : "");
+	const FString OutMessage = FString::Printf(TEXT("%s %s %s: \"%s\"")
+											   , *WorldName
+											   , *GetName()
+											   , *ResultText.ToString()
+											   , Message.IsEmpty() == false ? *Message : TEXT("Test finished"));
+	
+	switch (TestResult)
+	{
+		case EFunctionalTestResult::Invalid:
+		case EFunctionalTestResult::Error:
+		case EFunctionalTestResult::Failed:
+			UE_VLOG(this, LogFunctionalTest, Error, TEXT("%s"), *OutMessage);
+			UE_LOG(LogFunctionalTest, Error, TEXT("%s"), *OutMessage);
+			break;
+			
+		case EFunctionalTestResult::Running:
+			UE_VLOG(this, LogFunctionalTest, Warning, TEXT("%s"), *OutMessage);
+			UE_LOG(LogFunctionalTest, Warning, TEXT("%s"), *OutMessage);
+			break;
+			
+		default:
+			UE_VLOG(this, LogFunctionalTest, Log, TEXT("%s"), *OutMessage);
+			UE_LOG(LogFunctionalTest, Log, TEXT("%s"), *OutMessage);
+			break;
+	}
+	
+	FFunctionalTestBase* FunctionalTest = static_cast<FFunctionalTestBase*>(FAutomationTestFramework::Get().GetCurrentTest());
+	if (FunctionalTest)
+	{
+		FunctionalTest->SetFunctionalTestRunning(false);
+	}
 
 	bIsRunning = false;
 	SetActorTickEnabled(false);
@@ -330,39 +388,11 @@ void AFunctionalTest::FinishTest(EFunctionalTestResult TestResult, const FString
 			(*ActorToDestroy)->SetLifeSpan( 0.01f );
 		}
 	}
-
-	const FText ResultText = FTestResultTypeEnum->GetDisplayNameTextByValue( (int64)TestResult );
-
-	//Output map and test name along with results
-	UWorld* World = GetWorld();
-	FString WorldName = (World ? UWorld::RemovePIEPrefix(World->GetMapName()) : "");
-	const FString OutMessage = FString::Printf(TEXT("%s %s %s: \"%s\"")
-		, *WorldName
-		, *GetName()
-		, *ResultText.ToString()
-		, Message.IsEmpty() == false ? *Message : TEXT("Test finished"));
-
+	
 	AutoDestroyActors.Reset();
-		
-	switch (TestResult)
-	{
-		case EFunctionalTestResult::Invalid:
-		case EFunctionalTestResult::Error:
-		case EFunctionalTestResult::Failed:
-			UE_VLOG(this, LogFunctionalTest, Error, TEXT("%s"), *OutMessage);
-			UE_LOG(LogFunctionalTest, Error, TEXT("%s"), *OutMessage);
-			break;
-
-		case EFunctionalTestResult::Running:
-			UE_VLOG(this, LogFunctionalTest, Warning, TEXT("%s"), *OutMessage);
-			UE_LOG(LogFunctionalTest, Warning, TEXT("%s"), *OutMessage);
-			break;
-		
-		default:
-			UE_VLOG(this, LogFunctionalTest, Log, TEXT("%s"), *OutMessage);
-			UE_LOG(LogFunctionalTest, Log, TEXT("%s"), *OutMessage);
-			break;
-	}
+	
+	//Force GC at the end of every test.
+	GEngine->ForceGarbageCollection();
 	
 	//if (AdditionalDetails.IsEmpty() == false)
 	//{
@@ -371,8 +401,6 @@ void AFunctionalTest::FinishTest(EFunctionalTestResult TestResult, const FString
 	//}
 
 	TestFinishedObserver.ExecuteIfBound(this);
-
-	FAutomationTestFramework::Get().SetTreatWarningsAsErrors(TOptional<bool>());
 }
 
 void AFunctionalTest::EndPlay(const EEndPlayReason::Type EndPlayReason)

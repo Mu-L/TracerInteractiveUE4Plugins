@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "CoreMinimal.h"
 #include "XRTrackingSystemBase.h"
 #include "ARTypes.h"
 #include "ARSessionConfig.h"
@@ -13,6 +14,34 @@ class UARSessionConfig;
 class UARTextureCameraImage;
 class UARTextureCameraDepth;
 struct FARTraceResult;
+
+#define DEFINE_AR_DELEGATE_BASE(DelegateName) \
+private: \
+	F##DelegateName DelegateName##Delegates; \
+public: \
+	virtual FDelegateHandle Add##DelegateName##Delegate_Handle(const F##DelegateName##Delegate& Delegate) \
+	{ \
+		DelegateName##Delegates.Add(Delegate); \
+		return Delegate.GetHandle(); \
+	} \
+	virtual void Clear##DelegateName##Delegate_Handle(FDelegateHandle& Handle) \
+	{ \
+		DelegateName##Delegates.Remove(Handle); \
+		Handle.Reset(); \
+	} \
+	virtual void Clear##DelegateName##Delegates(void* Object) \
+	{ \
+		DelegateName##Delegates.RemoveAll(Object); \
+	}
+
+#define DEFINE_AR_DELEGATE_ONE_PARAM(DelegateName, Param1Type) \
+	DEFINE_AR_DELEGATE_BASE(DelegateName) \
+protected: \
+	virtual void Trigger##DelegateName##Delegates(Param1Type Param1) \
+	{ \
+		DelegateName##Delegates.Broadcast(Param1); \
+	} \
+public:
 
 
 /**
@@ -54,6 +83,10 @@ public:
 	/** @return the tracking quality; if unable to determine tracking quality, return EARTrackingQuality::NotAvailable */
 	virtual EARTrackingQuality OnGetTrackingQuality() const = 0;
 	
+	/** @return the reason of limited tracking quality; if the state is not limited, return EARTrackingQualityReason::None */
+	// @todo merge-check
+//	virtual EARTrackingQualityReason OnGetTrackingQualityReason() const = 0;
+	
 	/**
 	 * Start the AR system.
 	 *
@@ -72,6 +105,9 @@ public:
 	/** @return the info about whether the session is running normally or encountered some kind of error. */
 	virtual FARSessionStatus OnGetARSessionStatus() const = 0;
 	
+	/** Returns true/false based on whether AR features are available */
+//	virtual bool IsARAvailable() const = 0;
+	
 	/**
 	 * Set a transform that will align the Tracking Space origin to the World Space origin.
 	 * This is useful for supporting static geometry and static lighting in AR.
@@ -88,7 +124,7 @@ public:
 	 */
 	virtual TArray<FARTraceResult> OnLineTraceTrackedObjects( const FVector2D ScreenCoord, EARLineTraceChannels TraceChannels ) = 0;
 	virtual TArray<FARTraceResult> OnLineTraceTrackedObjects( const FVector Start, const FVector End, EARLineTraceChannels TraceChannels ) = 0;
-
+	
 	/** @return a TArray of all the tracked geometries known to your ar system */
 	virtual TArray<UARTrackedGeometry*> OnGetAllTrackedGeometries() const = 0;
 	
@@ -135,19 +171,50 @@ public:
 	
 	/** @return The list of supported video formats for this device and session type */
 	virtual TArray<FARVideoFormat> OnGetSupportedVideoFormats(EARSessionType SessionType) const = 0;
-
+	
 	/** @return the current point cloud data for the ar scene */
 	virtual TArray<FVector> OnGetPointCloud() const = 0;
-
+	
 	/** Add candidate image at runtime @return True if it added the iamge successfully */
 	virtual bool OnAddRuntimeCandidateImage(UARSessionConfig* SessionConfig, UTexture2D* CandidateTexture, FString FriendlyName, float PhysicalWidth) = 0;
 
 	virtual void* GetARSessionRawPointer() = 0;
 	virtual void* GetGameThreadARFrameRawPointer() = 0;
+	
+	/** @return if a particular session feature is supported on this device */
+	virtual bool OnIsSessionTrackingFeatureSupported(EARSessionType SessionType, EARSessionTrackingFeature SessionTrackingFeature) const { return false; }
+	
+	/** @return all the tracked 2D poses in AR */
+	virtual TArray<FARPose2D> OnGetTracked2DPose() const { return {}; }
+	
+	/** @return the person segmentation image */
+	virtual UARTextureCameraImage* OnGetPersonSegmentationImage() const { return nullptr; }
+	
+	/** @return the person segmentation depth image */
+	virtual UARTextureCameraImage* OnGetPersonSegmentationDepthImage() const { return nullptr; }
 
-
-public:
 	virtual ~IARSystemSupport(){}
+
+	/**
+	 * Delegate called when an ar item is added to the scene
+	 *
+	 * @param Added the item that was added
+	 */
+	DEFINE_AR_DELEGATE_ONE_PARAM(OnTrackableAdded, UARTrackedGeometry* /* Added */);
+
+	/**
+	 * Delegate called when an ar item is updated
+	 *
+	 * @param Updated the item that was updated
+	 */
+	DEFINE_AR_DELEGATE_ONE_PARAM(OnTrackableUpdated, UARTrackedGeometry* /* Updated */);
+
+	/**
+	 * Delegate called when an ar item is removed from the scene
+	 *
+	 * @param Removed the item that was removed
+	 */
+	DEFINE_AR_DELEGATE_ONE_PARAM(OnTrackableRemoved, UARTrackedGeometry* /* Removed */);
 };
 
 

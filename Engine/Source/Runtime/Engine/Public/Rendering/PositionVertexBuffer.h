@@ -64,6 +64,10 @@ public:
 	*/
 	void Serialize(FArchive& Ar, bool bInNeedsCPUAccess);
 
+	void SerializeMetaData(FArchive& Ar);
+
+	void ClearMetaData();
+
 	/**
 	* Specialized assignment operator, only used when importing LOD's.
 	*/
@@ -90,6 +94,36 @@ public:
 		return NumVertices;
 	}
 
+	/** Create an RHI vertex buffer with CPU data. CPU data may be discarded after creation (see TResourceArray::Discard) */
+	FVertexBufferRHIRef CreateRHIBuffer_RenderThread();
+	FVertexBufferRHIRef CreateRHIBuffer_Async();
+
+	/** Similar to Init/ReleaseRHI but only update existing SRV so references to the SRV stays valid */
+	template <uint32 MaxNumUpdates>
+	void InitRHIForStreaming(FRHIVertexBuffer* IntermediateBuffer, TRHIResourceUpdateBatcher<MaxNumUpdates>& Batcher)
+	{
+		check(VertexBufferRHI);
+		if (IntermediateBuffer)
+		{
+			Batcher.QueueUpdateRequest(VertexBufferRHI, IntermediateBuffer);
+			if (PositionComponentSRV)
+			{
+				Batcher.QueueUpdateRequest(PositionComponentSRV, VertexBufferRHI, 4, PF_R32_FLOAT);
+			}
+		}
+	}
+
+	template <uint32 MaxNumUpdates>
+	void ReleaseRHIForStreaming(TRHIResourceUpdateBatcher<MaxNumUpdates>& Batcher)
+	{
+		check(VertexBufferRHI);
+		Batcher.QueueUpdateRequest(VertexBufferRHI, nullptr);
+		if (PositionComponentSRV)
+		{
+			Batcher.QueueUpdateRequest(PositionComponentSRV, nullptr, 0, 0);
+		}
+	}
+
 	// FRenderResource interface.
 	ENGINE_API virtual void InitRHI() override;
 	ENGINE_API virtual void ReleaseRHI() override;
@@ -101,6 +135,8 @@ public:
 	{
 		return Data;
 	}
+
+	FRHIShaderResourceView* GetSRV() const { return PositionComponentSRV; }
 
 private:
 
@@ -122,4 +158,7 @@ private:
 
 	/** Allocates the vertex data storage type. */
 	void AllocateData(bool bInNeedsCPUAccess = true);
+
+	template <bool bRenderThread>
+	FVertexBufferRHIRef CreateRHIBuffer_Internal();
 };

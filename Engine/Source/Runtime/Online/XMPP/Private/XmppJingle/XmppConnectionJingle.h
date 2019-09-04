@@ -35,7 +35,7 @@ public:
 	virtual const FXmppUserJid& GetUserJid() const override;
 
 	virtual FOnXmppLoginComplete& OnLoginComplete() override { return OnXmppLoginCompleteDelegate; }
-	virtual FOnXmppLogingChanged& OnLoginChanged() override { return OnXmppLogingChangedDelegate; }
+	virtual FOnXmppLoginChanged& OnLoginChanged() override { return OnXmppLoginChangedDelegate; }
 	virtual FOnXmppLogoutComplete& OnLogoutComplete() override { return OnXmppLogoutCompleteDelegate; }
 
 	virtual IXmppPresencePtr Presence() override;
@@ -43,6 +43,8 @@ public:
 	virtual IXmppMessagesPtr Messages() override;
 	virtual IXmppMultiUserChatPtr MultiUserChat() override;
 	virtual IXmppChatPtr PrivateChat() override;
+
+	virtual void DumpState() const override;
 
 	// FTickerObjectBase
 
@@ -96,7 +98,7 @@ private:
 
 	// completion delegates
 	FOnXmppLoginComplete OnXmppLoginCompleteDelegate;
-	FOnXmppLogingChanged OnXmppLogingChangedDelegate;
+	FOnXmppLoginChanged OnXmppLoginChangedDelegate;
 	FOnXmppLogoutComplete OnXmppLogoutCompleteDelegate;
 
 	/** access to presence implementation */

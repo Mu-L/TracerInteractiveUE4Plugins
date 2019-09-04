@@ -31,7 +31,7 @@ FConsoleSlateDebugger::FConsoleSlateDebugger()
 	, StopDebuggingCommand(
 		TEXT("SlateDebugger.Stop"),
 		*LOCTEXT("StopDebugger", "Stops the debugger.").ToString(),
-		FConsoleCommandDelegate::CreateRaw(this, &FConsoleSlateDebugger::StartDebugging))
+		FConsoleCommandDelegate::CreateRaw(this, &FConsoleSlateDebugger::StopDebugging))
 	, CaptureStackVariable(
 		TEXT("SlateDebugger.CaptureStack"),
 		bCaptureStack,
@@ -92,7 +92,7 @@ void FConsoleSlateDebugger::SetInputFilter(const TArray< FString >& Params)
 		return;
 	}
 
-	static const UEnum* SlateDebuggingInputEventEnum = FindObjectChecked<UEnum>(ANY_PACKAGE, TEXT("ESlateDebuggingInputEvent"));
+	static const UEnum* SlateDebuggingInputEventEnum = StaticEnum<ESlateDebuggingInputEvent>();
 	
 	const int64 InputEventEnumValue = SlateDebuggingInputEventEnum->GetValueByNameString(Params[0]);
 	if (InputEventEnumValue == INDEX_NONE)
@@ -115,7 +115,7 @@ void FConsoleSlateDebugger::RemoveListeners()
 	FSlateDebugging::Warning.RemoveAll(this);
 	FSlateDebugging::InputEvent.RemoveAll(this);
 	FSlateDebugging::FocusEvent.RemoveAll(this);
-	FSlateDebugging::NavigationEvent.RemoveAll(this);
+	FSlateDebugging::AttemptNavigationEvent.RemoveAll(this);
 	FSlateDebugging::MouseCaptureEvent.RemoveAll(this);
 #endif
 }
@@ -128,8 +128,9 @@ void FConsoleSlateDebugger::UpdateListeners()
 	FSlateDebugging::Warning.AddRaw(this, &FConsoleSlateDebugger::OnWarning);
 	FSlateDebugging::InputEvent.AddRaw(this, &FConsoleSlateDebugger::OnInputEvent);
 	FSlateDebugging::FocusEvent.AddRaw(this, &FConsoleSlateDebugger::OnFocusEvent);
-	FSlateDebugging::NavigationEvent.AddRaw(this, &FConsoleSlateDebugger::OnNavigationEvent);
-	FSlateDebugging::MouseCaptureEvent.AddRaw(this, &FConsoleSlateDebugger::OnStateChangeEvent);
+	FSlateDebugging::AttemptNavigationEvent.AddRaw(this, &FConsoleSlateDebugger::OnAttemptNavigationEvent);
+	FSlateDebugging::ExecuteNavigationEvent.AddRaw(this, &FConsoleSlateDebugger::OnExecuteNavigationEvent);
+	FSlateDebugging::MouseCaptureEvent.AddRaw(this, &FConsoleSlateDebugger::OnCaptureStateChangeEvent);
 #endif
 }
 
@@ -160,7 +161,7 @@ void FConsoleSlateDebugger::OnInputEvent(const FSlateDebuggingInputEventArgs& Ev
 
 	static const FText InputEventFormat = LOCTEXT("InputEventFormat", "{0} - ({1}) - [{2}]");
 
-	static const UEnum* SlateDebuggingInputEventEnum = FindObjectChecked<UEnum>(ANY_PACKAGE, TEXT("ESlateDebuggingInputEvent"));
+	static const UEnum* SlateDebuggingInputEventEnum = StaticEnum<ESlateDebuggingInputEvent>();
 	const FText InputEventTypeText = SlateDebuggingInputEventEnum->GetDisplayNameTextByValue((int64)EventArgs.InputEventType);
 	const FText AdditionalContent = FText::FromString(EventArgs.AdditionalContent);
 	const FText HandlerWidget = FText::FromString(FReflectionMetaData::GetWidgetDebugInfo(EventArgs.HandlerWidget.Get()));
@@ -237,24 +238,24 @@ void FConsoleSlateDebugger::OnFocusEvent(const FSlateDebuggingFocusEventArgs& Ev
 	OptionallyDumpCallStack();
 }
 
-void FConsoleSlateDebugger::OnNavigationEvent(const FSlateDebuggingNavigationEventArgs& EventArgs)
+void FConsoleSlateDebugger::OnAttemptNavigationEvent(const FSlateDebuggingNavigationEventArgs& EventArgs)
 {
-	static const UEnum* UINavigationEnum = FindObjectChecked<UEnum>(ANY_PACKAGE, TEXT("EUINavigation"));
-	static const UEnum* NavigationGenesisEnum = FindObjectChecked<UEnum>(ANY_PACKAGE, TEXT("ENavigationGenesis"));
-
-	static const FText NavEventFormat = LOCTEXT("NavEventFormat", "Nav: {0}:{1} | {2} -> {3}");
+	static const FText NavEventFormat = LOCTEXT("NavEventFormat", "Navigation User({4}) Source({0}:{1}) | {5} | {2} -> {3}");
 
 	const FText SourceWidget = FText::FromString(FReflectionMetaData::GetWidgetDebugInfo(&EventArgs.NavigationSource.GetLastWidget().Get()));
 	const FText DestinationWidget = FText::FromString(FReflectionMetaData::GetWidgetDebugInfo(EventArgs.DestinationWidget.Get()));
-	const FText NavigationTypeText = UINavigationEnum->GetDisplayNameTextByValue((int64)EventArgs.NavigationEvent.GetNavigationType());
-	const FText NavigationGenesisText = UINavigationEnum->GetDisplayNameTextByValue((int64)EventArgs.NavigationEvent.GetNavigationGenesis());
+	const FText NavigationTypeText = StaticEnum<EUINavigation>()->GetDisplayNameTextByValue((int64)EventArgs.NavigationEvent.GetNavigationType());
+	const FText NavigationGenesisText = StaticEnum<ENavigationGenesis>()->GetDisplayNameTextByValue((int64)EventArgs.NavigationEvent.GetNavigationGenesis());
+	const FText NavigationMethodText = StaticEnum<ESlateDebuggingNavigationMethod>()->GetDisplayNameTextByValue((int64)EventArgs.NavigationMethod);
 
 	FText EventText = FText::Format(
 		NavEventFormat,
-		NavigationTypeText,
 		NavigationGenesisText,
+		NavigationTypeText,
 		SourceWidget,
-		DestinationWidget
+		DestinationWidget,
+		EventArgs.NavigationEvent.GetUserIndex(),
+		NavigationMethodText
 	);
 
 	UE_LOG(LogSlateDebugger, Log, TEXT("%s"), *EventText.ToString());
@@ -262,16 +263,23 @@ void FConsoleSlateDebugger::OnNavigationEvent(const FSlateDebuggingNavigationEve
 	OptionallyDumpCallStack();
 }
 
-void FConsoleSlateDebugger::OnStateChangeEvent(const FSlateDebuggingMouseCaptureEventArgs& EventArgs)
+void FConsoleSlateDebugger::OnExecuteNavigationEvent(const FSlateDebuggingExecuteNavigationEventArgs& EventArgs)
 {
-	static const FText StateChangeEventFormat = LOCTEXT("StateChangeEventFormat", "{0} : {1}");
+	OptionallyDumpCallStack();
+}
 
-	const FText StateText = LOCTEXT("MouseCaptured", "Mouse Captured");
-	const FText SourceWidget = FText::FromString(FReflectionMetaData::GetWidgetDebugInfo(EventArgs.CapturingWidget.Get()));
+void FConsoleSlateDebugger::OnCaptureStateChangeEvent(const FSlateDebuggingMouseCaptureEventArgs& EventArgs)
+{
+	static const FText StateChangeEventFormat = LOCTEXT("StateChangeEventFormat", "{0}({1}:{2}) : {3}");
+
+	const FText StateText = EventArgs.Captured ? LOCTEXT("MouseCaptured", "Mouse Captured") : LOCTEXT("MouseCaptureLost", "Mouse Capture Lost");
+	const FText SourceWidget = FText::FromString(FReflectionMetaData::GetWidgetDebugInfo(EventArgs.CaptureWidget.Get()));
 
 	FText EventText = FText::Format(
 		StateChangeEventFormat,
 		StateText,
+		EventArgs.UserIndex,
+		EventArgs.PointerIndex,
 		SourceWidget
 	);
 

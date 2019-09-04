@@ -91,6 +91,19 @@ namespace EAndroidInstallLocation
 	};
 }
 
+/** The target Oculus Mobile device for application packaging */
+UENUM()
+namespace EOculusMobileDevice
+{
+	enum Type
+	{
+		/** Package for Oculus Go / Gear VR */
+		GearGo UMETA(DisplayName = "Oculus Go / Gear VR"),
+		/** Package for Oculus Quest */
+		Quest UMETA(DisplayName = "Oculus Quest"),
+	};
+}
+
 /**
  * Holds the game-specific achievement name and corresponding ID from Google Play services.
  */
@@ -188,6 +201,18 @@ public:
 	UPROPERTY(GlobalConfig, EditAnywhere, Category = "APK Packaging", Meta = (DisplayName = "Store Version (1-2147483647)", ClampMin="1", ClampMax="2147483647"))
 	int32 StoreVersion;
 
+	// Offset to add to store version for APKs generated for armv7
+	UPROPERTY(GlobalConfig, EditAnywhere, Category = "APK Packaging", meta = (DisplayName = "Store Version offset (armv7)"))
+	int32 StoreVersionOffsetArmV7;
+
+	// Offset to add to store version for APKs generated for arm64
+	UPROPERTY(GlobalConfig, EditAnywhere, Category = "APK Packaging", meta = (DisplayName = "Store Version offset (arm64)"))
+	int32 StoreVersionOffsetArm64;
+
+	// Offset to add to store version for APKs generated for x86_64
+	UPROPERTY(GlobalConfig, EditAnywhere, Category = "APK Packaging", meta = (DisplayName = "Store Version offset (x86_64)"))
+	int32 StoreVersionOffsetX8664;
+
 	// The visual application name displayed for end users
 	UPROPERTY(GlobalConfig, EditAnywhere, Category = "APK Packaging", Meta = (DisplayName = "Application Display Name (app_name), project name if blank"))
 	FString ApplicationDisplayName;
@@ -231,6 +256,10 @@ public:
 	// If checked, OBB is not limited to 2 GiB allowed by Google Play Store (still limited to 4 GiB ZIP limit). 
 	UPROPERTY(GlobalConfig, EditAnywhere, Category = "APK Packaging", Meta = (DisplayName = "Allow large OBB files."))
 	bool bAllowLargeOBBFiles;
+
+	// If checked, a patch OBB is generated for files not fitting in the main OBB (requires using multiple PAK files so split up content by chunk id). 
+	UPROPERTY(GlobalConfig, EditAnywhere, Category = "APK Packaging", Meta = (DisplayName = "Allow patch OBB file."))
+	bool bAllowPatchOBBFile;
 
 	// If checked, UE4Game files will be placed in ExternalFilesDir which is removed on uninstall.
 	// You should also check this if you need to save you game progress without requesting runtime WRITE_EXTERNAL_STORAGE permission in android api 23+
@@ -297,9 +326,9 @@ public:
 	UPROPERTY(GlobalConfig, EditAnywhere, Category = "Advanced APK Packaging", Meta = (DisplayName = "Add permissions to support Voice chat (RECORD_AUDIO)"))
 	bool bAndroidVoiceEnabled;
 
-	// Configure AndroidManifest.xml for Oculus Mobile
-	UPROPERTY(GlobalConfig, EditAnywhere, Category = "Advanced APK Packaging", Meta = (DisplayName = "Configure the AndroidManifest for deployment to Oculus Mobile"))
-	bool bPackageForGearVR;
+	// Package for an Oculus Mobile device
+	UPROPERTY(GlobalConfig, EditAnywhere, Category = "Advanced APK Packaging", Meta = (DisplayName = "Package for Oculus Mobile devices"))
+	TArray<TEnumAsByte<EOculusMobileDevice::Type>> PackageForOculusMobile;
 
 	// Removes Oculus Signature Files (osig) from APK if Gear VR APK signed for distribution and enables entitlement checker
 	UPROPERTY(GlobalConfig, EditAnywhere, Category = "Advanced APK Packaging", Meta = (DisplayName = "Remove Oculus Signature Files from Distribution APK"))
@@ -341,15 +370,15 @@ public:
 	UPROPERTY(GlobalConfig, EditAnywhere, Category = Build, meta = (DisplayName = "Support x86_64 [aka x64]"))
 	bool bBuildForX8664;
 
-	// Enable ES2 support?
-	UPROPERTY(GlobalConfig, EditAnywhere, Category = Build, meta = (DisplayName = "Support OpenGL ES2"))
+	// Include shaders for devices that support OpenGL ES 2 and above
+	UPROPERTY(GlobalConfig, EditAnywhere, Category = Build, meta = (DisplayName = "Support OpenGL ES2 (Deprecated)"))
 	bool bBuildForES2;
 
-	// Enable ES3.1 support?
+	// Include shaders for devices supporting OpenGL ES 3.1 and above (default)
 	UPROPERTY(GlobalConfig, EditAnywhere, Category = Build, meta = (DisplayName = "Support OpenGL ES3.1"))
 	bool bBuildForES31;
 
-	// Enable Vulkan rendering support?
+	// Support the Vulkan RHI and include Vulkan shaders
 	UPROPERTY(GlobalConfig, EditAnywhere, Category = Build, meta = (DisplayName = "Support Vulkan"))
 	bool bSupportsVulkan;
 
@@ -576,6 +605,10 @@ public:
 
 
 #if WITH_EDITOR
+	/** Called whenever a registered Android property changes. */
+	DECLARE_MULTICAST_DELEGATE_OneParam(FPropertyChanged, struct FPropertyChangedEvent&);
+	FPropertyChanged OnPropertyChanged;
+
 private:
 	// UObject interface
 	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;

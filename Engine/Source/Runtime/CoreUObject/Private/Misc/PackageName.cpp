@@ -24,8 +24,8 @@ DEFINE_LOG_CATEGORY_STATIC(LogPackageName, Log, All);
 
 FString FPackageName::AssetPackageExtension = TEXT(".uasset");
 FString FPackageName::MapPackageExtension = TEXT(".umap");
-FString FPackageName::TextAssetPackageExtension = TEXT(".utextasset");
-FString FPackageName::TextMapPackageExtension = TEXT(".utextmap");
+FString FPackageName::TextAssetPackageExtension = TEXT(".utxt");
+FString FPackageName::TextMapPackageExtension = TEXT(".utxtmap");
 
 /** Event that is triggered when a new content path is mounted */
 FPackageName::FOnContentPathMountedEvent FPackageName::OnContentPathMountedEvent;
@@ -844,7 +844,7 @@ bool FPackageName::DoesPackageExist(const FString& LongPackageName, const FGuid*
 
 	if (!FPackageName::TryConvertFilenameToLongPackageName(LongPackageName, PackageName))
 	{
-		verify(!FPackageName::IsValidLongPackageName(PackageName, true, &Reason));
+		verify(!FPackageName::IsValidLongPackageName(LongPackageName, true, &Reason));
 		UE_LOG(LogPackageName, Error, TEXT("Illegal call to DoesPackageExist: '%s' is not a standard unreal filename or a long path name. Reason: %s"), *LongPackageName, *Reason.ToString());
 		ensureMsgf(false, TEXT("Illegal call to DoesPackageExist: '%s' is not a standard unreal filename or a long path name. Reason: %s"), *LongPackageName, *Reason.ToString());
 		return false;
@@ -1273,6 +1273,7 @@ void FPackageName::QueryRootContentPaths( TArray<FString>& OutRootContentPaths )
 
 void FPackageName::EnsureContentPathsAreRegistered()
 {
+	SCOPED_BOOT_TIMING("FPackageName::EnsureContentPathsAreRegistered");
 	FLongPackagePathsSingleton::Get();
 }
 

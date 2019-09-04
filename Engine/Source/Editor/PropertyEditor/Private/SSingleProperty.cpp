@@ -90,6 +90,11 @@ public:
 		return false;
 	}
 
+	virtual TSharedPtr<FEditConditionParser> GetEditConditionParser() const override
+	{
+		return nullptr;
+	}
+
 private:
 	TWeakPtr< SSingleProperty > View;
 };
@@ -169,7 +174,7 @@ void SSingleProperty::SetObject( UObject* InObject )
 		if( NamePlacement != EPropertyNamePlacement::Hidden )
 		{
 			HorizontalBox->AddSlot()
-			.Padding( 2.0f, 0.0f, 2.0f, 4.0f )
+			.Padding(4.0f, 0.0f)
 			.AutoWidth()
 			.VAlign( VAlign_Center )
 			[
@@ -179,7 +184,7 @@ void SSingleProperty::SetObject( UObject* InObject )
 		}
 
 		HorizontalBox->AddSlot()
-		.Padding( 0.0f, 2.0f, 0.0f, 2.0f )
+		.Padding( 4.0f, 0.0f)
 		.FillWidth(1.0f)
 		.VAlign( VAlign_Center )
 		[

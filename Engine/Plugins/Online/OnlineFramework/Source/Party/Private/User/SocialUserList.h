@@ -5,6 +5,8 @@
 #include "User/ISocialUserList.h"
 #include "UObject/GCObject.h"
 
+enum class EMemberExitedReason : uint8;
+
 class FSocialUserList : public ISocialUserList, public FGCObject, public TSharedFromThis<FSocialUserList>
 {
 public:
@@ -17,6 +19,7 @@ public:
 	FOnUpdateComplete& OnUpdateComplete() const override { return OnUpdateCompleteEvent; }
 
 	void UpdateNow();
+	void SetAllowAutoUpdate(bool bIsEnabled) { bAllowAutoUpdate = bIsEnabled; }
 	void SetAutoUpdatePeriod(float InAutoUpdatePeriod);
 	const TArray<USocialUser*>& GetUsers() const { return Users; }
 
@@ -41,6 +44,9 @@ private:
 	void HandleRecentPlayerRemoved(USocialUser& RemovedUser, ESocialSubsystem SubsystemType);
 	
 	void HandleUserPresenceChanged(ESocialSubsystem SubsystemType, USocialUser* User);
+	void HandleUserGameSpecificStatusChanged(USocialUser* User);
+
+	void MarkUserAsDirty(USocialUser& User);
 
 	void TryAddUser(USocialUser& User);
 	void TryAddUserFast(USocialUser& User);
@@ -52,6 +58,11 @@ private:
 	bool EvaluatePresenceFlag(bool bPresenceValue, ESocialUserStateFlags Flag) const;
 
 	bool HandleAutoUpdateList(float);
+	void UpdateListInternal();
+
+	void HandlePartyJoined(USocialParty& Party);
+	void HandlePartyMemberCreated(UPartyMember& Member);
+	void HandlePartyMemberLeft(EMemberExitedReason Reason, UPartyMember* Member);
 
 private:
 	FSocialUserList(USocialToolkit& InOwnerToolkit, const FSocialUserListConfig& Config);
@@ -70,6 +81,8 @@ private:
 
 	FSocialUserListConfig ListConfig;
 
+	// give external access to disable list update for perf
+	bool bAllowAutoUpdate = true;
 	bool bNeedsSort = false;
 	float AutoUpdatePeriod = 5.f;
 	FDelegateHandle UpdateTickerHandle;

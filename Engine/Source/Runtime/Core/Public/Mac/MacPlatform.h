@@ -42,10 +42,13 @@ typedef FMacPlatformTypes FPlatformTypes;
 #define PLATFORM_SUPPORTS_TBB						1
 #define PLATFORM_SUPPORTS_STACK_SYMBOLS				1
 #define PLATFORM_HAS_BSD_SOCKET_FEATURE_MSG_DONTWAIT	1
+#define PLATFORM_IS_ANSI_MALLOC_THREADSAFE			1
 
 #define PLATFORM_RHITHREAD_DEFAULT_BYPASS			WITH_EDITOR
 
 #define PLATFORM_ENABLE_POPCNT_INTRINSIC 1
+
+#define PLATFORM_GLOBAL_LOG_CATEGORY				LogMac
 
 #define PLATFORM_BREAK()							__asm__("int $3")
 
@@ -88,8 +91,12 @@ typedef FMacPlatformTypes FPlatformTypes;
 #define OPERATOR_NEW_NOTHROW_SPEC  _NOEXCEPT
 #define OPERATOR_DELETE_NOTHROW_SPEC  _NOEXCEPT
 
+// DLL export and import for tpyes definitions
+#define DLLEXPORT_VTABLE	__attribute__ ((__type_visibility__("default")))
+#define DLLIMPORT_VTABLE	__attribute__ ((__type_visibility__("default")))
+
 // DLL export and import definitions
-#define DLLEXPORT
-#define DLLIMPORT
+#define DLLEXPORT			__attribute__((visibility("default")))
+#define DLLIMPORT			__attribute__((visibility("default")))
 
 #define MAC_MAX_PATH 1024

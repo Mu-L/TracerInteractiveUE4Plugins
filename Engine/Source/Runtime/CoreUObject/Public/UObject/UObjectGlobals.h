@@ -35,13 +35,6 @@ DECLARE_CYCLE_STAT_EXTERN(TEXT("~UObject"),STAT_DestroyObject,STATGROUP_Object, 
 DECLARE_DWORD_COUNTER_STAT_EXTERN(TEXT("FindObject"),STAT_FindObject,STATGROUP_ObjectVerbose, );
 DECLARE_DWORD_COUNTER_STAT_EXTERN(TEXT("FindObjectFast"),STAT_FindObjectFast,STATGROUP_ObjectVerbose, );
 
-/**
- * Network stats counters
- */
-
-DECLARE_CYCLE_STAT_EXTERN(TEXT("NetSerializeFast Array"),STAT_NetSerializeFastArray,STATGROUP_ServerCPU, COREUOBJECT_API);
-DECLARE_CYCLE_STAT_EXTERN(TEXT("NetSerializeFast Array BuildMap"),STAT_NetSerializeFastArray_BuildMap,STATGROUP_ServerCPU, COREUOBJECT_API);
-
 #define	INVALID_OBJECT	(UObject*)-1
 
 
@@ -51,6 +44,8 @@ DECLARE_CYCLE_STAT_EXTERN(TEXT("NetSerializeFast Array BuildMap"),STAT_NetSerial
 extern COREUOBJECT_API bool					GIsSavingPackage;
 /** This allows loading unversioned cooked content in the editor */
 extern COREUOBJECT_API bool					GAllowUnversionedContentInEditor;
+/** This allows loading cooked content in the editor */
+extern COREUOBJECT_API int32				GAllowCookedDataInEditorBuilds;
 
 /** Enum used in StaticDuplicateObject() and related functions to describe why something is being duplicated */
 namespace EDuplicateMode
@@ -189,8 +184,8 @@ COREUOBJECT_API FString ResolveIniObjectsReference(const FString& ObjectReferenc
  */
 COREUOBJECT_API bool ResolveName(UObject*& Outer, FString& ObjectsReferenceString, bool Create, bool Throw, uint32 LoadFlags = LOAD_None, FUObjectSerializeContext* InLoadContext = nullptr);
 
-/** Internal function used to possibly output an error message, taking into account the outer and LoadFlags */
-COREUOBJECT_API void SafeLoadError( UObject* Outer, uint32 LoadFlags, const TCHAR* ErrorMessage);
+/** Internal function used to possibly output an error message, taking into account the outer and LoadFlags. Returns true if a log message was emitted. */
+COREUOBJECT_API bool SafeLoadError( UObject* Outer, uint32 LoadFlags, const TCHAR* ErrorMessage);
 
 /** Internal function used to update the suffix to be given to the next newly-created unnamed object. */
 COREUOBJECT_API int32 UpdateSuffixForNextNewObject(UObject* Parent, UClass* Class, TFunctionRef<void(int32&)> IndexMutator);
@@ -431,6 +426,11 @@ COREUOBJECT_API float GetAsyncLoadPercentage( const FName& PackageName );
 */
 COREUOBJECT_API bool IsGarbageCollecting();
 
+/**
+* Whether we are running on the Garbage Collector Thread
+*/
+COREUOBJECT_API bool IsInGarbageCollectorThread();
+
 /** 
  * Deletes all unreferenced objects, keeping objects that have any of the passed in KeepFlags set. Will wait for other threads to unlock GC.
  *
@@ -470,6 +470,13 @@ COREUOBJECT_API bool IsIncrementalUnhashPending();
  * @return	true if incremental purge needs to be kicked off or is currently in progress, false othwerise.
  */
 COREUOBJECT_API bool IsIncrementalPurgePending();
+
+/**
+ * Gathers unreachable objects for IncrementalPurgeGarbage.
+ *
+ * @param bForceSingleThreaded true to force the process to just one thread
+ */
+COREUOBJECT_API void GatherUnreachableObjects(bool bForceSingleThreaded);
 
 /**
  * Incrementally purge garbage by deleting all unreferenced objects after routing Destroy.
@@ -692,7 +699,7 @@ public:
 		return !!Object && Object != (UObject*)InvalidPtrValue;
 	}
 	/** Convenience operator. Does the same thing as IsValid(). */
-	FORCEINLINE operator bool() const
+	FORCEINLINE explicit operator bool() const
 	{
 		return IsValid();
 	}
@@ -821,7 +828,7 @@ public:
 	TReturnType* CreateDefaultSubobject(UObject* Outer, FName SubobjectName, bool bTransient = false) const
 	{
 		UClass* ReturnType = TReturnType::StaticClass();
-		return static_cast<TReturnType*>(CreateDefaultSubobject(Outer, SubobjectName, ReturnType, ReturnType, /*bIsRequired =*/ true, /*bIsAbstract =*/ false, bTransient));
+		return static_cast<TReturnType*>(CreateDefaultSubobject(Outer, SubobjectName, ReturnType, ReturnType, /*bIsRequired =*/ true, bTransient));
 	}
 
 	/**
@@ -836,7 +843,7 @@ public:
 	TReturnType* CreateOptionalDefaultSubobject(UObject* Outer, FName SubobjectName, bool bTransient = false) const
 	{
 		UClass* ReturnType = TReturnType::StaticClass();
-		return static_cast<TReturnType*>(CreateDefaultSubobject(Outer, SubobjectName, ReturnType, ReturnType, /*bIsRequired =*/ false, /*bIsAbstract =*/ false, bTransient));
+		return static_cast<TReturnType*>(CreateDefaultSubobject(Outer, SubobjectName, ReturnType, ReturnType, /*bIsRequired =*/ false, bTransient));
 	}
 
 	/**
@@ -847,11 +854,19 @@ public:
 	 * @param	SubobjectName				name of the new component
 	 * @param bTransient		true if the component is being assigned to a transient property
 	 */
+
+	/**
+	 * Create a subobject that has the Abstract class flag, child classes are expected to override this by calling SetDefaultSubobjectClass with the same name and a non-abstract class.
+	 * @param	TReturnType					Class of return type, all overrides must be of this type
+	 * @param	SubobjectName				Name of the new component
+	 * @param	bTransient					True if the component is being assigned to a transient property. This does not make the component itself transient, but does stop it from inheriting parent defaults
+	 */
 	template<class TReturnType>
+	UE_DEPRECATED(4.23, "CreateAbstract did not work as intended and has been deprecated in favor of CreateDefaultObject")
 	TReturnType* CreateAbstractDefaultSubobject(UObject* Outer, FName SubobjectName, bool bTransient = false) const
 	{
 		UClass* ReturnType = TReturnType::StaticClass();
-		return static_cast<TReturnType*>(CreateDefaultSubobject(Outer, SubobjectName, ReturnType, ReturnType, /*bIsRequired =*/ true, /*bIsAbstract =*/ true, bTransient));
+		return static_cast<TReturnType*>(CreateDefaultSubobject(Outer, SubobjectName, ReturnType, ReturnType, /*bIsRequired =*/ true, bTransient));
 	}
 
 	/** 
@@ -865,7 +880,7 @@ public:
 	template<class TReturnType, class TClassToConstructByDefault> 
 	TReturnType* CreateDefaultSubobject(UObject* Outer, FName SubobjectName, bool bTransient = false) const 
 	{ 
-		return static_cast<TReturnType*>(CreateDefaultSubobject(Outer, SubobjectName, TReturnType::StaticClass(), TClassToConstructByDefault::StaticClass(), /*bIsRequired =*/ true, /*bIsAbstract =*/ false, bTransient));
+		return static_cast<TReturnType*>(CreateDefaultSubobject(Outer, SubobjectName, TReturnType::StaticClass(), TClassToConstructByDefault::StaticClass(), /*bIsRequired =*/ true, bTransient));
 	}
 
 	/**
@@ -898,10 +913,17 @@ public:
 	 * @param	TClassToConstructByDefault	if the derived class has not overridden, create a component of this type (default is TReturnType)
 	 * @param	Outer						outer to construct the subobject in
 	 * @param	SubobjectName				name of the new component
-	 * @param bIsRequired			true if the component is required and will always be created even if DoNotCreateDefaultSubobject was sepcified.
+	 * @param bIsRequired			true if the component is required and will always be created even if DoNotCreateDefaultSubobject was specified.
 	 * @param bIsTransient		true if the component is being assigned to a transient property
 	 */
-	UObject* CreateDefaultSubobject(UObject* Outer, FName SubobjectFName, UClass* ReturnType, UClass* ClassToCreateByDefault, bool bIsRequired, bool bAbstract, bool bIsTransient) const;
+	UObject* CreateDefaultSubobject(UObject* Outer, FName SubobjectFName, UClass* ReturnType, UClass* ClassToCreateByDefault, bool bIsRequired, bool bIsTransient) const;
+
+	UE_DEPRECATED(4.23, "CreateDefaultSubobject no longer takes bAbstract as a parameter.")
+	UObject* CreateDefaultSubobject(UObject* Outer, FName SubobjectFName, UClass* ReturnType, UClass* ClassToCreateByDefault, bool bIsRequired, bool bAbstract, bool bIsTransient) const
+	{
+		return CreateDefaultSubobject(Outer, SubobjectFName, ReturnType, ClassToCreateByDefault, bIsRequired, bIsTransient);
+	}
+
 
 	/**
 	 * Sets the class of a subobject for a base class
@@ -1731,6 +1753,22 @@ public:
 	}
 
 	/**
+	 * Adds const object reference, this reference can still be nulled out if forcefully collected.
+	 *
+	 * @param Object Referenced object.
+	 * @param ReferencingObject Referencing object (if available).
+	 * @param ReferencingProperty Referencing property (if available).
+	 */
+	template<class UObjectType>
+	void AddReferencedObject(const UObjectType*& Object, const UObject* ReferencingObject = nullptr, const UProperty* ReferencingProperty = nullptr)
+	{
+		// @todo: should be uncommented when proper usage is fixed everywhere
+		// static_assert(sizeof(UObjectType) > 0, "AddReferencedObject: Element must be a pointer to a fully-defined type");
+		// static_assert(TPointerIsConvertibleFromTo<UObjectType, const UObjectBase>::Value, "AddReferencedObject: Element must be a pointer to a type derived from UObject");
+		HandleObjectReference(*(UObject**)const_cast<UObjectType**>(&Object), ReferencingObject, ReferencingProperty);
+	}
+
+	/**
 	* Adds references to an array of objects.
 	*
 	* @param ObjectArray Referenced objects array.
@@ -1743,6 +1781,21 @@ public:
 		static_assert(sizeof(UObjectType) > 0, "AddReferencedObjects: Elements must be pointers to a fully-defined type");
 		static_assert(TPointerIsConvertibleFromTo<UObjectType, const UObjectBase>::Value, "AddReferencedObjects: Elements must be pointers to a type derived from UObject");
 		HandleObjectReferences(reinterpret_cast<UObject**>(ObjectArray.GetData()), ObjectArray.Num(), ReferencingObject, ReferencingProperty);
+	}
+
+	/**
+	* Adds references to an array of const objects, these objects can still be nulled out if forcefully collected.
+	*
+	* @param ObjectArray Referenced objects array.
+	* @param ReferencingObject Referencing object (if available).
+	* @param ReferencingProperty Referencing property (if available).
+	*/
+	template<class UObjectType>
+	void AddReferencedObjects(TArray<const UObjectType*>& ObjectArray, const UObject* ReferencingObject = nullptr, const UProperty* ReferencingProperty = nullptr)
+	{
+		static_assert(sizeof(UObjectType) > 0, "AddReferencedObjects: Elements must be pointers to a fully-defined type");
+		static_assert(TPointerIsConvertibleFromTo<UObjectType, const UObjectBase>::Value, "AddReferencedObjects: Elements must be pointers to a type derived from UObject");
+		HandleObjectReferences(reinterpret_cast<UObject**>(const_cast<UObjectType**>(ObjectArray.GetData())), ObjectArray.Num(), ReferencingObject, ReferencingProperty);
 	}
 
 	/**
@@ -2242,9 +2295,10 @@ namespace UE4CodeGen_Private
 		Set               = 0x18,
 		Struct            = 0x19,
 		Delegate          = 0x1A,
-		MulticastDelegate = 0x1B,
-		Text              = 0x1C,
-		Enum              = 0x1D,
+		InlineMulticastDelegate = 0x1B,
+		SparseMulticastDelegate = 0x1C,
+		Text              = 0x1D,
+		Enum              = 0x1E,
 
 		// Property-specific flags
 		NativeBool        = 0x20
@@ -2502,6 +2556,8 @@ namespace UE4CodeGen_Private
 		UObject*                          (*OuterFunc)();
 		UFunction*                        (*SuperFunc)();
 		const char*                         NameUTF8;
+		const char*                         OwningClassName;
+		const char*                         DelegateName;
 		SIZE_T                              StructureSize;
 		const FPropertyParamsBase* const*   PropertyArray;
 		int32                               NumProperties;
@@ -2620,7 +2676,7 @@ namespace UE4CodeGen_Private
 	#define IF_WITH_EDITORONLY_DATA(x, y) y
 #endif
 
-/** Enum used by UDataValidationManager to see if an asset has been validated for correctness */
+/** Enum used by DataValidation plugin to see if an asset has been validated for correctness */
 enum class EDataValidationResult : uint8
 {
 	/** Asset has failed validation */
@@ -2630,3 +2686,13 @@ enum class EDataValidationResult : uint8
 	/** Asset has not yet been validated */
 	NotValidated
 };
+
+/**
+ * Combines two different data validation results and returns the combined result.
+ *
+ * @param	Result1			One of the data validation results to be combined
+ * @param	Result2			One of the data validation results to be combined
+ *
+ * @return	Returns the combined data validation result
+ */
+COREUOBJECT_API EDataValidationResult CombineDataValidationResults(EDataValidationResult Result1, EDataValidationResult Result2);

@@ -6,7 +6,7 @@
 #include "Math/IntRect.h"
 
 // Windows has special needs with RECT, and we don't need this class on Windows anyway, so just skip it
-#if !PLATFORM_WINDOWS
+#if !PLATFORM_WINDOWS && !PLATFORM_HOLOLENS
 
 class FGenericPlatformSoftwareCursor : public ICursor
 {
@@ -16,6 +16,16 @@ public:
 
 	virtual ~FGenericPlatformSoftwareCursor()
 	{
+	}
+
+	virtual void* CreateCursorFromFile(const FString& InPathToCursorWithoutExtension, FVector2D HotSpot) override
+	{
+		return nullptr;
+	}
+
+	virtual void* CreateCursorFromRGBABuffer(const FColor* Pixels, int32 Width, int32 Height, FVector2D InHotSpot) override
+	{
+		return nullptr;
 	}
 
 	virtual FVector2D GetPosition() const override

@@ -74,21 +74,21 @@ namespace UnrealBuildTool
 
 		static private Dictionary<string, string[]> LibrariesToSkip = new Dictionary<string, string[]> {
 			{ "-armv7", new string[] { } },
-			{ "-arm64", new string[] { "nvToolsExt", "nvToolsExtStub", "ThirdParty/Oculus/LibOVRPlatform/LibOVRPlatform/lib/libovrplatformloader.so", "vorbisenc", } },
-			{ "-x86",   new string[] { "nvToolsExt", "nvToolsExtStub", "oculus", "OVRPlugin", "vrapi", "vrintegrationloader", "ovrkernel", "systemutils", "openglloader", "ThirdParty/Oculus/LibOVRPlatform/LibOVRPlatform/lib/libovrplatformloader.so", "opus", "speex_resampler", "vorbisenc", } },
-			{ "-x64",   new string[] { "nvToolsExt", "nvToolsExtStub", "oculus", "OVRPlugin", "vrapi", "vrintegrationloader", "ovrkernel", "systemutils", "openglloader", "ThirdParty/Oculus/LibOVRPlatform/LibOVRPlatform/lib/libovrplatformloader.so", "gpg", "vorbisenc", } },
+			{ "-arm64", new string[] { "nvToolsExt", "nvToolsExtStub", "vorbisenc", } },
+			{ "-x86",   new string[] { "nvToolsExt", "nvToolsExtStub", "oculus", "OVRPlugin", "vrapi", "vrintegrationloader", "ovrkernel", "systemutils", "openglloader", "ovrplatformloader", "opus", "speex_resampler", "vorbisenc", } },
+			{ "-x64",   new string[] { "nvToolsExt", "nvToolsExtStub", "oculus", "OVRPlugin", "vrapi", "vrintegrationloader", "ovrkernel", "systemutils", "openglloader", "ovrplatformloader", "gpg", "vorbisenc", } },
 		};
 
 		static private Dictionary<string, string[]> ModulesToSkip = new Dictionary<string, string[]> {
 			{ "-armv7", new string[] {  } },
-			{ "-arm64", new string[] { "OnlineSubsystemOculus", } },
-			{ "-x86",   new string[] { "OnlineSubsystemOculus", } },
-			{ "-x64",   new string[] { "OnlineSubsystemOculus", "OnlineSubsystemGooglePlay", } },
+			{ "-arm64", new string[] {  } },
+			{ "-x86",   new string[] { "OnlineSubsystemOculus", "OculusHMD" } },
+			{ "-x64",   new string[] { "OnlineSubsystemOculus", "OculusHMD", "OnlineSubsystemGooglePlay" } },
 		};
 
 		static private Dictionary<string, string[]> GeneratedModulesToSkip = new Dictionary<string, string[]> {
 			{ "-armv7", new string[] {  } },
-			{ "-arm64", new string[] { "OculusEntitlementCallbackProxy", "OculusCreateSessionCallbackProxy", "OculusFindSessionsCallbackProxy", "OculusIdentityCallbackProxy", "OculusNetConnection", "OculusNetDriver", "OnlineSubsystemOculus_init" } },
+			{ "-arm64", new string[] {  } },
 			{ "-x86",   new string[] { "OculusEntitlementCallbackProxy", "OculusCreateSessionCallbackProxy", "OculusFindSessionsCallbackProxy", "OculusIdentityCallbackProxy", "OculusNetConnection", "OculusNetDriver", "OnlineSubsystemOculus_init" } },
 			{ "-x64",   new string[] { "OculusEntitlementCallbackProxy", "OculusCreateSessionCallbackProxy", "OculusFindSessionsCallbackProxy", "OculusIdentityCallbackProxy", "OculusNetConnection", "OculusNetDriver", "OnlineSubsystemOculus_init" } },
 		};
@@ -146,12 +146,11 @@ namespace UnrealBuildTool
 		protected bool bEnableGcSections = true;
 
 		public AndroidToolChain(FileReference InProjectFile, bool bInUseLdGold, IReadOnlyList<string> InAdditionalArches, IReadOnlyList<string> InAdditionalGPUArches)
-			: this(CppPlatform.Android, InProjectFile, bInUseLdGold, InAdditionalArches, InAdditionalGPUArches, false)
+			: this(InProjectFile, bInUseLdGold, InAdditionalArches, InAdditionalGPUArches, false)
 		{
 		}
 
-		protected AndroidToolChain(CppPlatform InCppPlatform, FileReference InProjectFile, bool bInUseLdGold, IReadOnlyList<string> InAdditionalArches, IReadOnlyList<string> InAdditionalGPUArches, bool bAllowMissingNDK)
-			: base(InCppPlatform)
+		protected AndroidToolChain(FileReference InProjectFile, bool bInUseLdGold, IReadOnlyList<string> InAdditionalArches, IReadOnlyList<string> InAdditionalGPUArches, bool bAllowMissingNDK)
 		{
 			ProjectFile = InProjectFile;
 			bUseLdGold = bInUseLdGold;
@@ -1275,7 +1274,7 @@ namespace UnrealBuildTool
 			//string NDKRoot = Environment.GetEnvironmentVariable("NDKROOT").Replace("\\", "/");
 
 			string BasePCHName = "";
-			UEBuildPlatform BuildPlatform = UEBuildPlatform.GetBuildPlatform(UEBuildPlatform.CPPTargetPlatformToUnrealTargetPlatform(CompileEnvironment.Platform));
+			UEBuildPlatform BuildPlatform = UEBuildPlatform.GetBuildPlatform(CompileEnvironment.Platform);
 			string PCHExtension = ".gch";
 			if (CompileEnvironment.PrecompiledHeaderAction == PrecompiledHeaderAction.Include)
 			{
@@ -1409,7 +1408,6 @@ namespace UnrealBuildTool
 						{
 							if (CompileEnvironment.PrecompiledHeaderAction == PrecompiledHeaderAction.Include)
 							{
-								CompileAction.bIsUsingPCH = true;
 								FileItem ArchPrecompiledHeaderFile = FileItem.GetItemByPath(InlineArchName(BasePCHName, Arch, GPUArchitecture) + PCHExtension);
 								CompileAction.PrerequisiteItems.Add(ArchPrecompiledHeaderFile);
 							}
@@ -1570,8 +1568,9 @@ namespace UnrealBuildTool
 					int OutputPathIndex = ArchIndex * GPUArchitectures.Count + GPUArchIndex;
 
 					// Android will have an array of outputs
-					if (LinkEnvironment.OutputFilePaths.Count < OutputPathIndex ||
-						!LinkEnvironment.OutputFilePaths[OutputPathIndex].GetFileNameWithoutExtension().EndsWith(Arch + GPUArchitecture))
+					if (!LinkEnvironment.bIsBuildingDLL && // DLL compiles don't have the Arch embedded in the name
+						(LinkEnvironment.OutputFilePaths.Count < OutputPathIndex ||
+						!LinkEnvironment.OutputFilePaths[OutputPathIndex].GetFileNameWithoutExtension().EndsWith(Arch + GPUArchitecture)))
 					{
 						throw new BuildException("The OutputFilePaths array didn't match the Arches array in AndroidToolChain.LinkAllFiles");
 					}
@@ -1808,10 +1807,6 @@ namespace UnrealBuildTool
 			foreach (FileItem InputFile in LinkEnvironment.InputFiles)
 			{
 				ObjectFileDirectories.Add(InputFile.Location.Directory);
-			}
-			foreach (FileItem InputLibrary in LinkEnvironment.InputLibraries)
-			{
-				ObjectFileDirectories.Add(InputLibrary.Location.Directory);
 			}
 			foreach (string AdditionalLibrary in LinkEnvironment.AdditionalLibraries.Where(x => Path.IsPathRooted(x)))
 			{

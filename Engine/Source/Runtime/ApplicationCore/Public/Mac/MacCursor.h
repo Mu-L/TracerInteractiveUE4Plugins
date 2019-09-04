@@ -15,6 +15,10 @@ public:
 
 	virtual ~FMacCursor();
 
+	virtual void* CreateCursorFromFile(const FString& InPathToCursorWithoutExtension, FVector2D HotSpot) override;
+
+	virtual void* CreateCursorFromRGBABuffer(const FColor* Pixels, int32 Width, int32 Height, FVector2D InHotSpot) override;
+
 	virtual FVector2D GetPosition() const override;
 
 	virtual void SetPosition(const int32 X, const int32 Y) override;
@@ -61,6 +65,7 @@ private:
 	bool bIsVisible;
 	bool bUseHighPrecisionMode;
 	NSCursor* CurrentCursor;
+	int32 CursorTypeOverride;
 
 	FVector2D CurrentPosition;
 	FVector2D MouseWarpDelta;

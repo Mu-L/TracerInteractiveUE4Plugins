@@ -13,7 +13,7 @@ public class Engine : ModuleRules
 
 		SharedPCHHeaderFile = "Public/EngineSharedPCH.h";
 
-		PublicIncludePathModuleNames.AddRange(new string[] { "Renderer", "PacketHandler", "NetworkReplayStreaming", "AudioMixer", "AnimationCore" });
+		PublicIncludePathModuleNames.AddRange(new string[] { "Renderer", "PacketHandler", "AudioMixer", "AnimationCore" });
 
 		PrivateIncludePaths.AddRange(
 			new string[] {
@@ -32,7 +32,6 @@ public class Engine : ModuleRules
 				"EyeTracker",
 				"MRMesh",
 				"Advertising",
-				"NetworkReplayStreaming",
 				"MovieSceneCapture",
 				"AutomationWorker",
 				"MovieSceneCapture",
@@ -84,6 +83,10 @@ public class Engine : ModuleRules
 				"AudioPlatformConfiguration",
 				"MeshDescription",
 				"PakFile",
+                "NetworkReplayStreaming",
+				"PhysicsCore",
+				"PhysicsSQ",
+				"ChaosSolvers"
 			}
 		);
 
@@ -99,21 +102,21 @@ public class Engine : ModuleRules
 				"Analytics",
 				"AnalyticsET",
 				"AudioMixer",
-				//"CrunchCompression"
-			}
+                "CrunchCompression"
+            }
 		);
 
-		if((Target.Platform != UnrealTargetPlatform.TVOS && Target.Platform != UnrealTargetPlatform.HTML5))
-        {
-            // Cross platform Audio Codecs:
-            AddEngineThirdPartyPrivateStaticDependencies(Target,
+		if(Target.Platform != UnrealTargetPlatform.HTML5)
+		{
+			// Cross platform Audio Codecs:
+			AddEngineThirdPartyPrivateStaticDependencies(Target,
                     "UEOgg",
                     "Vorbis",
                     "VorbisFile",
                     "libOpus"
                     );
         }
-		
+        
 
 		DynamicallyLoadedModuleNames.Add("EyeTracker");
 
@@ -191,7 +194,7 @@ public class Engine : ModuleRules
 		// The AnimGraphRuntime module is not needed by Engine proper, but it is loaded in LaunchEngineLoop.cpp,
 		// and needs to be listed in an always-included module in order to be compiled into standalone games
 		DynamicallyLoadedModuleNames.Add("AnimGraphRuntime");
-		
+        
 		DynamicallyLoadedModuleNames.AddRange(
 			new string[]
 			{
@@ -302,8 +305,8 @@ public class Engine : ModuleRules
 
 		DynamicallyLoadedModuleNames.AddRange(
 			new string[] {
-				"NetworkReplayStreaming",
 				"NullNetworkReplayStreaming",
+				"LocalFileNetworkReplayStreaming",
 				"HttpNetworkReplayStreaming",
 				"Advertising"
 			}

@@ -57,6 +57,12 @@ public:
 	void ComputePackageDifferences(TSet<FName>& ModifiedPackages, TSet<FName>& NewPackages, TSet<FName>& RemovedPackages, TSet<FName>& IdenticalCookedPackages, TSet<FName>& IdenticalUncookedPackages, bool bRecurseModifications, bool bRecurseScriptModifications);
 
 	/**
+	 * Tracks packages that were kept from a previous cook.
+	 * Updates the current asset registry from the previous one for all kept packages.
+	 */
+	void UpdateKeptPackages(const TArray<FName>& InKeptPackages);
+
+	/**
 	 * GenerateChunkManifest 
 	 * generate chunk manifest for the packages passed in using the asset registry to determine dependencies
 	 *
@@ -160,6 +166,8 @@ private:
 	TSet<FName> CookedPackages;
 	/** List of packages that were filtered out from cooking */
 	TSet<FName> DevelopmentOnlyPackages;
+	/** List of packages that were kept from a previous cook */
+	TArray<FName> KeptPackages;
 	/** Map of Package name to Sandbox Paths */
 	typedef TMap<FName, FString> FChunkPackageSet;
 	/** Holds a reference to asset registry */
@@ -176,6 +184,8 @@ private:
 	bool bGenerateChunks;
 	/** True if we should use the AssetManager, false to use the deprecated path */
 	bool bUseAssetManager;
+	/** Highest chunk id, being used for geneating dependency tree */
+	int32 HighestChunkId;
 	/** Array of Maps with chunks<->packages assignments */
 	TArray<FChunkPackageSet*>		ChunkManifests;
 	/** Map of packages that has not been assigned to chunks */
@@ -191,6 +201,9 @@ private:
 
 	/** Dependency type to follow when adding package dependencies to chunks.*/
 	EAssetRegistryDependencyType::Type DependencyType;
+
+	/** Mapping from chunk id to pakchunk file index. If not defined, Pakchunk index will be the same as chunk id by default */
+	TMap<int32, int32> ChunkIdPakchunkIndexMapping;
 
 	struct FReferencePair
 	{
@@ -210,6 +223,17 @@ private:
 		uint32		ParentNodeIndex;
 	};
 
+	/**
+	 * Updates disk data with CookedHash and DiskSize from previous asset registry
+	 * for all packages kept from a previous cook.
+	 */
+	void UpdateKeptPackagesDiskData(const TArray<FName>& InKeptPackages);
+
+	/**
+	 * Updates AssetData with TagsAndValues from previous asset registry
+	 * for all packages kept from a previous cook.
+	 */
+	void UpdateKeptPackagesAssetData();
 
 	/**
 	 * Adds a package to chunk manifest
@@ -229,6 +253,14 @@ private:
 	void RemovePackageFromManifest(FName PackageName, int32 ChunkId);
 
 	/**
+	* Get pakchunk file index from ChunkID
+	*
+	* @param ChunkID
+	* @return Index of target pakchunk file
+	*/
+	int32 GetPakchunkIndex(int32 ChunkId);
+
+	/**
 	 * Walks the dependency graph of assets and assigns packages to correct chunks.
 	 * 
 	 * @param the InSandboxFile used during cook
@@ -240,7 +272,7 @@ private:
 	 */
 	void InjectEncryptionData(FAssetRegistryState& TargetState);
 
-	void AddPackageAndDependenciesToChunk(FChunkPackageSet* ThisPackageSet, FName InPkgName, const FString& InSandboxFile, int32 ChunkID, FSandboxPlatformFile* SandboxPlatformFile);
+	void AddPackageAndDependenciesToChunk(FChunkPackageSet* ThisPackageSet, FName InPkgName, const FString& InSandboxFile, int32 PakchunkIndex, FSandboxPlatformFile* SandboxPlatformFile);
 
 	/**
 	 * Returns the path of the temporary packaging directory for the specified platform.
@@ -322,9 +354,9 @@ private:
 	FString	GetShortestReferenceChain(FName PackageName, int32 ChunkID);
 
 	/** Deprecated method to remove redundant chunks */
-	void ResolveChunkDependencyGraph(const FChunkDependencyTreeNode& Node, FChunkPackageSet BaseAssetSet, TArray<TArray<FName>>& OutPackagesMovedBetweenChunks);
+	void ResolveChunkDependencyGraph(const FChunkDependencyTreeNode& Node, const TSet<FName>& BaseAssetSet, TArray<TArray<FName>>& OutPackagesMovedBetweenChunks);
 
-	/** Helper function to verify Chunk asset assigment is valid */
+	/** Helper function to verify Chunk asset assignment is valid */
 	bool CheckChunkAssetsAreNotInChild(const FChunkDependencyTreeNode& Node);
 
 	/** Helper function to create a given collection. */
@@ -332,5 +364,7 @@ private:
 
 	/** Helper function to fill a given collection with a set of packages */
 	void WriteCollection(FName CollectionName, const TArray<FName>& PackageNames);
-
+	
+	/** Initialize ChunkIdPakchunkIndexMapping and PakchunkIndexChunkIdMapping. */
+	void InitializeChunkIdPakchunkIndexMapping();
 };

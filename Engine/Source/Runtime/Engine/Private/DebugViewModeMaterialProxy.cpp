@@ -31,6 +31,8 @@ FDebugViewModeMaterialProxy::FDebugViewModeMaterialProxy(
 	, bSynchronousCompilation(InSynchronousCompilation)
 {
 	SetQualityLevelProperties(QualityLevel, false, FeatureLevel);
+	const EShaderPlatform ShaderPlatform = GetFeatureLevelShaderPlatform(FeatureLevel);
+
 	Material = InMaterialInterface->GetMaterial();
 	MaterialInterface->AppendReferencedTextures(ReferencedTextures);
 
@@ -62,22 +64,22 @@ FDebugViewModeMaterialProxy::FDebugViewModeMaterialProxy(
 		}
 
 		FMaterialShaderMapId ResourceId;
-		Resource->GetShaderMapId(GMaxRHIShaderPlatform, ResourceId);
+		Resource->GetShaderMapId(ShaderPlatform, ResourceId);
 
 		{
 			TArray<FShaderType*> ShaderTypes;
 			TArray<FVertexFactoryType*> VFTypes;
 			TArray<const FShaderPipelineType*> ShaderPipelineTypes;
-			GetDependentShaderAndVFTypes(GMaxRHIShaderPlatform, ShaderTypes, ShaderPipelineTypes, VFTypes);
+			GetDependentShaderAndVFTypes(ShaderPlatform, ShaderTypes, ShaderPipelineTypes, VFTypes);
 
 			// Overwrite the shader map Id's dependencies with ones that came from the FMaterial actually being compiled (this)
-			// This is necessary as we change FMaterial attributes like GetShadingModel(), which factor into the ShouldCache functions that determine dependent shader types
-			ResourceId.SetShaderDependencies(ShaderTypes, ShaderPipelineTypes, VFTypes, GMaxRHIShaderPlatform);
+			// This is necessary as we change FMaterial attributes like GetShadingModels(), which factor into the ShouldCache functions that determine dependent shader types
+			ResourceId.SetShaderDependencies(ShaderTypes, ShaderPipelineTypes, VFTypes, ShaderPlatform);
 		}
 
 		ResourceId.Usage = Usage;
 
-		CacheShaders(ResourceId, GMaxRHIShaderPlatform, true);
+		CacheShaders(ResourceId, ShaderPlatform);
 	}
 	else
 	{
@@ -163,9 +165,14 @@ enum EBlendMode FDebugViewModeMaterialProxy::GetBlendMode() const
 	return MaterialInterface ? MaterialInterface->GetBlendMode() : BLEND_Opaque;
 }
 
-enum EMaterialShadingModel FDebugViewModeMaterialProxy::GetShadingModel() const
+FMaterialShadingModelField FDebugViewModeMaterialProxy::GetShadingModels() const
 { 
-	return Material ? Material->GetShadingModel() : MSM_Unlit;
+	return Material ? Material->GetShadingModels() : MSM_Unlit;
+}
+
+bool FDebugViewModeMaterialProxy::IsShadingModelFromMaterialExpression() const
+{ 
+	return Material ? Material->IsShadingModelFromMaterialExpression() : false;
 }
 
 float FDebugViewModeMaterialProxy::GetOpacityMaskClipValue() const

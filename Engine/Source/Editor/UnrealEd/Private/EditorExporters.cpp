@@ -847,19 +847,23 @@ static void AddActorToOBJs(AActor* Actor, TArray<FOBJGeom*>& Objects, TSet<UMate
 			OBJGeom->Faces.AddZeroed( FMath::Square(ComponentSizeQuads) * 2 );
 
 			// Check if there are any holes
-			TArray<uint8> RawVisData;
+			TArray64<uint8> RawVisData;
 			uint8* VisDataMap = NULL;
 			int32 TexIndex = INDEX_NONE;
 			int32 WeightMapSize = (SubsectionSizeQuads + 1) * Component->NumSubsections;
 			int32 ChannelOffsets[4] = {(int32)STRUCT_OFFSET(FColor,R),(int32)STRUCT_OFFSET(FColor,G),(int32)STRUCT_OFFSET(FColor,B),(int32)STRUCT_OFFSET(FColor,A)};
 
-			for( int32 AllocIdx=0;AllocIdx < Component->WeightmapLayerAllocations.Num(); AllocIdx++ )
+			TArray<FWeightmapLayerAllocationInfo>& ComponentWeightmapLayerAllocations = Component->GetWeightmapLayerAllocations();
+			TArray<UTexture2D*>& ComponentWeightmapTextures = Component->GetWeightmapTextures();
+
+			for( int32 AllocIdx=0;AllocIdx < ComponentWeightmapLayerAllocations.Num(); AllocIdx++ )
 			{
-				FWeightmapLayerAllocationInfo& AllocInfo = Component->WeightmapLayerAllocations[AllocIdx];
+				FWeightmapLayerAllocationInfo& AllocInfo = ComponentWeightmapLayerAllocations[AllocIdx];
 				if( AllocInfo.LayerInfo == ALandscapeProxy::VisibilityLayer )
 				{
 					TexIndex = AllocInfo.WeightmapTextureIndex;
-					Component->WeightmapTextures[TexIndex]->Source.GetMipData(RawVisData, 0);
+
+					ComponentWeightmapTextures[TexIndex]->Source.GetMipData(RawVisData, 0);
 					VisDataMap = RawVisData.GetData() + ChannelOffsets[AllocInfo.WeightmapTextureChannel];
 				}
 			}

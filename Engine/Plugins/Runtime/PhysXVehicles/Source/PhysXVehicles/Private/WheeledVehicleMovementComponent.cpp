@@ -417,7 +417,7 @@ void UWheeledVehicleMovementComponent::SetupVehicleMass()
 	}
 
 	//Ensure that if mass properties ever change we set them back to our override
-	UpdatedPrimitive->GetBodyInstance()->OnRecalculatedMassProperties.AddUObject(this, &UWheeledVehicleMovementComponent::UpdateMassProperties);
+	UpdatedPrimitive->GetBodyInstance()->OnRecalculatedMassProperties().AddUObject(this, &UWheeledVehicleMovementComponent::UpdateMassProperties);
 
 	UpdateMassProperties(UpdatedPrimitive->GetBodyInstance());
 }
@@ -848,7 +848,8 @@ void UWheeledVehicleMovementComponent::OnDestroyPhysicsState()
 
 		FPhysXVehicleManager* VehicleManager = FPhysXVehicleManager::GetVehicleManagerFromScene(GetWorld()->GetPhysicsScene());
 		VehicleManager->RemoveVehicle( this );
-		PVehicle = NULL;
+		PVehicle = nullptr;
+		PVehicleDrive = nullptr;
 
 		if(MeshOnPhysicsStateChangeHandle.IsValid())
 		{

@@ -27,7 +27,7 @@ class UMovieSceneEventSectionBase;
  *         - Objects provided by the playback context.
  *     - Will only trigger if the specified object is of the same type as the parameter (or interface)
  */
-USTRUCT()
+USTRUCT(BlueprintType)
 struct MOVIESCENETRACKS_API FMovieSceneEvent
 {
 	GENERATED_BODY()
@@ -54,7 +54,7 @@ struct MOVIESCENETRACKS_API FMovieSceneEvent
 	 * The function that should be called to invoke this event.
 	 * Functions must have either no parameters, or a single, pass-by-value object/interface parameter, with no return parameter.
 	 */
-	UPROPERTY()
+	UPROPERTY(EditDefaultsOnly, Category="Sequencer")
 	FName FunctionName;
 
 #if WITH_EDITORONLY_DATA
@@ -103,6 +103,11 @@ public:
 	void SetFunctionEntry(UK2Node_FunctionEntry* Entry);
 
 private:
+
+	/**
+	* Validates that all Graphs in the blueprint are loaded.
+	*/
+	bool IsReadyToGetFunctionEntry();
 
 	/** Serialized soft pointer to the blueprint that contains the function graph endpoint for this event. Stored as a soft path so that renames of the blueprint don't break this event binding. */
 	UPROPERTY()

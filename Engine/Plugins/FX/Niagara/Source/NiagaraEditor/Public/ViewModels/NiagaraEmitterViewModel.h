@@ -11,7 +11,7 @@ class UNiagaraScript;
 class FNiagaraScriptViewModel;
 class FNiagaraScriptGraphViewModel;
 class UNiagaraEmitterEditorData;
-struct FNiagaraEmitterInstance;
+class FNiagaraEmitterInstance;
 struct FNiagaraVariable;
 struct FNiagaraParameterStore;
 struct FEdGraphEditAction;
@@ -28,20 +28,29 @@ public:
 
 public:
 	/** Creates a new emitter editor view model with the supplied emitter handle and simulation. */
-	FNiagaraEmitterViewModel(UNiagaraEmitter* InEmitter, TWeakPtr<FNiagaraEmitterInstance> InSimulation);
+	FNiagaraEmitterViewModel();
 	virtual ~FNiagaraEmitterViewModel();
 
 	/** Reuse this view model with new parameters.*/
-	bool Set(UNiagaraEmitter* InEmitter, TWeakPtr<FNiagaraEmitterInstance> InSimulation);
+	bool Set(UNiagaraEmitter* InEmitter, TWeakPtr<FNiagaraEmitterInstance, ESPMode::ThreadSafe> InSimulation);
 
 	/** Sets this view model to a different emitter. */
 	void SetEmitter(UNiagaraEmitter* InEmitter);
 
 	/** Sets the current simulation for the emitter. */
-	void SetSimulation(TWeakPtr<FNiagaraEmitterInstance> InSimulation);
+	void SetSimulation(TWeakPtr<FNiagaraEmitterInstance, ESPMode::ThreadSafe> InSimulation);
 
 	/** Gets the emitter represented by this view model. */
 	NIAGARAEDITOR_API UNiagaraEmitter* GetEmitter();
+
+	/** Gets the parent emitter for the emitter represented by this view model, if it has one. */
+	NIAGARAEDITOR_API const UNiagaraEmitter* GetParentEmitter() const;
+
+	/** Gets the text representation of the parent emitter name. */
+	NIAGARAEDITOR_API FText GetParentNameText() const;
+
+	/** Gets the text representation of the parent emitter path. */
+	NIAGARAEDITOR_API FText GetParentPathNameText() const;
 
 	/** Gets text representing stats for the emitter. */
 	//~ TODO: Instead of a single string here, we should probably have separate controls with tooltips etc.
@@ -101,7 +110,7 @@ private:
 	TWeakObjectPtr<UNiagaraEmitter> Emitter;
 
 	/** The runtime simulation for the emitter being displayed by the control */
-	TWeakPtr<FNiagaraEmitterInstance> Simulation;
+	TWeakPtr<FNiagaraEmitterInstance, ESPMode::ThreadSafe> Simulation;
 	
 	/** The view model for the update/spawn/event script. */
 	TSharedPtr<FNiagaraScriptViewModel> SharedScriptViewModel;

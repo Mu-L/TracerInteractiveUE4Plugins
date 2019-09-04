@@ -52,6 +52,7 @@ UGameplayEffect::UGameplayEffect(const FObjectInitializer& ObjectInitializer)
 {
 	DurationPolicy = EGameplayEffectDurationType::Instant;
 	bExecutePeriodicEffectOnApplication = true;
+	PeriodicInhibitionPolicy = EGameplayEffectPeriodInhibitionRemovedPolicy::NeverReset;
 	ChanceToApplyToTarget.SetValue(1.f);
 	StackingType = EGameplayEffectStackingType::None;
 	StackLimitCount = 0;
@@ -997,7 +998,7 @@ void FGameplayEffectSpec::SetLevel(float InLevel)
 			SetDuration(DefCalcDuration, false);
 		}
 
-		FString ContextString = FString::Printf(TEXT("FGameplayEffectSpec::SetLevel from effect %s"), *Def->GetName());
+		FString ContextString = Def->GetName();
 		Period = Def->Period.GetValueAtLevel(InLevel, &ContextString);
 		ChanceToApplyToTarget = Def->ChanceToApplyToTarget.GetValueAtLevel(InLevel, &ContextString);
 	}
@@ -1874,6 +1875,7 @@ FActiveGameplayEffectsContainer::FActiveGameplayEffectsContainer()
 	, PendingGameplayEffectHead(nullptr)
 {
 	PendingGameplayEffectNext = &PendingGameplayEffectHead;
+	SetDeltaSerializationEnabled(true);
 }
 
 FActiveGameplayEffectsContainer::~FActiveGameplayEffectsContainer()
@@ -1903,6 +1905,10 @@ void FActiveGameplayEffectsContainer::RegisterWithOwner(UAbilitySystemComponent*
 /** This is the main function that executes a GameplayEffect on Attributes and ActiveGameplayEffects */
 void FActiveGameplayEffectsContainer::ExecuteActiveEffectsFrom(FGameplayEffectSpec &Spec, FPredictionKey PredictionKey)
 {
+#if WITH_SERVER_CODE
+	SCOPE_CYCLE_COUNTER(STAT_ExecuteActiveEffectsFrom);
+#endif
+
 	FGameplayEffectSpec& SpecToUse = Spec;
 
 	// Capture our own tags.
@@ -2580,14 +2586,18 @@ float FActiveGameplayEffectsContainer::GetAttributeBaseValue(FGameplayAttribute 
 	float BaseValue = 0.f;
 	if (Owner)
 	{
+		const UAttributeSet* AttributeSet = Owner->GetAttributeSubobject(Attribute.GetAttributeSetClass());
+		if (!ensureMsgf(AttributeSet, TEXT("FActiveGameplayEffectsContainer::SetAttributeBaseValue: Unable to get attribute set for attribute %s"), *Attribute.AttributeName))
+		{
+			return BaseValue;
+		}
+
 		const FAggregatorRef* RefPtr = AttributeAggregatorMap.Find(Attribute);
 		// if this attribute is of type FGameplayAttributeData then use the base value stored there
 		if (FGameplayAttribute::IsGameplayAttributeDataProperty(Attribute.GetUProperty()))
 		{
 			const UStructProperty* StructProperty = Cast<UStructProperty>(Attribute.GetUProperty());
 			check(StructProperty);
-			const UAttributeSet* AttributeSet = Owner->GetAttributeSubobject(Attribute.GetAttributeSetClass());
-			ensure(AttributeSet);
 			const FGameplayAttributeData* DataPtr = StructProperty->ContainerPtrToValuePtr<FGameplayAttributeData>(AttributeSet);
 			if (DataPtr)
 			{
@@ -2621,6 +2631,8 @@ float FActiveGameplayEffectsContainer::GetEffectContribution(const FAggregatorEv
 
 bool FActiveGameplayEffectsContainer::InternalExecuteMod(FGameplayEffectSpec& Spec, FGameplayModifierEvaluatedData& ModEvalData)
 {
+	SCOPE_CYCLE_COUNTER(STAT_InternalExecuteMod);
+
 	check(Owner);
 
 	bool bExecuted = false;
@@ -2653,8 +2665,11 @@ bool FActiveGameplayEffectsContainer::InternalExecuteMod(FGameplayEffectSpec& Sp
 			}
 			ModifiedAttribute->TotalMagnitude += ModEvalData.Magnitude;
 
-			/** This should apply 'gamewide' rules. Such as clamping Health to MaxHealth or granting +3 health for every point of strength, etc */
-			AttributeSet->PostGameplayEffectExecute(ExecuteData);
+			{
+				SCOPE_CYCLE_COUNTER(STAT_PostGameplayEffectExecute);
+				/** This should apply 'gamewide' rules. Such as clamping Health to MaxHealth or granting +3 health for every point of strength, etc */
+				AttributeSet->PostGameplayEffectExecute(ExecuteData);
+			}
 
 #if ENABLE_VISUAL_LOG
 			DebugExecutedGameplayEffectData DebugData;
@@ -2737,7 +2752,7 @@ FActiveGameplayEffect* FActiveGameplayEffectsContainer::ApplyGameplayEffectSpec(
 		UAbilitySystemGlobals::Get().SetCurrentAppliedGE(&ExistingSpec);
 		
 		// How to apply multiple stacks at once? What if we trigger an overflow which can reject the application?
-		// We still want to apply the stacks that didnt push us over, but we also want to call HandleActiveGameplayEffectStackOverflow.
+		// We still want to apply the stacks that didn't push us over, but we also want to call HandleActiveGameplayEffectStackOverflow.
 		
 		// For now: call HandleActiveGameplayEffectStackOverflow only if we are ALREADY at the limit. Else we just clamp stack limit to max.
 		if (ExistingSpec.StackCount == ExistingSpec.Def->StackLimitCount)
@@ -2860,7 +2875,7 @@ FActiveGameplayEffect* FActiveGameplayEffectsContainer::ApplyGameplayEffectSpec(
 		const bool HasModifiedAttributes = AppliedEffectSpec.ModifiedAttributes.Num() > 0;
 		const bool HasDurationAndNoPeriod = AppliedEffectSpec.Def->DurationPolicy == EGameplayEffectDurationType::HasDuration && AppliedEffectSpec.GetPeriod() == UGameplayEffect::NO_PERIOD;
 		const bool HasPeriodAndNoDuration = AppliedEffectSpec.Def->DurationPolicy == EGameplayEffectDurationType::Instant &&
-											AppliedEffectSpec.GetPeriod() != UGameplayEffect::NO_PERIOD;
+											AppliedEffectSpec.GetPeriod() > UGameplayEffect::NO_PERIOD;
 		const bool ShouldBuildModifiedAttributeList = !HasModifiedAttributes && (HasDurationAndNoPeriod || HasPeriodAndNoDuration);
 		if (ShouldBuildModifiedAttributeList)
 		{
@@ -2939,7 +2954,7 @@ FActiveGameplayEffect* FActiveGameplayEffectsContainer::ApplyGameplayEffectSpec(
 	}
 	
 	// Register period callbacks with the timer manager
-	if (bSetPeriod && Owner && (AppliedEffectSpec.GetPeriod() != UGameplayEffect::NO_PERIOD))
+	if (bSetPeriod && Owner && (AppliedEffectSpec.GetPeriod() > UGameplayEffect::NO_PERIOD))
 	{
 		FTimerManager& TimerManager = Owner->GetWorld()->GetTimerManager();
 		FTimerDelegate Delegate = FTimerDelegate::CreateUObject(Owner, &UAbilitySystemComponent::ExecutePeriodicEffect, AppliedActiveGE->Handle);
@@ -3068,6 +3083,22 @@ void FActiveGameplayEffectsContainer::AddActiveGameplayEffectGrantedTagsAndModif
 			}
 		}
 	}
+	else
+	{
+		if (Effect.Spec.Def->PeriodicInhibitionPolicy != EGameplayEffectPeriodInhibitionRemovedPolicy::NeverReset && Owner && Owner->IsOwnerActorAuthoritative())
+		{
+			FTimerManager& TimerManager = Owner->GetWorld()->GetTimerManager();
+			FTimerDelegate Delegate = FTimerDelegate::CreateUObject(Owner, &UAbilitySystemComponent::ExecutePeriodicEffect, Effect.Handle);
+
+			// The timer manager moves things from the pending list to the active list after checking the active list on the first tick so we need to execute here
+			if (Effect.Spec.Def->PeriodicInhibitionPolicy == EGameplayEffectPeriodInhibitionRemovedPolicy::ExecuteAndResetPeriod)
+			{
+				TimerManager.SetTimerForNextTick(Delegate);
+			}
+
+			TimerManager.SetTimer(Effect.PeriodHandle, Delegate, Effect.Spec.GetPeriod(), true);
+		}
+	}
 
 	// Update our owner with the tags this GameplayEffect grants them
 	Owner->UpdateTagMap(Effect.Spec.Def->InheritableOwnedTagsContainer.CombinedTags, 1);
@@ -3100,8 +3131,6 @@ void FActiveGameplayEffectsContainer::AddActiveGameplayEffectGrantedTagsAndModif
 				AbilitySpecDef.SetByCallerTagMagnitudes = Effect.Spec.SetByCallerTagMagnitudes;
 
 				Owner->GiveAbility( FGameplayAbilitySpec(AbilitySpecDef, Effect.Spec.GetLevel(), Effect.Handle) );
-
-				ABILITY_LOG(Display, TEXT("::AddActiveGameplayEffectGrantedTagsAndModifiers granted ability %s (Handle %s) from GE %s (Handle: %s)"), *GetNameSafe(AbilitySpecDef.Ability), *AbilitySpecDef.AssignedHandle.ToString(), *Effect.GetDebugString(), *Effect.Handle.ToString());
 			}
 		}	
 	}
@@ -3703,8 +3732,8 @@ bool FActiveGameplayEffectsContainer::NetDeltaSerialize(FNetDeltaSerializeInfo& 
 			{
 				UNetConnection* Connection = Client->GetConnection();
 
-				// Even in mixed mode, we should always replicate out to replays so it has all information.
-				if (Connection->GetDriver()->NetDriverName != NAME_DemoNetDriver)
+				// Even in mixed mode, we should always replicate out to client side recorded replays so it has all information.
+				if (Connection->GetDriver()->NetDriverName != NAME_DemoNetDriver || IsNetAuthority())
 				{
 					// In mixed mode, we only want to replicate to the owner of this channel, minimal replication
 					// data will go to everyone else.

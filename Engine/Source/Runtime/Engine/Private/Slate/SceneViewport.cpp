@@ -198,7 +198,7 @@ void FSceneViewport::SetMouse( int32 X, int32 Y )
 {
 	const FVector2D NormalizedLocalMousePosition = FVector2D(X, Y) / GetSizeXY();
 	FVector2D AbsolutePos = CachedGeometry.LocalToAbsolute(NormalizedLocalMousePosition * CachedGeometry.GetLocalSize());
-	FSlateApplication::Get().SetCursorPos( AbsolutePos );
+	FSlateApplication::Get().SetCursorPos( AbsolutePos.RoundToVector() );
 	CachedCursorPos = FIntPoint(X, Y);
 }
 
@@ -487,7 +487,7 @@ FReply FSceneViewport::OnMouseButtonDown( const FGeometry& InGeometry, const FPo
 			!bNewMenuWasOpened && // We should not focus the viewport if a menu was opened as it would close the menu
 			(bPermanentCapture || bTemporaryCapture))
 		{
-			CurrentReplyState = AcquireFocusAndCapture(FIntPoint(InMouseEvent.GetScreenSpacePosition().X, InMouseEvent.GetScreenSpacePosition().Y));
+			CurrentReplyState = AcquireFocusAndCapture(FIntPoint(InMouseEvent.GetScreenSpacePosition().X, InMouseEvent.GetScreenSpacePosition().Y), EFocusCause::Mouse);
 		}
 	}
 
@@ -497,7 +497,7 @@ FReply FSceneViewport::OnMouseButtonDown( const FGeometry& InGeometry, const FPo
 	return CurrentReplyState;
 }
 
-FReply FSceneViewport::AcquireFocusAndCapture(FIntPoint MousePosition)
+FReply FSceneViewport::AcquireFocusAndCapture(FIntPoint MousePosition, EFocusCause FocusCause)
 {
 	bShouldCaptureMouseOnActivate = false;
 
@@ -506,7 +506,7 @@ FReply FSceneViewport::AcquireFocusAndCapture(FIntPoint MousePosition)
 	TSharedRef<SViewport> ViewportWidgetRef = ViewportWidget.Pin().ToSharedRef();
 
 	// Mouse down should focus viewport for user input
-	ReplyState.SetUserFocus(ViewportWidgetRef, EFocusCause::SetDirectly, true);
+	ReplyState.SetUserFocus(ViewportWidgetRef, FocusCause, true);
 
 	UWorld* World = ViewportClient->GetWorld();
 	if (World && World->IsGameWorld() && World->GetGameInstance() && (World->GetGameInstance()->GetFirstLocalPlayerController() || World->IsPlayInEditor()))
@@ -741,7 +741,7 @@ FReply FSceneViewport::OnTouchStarted( const FGeometry& MyGeometry, const FPoint
 			const bool bTemporaryCapture = ViewportClient->CaptureMouseOnClick() == EMouseCaptureMode::CaptureDuringMouseDown;
 			if (bTemporaryCapture)
 			{
-				CurrentReplyState = AcquireFocusAndCapture(FIntPoint(TouchEvent.GetScreenSpacePosition().X, TouchEvent.GetScreenSpacePosition().Y));
+				CurrentReplyState = AcquireFocusAndCapture(FIntPoint(TouchEvent.GetScreenSpacePosition().X, TouchEvent.GetScreenSpacePosition().Y), EFocusCause::Mouse);
 			}
 		}
 		else
@@ -791,6 +791,7 @@ FReply FSceneViewport::OnTouchEnded( const FGeometry& MyGeometry, const FPointer
 	}
 	else
 	{
+		UpdateCachedCursorPos(MyGeometry, TouchEvent);
 		CurCursorPos = CachedCursorPos;
 		CachedCursorPos = FIntPoint(-1, -1);
 	}
@@ -1089,7 +1090,7 @@ FReply FSceneViewport::OnFocusReceived(const FFocusEvent& InFocusEvent)
 				FWidgetPath PathToWidget;
 				SlateApp.GeneratePathToWidgetUnchecked(ViewportWidgetRef, PathToWidget);
 
-				return AcquireFocusAndCapture(GetSizeXY() / 2);
+				return AcquireFocusAndCapture(GetSizeXY() / 2, EFocusCause::Mouse);
 			}
 		}
 	}
@@ -1155,9 +1156,8 @@ FReply FSceneViewport::OnViewportActivated(const FWindowActivateEvent& InActivat
 		ViewportClient->Activated(this, InActivateEvent);
 		
 		// Determine if we're in permanent capture mode.  This cannot be cached as part of bShouldCaptureMouseOnActivate because it could change between window activate and deactivate
-		const bool bPermanentCapture =
-			!GIsEditor && ((ViewportClient->CaptureMouseOnClick() == EMouseCaptureMode::CapturePermanently) ||
-			(ViewportClient->CaptureMouseOnClick() == EMouseCaptureMode::CapturePermanently_IncludingInitialMouseDown));
+		const bool bPermanentCapture = ViewportClient->IsInPermanentCapture();
+
 
 		// If we are activating and had Mouse Capture on deactivate then we should get focus again
 		// It's important to note in the case of:
@@ -1169,12 +1169,13 @@ FReply FSceneViewport::OnViewportActivated(const FWindowActivateEvent& InActivat
 		//    - the user clicked in our window but not an area our viewport covers.
 		if (InActivateEvent.GetActivationType() == FWindowActivateEvent::EA_Activate && (bShouldCaptureMouseOnActivate || bPermanentCapture))
 		{
-			return AcquireFocusAndCapture(GetSizeXY() / 2);
+			return AcquireFocusAndCapture(GetSizeXY() / 2, EFocusCause::WindowActivate);
 		}
 	}
 
 	return FReply::Unhandled();
 }
+
 void FSceneViewport::OnViewportDeactivated(const FWindowActivateEvent& InActivateEvent)
 {
 	// We backup if we have capture for us on activation, however we also maintain "true" if it's already true!
@@ -1333,7 +1334,7 @@ void FSceneViewport::ResizeFrame(uint32 NewWindowSizeX, uint32 NewWindowSizeY, E
 				IHeadMountedDisplay::MonitorInfo MonitorInfo;
 				if (GEngine->XRSystem.IsValid() && GEngine->XRSystem->GetHMDDevice() && GEngine->XRSystem->GetHMDDevice()->GetHMDMonitorInfo(MonitorInfo))
 				{
-					if (MonitorInfo.DesktopX > 0 || MonitorInfo.DesktopY > 0)
+					if (MonitorInfo.DesktopX > 0 || MonitorInfo.DesktopY > 0 || MonitorInfo.ResolutionX > 0 || MonitorInfo.ResolutionY > 0)
 					{
 						NewWindowSize.X = MonitorInfo.ResolutionX;
 						NewWindowSize.Y = MonitorInfo.ResolutionY;
@@ -1393,6 +1394,11 @@ void FSceneViewport::ResizeFrame(uint32 NewWindowSizeX, uint32 NewWindowSizeY, E
 			UCanvas::UpdateAllCanvasSafeZoneData();
 		}
 	}
+}
+
+bool FSceneViewport::HasFixedSize() const
+{
+	return bForceViewportSize;
 }
 
 void FSceneViewport::SetFixedViewportSize(uint32 NewViewportSizeX, uint32 NewViewportSizeY)
@@ -1934,6 +1940,12 @@ void FSceneViewport::InitDynamicRHI()
 
 		static const auto CVarDefaultBackBufferPixelFormat = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.DefaultBackBufferPixelFormat"));
 		EPixelFormat SceneTargetFormat = EDefaultBackBufferPixelFormat::Convert2PixelFormat(EDefaultBackBufferPixelFormat::FromInt(CVarDefaultBackBufferPixelFormat->GetValueOnRenderThread()));
+#if PLATFORM_HTML5
+		if ( SceneTargetFormat == PF_A2B10G10R10 )
+		{	// UE-71220: this seems to be FDummyViewport - force to valid pixel format type for HTML5
+			SceneTargetFormat = PF_FloatRGBA;
+		}
+#endif
 
 		FRHIResourceCreateInfo CreateInfo;
 		FTexture2DRHIRef BufferedRTRHI;

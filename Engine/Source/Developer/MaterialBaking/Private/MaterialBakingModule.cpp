@@ -14,6 +14,7 @@
 #include "Framework/Application/SlateApplication.h"
 #include "MaterialBakingHelpers.h"
 #include "Async/ParallelFor.h"
+#include "Materials/MaterialInstance.h"
 
 #if WITH_EDITOR
 #include "Misc/FileHelper.h"
@@ -262,7 +263,7 @@ void FMaterialBakingModule::CleanupMaterialProxies()
 {
 	for (auto Iterator : MaterialProxyPool)
 	{
-		delete Iterator.Value;
+		delete Iterator.Value.Value;
 	}
 	MaterialProxyPool.Reset();
 }
@@ -306,16 +307,25 @@ FExportMaterialProxy* FMaterialBakingModule::CreateMaterialProxy(UMaterialInterf
 {
 	FExportMaterialProxy* Proxy = nullptr;
 
-	// Find any pooled material proxy matching this material and property
-	FExportMaterialProxy** FindResult = MaterialProxyPool.Find(TPair<UMaterialInterface*, EMaterialProperty>(Material, Property));
-	if (FindResult)
+	// Find all pooled material proxy matching this material
+	TArray<FMaterialPoolValue> Entries;
+	MaterialProxyPool.MultiFind(Material, Entries);
+
+	// Look for the matching property
+	for (FMaterialPoolValue& Entry : Entries)
 	{
-		Proxy = *FindResult;
+		if (Entry.Key == Property)
+		{
+			Proxy = Entry.Value;
+			break;
+		}
 	}
-	else
+
+	// Not found, create a new entry
+	if (Proxy == nullptr)
 	{
-		Proxy = new FExportMaterialProxy(Material, Property);		
-		MaterialProxyPool.Add(TPair<UMaterialInterface*, EMaterialProperty>(Material, Property), Proxy);
+		Proxy = new FExportMaterialProxy(Material, Property);
+		MaterialProxyPool.Add(Material, FMaterialPoolValue(Property, Proxy));
 	}
 
 	return Proxy;
@@ -407,13 +417,13 @@ void FMaterialBakingModule::ReadTextureOutput(FTextureRenderTargetResource* Rend
 
 					const FFloat16Color MagentaFloat16 = FFloat16Color(FLinearColor(1.0f, 0.0f, 1.0f));
 					FColor& Pixel8 = OutputColor[PixelX + YOffset];
-					/*if (Pixel16 == MagentaFloat16)
+					if (Pixel16 == MagentaFloat16)
 					{
 						Pixel8.R = 255;
 						Pixel8.G = 0;
 						Pixel8.B = 255;
 					}
-					else*/
+					else
 					{
 						Pixel8.R = (uint8)FMath::RoundToInt(Pixel16.R.GetFloat() * Scale);
 						Pixel8.G = (uint8)FMath::RoundToInt(Pixel16.G.GetFloat() * Scale);
@@ -437,12 +447,38 @@ void FMaterialBakingModule::OnObjectModified(UObject* Object)
 	{
 		if (Object && Object->IsA<UMaterialInterface>())
 		{
-			UMaterialInterface* Material = Cast<UMaterialInterface>(Object);
-			if (MaterialProxyPool.Contains(TPair<UMaterialInterface*, EMaterialProperty>(Material, MP_BaseColor)))
+			UMaterialInterface* MaterialToInvalidate = Cast<UMaterialInterface>(Object);
+
+			// Search our proxy pool for materials or material instances that refer to MaterialToInvalidate
+			for (auto It = MaterialProxyPool.CreateIterator(); It; ++It)
 			{
-				for (int32 PropertyIndex = 0; PropertyIndex < MP_MAX; ++PropertyIndex)
+				TWeakObjectPtr<UMaterialInterface> PoolMaterialPtr = It.Key();
+
+				// Remove stale entries from the pool
+				bool bMustDelete = PoolMaterialPtr.IsValid();
+				if (!bMustDelete)
 				{
-					MaterialProxyPool.Remove(TPair<UMaterialInterface*, EMaterialProperty>(Material, (EMaterialProperty)PropertyIndex));
+					bMustDelete = PoolMaterialPtr == MaterialToInvalidate;
+				}
+
+				// No match - Test the MaterialInstance hierarchy
+				if (!bMustDelete)
+				{
+					UMaterialInstance* MaterialInstance = Cast<UMaterialInstance>(PoolMaterialPtr);
+					while (!bMustDelete && MaterialInstance && MaterialInstance->Parent != nullptr)
+					{
+						bMustDelete = MaterialInstance->Parent == MaterialToInvalidate;
+						MaterialInstance = Cast<UMaterialInstance>(MaterialInstance->Parent);
+					}
+				}
+
+				// We have a match, remove the entry from our pool
+				if (bMustDelete)
+				{
+					FExportMaterialProxy* Proxy = It.Value().Value;
+					delete Proxy;
+
+					It.RemoveCurrent();
 				}
 			}
 		}

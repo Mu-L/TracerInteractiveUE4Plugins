@@ -34,6 +34,14 @@ typedef FSHAHash TPakChunkHash;
 #endif
 
 PAKFILE_API TPakChunkHash ComputePakChunkHash(const void* InData, int64 InDataSizeInBytes);
+FORCEINLINE FString ChunkHashToString(const TPakChunkHash& InHash)
+{
+#if PAKHASH_USE_CRC
+	return FString::Printf(TEXT("%08X"), InHash);
+#else
+	return LexToString(InHash);
+#endif
+}
 
 struct FPakChunkSignatureCheckFailedData
 {
@@ -53,6 +61,7 @@ struct FPakChunkSignatureCheckFailedData
 };
 /** Delegate for allowing a game to restrict the accessing of non-pak files */
 DECLARE_DELEGATE_RetVal_OneParam(bool, FFilenameSecurityDelegate, const TCHAR* /*InFilename*/);
+DECLARE_DELEGATE_ThreeParams(FPakCustomEncryptionDelegate, uint8* /*InData*/, uint32 /*InDataSize*/, FGuid /*InEncryptionKeyGuid*/);
 DECLARE_MULTICAST_DELEGATE_OneParam(FPakChunkSignatureCheckFailedHandler, const FPakChunkSignatureCheckFailedData&);
 DECLARE_MULTICAST_DELEGATE_OneParam(FPakMasterSignatureTableCheckFailureHandler, const FString&);
 
@@ -70,7 +79,7 @@ struct FPakInfo
 		/** Length of a compression format name */
 		CompressionMethodNameLen = 32,
 		/** Number of allowed different methods */
-		MaxNumCompressionMethods=4,
+		MaxNumCompressionMethods=5, // when we remove patchcompatibilitymode421 we can reduce this to 4
 	};
 
 	/** Version numbers. */
@@ -100,7 +109,7 @@ struct FPakInfo
 	/** Size (in bytes) of pak file index. */
 	int64 IndexSize;
 	/** Index SHA1 value. */
-	uint8 IndexHash[20];
+	FSHAHash IndexHash;
 	/** Flag indicating if the pak index has been encrypted. */
 	uint8 bEncryptedIndex;
 	/** Encryption key guid. Empty if we should use the embedded key. */
@@ -118,7 +127,6 @@ struct FPakInfo
 		, IndexSize(0)
 		, bEncryptedIndex(0)
 	{
-		FMemory::Memset(IndexHash, 0, sizeof(IndexHash));
 		// we always put in a NAME_None entry as index 0, so that an uncompressed PakEntry will have CompressionMethodIndex of 0 and can early out easily
 		CompressionMethods.Add(NAME_None);
 	}
@@ -173,7 +181,7 @@ struct FPakInfo
 		Ar << Version;
 		Ar << IndexOffset;
 		Ar << IndexSize;
-		Ar.Serialize(IndexHash, sizeof(IndexHash));
+		Ar << IndexHash;
 
 		if (Ar.IsLoading())
 		{
@@ -282,6 +290,15 @@ FORCEINLINE FArchive& operator<<(FArchive& Ar, FPakCompressedBlock& Block)
 
 /**
  * Struct holding info about a single file stored in pak file.
+ *
+ * CHANGE THIS FILE RARELY AND WITH GREAT CARE. MODIFICATIONS
+ * WILL RESULT IN EVERY PAK ENTRY IN AN EXISTING INSTALL HAVING TO
+ * TO BE PATCHED.
+ *
+*  On Fortnite that would be 15GB of data 
+* (250k pak entries * 64kb patch block) just to add/change/remove 
+ * a field.
+ * 
  */
 struct FPakEntry
 {
@@ -302,7 +319,7 @@ struct FPakEntry
 	/** Size of a compressed block in the file. */
 	uint32 CompressionBlockSize;
 	/** Index into the compression methods in this pakfile. */
-	uint8 CompressionMethodIndex;
+	uint32 CompressionMethodIndex;
 	/** Pak entry flags. */
 	uint8 Flags;
 	/** Flag is set to true when FileHeader has been checked against PakHeader. It is not serialized. */
@@ -507,13 +524,13 @@ class PAKFILE_API FPakFile : FNoncopyable
 	/** Pak Index organized as a map of directories for faster Directory iteration. Completely valid only when bFilenamesRemoved == false, although portions may still be valid after a call to UnloadPakEntryFilenames() while utilizing DirectoryRootsToKeep. */
 	TMap<FString, FPakDirectory> Index;
 	/** The hash to use when generating a filename hash (CRC) to avoid collisions within the hashed filename space. */
-	uint32 FilenameStartHash;
+	uint64 FilenameStartHash;
 	/** An array of 256 + 1 size that represents the starting index of the most significant byte of a hash group within the FilenameHashes array. */
 	uint32* FilenameHashesIndex;
 	/** An array of NumEntries size mapping 1:1 with FilenameHashes and describing the index of the FPakEntry. */
 	int32* FilenameHashesIndices;
 	/** A tightly packed array of filename hashes (CRC) of NumEntries size. */
-	uint32* FilenameHashes;
+	uint64* FilenameHashes;
 	/** A tightly packed array, NumEntries in size, of offsets to the pak entry data within the MiniPakEntries buffer */
 	uint32* MiniPakEntriesOffsets;
 	/** Memory buffer representing the minimal file entry headers, NumEntries in size */
@@ -539,8 +556,8 @@ class PAKFILE_API FPakFile : FNoncopyable
 
 	static inline int32 CDECL CompareFilenameHashes(const void* Left, const void* Right)
 	{
-		const uint32* LeftHash = (const uint32*)Left;
-		const uint32* RightHash = (const uint32*)Right;
+		const uint64* LeftHash = (const uint64*)Left;
+		const uint64* RightHash = (const uint64*)Right;
 		if (*LeftHash < *RightHash)
 		{
 			return -1;
@@ -599,6 +616,13 @@ public:
 	}
 
 	/**
+	 * Checks if the pak has valid chunk signature checking data, and that the data passed the initial signing check
+	 *
+	 * @return true if this pak file has passed the initial signature checking phase
+	 */
+	bool PassedSignatureChecks() const;
+
+	/**
 	 * Gets pak filename.
 	 *
 	 * @return Pak filename.
@@ -626,6 +650,16 @@ public:
 	{
 		return Index;
 	}
+
+	/**
+	 * Gets the number of files in this pak.
+	 */
+	int32 GetNumFiles() const
+	{
+		return Files.Num();
+	}
+
+	void GetFilenames(TArray<FString>& OutFileList) const;
 
 	void GetFilenamesInChunk(const TArray<int32>& InChunkIDs, TArray<FString>& OutFileList);
 
@@ -914,11 +948,13 @@ public:
 
 	/**
 	 * Saves memory by hashing the filenames, if possible. After this process,
-	 * wildcard scanning of pak entries can no longer be performed.
+	 * wildcard scanning of pak entries can no longer be performed. Returns TRUE
+	 * if there were any collisions within this pak or with any of the previous pak results supplied in CrossPakCollisionChecker
 	 *
+	 * @param CrossPakCollisionChecker A map of hash->fileentry records encountered during filename unloading on other pak files. Used to detect collisions with entries in other pak files.
 	 * @param DirectoryRootsToKeep An array of strings in wildcard format that specify whole directory structures of filenames to keep in memory for directory iteration to work.
 	 */
-	void UnloadPakEntryFilenames(TArray<FString>* DirectoryRootsToKeep = nullptr);
+	bool UnloadPakEntryFilenames(TMap<uint64, FPakEntry>& CrossPakCollisionChecker, TArray<FString>* DirectoryRootsToKeep = nullptr);
 
 	/**
 	 * Lower memory usage by bit-encoding the pak file entry information.
@@ -1429,14 +1465,14 @@ class PAKFILE_API FPakPlatformFile : public IPlatformFile
 	 * @param Directory Directory to (recursively) look for pak files in
 	 * @param OutPakFiles List of pak files
 	 */
-	static void FindPakFilesInDirectory(IPlatformFile* LowLevelFile, const TCHAR* Directory, TArray<FString>& OutPakFiles);
+	static void FindPakFilesInDirectory(IPlatformFile* LowLevelFile, const TCHAR* Directory, const FString& WildCard, TArray<FString>& OutPakFiles);
 
 	/**
 	 * Finds all pak files in the known pak folders
 	 *
 	 * @param OutPakFiles List of all found pak files
 	 */
-	static void FindAllPakFiles(IPlatformFile* LowLevelFile, const TArray<FString>& PakFolders, TArray<FString>& OutPakFiles);
+	static void FindAllPakFiles(IPlatformFile* LowLevelFile, const TArray<FString>& PakFolders, const FString& WildCard, TArray<FString>& OutPakFiles);
 
 	/**
 	 * When security is enabled, determine if this filename can be looked for in the lower level file system
@@ -1469,6 +1505,11 @@ public:
 	{
 		return TEXT("PakFile");
 	}
+
+	/**
+	 * Get the wild card pattern used to identify paks to load on startup
+	 */
+	static const TCHAR* GetMountStartupPaksWildCard();
 
 	/**
 	* Determine location information for a given chunk ID. Will be DoesNotExist if the pak file wasn't detected, NotAvailable if it exists but hasn't been mounted due to a missing encryption key, or LocalFast if it exists and has been mounted
@@ -1509,9 +1550,16 @@ public:
 	static void GetPakEncryptionKey(FAES::FAESKey& OutKey, const FGuid& InEncryptionKeyGuid);
 
 	/**
-	* Helper function for accessing pak the signing public key
+	* Load a pak signature file. Validates the contents by comparing a SHA hash of the chunk table against and encrypted version that
+	* is stored within the file. Returns nullptr if the data is missing or fails the signature check. This function also calls
+	* the generic pak signature failure delegates if anything is wrong.
 	*/
-	static TSharedPtr<FRSA::FKey, ESPMode::ThreadSafe> GetPakSigningKey();
+	static TSharedPtr<const struct FPakSignatureFile, ESPMode::ThreadSafe> GetPakSignatureFile(const TCHAR* InFilename);
+
+	/**
+	 * Remove the intenrally cached pointer to the signature file for the specified pak
+	 */
+	static void RemoveCachedPakSignaturesFile(const TCHAR* InFilename);
 
 	/**
 	 * Constructor.
@@ -1528,6 +1576,8 @@ public:
 	virtual bool ShouldBeUsed(IPlatformFile* Inner, const TCHAR* CmdLine) const override;
 	virtual bool Initialize(IPlatformFile* Inner, const TCHAR* CommandLineParam) override;
 	virtual void InitializeNewAsyncIO() override;
+
+	void OptimizeMemoryUsageForMountedPaks();
 
 	virtual IPlatformFile* GetLowerLevel() override
 	{
@@ -1555,7 +1605,8 @@ public:
 
 	bool Unmount(const TCHAR* InPakFilename);
 
-	int32 MountAllPakFiles(const TArray<FString>& PakFilesToMount);
+	int32 MountAllPakFiles(const TArray<FString>& PakFolders);
+	int32 MountAllPakFiles(const TArray<FString>& PakFolders, const FString& WildCard);
 
 
 	/**
@@ -1579,7 +1630,7 @@ public:
 			if (DeletedReadOrder != -1 && DeletedReadOrder > PakReadOrder)
 			{
 				//found a delete record in a higher priority patch level, but now we're at a lower priority set - don't search further back or we'll find the original, old file.
-				UE_LOG( LogPakFile, Display, TEXT("Delete Record: Accepted a delete record for %s"), Filename );
+				UE_LOG( LogPakFile, Verbose, TEXT("Delete Record: Accepted a delete record for %s"), Filename );
 				return false;
 			}
 
@@ -1590,13 +1641,13 @@ public:
 				{
 					*OutPakFile = Paks[PakIndex].PakFile;
 				}
-				UE_CLOG( DeletedReadOrder != -1, LogPakFile, Display, TEXT("Delete Record: Ignored delete record for %s - found it in %s instead (asset was moved between chunks)"), Filename, *Paks[PakIndex].PakFile->GetFilename() );
+				UE_CLOG( DeletedReadOrder != -1, LogPakFile, Verbose, TEXT("Delete Record: Ignored delete record for %s - found it in %s instead (asset was moved between chunks)"), Filename, *Paks[PakIndex].PakFile->GetFilename() );
 				return true;
 			}
 			else if (FindResult == FPakFile::EFindResult::FoundDeleted )
 			{
 				DeletedReadOrder = PakReadOrder;
-				UE_LOG( LogPakFile, Display, TEXT("Delete Record: Found a delete record for %s in %s"), Filename, *Paks[PakIndex].PakFile->GetFilename() );
+				UE_LOG( LogPakFile, Verbose, TEXT("Delete Record: Found a delete record for %s in %s"), Filename, *Paks[PakIndex].PakFile->GetFilename() );
 			}
 		}
 
@@ -2295,6 +2346,9 @@ public:
 	// Access static delegate for loose file security
 	static FFilenameSecurityDelegate& GetFilenameSecurityDelegate();
 
+	// Access static delegate for custom encryption
+	static FPakCustomEncryptionDelegate& GetPakCustomEncryptionDelegate();
+
 	// Access static delegate for handling a pak signature check failure
 	static FPakChunkSignatureCheckFailedHandler& GetPakChunkSignatureCheckFailedHandler();
 
@@ -2303,6 +2357,7 @@ public:
 
 	// Get a list of which files live in a given chunk
 	void GetFilenamesInChunk(const FString& InPakFilename, const TArray<int32>& InChunkIDs, TArray<FString>& OutFileList);
+	void GetFilenamesInPakFile(const FString& InPakFilename, TArray<FString>& OutFileList) ;
 
 	void UnloadPakEntryFilenames(TArray<FString>* DirectoryRootsToKeep = nullptr);
 	void ShrinkPakEntriesMemoryUsage();
@@ -2321,6 +2376,10 @@ public:
 	static void TrackPak(const TCHAR* Filename, const FPakEntry* PakEntry);
 	static TMap<FString, int32>& GetPakMap() { return GPakSizeMap; }
 #endif
+
+	// Internal cache of pak signature files
+	static TMap<FName, TSharedPtr<const struct FPakSignatureFile, ESPMode::ThreadSafe>> PakSignatureFileCache;
+	static FCriticalSection PakSignatureFileCacheLock;
 };
 
 /**
@@ -2333,7 +2392,7 @@ struct FPakSignatureFile
 
 	enum class EVersion
 	{
-		Legacy,
+		Invalid,
 		First,
 
 		Last,
@@ -2355,11 +2414,11 @@ struct FPakSignatureFile
 	/**
 	 * Initialize and hash the CRC list then use the provided private key to encrypt the hash
 	 */
-	void SetChunkHashesAndSign(const TArray<TPakChunkHash>& InChunkHashes, const FRSA::TKeyPtr InKey)
+	void SetChunkHashesAndSign(const TArray<TPakChunkHash>& InChunkHashes, const FRSAKeyHandle InKey)
 	{
 		ChunkHashes = InChunkHashes;
 		DecryptedHash = ComputeCurrentMasterHash();
-		FRSA::Encrypt(FRSA::EKeyType::Private, DecryptedHash.Hash, ARRAY_COUNT(FSHAHash::Hash), EncryptedHash, InKey);
+		FRSA::EncryptPrivate(TArrayView<const uint8>(DecryptedHash.Hash, ARRAY_COUNT(FSHAHash::Hash)), EncryptedHash, InKey);
 	}
 
 	/**
@@ -2367,20 +2426,14 @@ struct FPakSignatureFile
 	 */
 	void Serialize(FArchive& Ar)
 	{
-		int64 StartPos = Ar.Tell();
 		uint32 FileMagic = Magic;
 		Ar << FileMagic;
 
 		if (Ar.IsLoading() && FileMagic != Magic)
 		{
-			// Old format with no versioning! Go back to where we were and mark our version as legacy
-			Ar.Seek(StartPos);
-			Version = EVersion::Legacy;
-			TEncryptionInt LegacyEncryptedCRC;
-			Ar << LegacyEncryptedCRC;
-			Ar << ChunkHashes;
-			// Note that we don't do any actual signature checking here because this is old data that won't have been
-			// encrypted with the new larger keys.
+			Version = EVersion::Invalid;
+			EncryptedHash.Empty();
+			ChunkHashes.Empty();
 			return;
 		}
 
@@ -2392,27 +2445,36 @@ struct FPakSignatureFile
 	/**
 	 * Decrypt the chunk CRCs hash and validate that it matches the current one
 	 */
-	bool DecryptSignatureAndValidate(const FString& InFilename)
+	bool DecryptSignatureAndValidate(const FRSAKeyHandle InKey, const FString& InFilename)
 	{
-		TSharedPtr<FRSA::FKey, ESPMode::ThreadSafe> PublicKey = FPakPlatformFile::GetPakSigningKey();
-		return DecryptSignatureAndValidate(PublicKey, InFilename);
-	}
-
-	/**
-	 * Decrypt the chunk CRCs hash and validate that it matches the current one
-	 */
-	bool DecryptSignatureAndValidate(FRSA::TKeyPtr InKey, const FString& InFilename)
-	{
-		FRSA::Decrypt(FRSA::EKeyType::Public, EncryptedHash, DecryptedHash.Hash, ARRAY_COUNT(FSHAHash::Hash), InKey);
-
-		FSHAHash CurrentHash = ComputeCurrentMasterHash();
-		if (DecryptedHash != CurrentHash)
+		if (Version == EVersion::Invalid)
 		{
-			FPakPlatformFile::GetPakMasterSignatureTableCheckFailureHandler().Broadcast(InFilename);
-			return false;
+			UE_LOG(LogPakFile, Warning, TEXT("Pak signature file for '%s' was invalid"), *InFilename);
+		}
+		else
+		{
+			TArray<uint8> Decrypted;
+			int32 BytesDecrypted = FRSA::DecryptPublic(EncryptedHash, Decrypted, InKey);
+			if (BytesDecrypted == ARRAY_COUNT(FSHAHash::Hash))
+			{
+				FSHAHash CurrentHash = ComputeCurrentMasterHash();
+				if (FMemory::Memcmp(Decrypted.GetData(), CurrentHash.Hash, Decrypted.Num()) == 0)
+				{
+					return true;
+				}
+				else
+				{
+					UE_LOG(LogPakFile, Warning, TEXT("Pak signature table validation failed for '%s'! Expected %s, Received %s"), *InFilename, *DecryptedHash.ToString(), *CurrentHash.ToString());
+				}
+			}
+			else
+			{
+				UE_LOG(LogPakFile, Warning, TEXT("Pak signature table validation failed for '%s'! Failed to decrypt signature"), *InFilename);
+			}
 		}
 
-		return true;
+		FPakPlatformFile::GetPakMasterSignatureTableCheckFailureHandler().Broadcast(InFilename);
+		return false;
 	}
 
 	/**

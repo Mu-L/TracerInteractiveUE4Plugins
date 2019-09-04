@@ -406,7 +406,6 @@ void SMediaFrameworkCaptureCameraViewportWidget::StopOutput()
 
 void SMediaFrameworkCaptureCameraViewportWidget::OnPostPIEStarted()
 {
-return;
 	const bool bIsPIE = true;
 	if (LevelViewportClient.IsValid())
 	{

@@ -3,8 +3,9 @@
 #pragma once
 
 #include "CoreTypes.h"
-#include "Modules/ModuleInterface.h"
+#include "PythonScriptTypes.h"
 #include "Modules/ModuleManager.h"
+#include "Modules/ModuleInterface.h"
 
 class IPythonScriptPlugin : public IModuleInterface
 {
@@ -27,6 +28,12 @@ public:
 	 * @return true if the command ran successfully, false if there were errors (the output log will show the errors).
 	 */
 	virtual bool ExecPythonCommand(const TCHAR* InPythonCommand) = 0;
+
+	/**
+	 * Execute the given Python command.
+	 * @return true if the command ran successfully, false if there were errors.
+	 */
+	virtual bool ExecPythonCommandEx(FPythonCommandEx& InOutPythonCommand) = 0;
 	
 	/**
 	 * Delegate called after Python has been initialized.

@@ -20,7 +20,7 @@ struct ANIMGRAPHRUNTIME_API FAnimNode_CopyPoseFromMesh : public FAnimNode_Base
 	GENERATED_USTRUCT_BODY()
 
 	/*  This is used by default if it's valid */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=Copy, meta=(PinShownByDefault))
+	UPROPERTY(BlueprintReadWrite, transient, Category=Copy, meta=(PinShownByDefault))
 	TWeakObjectPtr<USkeletalMeshComponent> SourceMeshComponent;
 
 	/* If SourceMeshComponent is not valid, and if this is true, it will look for attahced parent as a source */
@@ -44,8 +44,13 @@ struct ANIMGRAPHRUNTIME_API FAnimNode_CopyPoseFromMesh : public FAnimNode_Base
 	// End of FAnimNode_Base interface
 
 private:
+	// this is source mesh references, so that we could compare and see if it has changed
 	TWeakObjectPtr<USkeletalMeshComponent>	CurrentlyUsedSourceMeshComponent;
 	TWeakObjectPtr<USkeletalMesh>			CurrentlyUsedSourceMesh;
+	TWeakObjectPtr<USkeletalMesh>			CurrentlyUsedMesh;
+
+	// target mesh 
+	TWeakObjectPtr<USkeletalMesh>			CurrentlyUsedTargetMesh;
 	// cache of target space bases to source space bases
 	TMap<int32, int32> BoneMapToSource;
 	TMap<FName, SmartName::UID_Type> CurveNameToUIDMap;
@@ -55,9 +60,6 @@ private:
 
 	// Cached curves, copied on the game thread
 	TMap<FName, float> SourceCurveList;
-
-	// Reference skeleton used for parent bone lookups
-	FReferenceSkeleton* RefSkeleton;
 
 	// reinitialize mesh component 
 	void ReinitializeMeshComponent(USkeletalMeshComponent* NewSkeletalMeshComponent, USkeletalMeshComponent* TargetMeshComponent);

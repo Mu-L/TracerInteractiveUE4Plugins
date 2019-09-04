@@ -4,7 +4,6 @@
 
 #include "CoreMinimal.h"
 #include "Containers/IndirectArray.h"
-#include "PackedNormal.h"
 #include "GPUSkinPublicDefs.h"
 #include "Components.h"
 #include "BoneIndices.h"
@@ -26,7 +25,7 @@ struct FSkeletalMeshVertIndexAndZ
 struct FSoftSkinBuildVertex
 {
 	FVector			Position;
-	FPackedNormal	TangentX,	// Tangent, U-direction
+	FVector			TangentX,	// Tangent, U-direction
 					TangentY,	// Binormal, V-direction
 					TangentZ;	// Normal
 	FVector2D		UVs[MAX_TEXCOORDS]; // UVs
@@ -110,7 +109,7 @@ namespace SkeletalMeshTools
 	 * @param Chunks			Chunks to split. Upon return contains the results of splitting chunks.
 	 * @param MaxBonesPerChunk	The maximum number of bones a chunk may reference.
 	*/
-	void ChunkSkinnedVertices(TArray<FSkinnedMeshChunk*>& Chunks,int32 MaxBonesPerChunk);
+	void ChunkSkinnedVertices(TArray<FSkinnedMeshChunk*>& Chunks, TMap<uint32, TArray<FBoneIndexType>>& AlternateBoneIDs, int32 MaxBonesPerChunk);
 
 	void CalcBoneVertInfos(USkeletalMesh* SkeletalMesh, TArray<FBoneVertInfo>& Infos, bool bOnlyDominant);
 };

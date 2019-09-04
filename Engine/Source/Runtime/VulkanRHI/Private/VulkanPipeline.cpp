@@ -86,6 +86,8 @@ static inline FSHAHash GetShaderHashForStage(const FGraphicsPipelineStateInitial
 	case ShaderStage::Pixel:		return GetShaderHash<FRHIPixelShader, FVulkanPixelShader>(PSOInitializer.BoundShaderState.PixelShaderRHI);
 #if VULKAN_SUPPORTS_GEOMETRY_SHADERS
 	case ShaderStage::Geometry:		return GetShaderHash<FRHIGeometryShader, FVulkanGeometryShader>(PSOInitializer.BoundShaderState.GeometryShaderRHI);
+#endif
+#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
 	case ShaderStage::Hull:			return GetShaderHash<FRHIHullShader, FVulkanHullShader>(PSOInitializer.BoundShaderState.HullShaderRHI);
 	case ShaderStage::Domain:		return GetShaderHash<FRHIDomainShader, FVulkanDomainShader>(PSOInitializer.BoundShaderState.DomainShaderRHI);
 #endif
@@ -283,18 +285,13 @@ bool FVulkanPipelineStateCacheManager::Load(const TArray<FString>& CacheFilename
 	// Try to load device cache first
 	for (const FString& CacheFilename : CacheFilenames)
 	{
-		const VkPhysicalDeviceProperties& DeviceProperties = Device->GetDeviceProperties();
 		double BeginTime = FPlatformTime::Seconds();
-		FString BinaryCacheAppendage = FString::Printf(TEXT(".%x.%x"), DeviceProperties.vendorID, DeviceProperties.deviceID);
-		FString BinaryCacheFilename = CacheFilename;
-		if (!CacheFilename.EndsWith(BinaryCacheAppendage))
-		{
-			BinaryCacheFilename += BinaryCacheAppendage;
-		}
+		FString BinaryCacheFilename = FVulkanPlatform::CreatePSOBinaryCacheFilename(Device, CacheFilename);
+
 		TArray<uint8> DeviceCache;
 		if (FFileHelper::LoadFileToArray(DeviceCache, *BinaryCacheFilename, FILEREAD_Silent))
 		{
-			if (BinaryCacheMatches(Device, DeviceCache))
+			if (FVulkanPlatform::PSOBinaryCacheMatches(Device, DeviceCache))
 			{
 				VkPipelineCacheCreateInfo PipelineCacheInfo;
 				ZeroVulkanStruct(PipelineCacheInfo, VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO);
@@ -335,14 +332,8 @@ bool FVulkanPipelineStateCacheManager::Load(const TArray<FString>& CacheFilename
 	{
 		for (const FString& CacheFilename : CacheFilenames)
 		{
-			const VkPhysicalDeviceProperties& DeviceProperties = Device->GetDeviceProperties();
 			double BeginTime = FPlatformTime::Seconds();
-			FString BinaryCacheAppendage = FString::Printf(TEXT(".%x.%x"), DeviceProperties.vendorID, DeviceProperties.deviceID);
-			FString LruCacheFilename = CacheFilename;
-			if (!CacheFilename.EndsWith(BinaryCacheAppendage))
-			{
-				LruCacheFilename += BinaryCacheAppendage;
-			}
+			FString LruCacheFilename = FVulkanPlatform::CreatePSOBinaryCacheFilename(Device, CacheFilename);
 			LruCacheFilename += TEXT(".lru");
 			LruCacheFilename.ReplaceInline(TEXT("TempScanVulkanPSO_"), TEXT("VulkanPSO_"));  //lru files do not use the rename trick...but are still protected against corruption indirectly
 
@@ -531,13 +522,7 @@ void FVulkanPipelineStateCacheManager::Save(const FString& CacheFilename, bool b
 		VkResult Result = VulkanRHI::vkGetPipelineCacheData(Device->GetInstanceHandle(), PipelineCache, &Size, DeviceCache.GetData());
 		if (Result == VK_SUCCESS)
 		{
-			const VkPhysicalDeviceProperties& DeviceProperties = Device->GetDeviceProperties();
-			FString BinaryCacheAppendage = FString::Printf(TEXT(".%x.%x"), DeviceProperties.vendorID, DeviceProperties.deviceID);
-			FString BinaryCacheFilename = CacheFilename;
-			if (!BinaryCacheFilename.EndsWith(BinaryCacheAppendage))
-			{
-				BinaryCacheFilename += BinaryCacheAppendage;
-			}
+			FString BinaryCacheFilename = FVulkanPlatform::CreatePSOBinaryCacheFilename(Device, CacheFilename);
 
 			if (FFileHelper::SaveArrayToFile(DeviceCache, *BinaryCacheFilename))
 			{
@@ -575,13 +560,7 @@ void FVulkanPipelineStateCacheManager::Save(const FString& CacheFilename, bool b
 		PipelineSizeList.GenerateValueArray(File.PipelineSizes);
 		File.Save(Ar);
 
-		const VkPhysicalDeviceProperties& DeviceProperties = Device->GetDeviceProperties();
-		FString BinaryCacheAppendage = FString::Printf(TEXT(".%x.%x"), DeviceProperties.vendorID, DeviceProperties.deviceID);
-		FString LruCacheFilename = CacheFilename;
-		if (!CacheFilename.EndsWith(BinaryCacheAppendage))
-		{
-			LruCacheFilename += BinaryCacheAppendage;
-		}
+		FString LruCacheFilename = FVulkanPlatform::CreatePSOBinaryCacheFilename(Device, CacheFilename);
 		LruCacheFilename += TEXT(".lru");
 
 		if (FFileHelper::SaveArrayToFile(MemFile, *LruCacheFilename))
@@ -1080,6 +1059,11 @@ FGfxEntryKey FVulkanPipelineStateCacheManager::FGfxPipelineEntry::CreateKey() co
 
 void FVulkanPipelineStateCacheManager::CreateGfxPipelineFromEntry(FGfxPipelineEntry* GfxEntry, FVulkanShader* Shaders[ShaderStage::NumStages], FVulkanGfxPipeline* Pipeline)
 {
+	if (Shaders[ShaderStage::Pixel] == nullptr && !FVulkanPlatform::SupportsNullPixelShader())
+	{
+		Shaders[ShaderStage::Pixel] = ResourceCast(TShaderMapRef<FNULLPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel))->GetPixelShader());
+	}
+
 	if (!GfxEntry->bLoaded)
 	{
 		GfxEntry->GetOrCreateShaderModules(Shaders);
@@ -1170,7 +1154,7 @@ void FVulkanPipelineStateCacheManager::CreateGfxPipelineFromEntry(FGfxPipelineEn
 	PipelineInfo.pViewportState = &VPInfo;
 
 	PipelineInfo.renderPass = GfxEntry->RenderPass->GetHandle();
-	PipelineInfo.subpass = 0;
+	PipelineInfo.subpass = GfxEntry->SubpassIndex;
 
 	VkPipelineInputAssemblyStateCreateInfo InputAssembly;
 	ZeroVulkanStruct(InputAssembly, VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO);
@@ -1349,6 +1333,8 @@ FVulkanPipelineStateCacheManager::FShaderHashes::FShaderHashes(const FGraphicsPi
 	Stages[ShaderStage::Pixel] = GetShaderHash<FRHIPixelShader, FVulkanPixelShader>(PSOInitializer.BoundShaderState.PixelShaderRHI);
 #if VULKAN_SUPPORTS_GEOMETRY_SHADERS
 	Stages[ShaderStage::Geometry] = GetShaderHash<FRHIGeometryShader, FVulkanGeometryShader>(PSOInitializer.BoundShaderState.GeometryShaderRHI);
+#endif
+#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
 	Stages[ShaderStage::Hull] = GetShaderHash<FRHIHullShader, FVulkanHullShader>(PSOInitializer.BoundShaderState.HullShaderRHI);
 	Stages[ShaderStage::Domain] = GetShaderHash<FRHIDomainShader, FVulkanDomainShader>(PSOInitializer.BoundShaderState.DomainShaderRHI);
 #endif
@@ -1414,7 +1400,9 @@ FVulkanGfxLayout* FVulkanPipelineStateCacheManager::GetOrGenerateGfxLayout(const
 		const FVulkanShaderHeader& GSHeader = Shaders[ShaderStage::Geometry]->GetCodeHeader();
 		DescriptorSetLayoutInfo.ProcessBindingsForStage(VK_SHADER_STAGE_GEOMETRY_BIT, ShaderStage::Geometry, GSHeader, UBGatherInfo);
 	}
-	
+#endif
+
+#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
 	if (Shaders[ShaderStage::Hull])
 	{
 		const FVulkanShaderHeader& HSHeader = Shaders[ShaderStage::Hull]->GetCodeHeader();
@@ -1423,11 +1411,9 @@ FVulkanGfxLayout* FVulkanPipelineStateCacheManager::GetOrGenerateGfxLayout(const
 		DescriptorSetLayoutInfo.ProcessBindingsForStage(VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT, ShaderStage::Domain, DSHeader, UBGatherInfo);
 	}
 #endif
-
-
 	// Second pass
 	const int32 NumImmutableSamplers = PSOInitializer.ImmutableSamplerState.ImmutableSamplers.Num();
-	TArrayView<const FSamplerStateRHIParamRef> ImmutableSamplers(NumImmutableSamplers > 0 ? &PSOInitializer.ImmutableSamplerState.ImmutableSamplers[0] : nullptr, NumImmutableSamplers);
+	TArrayView<FRHISamplerState*> ImmutableSamplers(NumImmutableSamplers > 0 ? &(FRHISamplerState*&)PSOInitializer.ImmutableSamplerState.ImmutableSamplers[0] : nullptr, NumImmutableSamplers);
 	DescriptorSetLayoutInfo.FinalizeBindings<false>(UBGatherInfo, ImmutableSamplers);
 
 	FVulkanLayout* Layout = FindOrAddLayout(DescriptorSetLayoutInfo, true);
@@ -1523,10 +1509,17 @@ FVulkanPipelineStateCacheManager::FGfxPipelineEntry* FVulkanPipelineStateCacheMa
 	FVulkanShader* Shaders[ShaderStage::NumStages];
 	GetVulkanShaders(PSOInitializer.BoundShaderState, Shaders);
 
-	OutGfxEntry->RenderPass = Device->GetImmediateContext().PrepareRenderPassForPSOCreation(PSOInitializer, OutGfxEntry->Layout->GetDescriptorSetsLayout().RemappingInfo.InputAttachmentData);
-
 	FVulkanVertexInputStateInfo VertexInputState;
 	OutGfxEntry->Layout = GetOrGenerateGfxLayout(PSOInitializer, Shaders, VertexInputState);
+	OutGfxEntry->RenderPass = Device->GetImmediateContext().PrepareRenderPassForPSOCreation(PSOInitializer);
+	
+	// check that any depth fetch is actually using depth read sub-pass
+	if (OutGfxEntry->Layout->UsesInputAttachment(FVulkanShaderHeader::EAttachmentType::Depth))
+	{
+		check(PSOInitializer.SubpassHint == ESubpassHint::DepthReadSubpass);
+		check(PSOInitializer.SubpassIndex == 1);
+	}
+	OutGfxEntry->SubpassIndex = PSOInitializer.SubpassIndex;
 
 	const bool bHasTessellation = (PSOInitializer.BoundShaderState.DomainShaderRHI != nullptr);
 
@@ -1654,6 +1647,9 @@ FVulkanRHIGraphicsPipelineState* FVulkanPipelineStateCacheManager::FindInRuntime
 	#if VULKAN_SUPPORTS_GEOMETRY_SHADERS
 			TempUInt64 = GetShaderKey(PSI.BoundShaderState.GeometryShaderRHI);
 			Ar << TempUInt64;
+	#endif
+	
+	#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
 			TempUInt64 = GetShaderKey(PSI.BoundShaderState.HullShaderRHI);
 			Ar << TempUInt64;
 			TempUInt64 = GetShaderKey(PSI.BoundShaderState.DomainShaderRHI);
@@ -1667,7 +1663,9 @@ FVulkanRHIGraphicsPipelineState* FVulkanPipelineStateCacheManager::FindInRuntime
 				for (uint32 Index = 0; Index < PSI.RenderTargetsEnabled; ++Index)
 				{
 					Ar << BlendState.RenderTargets[Index];
-					TempEnumValue = PSI.RenderTargetFormats[Index];
+					EPixelFormat PixelFormat = (EPixelFormat)PSI.RenderTargetFormats[Index];
+					bool bSRGB = (PSI.RenderTargetFlags[Index] & TexCreate_SRGB) == TexCreate_SRGB;
+					TempEnumValue = UEToVkTextureFormat(PixelFormat, bSRGB);
 					Ar << TempEnumValue;
 				}
 				Ar << BlendState.bUseIndependentRenderTargetBlendStates;
@@ -1796,7 +1794,7 @@ FVulkanComputePipeline* FVulkanPipelineStateCacheManager::CreateComputePipelineF
 	const FVulkanShaderHeader& CSHeader = Shader->GetCodeHeader();
 	FUniformBufferGatherInfo UBGatherInfo;
 	DescriptorSetLayoutInfo.ProcessBindingsForStage(VK_SHADER_STAGE_COMPUTE_BIT, ShaderStage::Compute, CSHeader, UBGatherInfo);
-	DescriptorSetLayoutInfo.FinalizeBindings<true>(UBGatherInfo, TArrayView<const FSamplerStateRHIParamRef>());
+	DescriptorSetLayoutInfo.FinalizeBindings<true>(UBGatherInfo, TArrayView<FRHISamplerState*>());
 	FVulkanLayout* Layout = FindOrAddLayout(DescriptorSetLayoutInfo, true);
 	FVulkanComputeLayout* ComputeLayout = (FVulkanComputeLayout*)Layout;
 	if (!ComputeLayout->ComputePipelineDescriptorInfo.IsInitialized())
@@ -1848,40 +1846,6 @@ inline void SerializeArray(FArchive& Ar, TArray<T*>& Array)
 			Ar << *(Array[Index]);
 		}
 	}
-}
-
-bool FVulkanPipelineStateCacheManager::BinaryCacheMatches(FVulkanDevice* InDevice, const TArray<uint8>& DeviceCache)
-{
-	if (DeviceCache.Num() > 4)
-	{
-		uint32* Data = (uint32*)DeviceCache.GetData();
-		uint32 HeaderSize = *Data++;
-		// 16 is HeaderSize + HeaderVersion
-		if (HeaderSize == 16 + VK_UUID_SIZE)
-		{
-			uint32 HeaderVersion = *Data++;
-			if (HeaderVersion == VK_PIPELINE_CACHE_HEADER_VERSION_ONE)
-			{
-				uint32 VendorID = *Data++;
-				const VkPhysicalDeviceProperties& DeviceProperties = InDevice->GetDeviceProperties();
-				if (VendorID == DeviceProperties.vendorID)
-				{
-					uint32 DeviceID = *Data++;
-					if (DeviceID == DeviceProperties.deviceID)
-					{
-						uint8* Uuid = (uint8*)Data;
-						if (FMemory::Memcmp(DeviceProperties.pipelineCacheUUID, Uuid, VK_UUID_SIZE) == 0)
-						{
-							// This particular binary cache matches this device
-							return true;
-						}
-					}
-				}
-			}
-		}
-	}
-
-	return false;
 }
 
 #if VULKAN_ENABLE_LRU_CACHE
@@ -2025,18 +1989,19 @@ void GetVulkanShaders(const FBoundShaderStateInput& BSI, FVulkanShader* OutShade
 	{
 		OutShaders[ShaderStage::Pixel] = ResourceCast(BSI.PixelShaderRHI);
 	}
-	else if (GMaxRHIFeatureLevel <= ERHIFeatureLevel::ES3_1)
-	{
-		// Some mobile devices expect PS stage (S7 Adreno)
-		OutShaders[ShaderStage::Pixel] = ResourceCast(TShaderMapRef<FNULLPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel))->GetPixelShader());
-	}
 
-#if VULKAN_SUPPORTS_GEOMETRY_SHADERS
+#if PLATFORM_SUPPORTS_GEOMETRY_SHADERS
 	if (BSI.GeometryShaderRHI)
 	{
+#if VULKAN_SUPPORTS_GEOMETRY_SHADERS
 		OutShaders[ShaderStage::Geometry] = ResourceCast(BSI.GeometryShaderRHI);
+#else
+		ensureMsgf(0, TEXT("Geometry not supported!"));
+#endif
 	}
+#endif
 
+#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
 	if (BSI.HullShaderRHI)
 	{
 		// Can't have Hull w/o Domain
@@ -2048,11 +2013,6 @@ void GetVulkanShaders(const FBoundShaderStateInput& BSI, FVulkanShader* OutShade
 	{
 		// Can't have Domain w/o Hull
 		check(BSI.DomainShaderRHI == nullptr);
-	}
-#else
-	if (BSI.GeometryShaderRHI || BSI.HullShaderRHI || BSI.DomainShaderRHI)
-	{
-		ensureMsgf(0, TEXT("Geometry not supported!"));
 	}
 #endif
 }

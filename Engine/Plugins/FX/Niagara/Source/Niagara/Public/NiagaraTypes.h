@@ -297,34 +297,70 @@ enum class ENiagaraExecutionState : uint32
 	Num
 };
 
+/** Defines options for conditionally editing and showing script inputs in the UI. */
+USTRUCT()
+struct NIAGARA_API FNiagaraInputConditionMetadata
+{
+	GENERATED_USTRUCT_BODY()
+public:
+	/** The name of the input to use for matching the target values. */
+	UPROPERTY(EditAnywhere, Category="Input Condition")
+	FName InputName;
+
+	/** The list of target values which will satisfy the input condition.  If this is empty it's assumed to be a single value of "true" for matching bool inputs. */
+	UPROPERTY(EditAnywhere, Category="Input Condition")
+	TArray<FString> TargetValues;
+};
+
 USTRUCT()
 struct NIAGARA_API FNiagaraVariableMetaData
 {
 	GENERATED_USTRUCT_BODY()
 public:
 	FNiagaraVariableMetaData()
-		:EditorSortPriority(0)
-		, CallSortPriority(0)
+		: bAdvancedDisplay(false)
+		, EditorSortPriority(0)
+		, bInlineEditConditionToggle(false)
+		, bIsStaticSwitch(false)
+		, StaticSwitchDefaultValue(0)
 	{
 	}
 public:
-	UPROPERTY(EditAnywhere, Category = "Variable", DisplayName = "Property Metadata", meta = (ToolTip = "Property Metadata"))
-	TMap<FName, FString> PropertyMetaData;
-
 	UPROPERTY(EditAnywhere, Category = "Variable", meta = (MultiLine = true))
 	FText Description;
 
 	UPROPERTY(EditAnywhere, Category = "Variable")
 	FText CategoryName;
 
+	/** Declares that this input is advanced and should only be visible if expanded inputs have been expanded. */
+	UPROPERTY(EditAnywhere, Category = "Variable")
+	bool bAdvancedDisplay;
+
 	UPROPERTY(EditAnywhere, Category = "Variable", meta = (ToolTip = "Affects the sort order in the editor stacks. Use a smaller number to push it to the top. Defaults to zero."))
 	int32 EditorSortPriority;
 
-	UPROPERTY()
-	int32 CallSortPriority;
+	/** Declares the associated input is used as an inline edit condition toggle, so it should be hidden and edited as a 
+	checkbox inline with the input which was designated as its edit condition. */
+	UPROPERTY(EditAnywhere, Category = "Variable")
+	bool bInlineEditConditionToggle;
 
+	/** Declares the associated input should be conditionally editable based on the value of another input. */
+	UPROPERTY(EditAnywhere, Category = "Input Conditions", meta = (EditCondition = "!bIsStaticSwitch"))
+	FNiagaraInputConditionMetadata EditCondition;
+
+	/** Declares the associated input should be conditionally visible based on the value of another input. */
+	UPROPERTY(EditAnywhere, Category = "Input Conditions", meta = (EditCondition = "!bIsStaticSwitch"))
+	FNiagaraInputConditionMetadata VisibleCondition;
+
+	UPROPERTY(EditAnywhere, Category = "Variable", DisplayName = "Property Metadata", meta = (ToolTip = "Property Metadata"))
+	TMap<FName, FString> PropertyMetaData;
+
+	UPROPERTY(AdvancedDisplay, VisibleAnywhere, Category = "Variable", meta = (ToolTip = "This is a read-only variable that designates if the metadata is tied to a static switch or not."))
+	bool bIsStaticSwitch;
+
+	/** The default value to use when creating new pins or stack entries for a static switch parameter */
 	UPROPERTY()
-	TArray<TWeakObjectPtr<UObject>> ReferencerNodes;
+	int32 StaticSwitchDefaultValue;
 };
 
 USTRUCT()
@@ -389,6 +425,19 @@ public:
 #else
 		return FText::FromString( GetStruct()->GetName() );
 #endif
+	}
+
+	FName GetFName() const
+	{
+		if ( IsValid() == false )
+		{
+			return FName();
+		}
+		if ( Enum != nullptr )
+		{
+			return Enum->GetFName();
+		}
+		return GetStruct()->GetFName();
 	}
 
 	FString GetName()const
@@ -521,6 +570,8 @@ public:
 	static UScriptStruct* GetIDStruct() { return IDStruct; }
 
 	static UEnum* GetExecutionStateEnum() { return ExecutionStateEnum; }
+	static UEnum* GetSimulationTargetEnum() { return SimulationTargetEnum; }
+	static UEnum* GetScriptUsageEnum() { return ScriptUsageEnum; }
 
 	static const FNiagaraTypeDefinition& GetCollisionEventDef() { return CollisionEventDef; }
 
@@ -568,6 +619,8 @@ private:
 	static UScriptStruct* Matrix4Struct;
 	static UScriptStruct* NumericStruct;
 
+	static UEnum* SimulationTargetEnum;
+	static UEnum* ScriptUsageEnum;
 	static UEnum* ExecutionStateEnum;
 	static UEnum* ExecutionStateSourceEnum;
 

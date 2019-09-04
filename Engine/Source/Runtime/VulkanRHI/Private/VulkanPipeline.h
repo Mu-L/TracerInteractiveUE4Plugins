@@ -42,6 +42,8 @@ inline uint64 GetShaderKeyForGfxStage(const FBoundShaderStateInput& BSI, ShaderS
 #if VULKAN_SUPPORTS_GEOMETRY_SHADERS
 	case ShaderStage::Geometry:
 		return GetShaderKey(BSI.GeometryShaderRHI);
+#endif
+#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
 	case ShaderStage::Hull:
 		return GetShaderKey(BSI.HullShaderRHI);
 	case ShaderStage::Domain:
@@ -380,6 +382,7 @@ public:
 			, Topology(0)
 			, RenderPass(nullptr)
 			, Layout(nullptr)
+			, SubpassIndex(0)
 		{
 			FMemory::Memzero(Rasterizer);
 			FMemory::Memzero(DepthStencil);
@@ -391,6 +394,7 @@ public:
 		VkShaderModule ShaderModules[ShaderStage::NumStages];
 		const FVulkanRenderPass* RenderPass;
 		FVulkanGfxLayout* Layout;
+		uint8 SubpassIndex;
 
 		void GetOrCreateShaderModules(FVulkanShader*const* Shaders);
 		void PurgeShaderModules(FVulkanShader*const* Shaders);
@@ -434,6 +438,11 @@ public:
 			}
 
 			if (!(DepthStencil == In.DepthStencil))
+			{
+				return false;
+			}
+
+			if (!(SubpassIndex == In.SubpassIndex))
 			{
 				return false;
 			}
@@ -618,8 +627,6 @@ private:
 		bool Load(FArchive& Ar);
 	};
 #endif
-
-	static bool BinaryCacheMatches(FVulkanDevice* InDevice, const TArray<uint8>& DeviceCache);
 };
 
 // Common pipeline class

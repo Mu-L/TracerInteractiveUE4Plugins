@@ -28,14 +28,32 @@ const TArray<FString>& FLocTextPlatformSplitUtils::GetPlatformsToSplit(const ELo
 	switch (InSplitMode)
 	{
 	case ELocTextPlatformSplitMode::Restricted:
-		return FDataDrivenPlatformInfoRegistry::GetConfidentialPlatforms();
+		{
+			static TArray<FString> RestrictedPlatformNames = []()
+			{
+				TArray<FString> TmpArray;
+				for (const FString& PlatformName : FDataDrivenPlatformInfoRegistry::GetConfidentialPlatforms())
+				{
+					const FDataDrivenPlatformInfoRegistry::FPlatformInfo& PlatformInfo = FDataDrivenPlatformInfoRegistry::GetPlatformInfo(PlatformName);
+					check(PlatformInfo.bIsConfidential);
+					if (PlatformInfo.bRestrictLocalization)
+					{
+						TmpArray.Add(PlatformName);
+					}
+				}
+				TmpArray.Sort();
+				return TmpArray;
+			}();
+			return RestrictedPlatformNames;
+		}
+		break;
 
 	case ELocTextPlatformSplitMode::All:
 		{
 			static TArray<FString> AllPlatformNames = []()
 			{
 				TArray<FString> TmpArray;
-				for (const PlatformInfo::FPlatformInfo& Info : PlatformInfo::EnumeratePlatformInfoArray(false))
+				for (const PlatformInfo::FPlatformInfo& Info : PlatformInfo::GetPlatformInfoArray())
 				{
 					if (!Info.IniPlatformName.IsEmpty())
 					{

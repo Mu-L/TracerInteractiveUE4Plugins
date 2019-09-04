@@ -22,6 +22,18 @@ FDetailLayoutBuilderImpl::FDetailLayoutBuilderImpl(TSharedPtr<FComplexPropertyNo
 	bLayoutForExternalRoot = bIsExternal;
 }
 
+
+FDetailLayoutBuilderImpl::~FDetailLayoutBuilderImpl()
+{
+	if (GetDetailsView())
+	{
+		for (TSharedPtr<FComplexPropertyNode> ExternalRootPropertyNode : ExternalRootPropertyNodes)
+		{
+			GetDetailsView()->SaveExpandedItems(ExternalRootPropertyNode.ToSharedRef());
+		}
+	}
+}
+
 IDetailCategoryBuilder& FDetailLayoutBuilderImpl::EditCategory( FName CategoryName, const FText& NewLocalizedDisplayName, ECategoryPriority::Type CategoryType )
 {
 	FText LocalizedDisplayName = NewLocalizedDisplayName;
@@ -447,7 +459,8 @@ TSharedPtr<FPropertyNode> FDetailLayoutBuilderImpl::GetPropertyNodeInternal( con
 	TArray<FString> PathList;
 	PropertyPath.ToString().ParseIntoArray( PathList, TEXT("."), true );
 
-	if( PathList.Num() == 1 )
+	int32 ArrayFoundIndex = 0;
+	if( PathList.Num() == 1 && !PathList[0].FindChar(TEXT('['), ArrayFoundIndex))
 	{
 		PropertyName = FName( *PathList[0] );
 	}
@@ -563,10 +576,15 @@ void FDetailLayoutBuilderImpl::AddExternalRootPropertyNode(TSharedRef<FComplexPr
 
 void FDetailLayoutBuilderImpl::RemoveExternalRootPropertyNode(TSharedRef<FComplexPropertyNode> InExternalRootNode)
 {
-	ExternalRootPropertyNodes.RemoveAll([InExternalRootNode](TSharedPtr<FComplexPropertyNode> ExternalRootPropertyNode)
+	int32 NumRemoved = ExternalRootPropertyNodes.RemoveAll([InExternalRootNode](TSharedPtr<FComplexPropertyNode> ExternalRootPropertyNode)
 	{
 		return ExternalRootPropertyNode == InExternalRootNode;
 	});
+
+	if (NumRemoved > 0 && GetDetailsView())
+	{
+		GetDetailsView()->SaveExpandedItems(InExternalRootNode);
+	}
 }
 
 FDelegateHandle FDetailLayoutBuilderImpl::AddNodeVisibilityChangedHandler(FSimpleMulticastDelegate::FDelegate InOnNodeVisibilityChanged)

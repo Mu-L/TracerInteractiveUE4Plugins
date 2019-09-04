@@ -11,6 +11,7 @@
 #include "RHI.h"
 #include "OpenGLDrv.h"
 #include "OpenGLDrvPrivate.h"
+#include "Misc/ScopeLock.h"
 
 #if UE_BUILD_DEBUG || UE_BUILD_DEVELOPMENT
 constexpr EUniformBufferValidation UniformBufferValidation = EUniformBufferValidation::ValidateResources;
@@ -345,7 +346,7 @@ static void SuballocateUBO( uint32 Size, GLuint& Resource, uint32& Offset, uint8
 	if (FOpenGL::SupportsBufferStorage() && OpenGLConsoleVariables::bUBODirectWrite)
 	{
 		FOpenGL::BufferStorage( GL_UNIFORM_BUFFER, GetUBOPoolSize(), NULL, GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT );
-		Pool.Pointer = (uint8*)FOpenGL::MapBufferRange(GL_UNIFORM_BUFFER, 0, GetUBOPoolSize(), FOpenGL::RLM_WriteOnlyPersistent);
+		Pool.Pointer = (uint8*)FOpenGL::MapBufferRange(GL_UNIFORM_BUFFER, 0, GetUBOPoolSize(), FOpenGL::EResourceLockMode::RLM_WriteOnlyPersistent);
 	}
 	else
 	{
@@ -395,9 +396,7 @@ void FOpenGLUniformBuffer::SetGLUniformBufferParams(GLuint InResource, uint32 In
 	AllocatedSize = InAllocatedSize;
 	bStreamDraw = bInStreamDraw;
 
-#if ENABLE_LOW_LEVEL_MEM_TRACKER
-	LLM_SCOPED_PAUSE_TRACKING_WITH_ENUM_AND_AMOUNT(ELLMTag::UniformBuffer, InAllocatedSize, ELLMTracker::Default, ELLMAllocType::None);
-#endif
+	LLM(FLowLevelMemTracker::Get().OnLowLevelAlloc(ELLMTracker::Default, ((uint8*)this)+1, InAllocatedSize)); //+1 because ptr must be unique for LLM
 }
 
 FOpenGLUniformBuffer::~FOpenGLUniformBuffer()
@@ -435,9 +434,8 @@ FOpenGLUniformBuffer::~FOpenGLUniformBuffer()
 			ReleaseUniformBuffer(IsValidRef(EmulatedBufferData), Resource, AllocatedSize);
 			Resource = 0; 
 		}
-#if ENABLE_LOW_LEVEL_MEM_TRACKER
-		LLM_SCOPED_PAUSE_TRACKING_WITH_ENUM_AND_AMOUNT(ELLMTag::UniformBuffer, -(int64)AllocatedSize, ELLMTracker::Default, ELLMAllocType::None);
-#endif
+
+		LLM(FLowLevelMemTracker::Get().OnLowLevelFree(ELLMTracker::Default, ((uint8*)this)+1)); //+1 because ptr must be unique for LLM
 	}
 }
 
@@ -722,7 +720,7 @@ void UpdateUniformBufferContents(FOpenGLUniformBuffer* UniformBuffer, const void
 	}
 }
 
-void FOpenGLDynamicRHI::RHIUpdateUniformBuffer(FUniformBufferRHIParamRef UniformBufferRHI, const void* Contents)
+void FOpenGLDynamicRHI::RHIUpdateUniformBuffer(FRHIUniformBuffer* UniformBufferRHI, const void* Contents)
 {
 	FOpenGLUniformBuffer* UniformBuffer = ResourceCast(UniformBufferRHI);
 

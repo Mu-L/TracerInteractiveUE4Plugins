@@ -7,18 +7,20 @@
 #include "Sound/SampleBuffer.h"
 #include "SoundEffectSubmix.h"
 #include "IAmbisonicsMixer.h"
+#include "Curves/CurveFloat.h"
 #include "SoundSubmix.generated.h"
+
 
 class UEdGraph;
 class USoundEffectSubmixPreset;
 class USoundSubmix;
 class ISubmixBufferListener;
 
-/* Submix channel format. 
+/* Submix channel format.
  Allows submixes to have sources mix to a particular channel configuration for potential effect chain requirements.
- Master submix will always render at the device channel count. All child submixes will be down-mixed (or up-mixed) to 
+ Master submix will always render at the device channel count. All child submixes will be down-mixed (or up-mixed) to
  the device channel count. This feature exists to allow specific submix effects to do their work on multi-channel mixes
- of audio. 
+ of audio.
 */
 UENUM(BlueprintType)
 enum class ESubmixChannelFormat : uint8
@@ -54,28 +56,81 @@ enum class EAudioRecordingExportType : uint8
 	WavFile
 };
 
+UENUM(BlueprintType)
+enum class ESendLevelControlMethod : uint8
+{
+	// A send based on linear interpolation between a distance range and send-level range
+	Linear,
+
+	// A send based on a supplied curve
+	CustomCurve,
+
+	// A manual send level (Uses the specified constant send level value. Useful for 2D sounds.)
+	Manual,
+};
+
+
 // Class used to send audio to submixes from USoundBase
 USTRUCT(BlueprintType)
 struct ENGINE_API FSoundSubmixSendInfo
 {
 	GENERATED_USTRUCT_BODY()
 
-	// The amount of audio to send
+	/* 
+		Manual: Use Send Level only
+		Linear: Interpolate between Min and Max Send Levels based on listener distance (between Distance Min and Distance Max)
+		Custom Curve: Use the float curve to map Send Level to distance (0.0-1.0 on curve maps to Distance Min - Distance Max)
+	*/
 	UPROPERTY(EditAnywhere, Category = SubmixSend)
-	float SendLevel;
-	
+	ESendLevelControlMethod SendLevelControlMethod;
+
 	// The submix to send the audio to
 	UPROPERTY(EditAnywhere, Category = SubmixSend)
 	USoundSubmix* SoundSubmix;
+
+	// The amount of audio to send
+	UPROPERTY(EditAnywhere, Category = SubmixSend)
+	float SendLevel;
+
+	// The amount to send to master when sound is located at a distance equal to value specified in the min send distance.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = SubmixSend)
+	float MinSendLevel;
+
+	// The amount to send to master when sound is located at a distance equal to value specified in the max send distance.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = SubmixSend)
+	float MaxSendLevel;
+
+	// The min distance to send to the master
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = SubmixSend)
+	float MinSendDistance;
+
+	// The max distance to send to the master
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = SubmixSend)
+	float MaxSendDistance;
+
+	// The custom reverb send curve to use for distance-based send level.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = SubmixSend)
+	FRuntimeFloatCurve CustomSendLevelCurve;
+
+	FSoundSubmixSendInfo()
+		: SendLevelControlMethod(ESendLevelControlMethod::Manual)
+		, SoundSubmix(nullptr)
+		, SendLevel(0.0f)
+		, MinSendLevel(0.0f)
+		, MaxSendLevel(1.0f)
+		, MinSendDistance(100.0f)
+		, MaxSendDistance(1000.0f)
+		{
+		}
 };
 
 /**
 * Called when a recorded file has finished writing to disk.
-* 
+*
 */
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnSubmixRecordedFileDone,const USoundWave*, ResultingSoundWave);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnSubmixRecordedFileDone, const USoundWave*, ResultingSoundWave);
 
-/** 
+/**
 * Called when a new submix envelope value is generated on the given audio device id (different for multiple PIE). Array is an envelope value for each channel.
 */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnSubmixEnvelope, const TArray<float>&, Envelope);
@@ -96,7 +151,7 @@ public:
 };
 #endif
 
-UCLASS(config=Engine, hidecategories=Object, editinlinenew, BlueprintType)
+UCLASS(config = Engine, hidecategories = Object, editinlinenew, BlueprintType)
 class ENGINE_API USoundSubmix : public UObject
 {
 	GENERATED_UCLASS_BODY()
@@ -117,10 +172,14 @@ class ENGINE_API USoundSubmix : public UObject
 	UPROPERTY()
 	ESubmixChannelFormat ChannelFormat;
 
+	/** Mute this submix when the application is muted or in the background. Used to prevent submix effect tails from continuing when tabbing out of application or if application is muted. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = SoundSubmix)
+	uint8 bMuteWhenBackgrounded : 1;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = SoundSubmix)
 	TArray<USoundEffectSubmixPreset*> SubmixEffectChain;
 
-	// TODO: Hide this unless Channel Format is ambisonics. Also, worry about thread safety.
+	/** Optional settings used by plugins which support ambisonics file playback. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = SoundSubmix)
 	UAmbisonicsSubmixSettingsBase* AmbisonicsPluginSettings;
 
@@ -131,6 +190,10 @@ class ENGINE_API USoundSubmix : public UObject
 	/** The release time in milliseconds for the envelope follower. Delegate callbacks can be registered to get the envelope value of sounds played with this submix. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = EnvelopeFollower, meta = (ClampMin = "0", UIMin = "0"))
 	int32 EnvelopeFollowerReleaseTime;
+
+	/** The output volume of the submix. Applied after submix effects and analysis are performed. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = SoundSubmix, meta = (ClampMin = "0.0", ClampMax = "1.0", UIMin = "0.0", UIMax = "1.0"))
+	float OutputVolume;
 
 	// Blueprint delegate for when a recorded file is finished exporting.
 	UPROPERTY(BlueprintAssignable)
@@ -163,6 +226,10 @@ class ENGINE_API USoundSubmix : public UObject
 	UFUNCTION(BlueprintCallable, Category = "Audio|EnvelopeFollowing", meta = (WorldContext = "WorldContextObject"))
 	void AddEnvelopeFollowerDelegate(const UObject* WorldContextObject, const FOnSubmixEnvelopeBP& OnSubmixEnvelopeBP);
 
+	/** Sets the output volume of the submix. This dynamic volume scales with the OutputVolume property of this submix. */
+	UFUNCTION(BlueprintCallable, Category = "Audio", meta = (WorldContext = "WorldContextObject"))
+	void SetSubmixOutputVolume(const UObject* WorldContextObject, float InOutputVolume);
+
 	// Registers and unregisters buffer listeners with the submix
 	void RegisterSubmixBufferListener(ISubmixBufferListener* InBufferListener);
 	void UnregisterSubmixBufferListener(ISubmixBufferListener* InBufferListener);
@@ -178,7 +245,7 @@ protected:
 	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
 	//~ End UObject Interface.
-	
+
 	// State handling for bouncing output.
 	TUniquePtr<Audio::FAudioRecordingData> RecordingData;
 

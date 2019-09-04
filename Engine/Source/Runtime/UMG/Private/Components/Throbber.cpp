@@ -9,17 +9,27 @@
 /////////////////////////////////////////////////////
 // UThrobber
 
+static FSlateBrush* DefaultThrobberBrush = nullptr;
+
 UThrobber::UThrobber(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
-	SThrobber::FArguments DefaultArgs;
-	Image = *DefaultArgs._PieceImage;
+	NumberOfPieces = 3;
 
-	NumberOfPieces = DefaultArgs._NumPieces;
+	bAnimateVertically = true;
+	bAnimateHorizontally = true;
+	bAnimateOpacity = true;
 
-	bAnimateVertically = (DefaultArgs._Animate & SThrobber::Vertical) != 0;
-	bAnimateHorizontally = (DefaultArgs._Animate & SThrobber::Horizontal) != 0;
-	bAnimateOpacity = (DefaultArgs._Animate & SThrobber::Opacity) != 0;
+	if (DefaultThrobberBrush == nullptr)
+	{
+		// HACK: THIS SHOULD NOT COME FROM CORESTYLE AND SHOULD INSTEAD BE DEFINED BY ENGINE TEXTURES/PROJECT SETTINGS
+		DefaultThrobberBrush = new FSlateBrush(*FCoreStyle::Get().GetBrush("Throbber.Chunk"));
+
+		// Unlink UMG default colors from the editor settings colors.
+		DefaultThrobberBrush->UnlinkColors();
+	}
+
+	Image = *DefaultThrobberBrush;
 }
 
 void UThrobber::ReleaseSlateResources(bool bReleaseChildren)
@@ -31,8 +41,6 @@ void UThrobber::ReleaseSlateResources(bool bReleaseChildren)
 
 TSharedRef<SWidget> UThrobber::RebuildWidget()
 {
-	SThrobber::FArguments DefaultArgs;
-
 	MyThrobber = SNew(SThrobber)
 		.PieceImage(&Image)
 		.NumPieces(FMath::Clamp(NumberOfPieces, 1, 25))

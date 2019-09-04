@@ -119,7 +119,9 @@ void FGauntletModuleImpl::OnPostEngineInit()
 
 	LoadControllers();
 
-	const float kTickRate = 1.0f;
+	float kTickRate = 1.0f;
+	FParse::Value(FCommandLine::Get(), TEXT("gauntlet.tickrate="), kTickRate);
+
 
 	FTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([this, kTickRate](float TimeDelta)
 	{
@@ -260,6 +262,17 @@ void FGauntletModuleImpl::InnerPreMapChange(const FString& MapName)
 
 void FGauntletModuleImpl::InnerPostMapChange(UWorld* World)
 {
+	if (!World)
+	{
+		// Failed to load requested map
+		for (auto Controller : Controllers)
+		{
+			Controller->OnPostMapChange(World);
+		}
+
+		return;
+	}
+
 	CurrentMap = World->GetMapName();
 
 	for (auto Controller : Controllers)

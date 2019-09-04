@@ -4,6 +4,7 @@
 #include "Framework/MultiBox/MultiBoxDefs.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "Widgets/Layout/SBorder.h"
+#include "Widgets/Input/SMultiLineEditableTextBox.h"
 #include "Modules/ModuleManager.h"
 #include "SlateOptMacros.h"
 #include "Widgets/Layout/SBox.h"
@@ -93,6 +94,7 @@ void FLandscapeToolKit::Init(const TSharedPtr<IToolkitHost>& InitToolkitHost)
 	MAP_TOOL("ResizeLandscape");
 
 	MAP_TOOL("Sculpt");
+	MAP_TOOL("Erase");
 	MAP_TOOL("Paint");
 	MAP_TOOL("Smooth");
 	MAP_TOOL("Flatten");
@@ -102,7 +104,7 @@ void FLandscapeToolKit::Init(const TSharedPtr<IToolkitHost>& InitToolkitHost)
 	MAP_TOOL("Noise");
 	MAP_TOOL("Retopologize");
 	MAP_TOOL("Visibility");
-	MAP_TOOL("BPCustom");
+	MAP_TOOL("BlueprintBrush");
 
 	MAP_TOOL("Select");
 	MAP_TOOL("AddComponent");
@@ -186,7 +188,7 @@ bool FLandscapeToolKit::IsModeEnabled(FName ModeName) const
 	if (LandscapeEdMode)
 	{
 		// Manage is the only mode enabled if we have no landscape
-		if (ModeName == "ToolMode_Manage" || LandscapeEdMode->GetLandscapeList().Num() > 0)
+		if (ModeName == "ToolMode_Manage" || (LandscapeEdMode->GetLandscapeList().Num() > 0 && LandscapeEdMode->CanEditCurrentTarget()))
 		{
 			return true;
 		}
@@ -337,7 +339,18 @@ void SLandscapeEditor::Construct(const FArguments& InArgs, TSharedRef<FLandscape
 		[
 			SNew(SVerticalBox)
 			.IsEnabled(this, &SLandscapeEditor::GetLandscapeEditorIsEnabled)
-
+			+ SVerticalBox::Slot()
+			.AutoHeight()
+			.Padding(0, 0, 0, 5)
+			[
+				SNew(SMultiLineEditableTextBox)
+				.Visibility_Lambda([=]() { return LandscapeEdMode->CanHaveLandscapeLayersContent() ? EVisibility::Visible : EVisibility::Collapsed; })
+				.IsReadOnly(true)
+				.Font(FCoreStyle::GetDefaultFontStyle("Bold", 10))
+				.Justification(ETextJustify::Center)
+				.BackgroundColor(FCoreStyle::Get().GetColor("InfoReporting.BackgroundColor"))
+				.Text(FText::FromString("Experimental Layer System"))
+			]
 			+ SVerticalBox::Slot()
 			.AutoHeight()
 			.Padding(4, 0, 4, 5)
@@ -452,8 +465,16 @@ bool SLandscapeEditor::GetIsPropertyVisible(const FPropertyAndParent& PropertyAn
 	const UProperty& Property = PropertyAndParent.Property;
 
 	FEdModeLandscape* LandscapeEdMode = GetEditorMode();
+	
 	if (LandscapeEdMode != nullptr && LandscapeEdMode->CurrentTool != nullptr)
 	{
+	    // Hide all properties if the current target can't be edited. Except in New Landscape tool
+		if (LandscapeEdMode->CurrentTool->GetToolName() != FName("NewLandscape") &&
+			!LandscapeEdMode->CanEditCurrentTarget())
+		{
+			return false;
+		}
+
 		if (Property.HasMetaData("ShowForMask"))
 		{
 			const bool bMaskEnabled = LandscapeEdMode->CurrentTool &&
@@ -504,11 +525,18 @@ bool SLandscapeEditor::GetIsPropertyVisible(const FPropertyAndParent& PropertyAn
 				return false;
 			}
 		}
-		if (Property.HasMetaData("ShowForBPCustomTool"))
+		if (Property.HasMetaData("ShowForBlueprintBrushTool"))
 		{
 			const FName CurrentToolName = LandscapeEdMode->CurrentTool->GetToolName();
 
-			if (CurrentToolName != TEXT("BPCustom"))
+			if (CurrentToolName != TEXT("BlueprintBrush"))
+			{
+				return false;
+			}
+		}
+		if (Property.HasMetaData("ShowForLandscapeLayerSystem"))
+		{
+			if (!LandscapeEdMode->HasLandscapeLayersContent())
 			{
 				return false;
 			}

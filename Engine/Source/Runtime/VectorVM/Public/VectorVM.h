@@ -155,10 +155,8 @@ enum class EVectorVMOp : uint8
 struct FDataSetMeta
 {
 	uint8 **InputRegisters;
-	uint8 NumVariables;
-	uint32 DataSetSizeInBytes;
+	int32 RegisterOffset;
 	int32 DataSetAccessIndex;	// index for individual elements of this set
-	int32 DataSetOffset;		// offset in the register table
 
 	int32 InstanceOffset;		// offset of the first instance processed 
 	
@@ -182,14 +180,14 @@ struct FDataSetMeta
 	FORCEINLINE void LockFreeTable();
 	FORCEINLINE void UnlockFreeTable();
 
-	FDataSetMeta(uint32 DataSetSize, uint8 **Data, uint8 InNumVariables, int32 InInstanceOffset, TArray<int32>* InIDTable, TArray<int32>* InFreeIDTable, int32* InNumFreeIDs, int32* InMaxUsedID, int32 InIDAcquireTag)
-		: InputRegisters(Data), NumVariables(InNumVariables), DataSetSizeInBytes(DataSetSize), DataSetAccessIndex(INDEX_NONE), DataSetOffset(0), InstanceOffset(InInstanceOffset)
+	FDataSetMeta(uint8 **Data, int32 InRegisterOffset, int32 InInstanceOffset, TArray<int32>* InIDTable, TArray<int32>* InFreeIDTable, int32* InNumFreeIDs, int32* InMaxUsedID, int32 InIDAcquireTag)
+		: InputRegisters(Data), RegisterOffset(InRegisterOffset), DataSetAccessIndex(INDEX_NONE), InstanceOffset(InInstanceOffset)
 		, IDTable(InIDTable), FreeIDTable(InFreeIDTable), NumFreeIDs(InNumFreeIDs), MaxUsedID(InMaxUsedID), IDAcquireTag(InIDAcquireTag)
 	{
 	}
 
 	FDataSetMeta() 
-		: InputRegisters(nullptr), NumVariables(0), DataSetSizeInBytes(0), DataSetAccessIndex(INDEX_NONE), DataSetOffset(0), InstanceOffset(0)
+		: InputRegisters(nullptr), RegisterOffset(0), DataSetAccessIndex(INDEX_NONE), InstanceOffset(0)
 		, IDTable(nullptr), FreeIDTable(nullptr), NumFreeIDs(nullptr), MaxUsedID(nullptr), IDAcquireTag(0)
 	{}
 
@@ -388,11 +386,23 @@ namespace VectorVM
 		int32 AdvanceOffset;
 
 	public:
-		FORCEINLINE FExternalFuncInputHandler(FVectorVMContext& Context)
-			: InputOffset(DecodeU16(Context))
-			, InputPtr(IsConstant() ? (T*)(Context.ConstantTable + GetOffset()) : (T*)Context.RegisterTable[GetOffset()])
-			, AdvanceOffset(IsConstant() ? 0 : 1)
+		FExternalFuncInputHandler()
+			: InputOffset(INDEX_NONE)
+			, InputPtr(nullptr)
+			, AdvanceOffset(0)
 		{}
+
+		FORCEINLINE FExternalFuncInputHandler(FVectorVMContext& Context)
+		{
+			Init(Context);
+		}
+
+		void Init(FVectorVMContext& Context)
+		{
+			InputOffset = DecodeU16(Context);
+			InputPtr = IsConstant() ? (T*)(Context.ConstantTable + GetOffset()) : (T*)Context.RegisterTable[GetOffset()];
+			AdvanceOffset = IsConstant() ? 0 : 1;
+		}
 
 		FORCEINLINE bool IsConstant()const { return !IsRegister(); }
 		FORCEINLINE bool IsRegister()const { return (InputOffset & VVM_EXT_FUNC_INPUT_LOC_BIT) != 0; }

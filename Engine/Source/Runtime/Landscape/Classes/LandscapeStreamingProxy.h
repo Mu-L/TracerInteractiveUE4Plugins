@@ -23,12 +23,14 @@ public:
 
 	//~ Begin UObject Interface
 #if WITH_EDITOR
-	void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+	virtual bool ShouldExport() override { return false;  }
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
 	//~ End UObject Interface
 
 	//~ Begin ALandscapeBase Interface
 	virtual ALandscape* GetLandscapeActor() override;
+	virtual const ALandscape* GetLandscapeActor() const override;
 #if WITH_EDITOR
 	virtual UMaterialInterface* GetLandscapeMaterial(int8 InLODIndex = INDEX_NONE) const override;
 	virtual UMaterialInterface* GetLandscapeHoleMaterial() const override;

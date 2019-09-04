@@ -88,7 +88,7 @@ UActorComponent* USCS_Node::ExecuteNodeOnActor(AActor* Actor, USceneComponent* P
 	UActorComponent* NewActorComp = nullptr;
 	UBlueprintGeneratedClass* ActualBPGC = CastChecked<UBlueprintGeneratedClass>(Actor->GetClass());
 	const FBlueprintCookedComponentInstancingData* ActualComponentTemplateData = ActualBPGC->UseFastPathComponentInstancing() ? GetActualComponentTemplateData(ActualBPGC) : nullptr;
-	if (ActualComponentTemplateData && ActualComponentTemplateData->bIsValid
+	if (ActualComponentTemplateData && ActualComponentTemplateData->bHasValidCookedData
 		&& ensureMsgf(ActualComponentTemplateData->ComponentTemplateClass != nullptr, TEXT("SCS fast path (%s.%s): Cooked data is valid, but runtime support data is not initialized. Using the slow path instead."), *ActualBPGC->GetName(), *InternalVariableName.ToString()))
 	{
 		// Use cooked instancing data if valid (fast path).
@@ -600,4 +600,29 @@ void USCS_Node::ValidateGuid()
 	}
 }
 
-#endif
+EDataValidationResult USCS_Node::IsDataValid(TArray<FText>& ValidationErrors)
+{
+	EDataValidationResult Result = Super::IsDataValid(ValidationErrors);
+	Result = (Result == EDataValidationResult::NotValidated) ? EDataValidationResult::Valid : Result;
+
+	// check the component that this node represents
+	if (ComponentTemplate)
+	{
+		EDataValidationResult ComponentResult = ComponentTemplate->IsDataValid(ValidationErrors);
+		Result = CombineDataValidationResults(Result, ComponentResult);
+	}
+
+	// check children
+	for (USCS_Node* Child : ChildNodes)
+	{
+		if (Child)
+		{
+			EDataValidationResult ChildResult = Child->IsDataValid(ValidationErrors);
+			Result = CombineDataValidationResults(Result, ChildResult);
+		}
+	}
+
+	return Result;
+}
+
+#endif // WITH_EDITOR

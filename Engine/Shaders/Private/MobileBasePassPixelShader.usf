@@ -65,17 +65,16 @@ float4 SpotLightDirection[MAX_DYNAMIC_POINT_LIGHTS];
 
 /** Prenormalized capture of the scene that's closest to the object being rendered. */
 #if !FULLY_ROUGH
-	TextureCube ReflectionCubemap;
-	SamplerState ReflectionCubemapSampler;
-	// x,y,z - inverted average brightness, w - max sky cube mip
-	float4 MobileReflectionParams;
 	#if HQ_REFLECTIONS
 	#define MAX_HQ_REFLECTIONS 3
-
+	TextureCube ReflectionCubemap0;
+	SamplerState ReflectionCubemapSampler0;
 	TextureCube ReflectionCubemap1;
 	SamplerState ReflectionCubemapSampler1;
 	TextureCube ReflectionCubemap2;
 	SamplerState ReflectionCubemapSampler2;
+	// x,y,z - inverted average brightness for 0, 1, 2
+	float4 ReflectionInvAverageBrigtness;
 	float4 ReflectionPositionsAndRadii[MAX_HQ_REFLECTIONS];
 		#if ALLOW_CUBE_REFLECTIONS
 		float4x4 CaptureBoxTransformArray[MAX_HQ_REFLECTIONS];
@@ -227,9 +226,9 @@ half3 BlendReflectionCaptures(FMaterialPixelParameters MaterialParameters, half 
 	half3 SpecularIBL = half3(0, 0, 0);
 	half BlendFactor = 1;
 
-	SpecularIBL += BlendReflectionCapture(MaterialParameters, Roughness, ReflectionCubemap, ReflectionCubemapSampler, AbsoluteSpecularMip, 0, MobileReflectionParams.x, BlendFactor);
-	SpecularIBL += BlendReflectionCapture(MaterialParameters, Roughness, ReflectionCubemap1, ReflectionCubemapSampler1, AbsoluteSpecularMip, 1, MobileReflectionParams.y, BlendFactor);
-	SpecularIBL += BlendReflectionCapture(MaterialParameters, Roughness, ReflectionCubemap2, ReflectionCubemapSampler2, AbsoluteSpecularMip, 2, MobileReflectionParams.z, BlendFactor);
+	SpecularIBL += BlendReflectionCapture(MaterialParameters, Roughness, ReflectionCubemap0, ReflectionCubemapSampler0, AbsoluteSpecularMip, 0, ReflectionInvAverageBrigtness.x, BlendFactor);
+	SpecularIBL += BlendReflectionCapture(MaterialParameters, Roughness, ReflectionCubemap1, ReflectionCubemapSampler1, AbsoluteSpecularMip, 1, ReflectionInvAverageBrigtness.y, BlendFactor);
+	SpecularIBL += BlendReflectionCapture(MaterialParameters, Roughness, ReflectionCubemap2, ReflectionCubemapSampler2, AbsoluteSpecularMip, 2, ReflectionInvAverageBrigtness.z, BlendFactor);
 
 	return SpecularIBL;
 }
@@ -257,14 +256,14 @@ half3 GetImageBasedReflectionLighting(FMaterialPixelParameters MaterialParameter
 
 	half3 ProjectedCaptureVector = MaterialParameters.ReflectionVector;	
 
-	half UsingSkyReflection = MobileReflectionParams.w > 0;
-	half CubemapMaxMip = UsingSkyReflection ? MobileReflectionParams.w : ResolvedView.ReflectionCubemapMaxMip;
+	half UsingSkyReflection = MobileReflectionCapture.Params.y > 0;
+	half CubemapMaxMip = UsingSkyReflection ? MobileReflectionCapture.Params.y : ResolvedView.ReflectionCubemapMaxMip;
 
 	// Compute fractional mip from roughness
 	half AbsoluteSpecularMip = ComputeReflectionCaptureMipFromRoughness(Roughness, CubemapMaxMip);
 	// Fetch from cubemap and convert to linear HDR
 	half3 SpecularIBL;
-	half4 SpecularIBLSample = ReflectionCubemap.SampleLevel(ReflectionCubemapSampler, ProjectedCaptureVector, AbsoluteSpecularMip);
+	half4 SpecularIBLSample = MobileReflectionCapture.Texture.SampleLevel(MobileReflectionCapture.TextureSampler, ProjectedCaptureVector, AbsoluteSpecularMip);
 	if (UsingSkyReflection)
 	{
 		SpecularIBL = SpecularIBLSample.rgb;
@@ -277,12 +276,14 @@ half3 GetImageBasedReflectionLighting(FMaterialPixelParameters MaterialParameter
 		SpecularIBL = SpecularIBL * SpecularIBL;
 		#if LQ_TEXTURE_LIGHTMAP || CACHED_POINT_INDIRECT_LIGHTING
 			// divide by average brightness for lightmap use cases only.
-			SpecularIBL *= MobileReflectionParams.x;
+			SpecularIBL *= MobileReflectionCapture.Params.x;
 		#endif
 	}
 
 #endif
-	
+
+	SpecularIBL*= View.IndirectLightingColorScale;
+		
 #if WEBGL
 	// need a rgb swizzle instead of the existing rgba swizzle, we should add it if another use case comes up. 
 	return SpecularIBL.bgr;
@@ -309,6 +310,10 @@ half3 FrameBufferBlendOp(half4 Source)
 // so ensure  MATERIALBLENDING_ALPHACOMPOSITE gets first in line
 #elif MATERIALBLENDING_ALPHACOMPOSITE
 	return Source.rgb + (Dest.rgb*(1.0 - Source.a));
+// AlphaHoldout will set both MATERIALBLENDING_TRANSLUCENT and MATERIALBLENDING_ALPHAHOLDOUT defines
+// so ensure  MATERIALBLENDING_ALPHAHOLDOUT gets first in line
+#elif MATERIALBLENDING_ALPHAHOLDOUT
+	return (Dest.rgb*(1.0 - Source.a));
 #elif MATERIALBLENDING_TRANSLUCENT
 	return (Source.rgb*Source.a) + (Dest.rgb*(1.0 - Source.a));
 #elif MATERIALBLENDING_ADDITIVE
@@ -400,9 +405,7 @@ void Main(
 	half Roughness = GetMaterialRoughness(PixelMaterialInputs);
 
 #if FULLY_ROUGH
-	// Factors derived from EnvBRDFApprox( SpecularColor, 1, 1 ) == SpecularColor * 0.4524 - 0.0024
-	DiffuseColor += SpecularColor * 0.45;
-	SpecularColor = 0;
+	EnvBRDFApproxFullyRough(DiffuseColor, SpecularColor);
 #else
 	half NoV = max( dot( MaterialParameters.WorldNormal, MaterialParameters.CameraVector ), 0 );
 
@@ -420,7 +423,11 @@ void Main(
 	{
 		// this feature is only needed for development/editor - we can compile it out for a shipping build (see r.CompileShadersForDevelopment cvar help)
 		DiffuseColor = DiffuseColor * ResolvedView.DiffuseOverrideParameter.w + ResolvedView.DiffuseOverrideParameter.xyz;
-		SpecularColor = SpecularColor * ResolvedView.SpecularOverrideParameter.w + ResolvedView.SpecularOverrideParameter.xyz;
+#if NONMETAL
+    SpecularColor = SpecularColor * ResolvedView.SpecularOverrideParameter.w + ResolvedView.SpecularOverrideParameter.x;
+#else
+    SpecularColor = SpecularColor * ResolvedView.SpecularOverrideParameter.w + ResolvedView.SpecularOverrideParameter.xyz;
+#endif
 	}
 #endif
 	
@@ -647,6 +654,9 @@ void Main(
 #endif
 
 	#if MATERIALBLENDING_ALPHACOMPOSITE
+		OutColor = half4(Color * VertexFog.a + VertexFog.rgb * Opacity, Opacity);
+	#elif MATERIALBLENDING_ALPHAHOLDOUT
+		// not implemented for holdout
 		OutColor = half4(Color * VertexFog.a + VertexFog.rgb * Opacity, Opacity);
 	#elif MATERIALBLENDING_TRANSLUCENT
 		OutColor = half4(Color * VertexFog.a + VertexFog.rgb, Opacity);

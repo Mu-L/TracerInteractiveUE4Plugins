@@ -8,12 +8,14 @@
 #include "ResonanceAudioReverb.h"
 #include "ResonanceAudioSpatialization.h"
 #include "Features/IModularFeatures.h"
+#include "ResonanceAudioSettings.h"
 
 IMPLEMENT_MODULE(ResonanceAudio::FResonanceAudioModule, ResonanceAudio)
 
 namespace ResonanceAudio
 {
 	void* FResonanceAudioModule::ResonanceAudioDynamicLibraryHandle = nullptr;
+	UResonanceAudioSpatializationSourceSettings* FResonanceAudioModule::GlobalSpatializationSourceSettings = nullptr;
 
 	static bool bModuleInitialized = false;
 
@@ -38,6 +40,26 @@ namespace ResonanceAudio
 		if (!ResonanceAudioDynamicLibraryHandle)
 		{
 			ResonanceAudioDynamicLibraryHandle = LoadResonanceAudioDynamicLibrary();
+		}
+
+		if (!IsRunningDedicatedServer() && !GlobalSpatializationSourceSettings)
+		{
+			// Load the global source preset settings:
+			const FSoftObjectPath GlobalPluginPresetName = GetDefault<UResonanceAudioSettings>()->GlobalSourcePreset;
+			if (GlobalPluginPresetName.IsValid())
+			{
+				GlobalSpatializationSourceSettings = LoadObject<UResonanceAudioSpatializationSourceSettings>(nullptr, *GlobalPluginPresetName.ToString());
+			}
+			
+			if (!GlobalSpatializationSourceSettings)
+			{
+				GlobalSpatializationSourceSettings = NewObject<UResonanceAudioSpatializationSourceSettings>(UResonanceAudioSpatializationSourceSettings::StaticClass(), TEXT("Default Global Resonance Spatialization Preset"));
+			}
+
+			if (GlobalSpatializationSourceSettings)
+			{ 
+				GlobalSpatializationSourceSettings->AddToRoot();
+			}
 		}
 	}
 
@@ -75,6 +97,11 @@ namespace ResonanceAudio
 	void FResonanceAudioModule::UnregisterAudioDevice(FAudioDevice* AudioDeviceHandle)
 	{
 		RegisteredAudioDevices.Remove(AudioDeviceHandle);
+	}
+
+	UResonanceAudioSpatializationSourceSettings* FResonanceAudioModule::GetGlobalSpatializationSourceSettings()
+	{
+		return GlobalSpatializationSourceSettings;
 	}
 
 	TAudioSpatializationPtr FSpatializationPluginFactory::CreateNewSpatializationPlugin(FAudioDevice* OwningDevice)

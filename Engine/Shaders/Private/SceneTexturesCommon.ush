@@ -75,7 +75,7 @@ float CalcSceneDepth(uint2 PixelPos)
 #if SHADING_PATH_MOBILE
 
 #ifndef VULKAN_SUBPASS_DEPTHFETCH
-	#define	VULKAN_SUBPASS_DEPTHFETCH		0
+	#define	VULKAN_SUBPASS_DEPTHFETCH	VULKAN_PROFILE
 #endif
 
 /** return all channels of the scene lighting texture */
@@ -96,6 +96,10 @@ float CalcSceneDepth(float2 ScreenUV)
 #else
 	#if MOBILE_FORCE_DEPTH_TEXTURE_READS
 		return ConvertFromDeviceZ(Texture2DSampleLevel(MobileSceneTextures.SceneDepthTexture, MobileSceneTextures.SceneDepthTextureSampler, ScreenUV, 0).r);
+	#elif POST_PROCESS_MATERIAL
+		// SceneDepth texture is not accessible during post-processing as we discard it at the end of mobile BasePass
+		// instead fetch depth from SceneColor.A 
+		return Texture2DSample(MobileSceneTextures.SceneColorTexture, MobileSceneTextures.SceneColorTextureSampler, ScreenUV).a;
 	#else
 		#if COMPILER_GLSL_ES2
 			#if IOS
@@ -108,7 +112,11 @@ float CalcSceneDepth(float2 ScreenUV)
 				return DepthbufferFetchES2(SceneW, View.InvDeviceZToWorldZTransform[2], View.InvDeviceZToWorldZTransform[3]);
 			#endif 
 		#elif METAL_PROFILE && !MAC
-			return FramebufferFetchES2().w;
+			#if PIXELSHADER
+				return FramebufferFetchES2().w;
+			#else
+				return ConvertFromDeviceZ(Texture2DSampleLevel(MobileSceneTextures.SceneDepthTexture, MobileSceneTextures.SceneDepthTextureSampler, ScreenUV, 0).r);
+			#endif
 		#elif COMPILER_GLSL_ES3_1
 			#if OUTPUT_GAMMA_SPACE
 				// Try framebuffer_fetch_depth_stencil to get the depth directly if the extension is available.
@@ -134,6 +142,9 @@ float LookupDeviceZ( float2 ScreenUV )
 #if	MOBILE_FORCE_DEPTH_TEXTURE_READS
 	// native Depth buffer lookup
 	return Texture2DSampleLevel(MobileSceneTextures.SceneDepthTexture, MobileSceneTextures.SceneDepthTextureSampler, ScreenUV, 0).r;
+#elif POST_PROCESS_MATERIAL
+	// SceneDepth texture is not accessible during post-processing, CalcSceneDepth will do the right thing
+	return ConvertToDeviceZ(CalcSceneDepth(ScreenUV));
 #elif COMPILER_GLSL_ES2 || COMPILER_GLSL_ES3_1
 	// todo: can be optimized
 	return ConvertToDeviceZ(CalcSceneDepth(ScreenUV));

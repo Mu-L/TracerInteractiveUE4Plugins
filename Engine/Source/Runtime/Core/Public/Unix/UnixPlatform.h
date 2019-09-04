@@ -57,6 +57,9 @@ typedef FUnixPlatformTypes FPlatformTypes;
 #define PLATFORM_HAS_BSD_SOCKET_FEATURE_IOCTL			1
 #define PLATFORM_HAS_BSD_SOCKET_FEATURE_MSG_DONTWAIT	1
 #define PLATFORM_SUPPORTS_STACK_SYMBOLS					1
+#define PLATFORM_IS_ANSI_MALLOC_THREADSAFE				1
+#define PLATFORM_ALLOW_ALLOCATIONS_IN_FASYNCWRITER_SERIALIZEBUFFERTOARCHIVE 0
+#define PLATFORM_RHITHREAD_DEFAULT_BYPASS				0
 
 #if PLATFORM_CPU_X86_FAMILY
 	#define PLATFORM_BREAK()							__asm__ volatile("int $0x03")
@@ -106,6 +109,12 @@ typedef FUnixPlatformTypes FPlatformTypes;
 #endif
 
 #define ABSTRACT abstract
+
+// DLL export and import for types, only supported on clang
+#if defined(__clang__)
+#define DLLEXPORT_VTABLE	__attribute__ ((__type_visibility__("default")))
+#define DLLIMPORT_VTABLE	__attribute__ ((__type_visibility__("default")))
+#endif
 
 // DLL export and import definitions
 #define DLLEXPORT			__attribute__((visibility("default")))

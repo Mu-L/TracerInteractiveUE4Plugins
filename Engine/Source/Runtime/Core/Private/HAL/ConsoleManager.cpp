@@ -156,6 +156,9 @@ public:
 
 	void OnChanged(EConsoleVariableFlags SetBy)
 	{
+		// SetBy can include set flags. Discard them here
+		SetBy = EConsoleVariableFlags(SetBy & ~ECVF_SetFlagMask);
+
 		// you have to specify a SetBy e.g. ECVF_SetByCommandline
 		check(((uint32)SetBy & ECVF_SetByMask) || SetBy == ECVF_Default);
 
@@ -164,7 +167,7 @@ public:
 
 		// only change on main thread
 
-		Flags = (EConsoleVariableFlags)(((uint32)Flags & ~ECVF_SetByMask) | SetBy);
+		Flags = (EConsoleVariableFlags)(((uint32)Flags & ECVF_FlagMask) | SetBy);
 
 		OnChangedCallback.ExecuteIfBound(this);
 	}
@@ -261,7 +264,7 @@ private: // -----------------------------------------
 };
 
 template <class T>
-void OnCVarChange(T& Dst, const T& Src, EConsoleVariableFlags Flags)
+void OnCVarChange(T& Dst, const T& Src, EConsoleVariableFlags Flags, EConsoleVariableFlags SetBy)
 {
 	FConsoleManager& ConsoleManager = (FConsoleManager&)IConsoleManager::Get();
 
@@ -284,7 +287,10 @@ void OnCVarChange(T& Dst, const T& Src, EConsoleVariableFlags Flags)
 		check(0);
 	}
 
-	ConsoleManager.OnCVarChanged();
+	if ((SetBy & ECVF_Set_NoSinkCall_Unsafe)== 0)
+	{
+		ConsoleManager.OnCVarChanged();
+	}
 }
 
 // T: int32, float, FString
@@ -297,7 +303,7 @@ public:
 	{
 	}
 
-	// interface IConsoleVariable -----------------------------------
+	// interface IConsoleVariable ----------------------------------- 
 
 	virtual void Release()
 	{
@@ -315,7 +321,9 @@ public:
 	virtual int32 GetInt() const;
 	virtual float GetFloat() const;
 	virtual FString GetString() const;
-	virtual bool IsVariableInt() const { return false; }
+	virtual bool IsVariableInt() const override { return false; }
+	virtual bool IsVariableFloat() const override { return false; }
+	virtual bool IsVariableString() const override { return false; }
 	virtual class TConsoleVariableData<int32>* AsVariableInt() { return 0; }
 	virtual class TConsoleVariableData<float>* AsVariableFloat() { return 0; }
 	virtual class TConsoleVariableData<FString>* AsVariableString() { return 0; }
@@ -334,7 +342,7 @@ private: // ----------------------------------------------------
 	void OnChanged(EConsoleVariableFlags SetBy)
 	{
 		// propagate from main thread to render thread
-		OnCVarChange(Data.ShadowedValue[1], Data.ShadowedValue[0], Flags);
+		OnCVarChange(Data.ShadowedValue[1], Data.ShadowedValue[0], Flags, SetBy);
 		FConsoleVariableBase::OnChanged(SetBy);
 	}
 };
@@ -379,9 +387,13 @@ template<> FString FConsoleVariable<float>::GetString() const
 {
 	return FString::Printf(TEXT("%g"), Value());
 }
+template<> bool FConsoleVariable<float>::IsVariableFloat() const
+{
+	return true;
+}
 template<> TConsoleVariableData<float>* FConsoleVariable<float>::AsVariableFloat()
 {
-	return &Data; 
+	return &Data;
 }
 
 // specialization for FString
@@ -406,7 +418,10 @@ template<> FString FConsoleVariable<FString>::GetString() const
 {
 	return Value();
 }
-
+template<> bool FConsoleVariable<FString>::IsVariableString() const
+{
+	return true;
+}
 template<> TConsoleVariableData<FString>* FConsoleVariable<FString>::AsVariableString()
 {
 	return &Data;
@@ -414,7 +429,7 @@ template<> TConsoleVariableData<FString>* FConsoleVariable<FString>::AsVariableS
 
 // ----
 
-// T: int32, float
+// T: int32, float, bool
 template <class T>
 class FConsoleVariableRef : public FConsoleVariableBase
 {
@@ -450,6 +465,9 @@ public:
 	{
 		return TTypeToString<T>::ToString(MainValue);
 	}
+	virtual bool IsVariableInt() const override { return false; }
+	virtual bool IsVariableFloat() const override { return false; }
+	virtual bool IsVariableString() const override { return false; }
 
 private: // ----------------------------------------------------
 
@@ -470,7 +488,7 @@ private: // ----------------------------------------------------
 		if(CanChange(SetBy))
 		{
 			// propagate from main thread to render thread or to reference
-			OnCVarChange(RefValue, MainValue, Flags);
+			OnCVarChange(RefValue, MainValue, Flags, SetBy);
 			FConsoleVariableBase::OnChanged(SetBy);
 		}
 	}
@@ -484,8 +502,90 @@ FString FConsoleVariableRef<float>::GetString() const
 	// otherwise we get 2.1f would become "2.100000"
 	return FString::SanitizeFloat(RefValue);
 }
+template<> bool FConsoleVariableRef<bool>::IsVariableInt() const
+{
+	return true;
+}
+template<> bool FConsoleVariableRef<int32>::IsVariableInt() const
+{
+	return true;
+}
+template<> bool FConsoleVariableRef<float>::IsVariableFloat() const
+{
+	return true;
+}
 
-// ----
+// string version
+
+class FConsoleVariableStringRef : public FConsoleVariableBase
+{
+public:
+	FConsoleVariableStringRef(FString& InRefValue, const TCHAR* Help, EConsoleVariableFlags Flags)
+		: FConsoleVariableBase(Help, Flags)
+		, RefValue(InRefValue)
+		, MainValue(InRefValue)
+	{
+	}
+
+	// interface IConsoleVariable -----------------------------------
+
+	virtual void Release()
+	{
+		delete this;
+	}
+	virtual void Set(const TCHAR* InValue, EConsoleVariableFlags SetBy)
+	{
+		if (CanChange(SetBy))
+		{
+			MainValue = InValue;
+			OnChanged(SetBy);
+		}
+	}
+	virtual int32 GetInt() const
+	{
+		int32 Result;
+		TTypeFromString<int32>::FromString(Result, *MainValue);
+		return Result;
+	}
+	virtual float GetFloat() const
+	{
+		float Result = 0.0f;
+		TTypeFromString<float>::FromString(Result, *MainValue);
+		return Result;
+	}
+	virtual FString GetString() const
+	{
+		return MainValue;
+	}
+	virtual bool IsVariableString() const override
+	{
+		return true;
+	}
+
+private: // ----------------------------------------------------
+
+	// reference the the value (should not be changed from outside), if ECVF_RenderThreadSafe this is the render thread version, otherwise same as MainValue
+	FString& RefValue;
+	// main thread version 
+	FString MainValue;
+
+	const FString& Value() const
+	{
+		uint32 Index = GetShadowIndex();
+		checkSlow(Index < 2);
+		return (Index == 0) ? MainValue : RefValue;
+	}
+
+	void OnChanged(EConsoleVariableFlags SetBy)
+	{
+		if (CanChange(SetBy))
+		{
+			// propagate from main thread to render thread or to reference
+			OnCVarChange(RefValue, MainValue, Flags, SetBy);
+			FConsoleVariableBase::OnChanged(SetBy);
+		}
+	}
+};
 
 class FConsoleVariableBitRef : public FConsoleVariableBase
 {
@@ -858,6 +958,11 @@ IConsoleVariable* FConsoleManager::RegisterConsoleVariableRef(const TCHAR* Name,
 	return AddConsoleObject(Name, new FConsoleVariableRef<bool>(RefValue, Help, (EConsoleVariableFlags)Flags))->AsVariable();
 }
 
+IConsoleVariable* FConsoleManager::RegisterConsoleVariableRef(const TCHAR* Name, FString& RefValue, const TCHAR* Help, uint32 Flags)
+{
+	return AddConsoleObject(Name, new FConsoleVariableStringRef(RefValue, Help, (EConsoleVariableFlags)Flags))->AsVariable();
+}
+
 IConsoleCommand* FConsoleManager::RegisterConsoleCommand(const TCHAR* Name, const TCHAR* Help, const FConsoleCommandDelegate& Command, uint32 Flags)
 {
 	return AddConsoleObject(Name, new FConsoleCommand(Command, Help, (EConsoleVariableFlags)Flags))->AsCommand();
@@ -894,9 +999,9 @@ IConsoleCommand* FConsoleManager::RegisterConsoleCommand(const TCHAR* Name, cons
 }
 
 
-IConsoleVariable* FConsoleManager::FindConsoleVariable(const TCHAR* Name) const
+IConsoleVariable* FConsoleManager::FindConsoleVariable(const TCHAR* Name, bool bTrackFrequentCalls) const
 {
-	IConsoleObject* Obj = FindConsoleObject(Name);
+	IConsoleObject* Obj = FindConsoleObject(Name, bTrackFrequentCalls);
 
 	if(Obj)
 	{
@@ -911,11 +1016,12 @@ IConsoleVariable* FConsoleManager::FindConsoleVariable(const TCHAR* Name) const
 	return 0;
 }
 
-IConsoleObject* FConsoleManager::FindConsoleObject(const TCHAR* Name) const
+IConsoleObject* FConsoleManager::FindConsoleObject(const TCHAR* Name, bool bTrackFrequentCalls) const
 {
 	IConsoleObject* CVar = FindConsoleObjectUnfiltered(Name);
 
 #if TRACK_CONSOLE_FIND_COUNT
+	if (bTrackFrequentCalls)
 	{
 		const bool bEarlyAppPhase = GFrameCounter < 1000;
 		if(CVar)
@@ -1335,6 +1441,33 @@ IConsoleObject* FConsoleManager::AddConsoleObject(const TCHAR* Name, IConsoleObj
 				ConsoleObjects.Add(Name, Var);
 				return Var;
 			}
+#if WITH_HOT_RELOAD
+			else if (GIsHotReload)
+			{
+				// Variable is being replaced due to a hot reload - copy state across to new variable, but only if the type hasn't changed
+				{
+					if (ExistingVar->IsVariableFloat())
+					{
+						Var->Set(ExistingVar->GetFloat());
+					}
+				}
+				{
+					if (ExistingVar->IsVariableInt())
+					{
+						Var->Set(ExistingVar->GetInt());
+					}
+				}
+				{
+					if (ExistingVar->IsVariableString())
+					{
+						Var->Set(*ExistingVar->GetString());
+					}
+				}
+				ExistingVar->Release();
+				ConsoleObjects.Add(Name, Var);
+				return Var;
+			}
+#endif
 			else
 			{
 				// Copy data over from the new variable,
@@ -1847,7 +1980,7 @@ static TAutoConsoleVariable<int32> CVarMobileNumDynamicPointLights(
 	TEXT("r.MobileNumDynamicPointLights"),
 	4,
 	TEXT("The number of dynamic point lights to support on mobile devices. Setting this to 0 for games which do not require dynamic point lights will reduce the number of shaders generated."), 
-	ECVF_RenderThreadSafe);
+	ECVF_RenderThreadSafe | ECVF_ReadOnly);
 
 static TAutoConsoleVariable<int32> CVarMobileDynamicPointLightsUseStaticBranch(
 	TEXT("r.MobileDynamicPointLightsUseStaticBranch"),
@@ -1918,6 +2051,20 @@ static TAutoConsoleVariable<int32> CVarMobileAllowDitheredLODTransition(
 	TEXT("r.Mobile.AllowDitheredLODTransition"),
 	0,
 	TEXT("Whether to support 'Dithered LOD Transition' material option on mobile platforms"),
+	ECVF_ReadOnly | ECVF_RenderThreadSafe
+);
+
+static TAutoConsoleVariable<int32> CVarMobileAllowPixelDepthOffset(
+	TEXT("r.Mobile.AllowPixelDepthOffset"),
+	1,
+	TEXT("Whether to allow 'Pixel Depth Offset' in materials for ES3.1 feature level. Depth modification in pixel shaders may reduce GPU performance"),
+	ECVF_ReadOnly | ECVF_RenderThreadSafe
+);
+
+static TAutoConsoleVariable<int32> CVarMobileSupportGPUScene(
+	TEXT("r.Mobile.SupportGPUScene"),
+	0,
+	TEXT("Whether to support GPU scene, required for auto-instancing (only ES3.1 feature level)"),
 	ECVF_ReadOnly | ECVF_RenderThreadSafe
 );
 
@@ -2522,12 +2669,6 @@ static TAutoConsoleVariable<int32> CVarLuminOverrideExternalTextureSupport(
 	TEXT("  3 = force ImageExternal300 (version #300 with GL_OES_EGL_image_external)\n")
 	TEXT("  4 = force ImageExternalESSL300 (version #300 with GL_OES_EGL_image_external_essl3)"),
 	ECVF_ReadOnly);
-
-static TAutoConsoleVariable<int32> GLSLCvar(
-	TEXT("r.Vulkan.UseGLSL"),
-	0,
-	TEXT("2 to use ES GLSL\n1 to use GLSL\n0 to use SPIRV")
-);
 
 static TAutoConsoleVariable<FString> CVarCustomUnsafeZones(
 	TEXT("r.CustomUnsafeZones"),

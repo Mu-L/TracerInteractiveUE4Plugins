@@ -102,8 +102,8 @@ public:
 					return false;
 				}
 
-				extern ENGINE_API bool IsGPUSkinCacheAvailable();
-				bool bSkinCache = IsGPUSkinCacheAvailable() && (VertexFactoryType == FindVertexFactoryType(FName(TEXT("FGPUSkinPassthroughVertexFactory"), FNAME_Find)));
+				extern ENGINE_API bool IsGPUSkinCacheAvailable(EShaderPlatform Platform);
+				bool bSkinCache = IsGPUSkinCacheAvailable(Platform) && (VertexFactoryType == FindVertexFactoryType(FName(TEXT("FGPUSkinPassthroughVertexFactory"), FNAME_Find)));
 					
 				if (
 					VertexFactoryType != FindVertexFactoryType(FName(TEXT("TGPUSkinVertexFactoryfalse"), FNAME_Find)) &&
@@ -1524,7 +1524,14 @@ void UMaterialEditorInstanceConstant::CopyBasePropertiesFromParent()
 	}
 	if (!BasePropertyOverrides.bOverride_ShadingModel)
 	{
-		BasePropertyOverrides.ShadingModel = SourceInstance->GetShadingModel();
+		if (SourceInstance->IsShadingModelFromMaterialExpression())
+		{
+			BasePropertyOverrides.ShadingModel = MSM_FromMaterialExpression;
+		}
+		else
+		{
+			BasePropertyOverrides.ShadingModel = SourceInstance->GetShadingModels().GetFirstShadingModel(); 
+		}
 	}
 	if (!BasePropertyOverrides.bOverride_TwoSided)
 	{
@@ -1546,10 +1553,9 @@ void UMaterialEditorInstanceConstant::CopyBasePropertiesFromParent()
 	//Copy refraction settings
 	SourceInstance->GetRefractionSettings(RefractionDepthBias);
 
-	if (!bOverrideSubsurfaceProfile)
-	{
-		SubsurfaceProfile = SourceInstance->SubsurfaceProfile;
-	}
+	bOverrideSubsurfaceProfile = SourceInstance->bOverrideSubsurfaceProfile;
+	// Copy the subsurface profile. GetSubsurfaceProfile_Internal() will return either the overridden profile or one from a parent
+	SubsurfaceProfile = SourceInstance->GetSubsurfaceProfile_Internal();
 }
 
 #if WITH_EDITOR

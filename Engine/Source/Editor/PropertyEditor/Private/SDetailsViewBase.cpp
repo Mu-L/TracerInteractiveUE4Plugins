@@ -23,6 +23,7 @@
 #include "Widgets/Input/SSearchBox.h"
 #include "Classes/EditorStyleSettings.h"
 #include "DetailLayoutHelpers.h"
+#include "EditConditionParser.h"
 
 SDetailsViewBase::~SDetailsViewBase()
 {
@@ -145,7 +146,12 @@ TArray< FPropertyPath > SDetailsViewBase::GetPropertiesInOrderDisplayed() const
 // @return populates OutNodes with the leaf node corresponding to property as the first entry in the list (e.g. [leaf, parent, grandparent]):
 static void FindTreeNodeFromPropertyRecursive( const TArray< TSharedRef<FDetailTreeNode> >& Nodes, const FPropertyPath& Property, TArray< TSharedPtr< FDetailTreeNode > >& OutNodes )
 {
-	for (auto& TreeNode : Nodes)
+	if (Property == FPropertyPath())
+	{
+		return;
+	}
+
+	for (const TSharedRef<FDetailTreeNode>& TreeNode : Nodes)
 	{
 		if (TreeNode->IsLeaf())
 		{
@@ -171,7 +177,7 @@ static void FindTreeNodeFromPropertyRecursive( const TArray< TSharedRef<FDetailT
 
 void SDetailsViewBase::HighlightProperty(const FPropertyPath& Property)
 {
-	auto PrevHighlightedNodePtr = CurrentlyHighlightedNode.Pin();
+	TSharedPtr<FDetailTreeNode> PrevHighlightedNodePtr = CurrentlyHighlightedNode.Pin();
 	if (PrevHighlightedNodePtr.IsValid())
 	{
 		PrevHighlightedNodePtr->SetIsHighlighted(false);
@@ -425,6 +431,16 @@ void SDetailsViewBase::SetIsPropertyReadOnlyDelegate(FIsPropertyReadOnly InIsPro
 	IsPropertyReadOnlyDelegate = InIsPropertyReadOnly;
 }
 
+void SDetailsViewBase::SetIsCustomRowVisibilityFilteredDelegate(FIsCustomRowVisibilityFiltered InIsCustomRowVisibilityFilteredDelegate)
+{
+	IsCustomRowVisibilityFilteredDelegate = InIsCustomRowVisibilityFilteredDelegate;
+};
+
+void SDetailsViewBase::SetIsCustomRowVisibleDelegate(FIsCustomRowVisible InIsCustomRowVisible)
+{
+	IsCustomRowVisibleDelegate = InIsCustomRowVisible;
+}
+
 void SDetailsViewBase::SetIsPropertyEditingEnabledDelegate(FIsPropertyEditingEnabled IsPropertyEditingEnabled)
 {
 	IsPropertyEditingEnabledDelegate = IsPropertyEditingEnabled;
@@ -477,6 +493,16 @@ TSharedPtr<FAssetThumbnailPool> SDetailsViewBase::GetThumbnailPool() const
 	return ThumbnailPool;
 }
 
+TSharedPtr<FEditConditionParser> SDetailsViewBase::GetEditConditionParser() const
+{
+	if (!EditConditionParser.IsValid())
+	{
+		EditConditionParser = MakeShareable(new FEditConditionParser);
+	}
+
+	return EditConditionParser;
+}
+
 void SDetailsViewBase::NotifyFinishedChangingProperties(const FPropertyChangedEvent& PropertyChangedEvent)
 {
 	OnFinishedChangingPropertiesDelegate.Broadcast(PropertyChangedEvent);
@@ -526,6 +552,20 @@ bool SDetailsViewBase::IsPropertyVisible( const FPropertyAndParent& PropertyAndP
 bool SDetailsViewBase::IsPropertyReadOnly( const FPropertyAndParent& PropertyAndParent ) const
 {
 	return IsPropertyReadOnlyDelegate.IsBound() ? IsPropertyReadOnlyDelegate.Execute(PropertyAndParent) : false;
+}
+
+bool SDetailsViewBase::IsCustomRowVisibilityFiltered() const
+{
+	if (!IsCustomRowVisibleDelegate.IsBound())
+	{
+		return false;
+	}
+	return IsCustomRowVisibilityFilteredDelegate.IsBound() ? IsCustomRowVisibilityFilteredDelegate.Execute() : true;
+}
+
+bool SDetailsViewBase::IsCustomRowVisible(FName InRowName, FName InParentName) const
+{
+	return IsCustomRowVisibleDelegate.IsBound() ? IsCustomRowVisibleDelegate.Execute(InRowName, InParentName) : true;
 }
 
 TSharedPtr<IPropertyUtilities> SDetailsViewBase::GetPropertyUtilities()
@@ -714,7 +754,8 @@ void SDetailsViewBase::Tick( const FGeometry& AllottedGeometry, const double InC
 
 	FRootPropertyNodeList& RootPropertyNodes = GetRootNodes();
 
-	for(TSharedPtr<FComplexPropertyNode>& RootPropertyNode : RootPropertyNodes)
+	bool bHadDeferredActions = DeferredActions.Num() > 0;
+	auto PreProcessRootNode = [&bHadDeferredActions, this](TSharedPtr<FComplexPropertyNode> RootPropertyNode) 
 	{
 		check(RootPropertyNode.IsValid());
 
@@ -724,11 +765,25 @@ void SDetailsViewBase::Tick( const FGeometry& AllottedGeometry, const double InC
 			ObjectRoot->PurgeKilledObjects();
 		}
 
-		if(DeferredActions.Num() > 0)
+		if(bHadDeferredActions)
 		{		
 			// Any deferred actions are likely to cause the node  tree to be at least partially rebuilt
 			// Save the expansion state of existing nodes so we can expand them later
 			SaveExpandedItems(RootPropertyNode.ToSharedRef());
+		}
+	};
+
+	for (TSharedPtr<FComplexPropertyNode>& RootPropertyNode : RootPropertyNodes)
+	{
+		PreProcessRootNode(RootPropertyNode);
+	}
+
+	for (FDetailLayoutData& LayoutData : DetailLayouts)
+	{
+		FRootPropertyNodeList& ExternalRootPropertyNodes = LayoutData.DetailLayout->GetExternalRootPropertyNodes();
+		for (TSharedPtr<FComplexPropertyNode>& ExternalRootPropertyNode : ExternalRootPropertyNodes)
+		{
+			PreProcessRootNode(ExternalRootPropertyNode);
 		}
 	}
 
@@ -740,6 +795,25 @@ void SDetailsViewBase::Tick( const FGeometry& AllottedGeometry, const double InC
 			DeferredActions[ActionIndex].ExecuteIfBound();
 		}
 		DeferredActions.Empty();
+	}
+
+	if (bHadDeferredActions)
+	{
+		for (TSharedPtr<FComplexPropertyNode>& RootPropertyNode : RootPropertyNodes)
+		{
+			check(RootPropertyNode.IsValid());
+			RestoreExpandedItems(RootPropertyNode.ToSharedRef());
+		}
+
+		for (FDetailLayoutData& LayoutData : DetailLayouts)
+		{
+			FRootPropertyNodeList& ExternalRootPropertyNodes = LayoutData.DetailLayout->GetExternalRootPropertyNodes();
+			for (TSharedPtr<FComplexPropertyNode>& ExternalRootPropertyNode : ExternalRootPropertyNodes)
+			{
+				check(ExternalRootPropertyNode.IsValid());
+				RestoreExpandedItems(ExternalRootPropertyNode.ToSharedRef());
+			}
+		}
 	}
 
 	TSharedPtr<FComplexPropertyNode> LastRootPendingKill;
@@ -764,12 +838,6 @@ void SDetailsViewBase::Tick( const FGeometry& AllottedGeometry, const double InC
 	{
 		for(TSharedPtr<FComplexPropertyNode>& RootPropertyNode : RootPropertyNodes)
 		{
-			if(RootPropertyNode == LastRootPendingKill)
-			{
-				ExpandedDetailNodes.Empty();
-				RestoreExpandedItems(RootPropertyNode.ToSharedRef());
-			}
-
 			EPropertyDataValidationResult Result = RootPropertyNode->EnsureDataIsValid();
 			if(Result == EPropertyDataValidationResult::PropertiesChanged || Result == EPropertyDataValidationResult::EditInlineNewValueChanged)
 			{
@@ -1002,7 +1070,7 @@ void SDetailsViewBase::UpdateFilteredDetails()
 
 	FDetailNodeList InitialRootNodeList;
 	
-	NumVisbleTopLevelObjectNodes = 0;
+	NumVisibleTopLevelObjectNodes = 0;
 	FRootPropertyNodeList& RootPropertyNodes = GetRootNodes();
 
 	if( GetDefault<UEditorStyleSettings>()->bShowAllAdvancedDetails )
@@ -1037,7 +1105,7 @@ void SDetailsViewBase::UpdateFilteredDetails()
 				if (LayoutRoots.Num() > 0)
 				{
 					// A top level object nodes has a non-filtered away root so add one to the total number we have
-					++NumVisbleTopLevelObjectNodes;
+					++NumVisibleTopLevelObjectNodes;
 
 					InitialRootNodeList.Append(LayoutRoots);
 				}

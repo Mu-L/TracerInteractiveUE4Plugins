@@ -1,7 +1,9 @@
 // Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
 
 #include "ControlRigUnitNodeSpawner.h"
+#include "Graph/ControlRigGraph.h"
 #include "Graph/ControlRigGraphNode.h"
+#include "Graph/ControlRigGraphSchema.h"
 #include "EdGraphSchema_K2.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Classes/EditorStyleSettings.h"
@@ -11,6 +13,14 @@
 #include "K2Node_Variable.h"
 #include "BlueprintNodeTemplateCache.h"
 #include "ControlRigBlueprintUtils.h"
+#include "ScopedTransaction.h"
+#include "ControlRig/Private/Units/Execution/RigUnit_BeginExecution.h"
+#include "ControlRig.h"
+#include "ControlRigBlueprint.h"
+
+#if WITH_EDITOR
+#include "Editor.h"
+#endif
 
 #define LOCTEXT_NAMESPACE "ControlRigUnitNodeSpawner"
 
@@ -25,6 +35,21 @@ UControlRigUnitNodeSpawner* UControlRigUnitNodeSpawner::CreateFromStruct(UStruct
 	MenuSignature.MenuName = InMenuDesc;
 	MenuSignature.Tooltip  = InTooltip;
 	MenuSignature.Category = InCategory;
+
+	FString KeywordsMetadata, PrototypeNameMetadata;
+	InStruct->GetStringMetaDataHierarchical(UControlRig::KeywordsMetaName, &KeywordsMetadata);
+	if(!PrototypeNameMetadata.IsEmpty())
+	{
+		if(KeywordsMetadata.IsEmpty())
+		{
+			KeywordsMetadata = PrototypeNameMetadata;
+		}
+		else
+		{
+			KeywordsMetadata = KeywordsMetadata + TEXT(",") + PrototypeNameMetadata;
+		}
+	}
+	MenuSignature.Keywords = FText::FromString(KeywordsMetadata);
 
 	// add at least one character, so that PrimeDefaultUiSpec() doesn't 
 	// attempt to query the template node
@@ -68,28 +93,69 @@ UEdGraphNode* UControlRigUnitNodeSpawner::Invoke(UEdGraph* ParentGraph, FBinding
 
 	if(StructTemplate)
 	{
-	//	const FScopedTransaction Transaction(LOCTEXT("AddRigUnitNode", "Add Rig Unit Node"));
+#if WITH_EDITOR
+		if (GEditor)
+		{
+			GEditor->CancelTransaction(0);
+		}
+#endif
 
+		UBlueprint* Blueprint = CastChecked<UBlueprint>(ParentGraph->GetOuter());
+		NewNode = SpawnNode(ParentGraph, Blueprint, StructTemplate, Location);
+	}
+
+	return NewNode;
+}
+
+bool UControlRigUnitNodeSpawner::IsTemplateNodeFilteredOut(FBlueprintActionFilter const& Filter) const
+{
+	if (StructTemplate)
+	{
+		FString DeprecatedMetadata;
+		StructTemplate->GetStringMetaDataHierarchical(UControlRig::DeprecatedMetaName, &DeprecatedMetadata);
+		if (!DeprecatedMetadata.IsEmpty())
+		{
+			return true;
+		}
+	}
+	return Super::IsTemplateNodeFilteredOut(Filter);
+}
+
+UControlRigGraphNode* UControlRigUnitNodeSpawner::SpawnNode(UEdGraph* ParentGraph, UBlueprint* Blueprint, UStruct* StructTemplate, FVector2D const Location)
+{
+	UControlRigGraphNode* NewNode = nullptr;
+	UControlRigBlueprint* RigBlueprint = Cast<UControlRigBlueprint>(Blueprint);
+	if (RigBlueprint != nullptr)
+	{
 		bool const bIsTemplateNode = FBlueprintNodeTemplateCache::IsTemplateOuter(ParentGraph);
 
 		// First create a backing member for our node
-		UBlueprint* Blueprint = CastChecked<UBlueprint>(ParentGraph->GetOuter());
 		FName MemberName = NAME_None;
-		if(!bIsTemplateNode)
+
+		if (!bIsTemplateNode)
 		{
-			MemberName = FControlRigBlueprintUtils::AddUnitMember(Blueprint, StructTemplate);
+			FName Name = FControlRigBlueprintUtils::ValidateName(RigBlueprint, StructTemplate->GetFName().ToString());
+			if (RigBlueprint->ModelController->AddNode(StructTemplate->GetFName(), Location, Name))
+			{
+				MemberName = RigBlueprint->LastNameFromNotification;
+				for (UEdGraphNode* Node : ParentGraph->Nodes)
+				{
+					if (UControlRigGraphNode* RigNode = Cast<UControlRigGraphNode>(Node))
+					{
+						if (RigNode->GetPropertyName() == MemberName)
+						{
+							NewNode = RigNode;
+							break;
+						}
+					}
+				}
+			}
 		}
 		else
 		{
-			MemberName = StructTemplate->GetFName();
-		}
-
-		if(MemberName != NAME_None)
-		{
-			NewNode = FControlRigBlueprintUtils::InstantiateGraphNodeForProperty(ParentGraph, MemberName, Location);
+			NewNode = FControlRigBlueprintUtils::InstantiateGraphNodeForStructPath(ParentGraph, *StructTemplate->GetDisplayNameText().ToString(), Location, StructTemplate->GetPathName());
 		}
 	}
-
 	return NewNode;
 }
 

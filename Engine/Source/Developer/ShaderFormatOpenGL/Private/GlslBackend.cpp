@@ -345,6 +345,15 @@ static const char* OutputTopologyStrings[5] = {
 	"ccw",
 };
 
+static const char* GLSLIntCastTypes[5] =
+{
+	"!invalid!",
+	"int",
+	"ivec2",
+	"ivec3",
+	"ivec4",
+};
+
 static const char* ES31FrameBufferFetchStorageQualifier = "FRAME_BUFFERFETCH_STORAGE_QUALIFIER ";
 static_assert((sizeof(GLSLExpressionTable) / sizeof(GLSLExpressionTable[0])) == ir_opcode_count, "GLSLExpressionTableSizeMismatch");
 
@@ -568,6 +577,9 @@ class ir_gen_glsl_visitor : public ir_visitor
 
 	// framebuffer fetch is in use
 	bool bUsesFrameBufferFetch;
+
+	// depthbuffer fetch is in use
+	bool bUsesDepthbufferFetch;
 
 	// uses external texture
 	bool bUsesExternalTexture;
@@ -968,7 +980,54 @@ class ir_gen_glsl_visitor : public ir_visitor
 				bUseGlobalUniformBufferWrapper = true;
 			}
 
-			if (scope_depth == 0 &&
+			if (var->is_patch_constant)
+			{
+				// AMD drivers reject interface blocks for per-patch data.
+				// AMD drivers also need a location qualifier for each shader input/output vector.
+				// So we translate patch constant data to individual structs:
+				//   "layout(location = 9) patch in struct { vec4 Data; } in_PN_POSITION9;"
+				// NVIDIA drivers would also accept the previous solution:
+				//   "patch in PN_POSITION9 { vec4 Data; } in_PN_POSITION9;"
+
+				// We expect a struct with single member "Data" at this point
+				check(var->type->base_type == GLSL_TYPE_STRUCT);
+
+				// Patch declarations cannot have interpolation qualifiers
+				if (var->explicit_location)
+				{
+					ralloc_asprintf_append(
+						buffer,
+						"layout(location = %d) patch %sstruct",
+						var->location,
+						mode_str[var->mode]
+					);
+				}
+				else
+				{
+					ralloc_asprintf_append(
+						buffer,
+						"patch %sstruct",
+						mode_str[var->mode]
+					);
+				}
+
+				const glsl_type* inner_type = var->type;
+				if (inner_type->is_array())
+				{
+					inner_type = inner_type->fields.array;
+				}
+				check(inner_type->is_record());
+				check(inner_type->length == 1);
+				const glsl_struct_field* field = &inner_type->fields.structure[0];
+				check(strcmp(field->name, "Data") == 0);
+
+				ralloc_asprintf_append(buffer, " { ");
+				print_type_pre(field->type);
+				ralloc_asprintf_append(buffer, " Data");
+				print_type_post(field->type);
+				ralloc_asprintf_append(buffer, "; }");
+			}
+			else if (scope_depth == 0 &&
 			   ((var->mode == ir_var_in) || (var->mode == ir_var_out)) && 
 			   var->is_interface_block)
 			{
@@ -1002,7 +1061,7 @@ class ir_gen_glsl_visitor : public ir_visitor
 					{
 						interp_qualifier = "smooth ";
 					}
-										
+
 					ralloc_asprintf_append(
 						buffer,
 						"INTERFACE_BLOCK(%d, %s, %s%s%s%s, ",
@@ -1073,19 +1132,30 @@ class ir_gen_glsl_visitor : public ir_visitor
 			}
 			else if (var->type->is_image())
 			{
-				if (!strncmp(var->type->name, "RWStructuredBuffer<", 19) || !strncmp(var->type->name, "StructuredBuffer<", 17))
+				if (var->type->HlslName && (!strncmp(var->type->HlslName, "RWStructuredBuffer<", 19) || !strncmp(var->type->HlslName, "StructuredBuffer<", 17)))
 				{
-					ralloc_asprintf_append(
-						buffer,
-						"buffer "
-					);
+					if (bGenerateLayoutLocations && var->explicit_location)
+					{
+						ralloc_asprintf_append(
+							buffer,
+							"layout(std430,binding=%d) buffer ",
+							var->location
+							);
+					}
+					else
+					{
+						ralloc_asprintf_append(
+							buffer,
+							"buffer "
+						);
+					}
 				}
 				else
 				{
 					const bool bSingleComp = (var->type->inner_type->vector_elements == 1);
 					const char * const coherent_str[] = { "", "coherent " };
 					const char * const writeonly_str[] = { "", "writeonly " };
-					const char * const type_str[] = { "32ui", "32i", "16f", (bIsES31 && !bSingleComp) ? "16f" : "32f" };
+					const char * const type_str[] = { "32ui", "32i", "16f", "32f" };
 					const char * const comp_str = bSingleComp ? "r" : "rgba";
 					const int writeonly = var->image_write && !(var->image_read);
 
@@ -1177,7 +1247,7 @@ class ir_gen_glsl_visitor : public ir_visitor
 				print_type_pre(var->type);
 			}
 
-			if (var->type->is_image() && (!strncmp(var->type->name, "RWStructuredBuffer<", 19) || !strncmp(var->type->name, "StructuredBuffer<", 17)))
+			if (var->type->is_image() && (var->type->HlslName && (!strncmp(var->type->HlslName, "RWStructuredBuffer<", 19) || !strncmp(var->type->HlslName, "StructuredBuffer<", 17))))
 			{
 				AddTypeToUsedStructs(var->type->inner_type);
 				ralloc_asprintf_append(buffer, " %s_VAR { %s %s[]; }", unique_name(var), var->type->inner_type->name, unique_name(var));
@@ -1649,7 +1719,7 @@ class ir_gen_glsl_visitor : public ir_visitor
 		const int dst_elements = deref->type->vector_elements;
 		const int src_elements = (src) ? src->type->vector_elements : 1;
 		
-		bool bIsStructured = deref->type->is_record() || (!strncmp(deref->image->type->name, "RWStructuredBuffer<", 19) || !strncmp(deref->image->type->name, "StructuredBuffer<", 17));
+		bool bIsStructured = deref->type->is_record() || (deref->image->type->HlslName && (!strncmp(deref->image->type->HlslName, "RWStructuredBuffer<", 19) || !strncmp(deref->image->type->HlslName, "StructuredBuffer<", 17)));
 
 		//!strncmp(var->type->name, "RWStructuredBuffer<")
 		check(bIsStructured || (1 <= dst_elements && dst_elements <= 4));
@@ -1675,18 +1745,18 @@ class ir_gen_glsl_visitor : public ir_visitor
 				{
 					ralloc_asprintf_append(buffer, "imageLoad( ");
 					deref->image->accept(this);
-					ralloc_asprintf_append(buffer, ", ");
+					ralloc_asprintf_append(buffer, ", %s(", GLSLIntCastTypes[deref->image_index->type->vector_elements]);
 					deref->image_index->accept(this);
-					ralloc_asprintf_append(buffer, ").%s", swizzle[dst_elements-1]);
+					ralloc_asprintf_append(buffer, ")).%s", swizzle[dst_elements-1]);
 				}
 				else
 				{
 					ralloc_asprintf_append(buffer, "imageStore( ");
 					deref->image->accept(this);
-					ralloc_asprintf_append(buffer, ", ");
+					ralloc_asprintf_append(buffer, ", %s(", GLSLIntCastTypes[deref->image_index->type->vector_elements]);
 					deref->image_index->accept(this);
-					ralloc_asprintf_append(buffer, ", ");
-
+					ralloc_asprintf_append(buffer, "), ");
+					// avoid 'scalar swizzle'
 					if (/*src->as_constant() && */src_elements == 1)
 					{
 						// Add cast if missing and avoid swizzle
@@ -2241,9 +2311,9 @@ class ir_gen_glsl_visitor : public ir_visitor
 			ralloc_asprintf_append(buffer, " = %s(",
 				imageAtomicFunctions[ir->operation]);
 			image->image->accept(this);
-			ralloc_asprintf_append(buffer, ", ");
+			ralloc_asprintf_append(buffer, ", %s(", GLSLIntCastTypes[image->image_index->type->vector_elements]);
 			image->image_index->accept(this);
-			ralloc_asprintf_append(buffer, ", ");
+			ralloc_asprintf_append(buffer, "), ");
 			ir->operands[0]->accept(this);
 			if (ir->operands[1])
 			{
@@ -3124,7 +3194,7 @@ class ir_gen_glsl_visitor : public ir_visitor
 public:
 
 	/** Constructor. */
-	ir_gen_glsl_visitor(bool bInIsES, bool bInEmitPrecision, bool bInIsWebGL, EHlslCompileTarget InCompileTarget, _mesa_glsl_parser_targets InShaderTarget, bool bInGenerateLayoutLocations, bool bInDefaultPrecisionIsHalf, bool bInNoGlobalUniforms, bool bInUsesFrameBufferFetch, bool bInUsesExternalTexture)
+	ir_gen_glsl_visitor(bool bInIsES, bool bInEmitPrecision, bool bInIsWebGL, EHlslCompileTarget InCompileTarget, _mesa_glsl_parser_targets InShaderTarget, bool bInGenerateLayoutLocations, bool bInDefaultPrecisionIsHalf, bool bInNoGlobalUniforms, bool bInUsesFrameBufferFetch, bool bInUsesDepthbufferFetch, bool bInUsesExternalTexture)
 		: early_depth_stencil(false)
 		, bIsES(bInIsES)
 		, bEmitPrecision(bInEmitPrecision)
@@ -3134,6 +3204,7 @@ public:
 		, bGenerateLayoutLocations(bInGenerateLayoutLocations)
 		, bDefaultPrecisionIsHalf(bInDefaultPrecisionIsHalf)
 		, bUsesFrameBufferFetch(bInUsesFrameBufferFetch)
+		, bUsesDepthbufferFetch(bInUsesDepthbufferFetch)
 		, bUsesExternalTexture(bInUsesExternalTexture)
 		, buffer(0)
 		, indentation(0)
@@ -3275,8 +3346,7 @@ bool compiler_internal_AdjustIsFrontFacing(bool isFrontFacing)
 
 		}
 
-		bool bUsesDepthbufferFetchES2 = UsesUEIntrinsic(ir, DEPTHBUFFER_FETCH_ES2);
-		if (bUsesDepthbufferFetchES2)
+		if (bUsesDepthbufferFetch)
 		{
 			ralloc_asprintf_append(buffer, "\n#ifdef GL_ARM_shader_framebuffer_fetch_depth_stencil\n");
 			ralloc_asprintf_append(buffer, "float DepthbufferFetchES2(float OptionalDepth, float C1, float C2) { float w = 1.0/(gl_LastFragDepthARM*C1-C2); return clamp(w, 0.0, 65000.0); }\n");
@@ -3338,8 +3408,8 @@ bool compiler_internal_AdjustIsFrontFacing(bool isFrontFacing)
 
 		char* Extensions = ralloc_asprintf(mem_ctx, "");
 		buffer = &Extensions;
-		print_extensions(state, bUsesFrameBufferFetch, bUsesDepthbufferFetchES2, CompileTarget == HCT_FeatureLevelES3_1Ext, bUsesExternalTexture);
-		if (state->bSeparateShaderObjects && !state->bGenerateES)
+		print_extensions(state, bUsesFrameBufferFetch, bUsesDepthbufferFetch, CompileTarget == HCT_FeatureLevelES3_1Ext, bUsesExternalTexture);
+		if (state->bSeparateShaderObjects && !(state->bGenerateES || CompileTarget == HCT_FeatureLevelES3_1))
 		{
 			switch (state->target)
 			{
@@ -3531,6 +3601,7 @@ char* FGlslCodeBackend::GenerateCode(exec_list* ir, _mesa_glsl_parse_state* stat
 	const bool bGenerateLayoutLocations = state->bGenerateLayoutLocations;
 	const bool bEmitPrecision = WantsPrecisionModifiers();
 	const bool bUsesFrameBufferFetch = Frequency == HSF_PixelShader && UsesUEIntrinsic(ir, FRAMEBUFFER_FETCH_ES2);
+	const bool bUsesDepthBufferFetch = Frequency == HSF_PixelShader && UsesUEIntrinsic(ir, DEPTHBUFFER_FETCH_ES2);
 	ir_gen_glsl_visitor visitor(state->bGenerateES,
 								bEmitPrecision,
 								bIsWebGL,
@@ -3540,6 +3611,7 @@ char* FGlslCodeBackend::GenerateCode(exec_list* ir, _mesa_glsl_parse_state* stat
 								bDefaultPrecisionIsHalf,
 								!AllowsGlobalUniforms(),
 								bUsesFrameBufferFetch,
+								bUsesDepthBufferFetch,
 								bUsesExternalTexture);
 	const char* code = visitor.run(ir, state, bGroupFlattenedUBs);
 	return _strdup(code);
@@ -4096,7 +4168,7 @@ static ir_rvalue* GenShaderInputSemantic(
 		Variable->interpolation = InputQualifier.Fields.InterpolationMode;
 		Variable->is_patch_constant = InputQualifier.Fields.bIsPatchConstant;
 
-		if(ParseState->bGenerateLayoutLocations && !InputQualifier.Fields.bIsPatchConstant)
+		if(ParseState->bGenerateLayoutLocations)
 		{
 			ConfigureInOutVariableLayout(Frequency, ParseState, Semantic, Variable, ir_var_in);
 		}
@@ -4133,7 +4205,7 @@ static ir_rvalue* GenShaderInputSemantic(
 		DeclInstructions->push_tail(Variable);
 		ParseState->symbols->add_variable(Variable);
 
-		if (ParseState->bGenerateLayoutLocations && !Variable->is_patch_constant)
+		if (ParseState->bGenerateLayoutLocations)
 		{
 			ConfigureInOutVariableLayout(Frequency, ParseState, Semantic, Variable, ir_var_in);
 		}
@@ -4208,7 +4280,7 @@ static ir_rvalue* GenShaderOutputSemantic(
 		}
 	}
 
-	if (Variable == NULL && Frequency == HSF_VertexShader)
+	if (Variable == NULL && (Frequency == HSF_VertexShader || Frequency == HSF_GeometryShader || Frequency == HSF_HullShader || Frequency == HSF_DomainShader))
 	{
 		const int PrefixLength = 15;
 		if (FCStringAnsi::Strnicmp(Semantic, "SV_ClipDistance", PrefixLength) == 0)
@@ -4251,8 +4323,8 @@ static ir_rvalue* GenShaderOutputSemantic(
 			{
 				Variable->explicit_location = true;
 				Variable->location = OutputIndex;
+			}
 		}
-	}
 	}
 
 	if (Variable == NULL && Frequency == HSF_HullShader)
@@ -4310,7 +4382,7 @@ static ir_rvalue* GenShaderOutputSemantic(
 		Variable = new(ParseState)ir_variable(Type, ralloc_asprintf(ParseState, "var_%s", Semantic), ir_var_out);
 	}
 
-	if (ParseState->bGenerateLayoutLocations && Variable && !Variable->is_patch_constant)
+	if (ParseState->bGenerateLayoutLocations && Variable)
 	{
 		ConfigureInOutVariableLayout(Frequency, ParseState, Semantic, Variable, ir_var_out);
 	}
@@ -4356,7 +4428,7 @@ static ir_rvalue* GenShaderOutputSemantic(
 	Variable->is_interface_block = true;
 	Variable->is_patch_constant = OutputQualifier.Fields.bIsPatchConstant;
 
-	if (ParseState->bGenerateLayoutLocations && !Variable->is_patch_constant)
+	if (ParseState->bGenerateLayoutLocations)
 	{
 		ConfigureInOutVariableLayout(Frequency, ParseState, Semantic, Variable, ir_var_out);
 	}
@@ -5580,7 +5652,6 @@ void FGlslCodeBackend::GenShaderPatchConstantFunctionInputs(_mesa_glsl_parse_sta
 
 void FGlslLanguageSpec::SetupLanguageIntrinsics(_mesa_glsl_parse_state* State, exec_list* ir)
 {
-	const bool bIsES31 = State->language_version == 310;
 	if (bIsES2)
 	{
 		make_intrinsic_genType(ir, State, GET_HDR_32BPP_HDR_ENCODE_MODE_ES2, ir_invalid_opcode, IR_INTRINSIC_ALL_FLOATING, 0);

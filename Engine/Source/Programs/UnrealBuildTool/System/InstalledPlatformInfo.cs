@@ -37,6 +37,23 @@ namespace UnrealBuildTool
 	};
 
 	/// <summary>
+	/// The state of a downloaded platform
+	/// </summary>
+	[Flags]
+	public enum InstalledPlatformState
+	{
+		/// <summary>
+		/// Query whether the platform is supported
+		/// </summary>
+		Supported,
+
+		/// <summary>
+		/// Query whether the platform has been downloaded
+		/// </summary>
+		Downloaded,
+	}
+
+	/// <summary>
 	/// Contains methods to allow querying the available installed platforms
 	/// </summary>
 	public class InstalledPlatformInfo
@@ -108,7 +125,7 @@ namespace UnrealBuildTool
 		static InstalledPlatformInfo()
 		{
 			List<string> InstalledPlatforms;
-			ConfigHierarchy Ini = ConfigCache.ReadHierarchy(ConfigHierarchyType.Engine, (DirectoryReference)null, UnrealTargetPlatform.Unknown);
+			ConfigHierarchy Ini = ConfigCache.ReadHierarchy(ConfigHierarchyType.Engine, (DirectoryReference)null, BuildHostPlatform.Current.Platform);
 
 			bool bHasInstalledPlatformInfo;
 			if(Ini.TryGetValue("InstalledPlatforms", "HasInstalledPlatformInfo", out bHasInstalledPlatformInfo) && bHasInstalledPlatformInfo)
@@ -154,21 +171,19 @@ namespace UnrealBuildTool
 				bCanCreateEntry = false;
 			}
 
-			string	PlatformName;
-			UnrealTargetPlatform Platform = UnrealTargetPlatform.Unknown;
+			string PlatformName;
 			if (ParseSubValue(PlatformConfiguration, "PlatformName=", out PlatformName))
 			{
-				Enum.TryParse(PlatformName, out Platform);
-			}
-			if (Platform == UnrealTargetPlatform.Unknown)
-			{
-				Log.TraceWarning("Unable to read platform from {0}", PlatformConfiguration);
-				bCanCreateEntry = false;
+				if (!UnrealTargetPlatform.IsValidName(PlatformName))
+				{
+					Log.TraceWarning("Unable to read platform from {0}", PlatformConfiguration);
+					bCanCreateEntry = false;
+				}
 			}
 
 			string PlatformTypeName;
 			TargetType PlatformType = TargetType.Game;
-			if (ParseSubValue(PlatformConfiguration, "PlatformTypeName=", out PlatformTypeName))
+			if (ParseSubValue(PlatformConfiguration, "PlatformType=", out PlatformTypeName))
 			{
 				if (!Enum.TryParse(PlatformTypeName, out PlatformType))
 				{
@@ -212,7 +227,7 @@ namespace UnrealBuildTool
 
 			if (bCanCreateEntry)
 			{
-				InstalledPlatformConfigurations.Add(new InstalledPlatformConfiguration(Configuration, Platform, PlatformType, Architecture, RequiredFile, ProjectType, bCanBeDisplayed));
+				InstalledPlatformConfigurations.Add(new InstalledPlatformConfiguration(Configuration, UnrealTargetPlatform.Parse(PlatformName), PlatformType, Architecture, RequiredFile, ProjectType, bCanBeDisplayed));
 			}
 		}
 
@@ -307,6 +322,53 @@ namespace UnrealBuildTool
 			);
 		}
 
+		/// <summary>
+		/// Determines whether the given target type is supported
+		/// </summary>
+		/// <param name="TargetType">The target type being built</param>
+		/// <param name="Platform">The platform being built</param>
+		/// <param name="Configuration">The configuration being built</param>
+		/// <param name="ProjectType">The project type required</param>
+		/// <param name="State">State of the given platform support</param>
+		/// <returns>True if the target can be built</returns>
+		public static bool IsValid(TargetType? TargetType, UnrealTargetPlatform? Platform, UnrealTargetConfiguration? Configuration, EProjectType ProjectType, InstalledPlatformState State)
+		{
+			if(!UnrealBuildTool.IsEngineInstalled() || InstalledPlatformConfigurations == null)
+			{
+				return true;
+			}
+
+			foreach(InstalledPlatformConfiguration Config in InstalledPlatformConfigurations)
+			{
+				// Check whether this configuration matches all the criteria
+				if(TargetType.HasValue && Config.PlatformType != TargetType.Value)
+				{
+					continue;
+				}
+				if(Platform.HasValue && Config.Platform != Platform.Value)
+				{
+					continue;
+				}
+				if(Configuration.HasValue && Config.Configuration != Configuration.Value)
+				{
+					continue;
+				}
+				if(ProjectType != EProjectType.Any && Config.ProjectType != EProjectType.Any && Config.ProjectType != ProjectType)
+				{
+					continue;
+				}
+				if(State == InstalledPlatformState.Downloaded && !String.IsNullOrEmpty(Config.RequiredFile) && !File.Exists(Config.RequiredFile))
+				{
+					continue;
+				}
+
+				// Success!
+				return true;
+			}
+
+			return false;
+		}
+
 		private static bool ContainsValidConfiguration(Predicate<InstalledPlatformConfiguration> ConfigFilter)
 		{
 			if (UnrealBuildTool.IsEngineInstalled() && InstalledPlatformConfigurations != null)
@@ -347,10 +409,7 @@ namespace UnrealBuildTool
 		private static void WriteConfigFileEntry(InstalledPlatformConfiguration Config, ref List<String> OutEntries)
 		{
 			string ConfigDescription = "+InstalledPlatformConfigurations=(";
-			if (Config.Platform != UnrealTargetPlatform.Unknown)
-			{
-				ConfigDescription += string.Format("PlatformName=\"{0}\", ", Config.Platform.ToString());
-			}
+			ConfigDescription += string.Format("PlatformName=\"{0}\", ", Config.Platform.ToString());
 			if (Config.Configuration != UnrealTargetConfiguration.Unknown)
 			{
 				ConfigDescription += string.Format("Configuration=\"{0}\", ", Config.Configuration.ToString());

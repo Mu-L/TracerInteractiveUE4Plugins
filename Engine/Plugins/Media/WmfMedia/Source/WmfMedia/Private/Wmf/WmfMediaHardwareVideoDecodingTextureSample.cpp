@@ -2,17 +2,28 @@
 
 #include "WmfMediaHardwareVideoDecodingTextureSample.h"
 
-ID3D11Texture2D* FWmfMediaHardwareVideoDecodingTextureSample::InitializeSourceTexture(const TComPtr<ID3D11Device>& InD3D11Device, FTimespan InTime, FTimespan InDuration, const FIntPoint& InDim, uint8 InFormat, EMediaTextureSampleFormat InMediaTextureSampleFormat)
+#include "WmfMediaCommon.h"
+
+#if WMFMEDIA_SUPPORTED_PLATFORM
+
+ID3D11Texture2D* FWmfMediaHardwareVideoDecodingTextureSample::InitializeSourceTexture(const TRefCountPtr<ID3D11Device>& InD3D11Device, FTimespan InTime, FTimespan InDuration, const FIntPoint& InDim, EPixelFormat InFormat, EMediaTextureSampleFormat InMediaTextureSampleFormat)
 {
 	Time = InTime;
 	Dim = InDim;
 	OutputDim = InDim;
 	Duration = InDuration;
 	SampleFormat = InMediaTextureSampleFormat;
+	Format = InFormat;
 
 	if (SourceTexture.IsValid())
 	{
-		return SourceTexture;
+		D3D11_TEXTURE2D_DESC Desc;
+		SourceTexture->GetDesc(&Desc);
+
+		if (Desc.Width == Dim.X && Desc.Height == Dim.Y)
+		{
+			return SourceTexture;
+		}
 	}
 
 	D3D11_TEXTURE2D_DESC TextureDesc;
@@ -28,6 +39,7 @@ ID3D11Texture2D* FWmfMediaHardwareVideoDecodingTextureSample::InitializeSourceTe
 	TextureDesc.CPUAccessFlags = 0;
 	TextureDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
 
+	SourceTexture.Reset();
 	InD3D11Device->CreateTexture2D(&TextureDesc, nullptr, &SourceTexture);
 
 	D3D11Device = InD3D11Device;
@@ -35,13 +47,17 @@ ID3D11Texture2D* FWmfMediaHardwareVideoDecodingTextureSample::InitializeSourceTe
 	return SourceTexture;
 }
 
+#if !UE_SERVER
 void FWmfMediaHardwareVideoDecodingTextureSample::ShutdownPoolable()
 {
 	FWmfMediaTextureSample::ShutdownPoolable();
 
 	// Correctly release the keyed mutex when the sample is returned to the pool
 	TComPtr<IDXGIResource> OtherResource(nullptr);
-	SourceTexture->QueryInterface(__uuidof(IDXGIResource), (void**)&OtherResource);
+	if (SourceTexture)
+	{
+		SourceTexture->QueryInterface(__uuidof(IDXGIResource), (void**)&OtherResource);
+	}
 
 	if (OtherResource)
 	{
@@ -73,4 +89,6 @@ void FWmfMediaHardwareVideoDecodingTextureSample::ShutdownPoolable()
 		}
 	}
 }
+#endif
 
+#endif

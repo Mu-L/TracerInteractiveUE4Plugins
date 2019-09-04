@@ -12,6 +12,7 @@ ShaderComplexityRendering.h: Declarations used for the shader complexity viewmod
 #include "GlobalShader.h"
 #include "DebugViewModeRendering.h"
 #include "DebugViewModeInterface.h"
+#include "PostProcess/SceneRenderTargets.h"
 
 class FPrimitiveSceneProxy;
 struct FMeshBatchElement;
@@ -32,10 +33,10 @@ class TComplexityAccumulatePS : public FDebugViewModePS
 	DECLARE_SHADER_TYPE(TComplexityAccumulatePS,MeshMaterial);
 public:
 
-	static bool ShouldCompilePermutation(EShaderPlatform Platform, const FMaterial* Material, const FVertexFactoryType* VertexFactoryType)
+	static bool ShouldCompilePermutation(const FMeshMaterialShaderPermutationParameters& Parameters)
 	{
 		// See FDebugViewModeMaterialProxy::GetFriendlyName()
-		return AllowDebugViewShaderMode(bQuadComplexity ? DVSM_QuadComplexity : DVSM_ShaderComplexity, Platform, GetMaxSupportedFeatureLevel(Platform)) && Material->GetFriendlyName().Contains(TEXT("ComplexityAccumulate"));
+		return AllowDebugViewShaderMode(bQuadComplexity ? DVSM_QuadComplexity : DVSM_ShaderComplexity, Parameters.Platform, Parameters.Material->GetFeatureLevel()) && Parameters.Material->GetFriendlyName().Contains(TEXT("ComplexityAccumulate"));
 	}
 
 	TComplexityAccumulatePS(const ShaderMetaType::CompiledShaderInitializerType& Initializer):
@@ -57,9 +58,12 @@ public:
 		return bShaderHasOutdatedParameters;
 	}
 
-	static void ModifyCompilationEnvironment(EShaderPlatform Platform, const FMaterial* Material, FShaderCompilerEnvironment& OutEnvironment)
+	static void ModifyCompilationEnvironment(const FMaterialShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
-		OutEnvironment.SetDefine(TEXT("OUTPUT_QUAD_OVERDRAW"), AllowDebugViewShaderMode(DVSM_QuadComplexity, Platform, GetMaxSupportedFeatureLevel(Platform)));
+		OutEnvironment.SetDefine(TEXT("OUTPUT_QUAD_OVERDRAW"), AllowDebugViewShaderMode(DVSM_QuadComplexity, Parameters.Platform, Parameters.Material->GetFeatureLevel()));
+		TCHAR BufferRegister[] = { 'u', '0', 0 };
+		BufferRegister[1] += FSceneRenderTargets::GetQuadOverdrawUAVIndex(Parameters.Platform, Parameters.Material->GetFeatureLevel());
+		OutEnvironment.SetDefine(TEXT("QUAD_BUFFER_REGISTER"), BufferRegister);
 	}
 
 	virtual void GetDebugViewModeShaderBindings(
@@ -98,7 +102,7 @@ public:
 	{}
 
 	virtual FDebugViewModePS* GetPixelShader(const FMaterial* InMaterial, FVertexFactoryType* VertexFactoryType) const override;
-	virtual void SetDrawRenderState(EBlendMode BlendMode, FRenderState& DrawRenderState) const;
+	virtual void SetDrawRenderState(EBlendMode BlendMode, FRenderState& DrawRenderState, bool bHasDepthPrepassForMaskedMaterial) const;
 };
 
 #endif //!(UE_BUILD_SHIPPING || UE_BUILD_TEST)

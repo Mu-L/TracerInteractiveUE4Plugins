@@ -47,6 +47,53 @@ struct FAnalyticsEventAttribute
 		, AttrType(AttrTypeEnum::String)
 	{}
 
+	/** Reinstate the default copy ctor because that one still works fine. */
+	FAnalyticsEventAttribute(const FAnalyticsEventAttribute& RHS) = default;
+
+	/** Hack to allow copy ctor using an rvalue-ref. This class only "sort of" acts like an immutable class because the const members prevents assignment, which was not intended when this code was changed. */
+	FAnalyticsEventAttribute(FAnalyticsEventAttribute&& RHS)
+		: AttrName(MoveTemp(const_cast<FString&>(RHS.AttrName)))
+		, AttrValueString(MoveTemp(const_cast<FString&>(RHS.AttrValueString)))
+		// no need to use MoveTemp on intrinsic types.
+		, AttrValueNumber(RHS.AttrValueNumber)
+		, AttrValueBool(RHS.AttrValueBool)
+		, AttrType(RHS.AttrType)
+	{
+	}
+
+	/** Hack to allow assignment. This class only "sort of" acts like an immutable class because the const members prevents assignment, which was not intended when this code was changed. */
+	FAnalyticsEventAttribute& operator=(const FAnalyticsEventAttribute& RHS)
+	{
+		if (&RHS == this)
+		{
+			return *this;
+		}
+
+		const_cast<FString&>(AttrName) = RHS.AttrName;
+		const_cast<FString&>(AttrValueString) = RHS.AttrValueString;
+		const_cast<double&>(AttrValueNumber) = RHS.AttrValueNumber;
+		const_cast<bool&>(AttrValueBool) = RHS.AttrValueBool;
+		const_cast<AttrTypeEnum&>(AttrType) = RHS.AttrType;
+		return *this;
+	}
+
+	/** Hack to allow assignment. This class only "sort of" acts like an immutable class because the const members prevents assignment, which was not intended when this code was changed. */
+	FAnalyticsEventAttribute& operator=(FAnalyticsEventAttribute&& RHS)
+	{
+		if (&RHS == this)
+		{
+			return *this;
+		}
+
+		const_cast<FString&>(AttrName) = MoveTemp(const_cast<FString&>(RHS.AttrName));
+		const_cast<FString&>(AttrValueString) = MoveTemp(const_cast<FString&>(RHS.AttrValueString));
+		// no need to use MoveTemp on intrinsic types.
+		const_cast<double&>(AttrValueNumber) = RHS.AttrValueNumber;
+		const_cast<bool&>(AttrValueBool) = RHS.AttrValueBool;
+		const_cast<AttrTypeEnum&>(AttrType) = RHS.AttrType;
+		return *this;
+	}
+
 	/** If you need the old AttrValue behavior (i.e. stringify everything), call this function instead. */
 	FString ToString() const
 	{
@@ -56,7 +103,8 @@ struct FAnalyticsEventAttribute
 		case AttrTypeEnum::JsonFragment:
 			return AttrValueString;
 		case AttrTypeEnum::Number:
-			if (AttrValueNumber - FMath::TruncToFloat(AttrValueNumber) == 0.0)
+			// From CL #3669417 : Integer numbers are formatted as "1" and not "1.00"
+			if (AttrValueNumber - FMath::FloorToDouble(AttrValueNumber) == 0.0)
 				return LexToSanitizedString((int64)AttrValueNumber);
 			return LexToSanitizedString(AttrValueNumber);
 		case AttrTypeEnum::Boolean:
@@ -142,15 +190,15 @@ public: // json fragment
 
 public: // string (catch-all)
 	/**
-	 * Helper constructor to make an attribute from a name/value pair by forwarding through LexToString and AnalyticsConversion::ToString.
+	 * Helper constructor to make an attribute from a name/value pair by forwarding through LexToString and AnalyticsConversionToString.
 	 * 
 	 * @param InName Name of the attribute. Will be converted to a string via forwarding to LexToString
-	 * @param InValue Value of the attribute. Will be converted to a string via forwarding to AnalyticsConversion::ToString (same as Lex but with basic support for arrays and maps)
+	 * @param InValue Value of the attribute. Will be converted to a string via forwarding to AnalyticsConversionToString (same as Lex but with basic support for arrays and maps)
 	 */
 	template <typename NameType, typename ValueType>
 	FAnalyticsEventAttribute(NameType&& InName, ValueType&& InValue)
 		: AttrName(LexToString(Forward<NameType>(InName)))
-		, AttrValueString(AnalyticsConversion::ToString(Forward<ValueType>(InValue)))
+		, AttrValueString(AnalyticsConversionToString(Forward<ValueType>(InValue)))
 		, AttrValueNumber(0)
 		, AttrValueBool(false)
 		, AttrType(AttrTypeEnum::String)

@@ -7,23 +7,27 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "UObject/ObjectMacros.h"
-#include "UObject/UObjectGlobals.h"
-#include "UObject/Object.h"
-#include "UObject/Class.h"
-#include "UObject/WeakObjectPtr.h"
-#include "UObject/CoreNetTypes.h"
-#include "UObject/ScriptInterface.h"
+
+#include "Concepts/GetTypeHashable.h"
+#include "Containers/List.h"
+#include "Serialization/SerializedPropertyScope.h"
 #include "Templates/Casts.h"
+#include "Templates/Greater.h"
 #include "Templates/IsFloatingPoint.h"
 #include "Templates/IsIntegral.h"
 #include "Templates/IsSigned.h"
-#include "Templates/Greater.h"
-#include "Containers/List.h"
+#include "Templates/Models.h"
+#include "UObject/Class.h"
+#include "UObject/CoreNetTypes.h"
 #include "UObject/LazyObjectPtr.h"
-#include "UObject/SoftObjectPtr.h"
+#include "UObject/Object.h"
+#include "UObject/ObjectMacros.h"
 #include "UObject/PropertyTag.h"
-#include "Serialization/SerializedPropertyScope.h"
+#include "UObject/ScriptInterface.h"
+#include "UObject/SoftObjectPtr.h"
+#include "UObject/SparseDelegate.h"
+#include "UObject/UObjectGlobals.h"
+#include "UObject/WeakObjectPtr.h"
 
 COREUOBJECT_API DECLARE_LOG_CATEGORY_EXTERN(LogType, Log, All);
 
@@ -966,7 +970,7 @@ protected:
 			(TIsPODType<TCppType>::Value ? CPF_IsPlainOldData : CPF_None) 
 			| (TIsTriviallyDestructible<TCppType>::Value ? CPF_NoDestructor : CPF_None) 
 			| (TIsZeroConstructType<TCppType>::Value ? CPF_ZeroConstructor : CPF_None)
-			| (THasGetTypeHash<TCppType>::Value ? CPF_HasGetValueTypeHash : CPF_None);
+			| (TModels<CGetTypeHashable, TCppType>::Value ? CPF_HasGetValueTypeHash : CPF_None);
 
 	}
 };
@@ -2881,8 +2885,21 @@ public:
 	{
 		Array->SwapMemory(A, B, ElementSize);
 	}
+
 	/**
-	 *	Used by memory counting archives to accumlate the size of this array.
+	 *	Move the allocation from another array and make it our own.
+	 *	@note The arrays MUST be of the same type, and this function will NOT validate that!
+	 *	@param InOtherArray The array to move the allocation from.
+	**/
+	void MoveAssign(void* InOtherArray)
+	{
+		FScriptArray* OtherArray = (FScriptArray*)InOtherArray;
+		checkSlow(OtherArray);
+		Array->MoveAssign(*OtherArray, ElementSize);
+	}
+
+	/**
+	 *	Used by memory counting archives to accumulate the size of this array.
 	 *	@param Ar archive to accumulate sizes
 	**/
 	void CountBytes( FArchive& Ar  ) const
@@ -3142,6 +3159,19 @@ public:
 	}
 
 	/**
+	 * Move the allocation from another map and make it our own.
+	 * @note The maps MUST be of the same type, and this function will NOT validate that!
+	 *
+	 * @param InOtherMap The map to move the allocation from.
+	 */
+	void MoveAssign(void* InOtherMap)
+	{
+		FScriptMap* OtherMap = (FScriptMap*)InOtherMap;
+		checkSlow(OtherMap);
+		Map->MoveAssign(*OtherMap, MapLayout);
+	}
+
+	/**
 	 * Add an uninitialized value to the end of the map.
 	 *
 	 * @return  The index of the added element.
@@ -3233,6 +3263,33 @@ public:
 	 * This function must be called to create a valid map.
 	 */
 	COREUOBJECT_API void Rehash();
+
+	/** 
+	 * Maps have gaps in their indices, so this function translates a logical index (ie. Nth element) 
+	 * to an internal index that can be used for the other functions in this class.
+	 * NOTE: This is slow, do not use this for iteration!
+	 */
+	int32 FindInternalIndex(int32 LogicalIdx) const
+	{
+		if (LogicalIdx < 0 && LogicalIdx > Num())
+		{
+			return INDEX_NONE;
+		}
+
+		int32 MaxIndex = GetMaxIndex();
+		for (int32 Actual = 0; Actual < MaxIndex; ++Actual)
+		{
+			if (IsValidIndex(Actual))
+			{
+				if (LogicalIdx == 0)
+				{
+					return Actual;
+				}
+				--LogicalIdx;
+			}
+		}
+		return INDEX_NONE;
+	}
 
 	/**
 	 * Finds the index of an element in a map which matches the key in another pair.
@@ -3692,6 +3749,19 @@ public:
 	}
 
 	/**
+	* Move the allocation from another set and make it our own.
+	* @note The sets MUST be of the same type, and this function will NOT validate that!
+	*
+	* @param InOtherSet The set to move the allocation from.
+	*/
+	void MoveAssign(void* InOtherSet)
+	{
+		FScriptSet* OtherSet = (FScriptSet*)InOtherSet;
+		checkSlow(OtherSet);
+		Set->MoveAssign(*OtherSet, SetLayout);
+	}
+
+	/**
 	* Add an uninitialized value to the end of the set.
 	*
 	* @return  The index of the added element.
@@ -3772,6 +3842,33 @@ public:
 	*/
 	COREUOBJECT_API void Rehash();
 
+	/**
+	 * Maps have gaps in their indices, so this function translates a logical index (ie. Nth element)
+	 * to an internal index that can be used for the other functions in this class.
+	 * NOTE: This is slow, do not use this for iteration!
+	 */
+	int32 FindInternalIndex(int32 LogicalIdx) const
+	{
+		if (LogicalIdx < 0 && LogicalIdx > Num())
+		{
+			return INDEX_NONE;
+		}
+
+		int32 MaxIndex = GetMaxIndex();
+		for (int32 Actual = 0; Actual < MaxIndex; ++Actual)
+		{
+			if (IsValidIndex(Actual))
+			{
+				if (LogicalIdx == 0)
+				{
+					return Actual;
+				}
+				--LogicalIdx;
+			}
+		}
+		return INDEX_NONE;
+	}
+	
 	/**
 	* Finds the index of an element in a set
 	*
@@ -4186,31 +4283,20 @@ public:
 -----------------------------------------------------------------------------*/
 
 /**
- * Describes a pointer to a function bound to an Object.
+ * Describes a list of functions bound to an Object.
  */
-// need to break this out a different type so that the DECLARE_CASTED_CLASS_INTRINSIC macro can digest the comma
-typedef TProperty<FMulticastScriptDelegate, UProperty> UMulticastDelegateProperty_Super;
-
-class COREUOBJECT_API UMulticastDelegateProperty : public UMulticastDelegateProperty_Super
+class COREUOBJECT_API UMulticastDelegateProperty : public UProperty
 {
-	DECLARE_CASTED_CLASS_INTRINSIC(UMulticastDelegateProperty, UMulticastDelegateProperty_Super, 0, TEXT("/Script/CoreUObject"), CASTCLASS_UMulticastDelegateProperty)
+	DECLARE_CASTED_CLASS_INTRINSIC(UMulticastDelegateProperty, UProperty, CLASS_Abstract, TEXT("/Script/CoreUObject"), CASTCLASS_UMulticastDelegateProperty)
 
 	/** Points to the source delegate function (the function declared with the delegate keyword) used in the declaration of this delegate property. */
 	UFunction* SignatureFunction;
+
 public:
 
-	typedef UMulticastDelegateProperty_Super::TTypeFundamentals TTypeFundamentals;
-	typedef TTypeFundamentals::TCppType TCppType;
-
-	UMulticastDelegateProperty(ECppProperty, int32 InOffset, EPropertyFlags InFlags, UFunction* InSignatureFunction = NULL)
-		: TProperty(FObjectInitializer::Get(), EC_CppProperty, InOffset, InFlags)
-		, SignatureFunction(InSignatureFunction)
-	{
-	}
-
-	UMulticastDelegateProperty( const FObjectInitializer& ObjectInitializer, ECppProperty, int32 InOffset, EPropertyFlags InFlags, UFunction* InSignatureFunction = NULL )
-		: TProperty( ObjectInitializer, EC_CppProperty, InOffset, InFlags )
-		, SignatureFunction(InSignatureFunction)
+	UMulticastDelegateProperty(const FObjectInitializer& ObjectInitializer, ECppProperty, int32 InOffset, EPropertyFlags InFlags)
+		: UProperty(ObjectInitializer, EC_CppProperty, InOffset, InFlags)
+		, SignatureFunction(nullptr)
 	{
 	}
 
@@ -4223,22 +4309,140 @@ public:
 	virtual FString GetCPPType( FString* ExtendedTypeText, uint32 CPPExportFlags ) const override;
 	virtual FString GetCPPTypeForwardDeclaration() const override;
 	virtual bool Identical( const void* A, const void* B, uint32 PortFlags ) const override;
-	virtual void SerializeItem(FStructuredArchive::FSlot Slot, void* Value, void const* Defaults) const override;
 	virtual bool NetSerializeItem( FArchive& Ar, UPackageMap* Map, void* Data, TArray<uint8> * MetaData = NULL ) const override;
 	virtual void ExportTextItem( FString& ValueStr, const void* PropertyValue, const void* DefaultValue, UObject* Parent, int32 PortFlags, UObject* ExportRootScope ) const override;
-	virtual const TCHAR* ImportText_Internal( const TCHAR* Buffer, void* Data, int32 PortFlags, UObject* OwnerObject, FOutputDevice* ErrorText ) const override;
 	virtual bool ContainsWeakObjectReference() const override;
 	virtual void InstanceSubobjects( void* Data, void const* DefaultData, UObject* Owner, struct FObjectInstancingGraph* InstanceGraph ) override;
 	virtual bool SameType(const UProperty* Other) const override;
+	virtual EConvertFromTypeResult ConvertFromType(const FPropertyTag& Tag, FStructuredArchive::FSlot Slot, uint8* Data, UStruct* DefaultsStruct) override;
 	// End of UProperty interface
+
+	virtual const FMulticastScriptDelegate* GetMulticastDelegate(const void* PropertyValue) const PURE_VIRTUAL(UMulticastDelegateProperty::GetMulticastDelegate, return nullptr;);
+	virtual void SetMulticastDelegate(void* PropertyValue, FMulticastScriptDelegate ScriptDelegate) const PURE_VIRTUAL(UMulticastDelegateProperty::SetMulticastDelegate, );
+
+	virtual void AddDelegate(FScriptDelegate ScriptDelegate, UObject* Parent = nullptr, void* PropertyValue = nullptr) const PURE_VIRTUAL(UMulticastDelegateProperty::AddDelegate, );
+	virtual void RemoveDelegate(const FScriptDelegate& ScriptDelegate, UObject* Parent = nullptr, void* PropertyValue = nullptr) const PURE_VIRTUAL(UMulticastDelegateProperty::RemoveDelegate, );
+	virtual void ClearDelegate(UObject* Parent = nullptr, void* PropertyValue = nullptr)  const PURE_VIRTUAL(UMulticastDelegateProperty::ClearDelegate, );
 
 protected:
 	friend class UProperty;
 
+	static FMulticastScriptDelegate::FInvocationList EmptyList;
+	virtual FMulticastScriptDelegate::FInvocationList& GetInvocationList(const void* PropertyValue) const PURE_VIRTUAL(UMulticastDelegateProperty::GetInvocationList, return EmptyList;);
+
+
 	const TCHAR* ImportText_Add( const TCHAR* Buffer, void* PropertyValue, int32 PortFlags, UObject* Parent, FOutputDevice* ErrorText ) const;
 	const TCHAR* ImportText_Remove( const TCHAR* Buffer, void* PropertyValue, int32 PortFlags, UObject* Parent, FOutputDevice* ErrorText ) const;
+
+	const TCHAR* ImportDelegateFromText(FMulticastScriptDelegate& MulticastDelegate, const TCHAR* Buffer, UObject* OwnerObject, FOutputDevice* ErrorText) const;
 };
 
+template<class InTCppType>
+class COREUOBJECT_API TProperty_MulticastDelegate : public TProperty<InTCppType, UMulticastDelegateProperty>
+{
+public:
+	typedef TProperty<InTCppType, UMulticastDelegateProperty> Super;
+	typedef InTCppType TCppType;
+	typedef typename Super::TTypeFundamentals TTypeFundamentals;
+	TProperty_MulticastDelegate(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get(), UFunction* InSignatureFunction = nullptr)
+		: Super(ObjectInitializer)
+	{
+		this->SignatureFunction = InSignatureFunction;
+	}
+
+	TProperty_MulticastDelegate(ECppProperty, int32 InOffset, EPropertyFlags InFlags, UFunction* InSignatureFunction = nullptr)
+		: Super(FObjectInitializer::Get(), EC_CppProperty, InOffset, InFlags)
+	{
+		this->SignatureFunction = InSignatureFunction;
+	}
+
+	TProperty_MulticastDelegate(const FObjectInitializer& ObjectInitializer, ECppProperty, int32 InOffset, EPropertyFlags InFlags, UFunction* InSignatureFunction = nullptr)
+		: Super(ObjectInitializer, EC_CppProperty, InOffset, InFlags)
+	{
+		this->SignatureFunction = InSignatureFunction;
+	}
+
+	/** DO NOT USE. This constructor is for internal usage only for hot-reload purposes. */
+	TProperty_MulticastDelegate(FVTableHelper& Helper) : Super(Helper) {};
+
+	// UProperty interface.
+	virtual FString GetCPPType(FString* ExtendedTypeText, uint32 CPPExportFlags) const override
+	{
+		return UMulticastDelegateProperty::GetCPPType(ExtendedTypeText, CPPExportFlags);
+	}
+	// End of UProperty interface
+};
+
+class COREUOBJECT_API UMulticastInlineDelegateProperty : public TProperty_MulticastDelegate<FMulticastScriptDelegate>
+{
+	DECLARE_CASTED_CLASS_INTRINSIC(UMulticastInlineDelegateProperty, TProperty_MulticastDelegate<FMulticastScriptDelegate>, 0, TEXT("/Script/CoreUObject"), CASTCLASS_UMulticastInlineDelegateProperty)
+
+public:
+
+	UMulticastInlineDelegateProperty(ECppProperty, int32 InOffset, EPropertyFlags InFlags, UFunction* InSignatureFunction = nullptr)
+		: TProperty_MulticastDelegate(FObjectInitializer::Get(), EC_CppProperty, InOffset, InFlags, InSignatureFunction)
+	{
+	}
+
+	UMulticastInlineDelegateProperty(const FObjectInitializer& ObjectInitializer, ECppProperty, int32 InOffset, EPropertyFlags InFlags, UFunction* InSignatureFunction = nullptr)
+		: TProperty_MulticastDelegate(ObjectInitializer, EC_CppProperty, InOffset, InFlags, InSignatureFunction)
+	{
+	}
+
+	// UProperty interface
+	virtual void SerializeItem(FStructuredArchive::FSlot Slot, void* Value, void const* Defaults) const override;
+	virtual const TCHAR* ImportText_Internal(const TCHAR* Buffer, void* Data, int32 PortFlags, UObject* OwnerObject, FOutputDevice* ErrorText) const override;
+	// End of UProperty interface
+
+	// UMulticastDelegateProperty interface
+	virtual const FMulticastScriptDelegate* GetMulticastDelegate(const void* PropertyValue) const override;
+	virtual void SetMulticastDelegate(void* PropertyValue, FMulticastScriptDelegate ScriptDelegate) const override;
+
+	virtual void AddDelegate(FScriptDelegate ScriptDelegate, UObject* Parent = nullptr, void* PropertyValue = nullptr) const override;
+	virtual void RemoveDelegate(const FScriptDelegate& ScriptDelegate, UObject* Parent = nullptr, void* PropertyValue = nullptr) const override;
+	virtual void ClearDelegate(UObject* Parent = nullptr, void* PropertyValue = nullptr) const override;
+
+protected:
+	virtual FMulticastScriptDelegate::FInvocationList& GetInvocationList(const void* PropertyValue) const;
+	// End of UMulticastDelegateProperty interface
+};
+
+class COREUOBJECT_API UMulticastSparseDelegateProperty : public TProperty_MulticastDelegate<FSparseDelegate> 
+{
+	DECLARE_CASTED_CLASS_INTRINSIC(UMulticastSparseDelegateProperty, TProperty_MulticastDelegate<FSparseDelegate>, 0, TEXT("/Script/CoreUObject"), CASTCLASS_UMulticastSparseDelegateProperty)
+
+public:
+
+	UMulticastSparseDelegateProperty(ECppProperty, int32 InOffset, EPropertyFlags InFlags, UFunction* InSignatureFunction = nullptr)
+		: TProperty_MulticastDelegate(FObjectInitializer::Get(), EC_CppProperty, InOffset, InFlags, InSignatureFunction)
+	{
+	}
+
+	UMulticastSparseDelegateProperty(const FObjectInitializer& ObjectInitializer, ECppProperty, int32 InOffset, EPropertyFlags InFlags, UFunction* InSignatureFunction = nullptr)
+		: TProperty_MulticastDelegate(ObjectInitializer, EC_CppProperty, InOffset, InFlags, InSignatureFunction)
+	{
+	}
+
+	// UProperty interface
+	virtual void SerializeItem(FStructuredArchive::FSlot Slot, void* Value, void const* Defaults) const override;
+	virtual const TCHAR* ImportText_Internal(const TCHAR* Buffer, void* Data, int32 PortFlags, UObject* OwnerObject, FOutputDevice* ErrorText) const override;
+	// End of UProperty interface
+
+	// UMulticastDelegateProperty interface
+	virtual const FMulticastScriptDelegate* GetMulticastDelegate(const void* PropertyValue) const override;
+	virtual void SetMulticastDelegate(void* PropertyValue, FMulticastScriptDelegate ScriptDelegate) const override;
+
+	virtual void AddDelegate(FScriptDelegate ScriptDelegate, UObject* Parent = nullptr, void* PropertyValue = nullptr) const override;
+	virtual void RemoveDelegate(const FScriptDelegate& ScriptDelegate, UObject* Parent = nullptr, void* PropertyValue = nullptr) const override;
+	virtual void ClearDelegate(UObject* Parent = nullptr, void* PropertyValue = nullptr) const override;
+
+protected:
+	virtual FMulticastScriptDelegate::FInvocationList& GetInvocationList(const void* PropertyValue) const;
+	// End of UMulticastDelegateProperty interface
+
+private:
+	virtual void SerializeItemInternal(FArchive& Ar, void* Value, void const* Defaults) const;
+};
 
 /** Describes a single node in a custom property list. */
 struct COREUOBJECT_API FCustomPropertyListNode

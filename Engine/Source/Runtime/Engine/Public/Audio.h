@@ -18,6 +18,7 @@
 
 class FAudioDevice;
 class USoundNode;
+struct FSoundModulationControls;
 class USoundWave;
 class USoundClass;
 class USoundSubmix;
@@ -26,7 +27,6 @@ struct FActiveSound;
 struct FWaveInstance;
 struct FSoundSourceBusSendInfo;
 
-//#include "Sound/SoundConcurrency.h"
 
 ENGINE_API DECLARE_LOG_CATEGORY_EXTERN(LogAudio, Warning, All);
 
@@ -82,7 +82,10 @@ DECLARE_CYCLE_STAT_EXTERN(TEXT("Audio Evaluate Concurrency"), STAT_AudioEvaluate
 DECLARE_DWORD_COUNTER_STAT_EXTERN( TEXT( "Audio Sources" ), STAT_AudioSources, STATGROUP_Audio , );
 DECLARE_DWORD_COUNTER_STAT_EXTERN( TEXT( "Wave Instances" ), STAT_WaveInstances, STATGROUP_Audio , );
 DECLARE_DWORD_COUNTER_STAT_EXTERN( TEXT( "Wave Instances Dropped" ), STAT_WavesDroppedDueToPriority, STATGROUP_Audio , );
+DECLARE_DWORD_COUNTER_STAT_EXTERN(TEXT("Virtualized Loops"), STAT_AudioVirtualLoops, STATGROUP_Audio, );
 DECLARE_DWORD_COUNTER_STAT_EXTERN( TEXT( "Audible Wave Instances Dropped" ), STAT_AudibleWavesDroppedDueToPriority, STATGROUP_Audio , );
+DECLARE_DWORD_COUNTER_STAT_EXTERN(TEXT("Max Channels"), STAT_AudioMaxChannels, STATGROUP_Audio, );
+DECLARE_DWORD_COUNTER_STAT_EXTERN(TEXT("Max Stopping Sources"), STAT_AudioMaxStoppingSources, STATGROUP_Audio, );
 DECLARE_DWORD_COUNTER_STAT_EXTERN( TEXT( "Finished delegates called" ), STAT_AudioFinishedDelegatesCalled, STATGROUP_Audio , );
 DECLARE_CYCLE_STAT_EXTERN( TEXT( "Finished delegates time" ), STAT_AudioFinishedDelegates, STATGROUP_Audio , );
 DECLARE_MEMORY_STAT_EXTERN( TEXT( "Audio Memory Used" ), STAT_AudioMemorySize, STATGROUP_Audio , );
@@ -259,6 +262,9 @@ struct ENGINE_API FWaveInstance
 	/** Sound class */
 	USoundClass* SoundClass;
 
+	/** Modulation controls */
+	FSoundModulationControls SoundModulationControls;
+
 	/** Sound submix object to send audio to for mixing in audio mixer.  */
 	USoundSubmix* SoundSubmix;
 
@@ -275,7 +281,7 @@ struct ENGINE_API FWaveInstance
 	FNotifyBufferFinishedHooks NotifyBufferFinishedHooks;
 
 	/** Active Sound this wave instance belongs to */
-	struct FActiveSound* ActiveSound;
+	FActiveSound* ActiveSound;
 
 private:
 
@@ -287,9 +293,6 @@ private:
 
 	/** Current volume multiplier - used to zero the volume without stopping the source */
 	float VolumeMultiplier;
-
-	/** The volume of the wave instance due to application volume or tab-state */
-	float VolumeApp;
 
 	/** The current envelope value of the wave instance. */
 	float EnvelopValue;
@@ -340,9 +343,11 @@ public:
 	/** Whether the notify finished hook has been called since the last update/parsenodes */
 	uint32 bAlreadyNotifiedHook:1;
 
+private:
 	/** Whether to use spatialization */
 	uint32 bUseSpatialization:1;
 
+public:
 	/** Whether or not to enable the low pass filter */
 	uint32 bEnableLowPassFilter:1;
 
@@ -388,6 +393,9 @@ public:
 	/** The occlusion plugin settings to use for the wave instance. */
 	UReverbPluginSourceSettingsBase* ReverbPluginSettings;
 
+	/** The modulation plugin settings to use for the wave instance. */
+	USoundModulationPluginSourceSettingsBase* ModulationPluginSettings;
+
 	/** Which output target the sound should play on. */
 	EAudioOutputTarget::Type OutputTarget;
 
@@ -424,6 +432,9 @@ public:
 	/** The distance from this wave instance to the closest listener. */
 	float ListenerToSoundDistance;
 
+	/** The distance from this wave instance to the closest listener. (ignoring attenuation override) */
+	float ListenerToSoundDistanceForPanning;
+
 	/** The absolute position of the wave instance relative to forward vector of listener. */
 	float AbsoluteAzimuth; 
 
@@ -455,7 +466,7 @@ public:
 	uint8 UserIndex;
 
 	/** Constructor, initializing all member variables. */
-	FWaveInstance(FActiveSound* ActiveSound);
+	FWaveInstance(const UPTRINT InWaveInstanceHash, FActiveSound& ActiveSound);
 
 	/** Stops the wave instance without notifying NotifyWaveInstanceFinishedHook. */
 	void StopWithoutNotification();
@@ -472,10 +483,10 @@ public:
 	/** Returns the actual volume the wave instance will play at */
 	bool ShouldStopDueToMaxConcurrency() const;
 
-	/** Setters for various volume values on wave instances. */
+	/** Setters for various values on wave instances. */
 	void SetVolume(const float InVolume) { Volume = InVolume; }
 	void SetDistanceAttenuation(const float InDistanceAttenuation) { DistanceAttenuation = InDistanceAttenuation; }
-	void SetVolumeApp(const float InVolumeApp) { VolumeApp = InVolumeApp; }
+	void SetPitch(const float InPitch) { Pitch = InPitch; }
 	void SetVolumeMultiplier(const float InVolumeMultiplier) { VolumeMultiplier = InVolumeMultiplier; }
 
 	void SetStopping(const bool bInIsStopping) { bIsStopping = bInIsStopping; }
@@ -496,14 +507,16 @@ public:
 	/** Returns the dynamic volume of the sound */
 	float GetDynamicVolume() const;
 
+	/** Returns the pitch of the wave instance */
+	float GetPitch() const;
+
 	/** Returns the volume of the wave instance (ignoring application muting) */
 	float GetVolume() const;
 
 	/** Returns the weighted priority of the wave instance. */
 	float GetVolumeWeightedPriority() const;
 
-	/** Returns the volume due to application behavior for the wave instance. */
-	float GetVolumeApp() const { return VolumeApp; }
+	bool IsSeekable() const;
 
 	/** Checks whether wave is streaming and streaming is supported */
 	bool IsStreaming() const;
@@ -517,6 +530,11 @@ public:
 	/** Gets the envelope value of the waveinstance. Only returns non-zero values if it's a real voice. Only implemented in the audio mixer. */
 	float GetEnvelopeValue() const { return EnvelopValue; }
 
+	/** Whether to use spatialization, which controls 3D effects like panning */
+	void SetUseSpatialization(const bool InUseSpatialization) { bUseSpatialization = InUseSpatialization; }
+
+	/** Whether this wave will be spatializized, which controls 3D effects like panning */
+	bool GetUseSpatialization() const;
 };
 
 inline uint32 GetTypeHash(FWaveInstance* A) { return A->TypeHash; }
@@ -525,7 +543,7 @@ inline uint32 GetTypeHash(FWaveInstance* A) { return A->TypeHash; }
 	FSoundBuffer.
 -----------------------------------------------------------------------------*/
 
-class FSoundBuffer
+class ENGINE_VTABLE FSoundBuffer
 {
 public:
 	FSoundBuffer(class FAudioDevice * InAudioDevice)
@@ -601,7 +619,7 @@ public:
 FSoundSource.
 -----------------------------------------------------------------------------*/
 
-class FSoundSource
+class ENGINE_VTABLE FSoundSource
 {
 public:
 	/** Constructor */
@@ -716,9 +734,6 @@ public:
 	/** Updates the stereo emitter positions of this voice. */
 	ENGINE_API void UpdateStereoEmitterPositions();
 
-	/** Draws debug info about this source voice if enabled. */
-	ENGINE_API void DrawDebugInfo();
-
 	/** Gets parameters necessary for computing 3d spatialization of sources. */
 	ENGINE_API FSpatializationParams GetSpatializationParams();
 
@@ -741,6 +756,8 @@ public:
 
 	/** Returns the source's envelope at the callback block rate. Only implemented in audio mixer. */
 	ENGINE_API virtual float GetEnvelopeValue() const { return 0.0f; };
+
+	ENGINE_API void GetChannelLocations(FVector& Left, FVector&Right) const;
 
 	void NotifyPlaybackData();
 

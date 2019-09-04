@@ -35,6 +35,7 @@
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Layout/SBox.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
+#include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Layout/SSplitter.h"
 #include "Widgets/Views/SExpanderArrow.h"
 #include "Widgets/Views/SHeaderRow.h"
@@ -208,7 +209,7 @@ static UObject* GetAssetRevisionObject(TSharedPtr<FHistoryTreeItem> HistoryTreeI
 				if (FileRevision.IsValid() && FileRevision->Get(TempPackageName)) // grab the path to a temporary package (where the revision item will be stored)
 				{
 					// try and load the temporary package
-					AssetPackage = LoadPackage(NULL, *TempPackageName, LOAD_DisableCompileOnLoad);
+					AssetPackage = LoadPackage(NULL, *TempPackageName, LOAD_ForDiff|LOAD_DisableCompileOnLoad);
 				}
 			} // if FileSourceControlState.IsValid()
 		}
@@ -654,6 +655,7 @@ public:
 	void Construct( const FArguments& InArgs )
 	{	
 		AddHistoryInfo(InArgs._SourceControlStates.Get());
+		ParentWindow = InArgs._ParentWindow.Get();
 
 		TSharedRef<SHeaderRow> HeaderRow = SNew(SHeaderRow);
 
@@ -717,9 +719,24 @@ public:
 		{
 			MainHistoryListView->SetItemExpansion(HistoryCollection[i],true);
 		}
+
+		ParentWindow.Pin()->SetWidgetToFocusOnActivate(MainHistoryListView);
 	}
 
 private:
+
+	/** Used to intercept Escape key press, and interpret it as a close event */
+	virtual FReply OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent) override
+	{
+		// Pressing escape returns as if the user closed the window
+		if (InKeyEvent.GetKey() == EKeys::Escape)
+		{
+			ParentWindow.Pin()->RequestDestroyWindow();
+			return FReply::Handled();
+		}
+
+		return FReply::Unhandled();
+	}
 
 	/**
 	 * Constructs the "Additional Info" panel that displays specific revision info
@@ -779,28 +796,32 @@ private:
 					.FillHeight(0.25f)
 					.Padding(Padding)
 					[
-						SNew(STextBlock)
+						SNew(SEditableText)
+						.IsReadOnly(true)
 						.Text(this, &SSourceControlHistoryWidget::GetRevisionNumber)	
 					]
 					+SVerticalBox::Slot()
 					.FillHeight(0.25f)
 					.Padding(Padding)
 					[
-						SNew(STextBlock)
+						SNew(SEditableText)
+						.IsReadOnly(true)
 						.Text(this, &SSourceControlHistoryWidget::GetDate)	
 					]
 					+SVerticalBox::Slot()
 					.FillHeight(0.25f)
 					.Padding(Padding)
 					[
-						SNew(STextBlock)
+						SNew(SEditableText)
+						.IsReadOnly(true)
 						.Text(this, &SSourceControlHistoryWidget::GetUserName)	
 					]
 					+SVerticalBox::Slot()
 					.FillHeight(0.25f)
 					.Padding(Padding)
 					[
-						SNew(STextBlock)
+						SNew(SEditableText)
+						.IsReadOnly(true)
 						.Text(this, &SSourceControlHistoryWidget::GetAction)	
 					]
 				]
@@ -850,28 +871,32 @@ private:
 					.FillHeight(0.25f)
 					.Padding(Padding)
 					[
-						SNew(STextBlock)
+						SNew(SEditableText)
+						.IsReadOnly(true)
 						.Text(this, &SSourceControlHistoryWidget::GetChangelistNumber)	
 					]
 					+SVerticalBox::Slot()
 					.FillHeight(0.25f)
 					.Padding(Padding)
 					[
-						SNew(STextBlock)
+						SNew(SEditableText)
+						.IsReadOnly(true)
 						.Text(this, &SSourceControlHistoryWidget::GetClientSpec)	
 					]
 					+SVerticalBox::Slot()
 					.FillHeight(0.25f)
 					.Padding(Padding)
 					[
-						SNew(STextBlock)
+						SNew(SEditableText)
+						.IsReadOnly(true)
 						.Text(this, &SSourceControlHistoryWidget::GetFileSize)	
 					]
 					+SVerticalBox::Slot()
 					.FillHeight(0.25f)
 					.Padding(Padding)
 					[
-						SNew(STextBlock)
+						SNew(SEditableText)
+						.IsReadOnly(true)
 						.Text(this, &SSourceControlHistoryWidget::GetBranchedFrom)	
 					]
 				]
@@ -893,7 +918,8 @@ private:
 					.AutoHeight()
 					.Padding(5)
 					[
-						SNew(STextBlock)
+						SNew(SEditableText)
+						.IsReadOnly(true)
 						.Text(this, &SSourceControlHistoryWidget::GetDescription)	
 					]
 				]
@@ -1416,6 +1442,9 @@ private:
 
 	/** The last selected revision item; Displayed in the "additional information" subpanel */
 	TWeakPtr<FHistoryRevisionListViewItem> LastSelectedRevisionItem;
+
+	/** Pointer to the parent window */
+	TWeakPtr<SWindow> ParentWindow;
 };
 
 void FSourceControlWindows::DisplayRevisionHistory( const TArray<FString>& InPackageNames )

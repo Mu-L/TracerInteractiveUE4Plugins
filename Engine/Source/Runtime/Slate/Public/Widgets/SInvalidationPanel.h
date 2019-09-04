@@ -43,6 +43,7 @@ public:
 #endif
 
 	virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
+	virtual FString GetReferencerName() const override;
 
 	void SetCanCache(bool InCanCache);
 
@@ -129,6 +130,7 @@ private:
 	mutable bool bNeedsCachePrepass;
 	mutable bool bPerformingCachePrepass;
 	mutable bool bIsInvalidating;
+	mutable int32 NumberOfFramesInARowWeInvalidated;
 	bool bCanCache;
 
 	bool bCacheRelativeTransforms;

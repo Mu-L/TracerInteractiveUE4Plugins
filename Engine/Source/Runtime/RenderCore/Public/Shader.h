@@ -35,6 +35,9 @@ class FVertexFactoryParameterRef;
 class FVertexFactoryType;
 class FShaderParametersMetadata;
 
+/** By default most shader source hashes are stripped at cook time so can be discarded
+	to save memory. See implementation of FilterShaderSourceHashForSerialization. */
+#define KEEP_SHADER_SOURCE_HASHES	(WITH_EDITOR)
 
 /** Define a shader permutation uniquely according to its type, and permutation id.*/
 template<typename MetaShaderType>
@@ -61,6 +64,8 @@ struct TShaderTypePermutation
 };
 
 using FShaderPermutation = TShaderTypePermutation<FShaderType>;
+
+const int32 kUniqueShaderPermutationId = 0;
 
 template<typename MetaShaderType>
 FORCEINLINE uint32 GetTypeHash(const TShaderTypePermutation<MetaShaderType>& Var)
@@ -112,7 +117,7 @@ public:
 
 	friend inline uint32 GetTypeHash( const FShaderResourceId& Id )
 	{
-		return FCrc::MemCrc_DEPRECATED((const void*)&Id.OutputHash, sizeof(Id.OutputHash));
+		return GetTypeHash(Id.OutputHash);
 	}
 
 	friend bool operator==(const FShaderResourceId& X, const FShaderResourceId& Y)
@@ -290,7 +295,7 @@ public:
 	RENDERCORE_API void Register();
 
 	/** @return the shader's vertex shader */
-	FORCEINLINE const FVertexShaderRHIParamRef GetVertexShader()
+	FORCEINLINE FRHIVertexShader* GetVertexShader()
 	{
 		checkSlow(Target.Frequency == SF_Vertex);
 		if (!IsInitialized())
@@ -300,7 +305,7 @@ public:
 		return (FRHIVertexShader*)Shader.GetReference();
 	}
 	/** @return the shader's pixel shader */
-	FORCEINLINE const FPixelShaderRHIParamRef GetPixelShader()
+	FORCEINLINE FRHIPixelShader* GetPixelShader()
 	{
 		checkSlow(Target.Frequency == SF_Pixel);
 		if (!IsInitialized())
@@ -310,7 +315,7 @@ public:
 		return (FRHIPixelShader*)Shader.GetReference();
 	}
 	/** @return the shader's hull shader */
-	FORCEINLINE const FHullShaderRHIParamRef GetHullShader()
+	FORCEINLINE FRHIHullShader* GetHullShader()
 	{
 		checkSlow(Target.Frequency == SF_Hull);
 		if (!IsInitialized())
@@ -320,7 +325,7 @@ public:
 		return (FRHIHullShader*)Shader.GetReference();
 	}
 	/** @return the shader's domain shader */
-	FORCEINLINE const FDomainShaderRHIParamRef GetDomainShader()
+	FORCEINLINE FRHIDomainShader* GetDomainShader()
 	{
 		checkSlow(Target.Frequency == SF_Domain);
 		if (!IsInitialized())
@@ -330,7 +335,7 @@ public:
 		return (FRHIDomainShader*)Shader.GetReference();
 	}
 	/** @return the shader's geometry shader */
-	FORCEINLINE const FGeometryShaderRHIParamRef GetGeometryShader()
+	FORCEINLINE FRHIGeometryShader* GetGeometryShader()
 	{
 		checkSlow(Target.Frequency == SF_Geometry);
 		if (!IsInitialized())
@@ -340,7 +345,7 @@ public:
 		return (FRHIGeometryShader*)Shader.GetReference();
 	}
 	/** @return the shader's compute shader */
-	FORCEINLINE const FComputeShaderRHIParamRef GetComputeShader()
+	FORCEINLINE FRHIComputeShader* GetComputeShader()
 	{
 		checkSlow(Target.Frequency == SF_Compute);
 		if (!IsInitialized())
@@ -351,11 +356,12 @@ public:
 	}
 
 #if RHI_RAYTRACING
-	inline const FRayTracingShaderRHIParamRef GetRayTracingShader()
+	inline FRHIRayTracingShader* GetRayTracingShader()
 	{
 		checkSlow(Target.Frequency == SF_RayGen
 			   || Target.Frequency == SF_RayMiss
-			   || Target.Frequency == SF_RayHitGroup);
+			   || Target.Frequency == SF_RayHitGroup
+			   || Target.Frequency == SF_RayCallable);
 
 		if (!IsInitialized())
 		{
@@ -366,9 +372,7 @@ public:
 
 	inline uint32 GetRayTracingMaterialLibraryIndex()
 	{
-		checkSlow(Target.Frequency == SF_RayGen
-			|| Target.Frequency == SF_RayMiss
-			|| Target.Frequency == SF_RayHitGroup);
+		checkSlow(Target.Frequency == SF_RayHitGroup);
 
 		if (!IsInitialized())
 		{
@@ -377,10 +381,10 @@ public:
 		return RayTracingMaterialLibraryIndex;
 	}
 
-	RENDERCORE_API static void GetRayTracingMaterialLibrary(TArray<FRayTracingShaderRHIParamRef>& RayTracingMaterials, FRayTracingShaderRHIParamRef DefaultShader);
+	RENDERCORE_API static void GetRayTracingMaterialLibrary(TArray<FRHIRayTracingShader*>& RayTracingMaterials, FRHIRayTracingShader* DefaultShader);
 
 private:
-	RENDERCORE_API static uint32 AddToRayTracingLibrary(FRayTracingShaderRHIParamRef Shader);
+	RENDERCORE_API static uint32 AddToRayTracingLibrary(FRHIRayTracingShader* Shader);
 	RENDERCORE_API static void RemoveFromRayTracingLibrary(uint32 Index);
 
 	static TArray<uint32> GlobalUnusedIndicies;
@@ -590,11 +594,13 @@ public:
 	 */ 
 	FSHAHash MaterialShaderMapHash;
 
+#if KEEP_SHADER_SOURCE_HASHES
 	/** Used to detect changes to the vertex factory source files. */
 	FSHAHash VFSourceHash;
 
 	/** Used to detect changes to the shader source files. */
 	FSHAHash SourceHash;
+#endif
 
 	/** Shader platform and frequency. */
 	FShaderTarget Target;
@@ -646,13 +652,15 @@ public:
 		return X.MaterialShaderMapHash == Y.MaterialShaderMapHash
 			&& X.ShaderPipeline == Y.ShaderPipeline
 			&& X.VertexFactoryType == Y.VertexFactoryType
-			&& X.VFSourceHash == Y.VFSourceHash
 			&& ((X.VFSerializationHistory == NULL && Y.VFSerializationHistory == NULL)
 				|| (X.VFSerializationHistory != NULL && Y.VFSerializationHistory != NULL &&
 					*X.VFSerializationHistory == *Y.VFSerializationHistory))
 			&& X.ShaderType == Y.ShaderType
 			&& X.PermutationId == Y.PermutationId 
+#if KEEP_SHADER_SOURCE_HASHES
 			&& X.SourceHash == Y.SourceHash 
+			&& X.VFSourceHash == Y.VFSourceHash
+#endif
 			&& X.SerializationHistory == Y.SerializationHistory
 			&& X.Target == Y.Target;
 	}
@@ -674,11 +682,13 @@ public:
 	 */ 
 	FSHAHash MaterialShaderMapHash;
 
+#if KEEP_SHADER_SOURCE_HASHES
 	/** Used to detect changes to the vertex factory source files. */
 	FSHAHash VFSourceHash;
 
 	/** Used to detect changes to the shader source files. */
 	FSHAHash SourceHash;
+#endif
 
 	/** 
 	 * Name of the vertex factory type that the shader was created for, 
@@ -766,6 +776,7 @@ public:
 	TArray<FParameter> Parameters;
 	TArray<FResourceParameter> Textures;
 	TArray<FResourceParameter> SRVs;
+	TArray<FResourceParameter> UAVs;
 	TArray<FResourceParameter> Samplers;
 	TArray<FResourceParameter> GraphTextures;
 	TArray<FResourceParameter> GraphSRVs;
@@ -780,6 +791,7 @@ public:
 		Ar << ParametersBindingData.Parameters;
 		Ar << ParametersBindingData.Textures;
 		Ar << ParametersBindingData.SRVs;
+		Ar << ParametersBindingData.UAVs;
 		Ar << ParametersBindingData.Samplers;
 		Ar << ParametersBindingData.GraphTextures;
 		Ar << ParametersBindingData.GraphSRVs;
@@ -878,38 +890,38 @@ public:
 	virtual const FVertexFactoryParameterRef* GetVertexFactoryParameterRef() const { return NULL; }
 
 	/** @return the shader's vertex shader */
-	inline const FVertexShaderRHIParamRef GetVertexShader() const
+	inline FRHIVertexShader* GetVertexShader() const
 	{
 		return Resource->GetVertexShader();
 	}
 	/** @return the shader's pixel shader */
-	inline const FPixelShaderRHIParamRef GetPixelShader() const
+	inline FRHIPixelShader* GetPixelShader() const
 	{
 		return Resource->GetPixelShader();
 	}
 	/** @return the shader's hull shader */
-	inline const FHullShaderRHIParamRef GetHullShader() const
+	inline FRHIHullShader* GetHullShader() const
 	{
 		return Resource->GetHullShader();
 	}
 	/** @return the shader's domain shader */
-	inline const FDomainShaderRHIParamRef GetDomainShader() const
+	inline FRHIDomainShader* GetDomainShader() const
 	{
 		return Resource->GetDomainShader();
 	}
 	/** @return the shader's geometry shader */
-	inline const FGeometryShaderRHIParamRef GetGeometryShader() const
+	inline FRHIGeometryShader* GetGeometryShader() const
 	{
 		return Resource->GetGeometryShader();
 	}
 	/** @return the shader's compute shader */
-	inline const FComputeShaderRHIParamRef GetComputeShader() const
+	inline FRHIComputeShader* GetComputeShader() const
 	{
 		return Resource->GetComputeShader();
 	}
 
 #if RHI_RAYTRACING
-	inline const FRayTracingShaderRHIParamRef GetRayTracingShader() const
+	inline FRHIRayTracingShader* GetRayTracingShader() const
 	{
 		return Resource->GetRayTracingShader();
 	}
@@ -930,7 +942,15 @@ public:
 #endif
 	inline const TArray<uint8>& GetCode() const { return Resource->Code; }
 	inline const FShaderTarget GetTarget() const { return Target; }
-	inline FSHAHash GetOutputHash() const { return OutputHash; }
+	inline FSHAHash GetOutputHash() const
+	{
+#if KEEP_SHADER_SOURCE_HASHES
+		return OutputHash;
+#else
+		check(Resource);
+		return Resource->OutputHash;
+#endif
+	}
 	FShaderId GetId() const;
 	inline FVertexFactoryType* GetVertexFactoryType() const { return VFType; }
 	inline int32 GetNumRefs() const { return NumRefs; }
@@ -1077,21 +1097,22 @@ protected:
 	TArray<FShaderUniformBufferParameter*> UniformBufferParameters;
 
 private:
-
-	/** 
-	 * Hash of the compiled output from this shader and the resulting parameter map.  
-	 * This is used to find a matching resource.
-	 */
-	FSHAHash OutputHash;
-
 	/** Hash of the material shader map this shader belongs to, stored so that an FShaderId can be constructed from this shader. */
 	FSHAHash MaterialShaderMapHash;
+
+#if KEEP_SHADER_SOURCE_HASHES
+	/**
+	* Hash of the compiled output from this shader and the resulting parameter map.
+	* This is used to find a matching resource.
+	*/
+	FSHAHash OutputHash;
 
 	/** Vertex factory source hash, stored so that an FShaderId can be constructed from this shader. */
 	FSHAHash VFSourceHash;
 
 	/** Hash of this shader's source files generated at compile time, and stored to allow creating an FShaderId. */
 	FSHAHash SourceHash;
+#endif
 
 	/** Reference to the shader resource, which stores the compiled bytecode and the RHI shader resource. */
 	TRefCountPtr<FShaderResource> Resource;
@@ -1518,7 +1539,11 @@ public:
 	bool IsGlobalTypePipeline() const { return Stages[0]->GetGlobalShaderType() != nullptr; }
 	bool IsMaterialTypePipeline() const { return Stages[0]->GetMaterialShaderType() != nullptr; }
 	bool IsMeshMaterialTypePipeline() const { return Stages[0]->GetMeshMaterialShaderType() != nullptr; }
-	bool ShouldOptimizeUnusedOutputs() const { return bShouldOptimizeUnusedOutputs; }
+
+	FORCEINLINE bool ShouldOptimizeUnusedOutputs(EShaderPlatform Platform) const
+	{
+		return bShouldOptimizeUnusedOutputs && RHISupportsShaderPipelines(Platform);
+	}
 
 	/** Gets a list of FShaderTypes & PipelineTypes whose source file no longer matches what that type was compiled with */
 	static void GetOutdatedTypes(TArray<FShaderType*>& OutdatedShaderTypes, TArray<const FShaderPipelineType*>& ShaderPipelineTypesToFlush, TArray<const FVertexFactoryType*>& OutdatedFactoryTypes);
@@ -1580,21 +1605,41 @@ public:
 		, PermutationId(0)
 	{}
 
+	FShaderTypeDependency(FShaderType* InShaderType, EShaderPlatform ShaderPlatform)
+		: ShaderType(InShaderType)
+		, PermutationId(0)
+	{
+#if KEEP_SHADER_SOURCE_HASHES
+		if (ShaderType)
+		{
+			SourceHash = ShaderType->GetSourceHash(ShaderPlatform);
+		}
+#endif
+	}
+
 	/** Shader type */
 	FShaderType* ShaderType;
 
 	/** Unique permutation identifier of the global shader type. */
 	int32 PermutationId;
 
+#if KEEP_SHADER_SOURCE_HASHES
 	/** Used to detect changes to the shader source files. */
 	FSHAHash SourceHash;
+#endif
 
 	friend FArchive& operator<<(FArchive& Ar,class FShaderTypeDependency& Ref)
 	{
 		Ar.UsingCustomVersion(FRenderingObjectVersion::GUID);
 
 		Ar << Ref.ShaderType;
-		Ar << FShaderResource::FilterShaderSourceHashForSerialization(Ar, Ref.SourceHash);
+
+#if KEEP_SHADER_SOURCE_HASHES
+		FSHAHash& Hash = Ref.SourceHash;
+#else
+		FSHAHash Hash;
+#endif
+		Ar << FShaderResource::FilterShaderSourceHashForSerialization(Ar, Hash);
 
 		if (Ar.CustomVer(FRenderingObjectVersion::GUID) >= FRenderingObjectVersion::ShaderPermutationId)
 		{
@@ -1606,7 +1651,16 @@ public:
 
 	bool operator==(const FShaderTypeDependency& Reference) const
 	{
+#if KEEP_SHADER_SOURCE_HASHES
 		return ShaderType == Reference.ShaderType && PermutationId == Reference.PermutationId && SourceHash == Reference.SourceHash;
+#else
+		return ShaderType == Reference.ShaderType && PermutationId == Reference.PermutationId;
+#endif
+	}
+
+	bool operator!=(const FShaderTypeDependency& Reference) const
+	{
+		return !(*this == Reference);
 	}
 };
 
@@ -1618,22 +1672,50 @@ public:
 		ShaderPipelineType(nullptr)
 	{}
 
+	FShaderPipelineTypeDependency(const FShaderPipelineType* InShaderPipelineType, EShaderPlatform ShaderPlatform) :
+		ShaderPipelineType(InShaderPipelineType)
+	{
+#if KEEP_SHADER_SOURCE_HASHES
+		if (ShaderPipelineType)
+		{
+			StagesSourceHash = ShaderPipelineType->GetSourceHash(ShaderPlatform);
+		}
+#endif
+	}
+
 	/** Shader Pipeline type */
 	const FShaderPipelineType* ShaderPipelineType;
 
+#if KEEP_SHADER_SOURCE_HASHES
 	/** Used to detect changes to the shader source files. */
 	FSHAHash StagesSourceHash;
+#endif
 
 	friend FArchive& operator<<(FArchive& Ar, class FShaderPipelineTypeDependency& Ref)
 	{
 		Ar << Ref.ShaderPipelineType;
-		Ar << FShaderResource::FilterShaderSourceHashForSerialization(Ar, Ref.StagesSourceHash);
+
+#if KEEP_SHADER_SOURCE_HASHES
+		FSHAHash& Hash = Ref.StagesSourceHash;
+#else
+		FSHAHash Hash;
+#endif
+		Ar << FShaderResource::FilterShaderSourceHashForSerialization(Ar, Hash);
 		return Ar;
 	}
 
 	bool operator==(const FShaderPipelineTypeDependency& Reference) const
 	{
+#if KEEP_SHADER_SOURCE_HASHES	
 		return ShaderPipelineType == Reference.ShaderPipelineType && StagesSourceHash == Reference.StagesSourceHash;
+#else
+		return ShaderPipelineType == Reference.ShaderPipelineType;
+#endif
+	}
+
+	bool operator!=(const FShaderPipelineTypeDependency& Reference) const
+	{
+		return !(*this == Reference);
 	}
 };
 
@@ -1979,11 +2061,11 @@ public:
 		for (auto Pair : ShaderPipelines)
 		{
 			FShaderPipeline* Pipeline = Pair.Value;
-			if (Pipeline->PipelineType->ShouldOptimizeUnusedOutputs() && Filter == FShaderPipeline::EOnlyShared)
+			if (Pipeline->PipelineType->ShouldOptimizeUnusedOutputs(Platform) && Filter == FShaderPipeline::EOnlyShared)
 			{
 				continue;
 			}
-			else if (!Pipeline->PipelineType->ShouldOptimizeUnusedOutputs() && Filter == FShaderPipeline::EOnlyUnique)
+			else if (!Pipeline->PipelineType->ShouldOptimizeUnusedOutputs(Platform) && Filter == FShaderPipeline::EOnlyUnique)
 			{
 				continue;
 			}
@@ -2623,7 +2705,7 @@ extern RENDERCORE_API void DispatchComputeShader(
 extern RENDERCORE_API void DispatchIndirectComputeShader(
 	FRHICommandList& RHICmdList,
 	FShader* Shader,
-	FVertexBufferRHIParamRef ArgumentBuffer,
+	FRHIVertexBuffer* ArgumentBuffer,
 	uint32 ArgumentOffset);
 
 /** Appends to KeyString for all shaders. */

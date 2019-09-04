@@ -24,6 +24,7 @@
 #include "PerPlatformProperties.h"
 #include "SkeletalMeshLODSettings.h"
 #include "Animation/NodeMappingProviderInterface.h"
+#include "Animation/SkinWeightProfile.h"
 
 #include "SkeletalMesh.generated.h"
 
@@ -42,6 +43,7 @@ class FSkeletalMeshModel;
 class FSkeletalMeshLODModel;
 class FSkeletalMeshLODRenderData;
 class FSkinWeightVertexBuffer;
+struct FSkinWeightProfileInfo;
 
 #if WITH_APEX_CLOTHING
 
@@ -417,6 +419,29 @@ struct FSkeletalMaterial
 DECLARE_MULTICAST_DELEGATE_OneParam(FOnPostMeshCache, class USkeletalMesh*);
 #endif
 
+#if WITH_EDITORONLY_DATA
+namespace NSSkeletalMeshSourceFileLabels
+{
+	static FText GeoAndSkinningText()
+	{
+		static FText GeoAndSkinningText = (NSLOCTEXT("FBXReimport", "ImportContentTypeAll", "Geometry and Skinning Weights"));
+		return GeoAndSkinningText;
+	}
+
+	static FText GeometryText()
+	{
+		static FText GeometryText = (NSLOCTEXT("FBXReimport", "ImportContentTypeGeometry", "Geometry"));
+		return GeometryText;
+	}
+	static FText SkinningText()
+	{
+		static FText SkinningText = (NSLOCTEXT("FBXReimport", "ImportContentTypeSkinning", "Skinning Weights"));
+		return SkinningText;
+	}
+}
+#endif
+
+
 /**
  * SkeletalMesh is geometry bound to a hierarchical skeleton of bones which can be animated for the purpose of deforming the mesh.
  * Skeletal Meshes are built up of two parts; a set of polygons composed to make up the surface of the mesh, and a hierarchical skeleton which can be used to animate the polygons.
@@ -489,11 +514,11 @@ public:
 
 	/** Get the extended bounds of this mesh (imported bounds plus bounds extension) */
 	UFUNCTION(BlueprintCallable, Category = Mesh)
-	FBoxSphereBounds GetBounds();
+	FBoxSphereBounds GetBounds() const;
 
 	/** Get the original imported bounds of the skel mesh */
 	UFUNCTION(BlueprintCallable, Category = Mesh)
-	FBoxSphereBounds GetImportedBounds();
+	FBoxSphereBounds GetImportedBounds() const;
 
 	/** Set the original imported bounds of the skel mesh, will recalculate extended bounds */
 	void SetImportedBounds(const FBoxSphereBounds& InBounds);
@@ -564,6 +589,10 @@ public:
 	/** Minimum LOD to render. Can be overridden per component as well as set here for all mesh instances here */
 	UPROPERTY(EditAnywhere, Category = LODSettings, meta = (DisplayName = "Minimum LOD"))
 	FPerPlatformInt MinLod;
+
+	/** when true all lods below minlod will still be cooked */
+	UPROPERTY(EditAnywhere, Category = LODSettings)
+	FPerPlatformBool DisableBelowMinLodStripping;
 
 #if WITH_EDITORONLY_DATA
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, AssetRegistrySearchable, BlueprintSetter = SetLODSettings, Category = LODSettings)
@@ -640,6 +669,8 @@ public:
 	UPROPERTY(EditAnywhere, Instanced, Category=ImportSettings)
 	class UAssetImportData* AssetImportData;
 
+	static FText GetSourceFileLabelFromIndex(int32 SourceFileIndex);
+
 	/** Path to the resource used to construct this skeletal mesh */
 	UPROPERTY()
 	FString SourceFilePath_DEPRECATED;
@@ -689,6 +720,13 @@ public:
 
 	UPROPERTY(Category=Mesh, BlueprintReadWrite)
 	TArray<UMorphTarget*> MorphTargets;
+
+	/**
+	 *	Returns the list of all morph targets of this skeletal mesh
+	 *  @return	The list of morph targets
+	 */
+	UFUNCTION(BlueprintPure, Category = Mesh, meta = (DisplayName = "Get All Morph Target Names", ScriptName = "GetAllMorphTargetNames", Keywords = "morph shape"))
+	TArray<FString> K2_GetAllMorphTargetNames() const;
 
 	/** A fence which is used to keep track of the rendering thread releasing the static mesh resources. */
 	FRenderCommandFence ReleaseResourcesFence;
@@ -882,6 +920,7 @@ public:
 	virtual FString GetDetailedInfoInternal() const override;
 	virtual void GetResourceSizeEx(FResourceSizeEx& CumulativeResourceSize) override;
 	static void AddReferencedObjects(UObject* InThis, FReferenceCollector& Collector);
+	virtual void GetPreloadDependencies(TArray<UObject*>& OutDeps) override;
 	//~ End UObject Interface.
 
 	/** Setup-only routines - not concerned with the instance. */
@@ -891,6 +930,10 @@ public:
 #if WITH_EDITOR
 	/** Calculate the required bones for a Skeletal Mesh LOD, including possible extra influences */
 	static void CalculateRequiredBones(FSkeletalMeshLODModel& LODModel, const struct FReferenceSkeleton& RefSkeleton, const TMap<FBoneIndexType, FBoneIndexType> * BonesToRemove);
+
+	/** Recalculate Retarget Base Pose BoneTransform */
+	void ReallocateRetargetBasePose();
+
 #endif // WITH_EDITOR
 
 	/** 
@@ -925,13 +968,16 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Animation")
 	USkeletalMeshSocket* GetSocketByIndex(int32 Index) const;
 
-#if !WITH_EDITOR
-private:
-	/** Called internally to rebuild an invalid socket map */
-	void RebuildSocketMap();
+	/**
+	 * Returns vertex color data by position.
+	 * For matching to reimported meshes that may have changed or copying vertex paint data from mesh to mesh.
+	 *
+	 *	@return	VertexColorData		Returns a map of vertex position and their associated color.
+	 */
+	TMap<FVector, FColor> GetVertexColorData(const uint32 PaintingMeshLODIndex = 0) const;
 
-public:
-#endif
+	/** Called to rebuild an out-of-date or invalid socket map */
+	void RebuildSocketMap();
 
 	// @todo document
 	FMatrix GetRefPoseMatrix( int32 BoneIndex ) const;
@@ -1198,8 +1244,24 @@ public:
 	 * Returns total number of LOD
 	 */
 	int32 GetLODNum() const { return LODInfo.Num();  }
-};
 
+public:
+	const TArray<FSkinWeightProfileInfo>& GetSkinWeightProfiles() const { return SkinWeightProfiles; }
+
+#if WITH_EDITOR
+	TArray<FSkinWeightProfileInfo>& GetSkinWeightProfiles() { return SkinWeightProfiles; }	
+	void AddSkinWeightProfile(const FSkinWeightProfileInfo& Profile) { SkinWeightProfiles.Add(Profile); }
+	int32 GetNumSkinWeightProfiles() const { return SkinWeightProfiles.Num(); }
+#endif
+
+	/** Releases all allocated Skin Weight Profile resources, assumes none are currently in use */
+	void ReleaseSkinWeightProfileResources();
+
+protected:
+	/** Set of skin weight profiles associated with this mesh */
+	UPROPERTY(EditAnywhere, Category = SkinWeights, EditFixedSize, Meta=(NoResetToDefault))
+	TArray<FSkinWeightProfileInfo> SkinWeightProfiles;
+};
 
 /**
  * Refresh Physics Asset Change

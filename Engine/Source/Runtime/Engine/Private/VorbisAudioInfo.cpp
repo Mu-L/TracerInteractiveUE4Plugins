@@ -35,7 +35,7 @@
 #endif
 
 // Non-windows platform don't load Dlls
-#if !PLATFORM_WINDOWS
+#if !PLATFORM_WINDOWS && !PLATFORM_HOLOLENS
 static FThreadSafeBool bDllLoaded = true;
 #else
 static FThreadSafeBool bDllLoaded;
@@ -98,7 +98,6 @@ FVorbisAudioInfo::FVorbisAudioInfo()
 	, SrcBufferDataSize(0)
 	, BufferOffset(0)
 	, CurrentBufferChunkOffset(0)
-	, StreamingSoundWave(NULL)
 	, CurrentStreamingChunkData(nullptr)
 	, CurrentStreamingChunkIndex(INDEX_NONE)
 	, NextStreamingChunkIndex(0)
@@ -156,6 +155,7 @@ int FVorbisAudioInfo::SeekMemory( uint32 offset, int whence )
 		break;
 	}
 
+	BufferOffset = FMath::Clamp<uint32>(BufferOffset, 0, SrcBufferDataSize);
 	return( BufferOffset );
 }
 
@@ -529,11 +529,11 @@ void FVorbisAudioInfo::EnableHalfRate( bool HalfRate )
 	ov_halfrate(&VFWrapper->vf, int32(HalfRate));
 }
 
-bool FVorbisAudioInfo::StreamCompressedInfo(USoundWave* Wave, struct FSoundQualityInfo* QualityInfo)
+bool FVorbisAudioInfo::StreamCompressedInfoInternal(USoundWave* Wave, struct FSoundQualityInfo* QualityInfo)
 {
 	if (!bDllLoaded)
 	{
-		UE_LOG(LogAudio, Error, TEXT("FVorbisAudioInfo::StreamCompressedInfo failed to parse header due to vorbis DLL not being loaded for sound '%s'."), *Wave->GetName());
+		UE_LOG(LogAudio, Error, TEXT("FVorbisAudioInfo::StreamCompressedInfoInternal failed to parse header due to vorbis DLL not being loaded for sound '%s'."), *Wave->GetName());
 		return false;
 	}
 
@@ -543,7 +543,7 @@ bool FVorbisAudioInfo::StreamCompressedInfo(USoundWave* Wave, struct FSoundQuali
 
 	if (!VFWrapper)
 	{
-		UE_LOG(LogAudio, Error, TEXT("FVorbisAudioInfo::StreamCompressedInfo failed due to no vorbis wrapper for sound '%s'."), *Wave->GetName());
+		UE_LOG(LogAudio, Error, TEXT("FVorbisAudioInfo::StreamCompressedInfoInternal failed due to no vorbis wrapper for sound '%s'."), *Wave->GetName());
 		return false;
 	}
 
@@ -562,7 +562,7 @@ bool FVorbisAudioInfo::StreamCompressedInfo(USoundWave* Wave, struct FSoundQuali
 	bHeaderParsed = GetCompressedInfoCommon(&Callbacks, QualityInfo);
 	if (!bHeaderParsed)
 	{
-		UE_LOG(LogAudio, Error, TEXT("FVorbisAudioInfo::StreamCompressedInfo failed to parse header for '%s'."), *Wave->GetName());
+		UE_LOG(LogAudio, Error, TEXT("FVorbisAudioInfo::StreamCompressedInfoInternal failed to parse header for '%s'."), *Wave->GetName());
 	}
 	
 
@@ -661,7 +661,7 @@ void LoadVorbisLibraries()
 	if (!bIsInitialized)
 	{
 		bIsInitialized = true;
-#if PLATFORM_WINDOWS  && WITH_OGGVORBIS
+#if (PLATFORM_WINDOWS || PLATFORM_HOLOLENS) && WITH_OGGVORBIS
 		//@todo if ogg is every ported to another platform, then use the platform abstraction to load these DLLs
 		// Load the Ogg dlls
 #  if _MSC_VER >= 1900
@@ -675,9 +675,22 @@ void LoadVorbisLibraries()
 		PlatformString = TEXT("Win64");
 		DLLNameStub = TEXT("_64.dll");
 #endif
+#if PLATFORM_HOLOLENS
+		PlatformString = TEXT("HoloLens");
+#endif
 
+#if PLATFORM_CPU_ARM_FAMILY
+#if PLATFORM_64BITS
+		FString RootOggPath = FPaths::EngineDir() / TEXT("Binaries/ThirdParty/Ogg/") / PlatformString / VSVersion / TEXT("arm64/");
+		FString RootVorbisPath = FPaths::EngineDir() / TEXT("Binaries/ThirdParty/Vorbis/") / PlatformString / VSVersion / TEXT("arm64/");
+#else
+		FString RootOggPath = FPaths::EngineDir() / TEXT("Binaries/ThirdParty/Ogg/") / PlatformString / VSVersion / TEXT("arm/");
+		FString RootVorbisPath = FPaths::EngineDir() / TEXT("Binaries/ThirdParty/Vorbis/") / PlatformString / VSVersion / TEXT("arm/");
+#endif
+#else
 		FString RootOggPath = FPaths::EngineDir() / TEXT("Binaries/ThirdParty/Ogg/") / PlatformString / VSVersion;
 		FString RootVorbisPath = FPaths::EngineDir() / TEXT("Binaries/ThirdParty/Vorbis/") / PlatformString / VSVersion;
+#endif
 
 		FString DLLToLoad = RootOggPath + TEXT("libogg") + DLLNameStub;
 		void* LibOggHandle = FPlatformProcess::GetDllHandle(*DLLToLoad);
@@ -705,7 +718,7 @@ void LoadVorbisLibraries()
 		}
 #elif WITH_OGGVORBIS
 		bDllLoaded = true;
-#endif	//PLATFORM_WINDOWS
+#endif	//(PLATFORM_WINDOWS || PLATFORM_HOLOLENS) && WITH_OGGVORBIS
 	}
 }
 

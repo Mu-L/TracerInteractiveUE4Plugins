@@ -4,6 +4,7 @@
 #include "HAL/PlatformTime.h"
 #include "HAL/PlatformProcess.h"
 #include "Misc/Paths.h"
+#include "Misc/ConfigCacheIni.h"
 #include "GenericPlatform/GenericApplicationMessageHandler.h"
 #include "Modules/ModuleManager.h"
 #include "GenericPlatform/IInputInterface.h"
@@ -74,6 +75,9 @@ public:
 			return;
 		}
 
+		GConfig->GetDouble(TEXT("/Script/Engine.InputSettings"), TEXT("InitialButtonRepeatDelay"), InitialButtonRepeatDelay, GInputIni);
+		GConfig->GetDouble(TEXT("/Script/Engine.InputSettings"), TEXT("ButtonRepeatDelay"), ButtonRepeatDelay, GInputIni);
+
 		// Initialize the API, so we can start calling SteamController functions
 		bSteamAPIInitialized = SteamAPI_Init();
 
@@ -126,7 +130,7 @@ public:
 					}
 				}
 
-				for (FInputActionKeyMapping ActionMapping : InputSettings->ActionMappings)
+				for (FInputActionKeyMapping ActionMapping : InputSettings->GetActionMappings())
 				{
 					if (ActionMapping.Key.IsGamepadKey())
 					{
@@ -134,7 +138,7 @@ public:
 					}
 				}
 
-				for (FInputAxisKeyMapping AxisMapping : InputSettings->AxisMappings)
+				for (FInputAxisKeyMapping AxisMapping : InputSettings->GetAxisMappings())
 				{
 					if (AxisMapping.Key.IsGamepadKey() || AxisMapping.Key == EKeys::MouseX || AxisMapping.Key == EKeys::MouseY)
 					{

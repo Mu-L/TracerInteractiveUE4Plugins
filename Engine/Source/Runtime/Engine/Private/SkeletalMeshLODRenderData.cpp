@@ -67,10 +67,16 @@ namespace
 // Serialization.
 FArchive& operator<<(FArchive& Ar, FSkelMeshRenderSection& S)
 {
+	const uint8 DuplicatedVertices = 1;
+	
+	// DuplicatedVerticesBuffer is used only for SkinCache and Editor features which is SM5 only
+	uint8 ClassDataStripFlags = 0;
+	ClassDataStripFlags |= (Ar.IsCooking() && !Ar.CookingTarget()->SupportsFeature(ETargetPlatformFeatures::DeferredRendering)) ? DuplicatedVertices : 0;
+
 	// When data is cooked for server platform some of the
 	// variables are not serialized so that they're always
 	// set to their initial values (for safety)
-	FStripDataFlags StripFlags(Ar);
+	FStripDataFlags StripFlags(Ar, ClassDataStripFlags);
 
 	Ar << S.MaterialIndex;
 	Ar << S.BaseIndex;
@@ -84,7 +90,10 @@ FArchive& operator<<(FArchive& Ar, FSkelMeshRenderSection& S)
 	Ar << S.MaxBoneInfluences;
 	Ar << S.CorrespondClothAssetIndex;
 	Ar << S.ClothingData;
-	Ar << S.DuplicatedVerticesBuffer;
+	if (!StripFlags.IsClassDataStripped(DuplicatedVertices))
+	{
+		Ar << S.DuplicatedVerticesBuffer;
+	}
 	Ar << S.bDisabled;
 
 	return Ar;
@@ -204,7 +213,8 @@ void FSkeletalMeshLODRenderData::InitResources(bool bNeedsVertexColors, int32 LO
 		INC_DWORD_STAT_BY(STAT_SkeletalMeshIndexMemory, AdjacencyMultiSizeIndexContainer.IsIndexBufferValid() ? (AdjacencyMultiSizeIndexContainer.GetIndexBuffer()->Num() * AdjacencyMultiSizeIndexContainer.GetDataTypeSize()) : 0);
 	}
 
-    if (RHISupportsComputeShaders(GMaxRHIShaderPlatform))
+	// DuplicatedVerticesBuffer is used only for SkinCache and Editor features which is SM5 only
+    if (IsFeatureLevelSupported(GMaxRHIShaderPlatform, ERHIFeatureLevel::SM5))
     {
         for (auto& RenderSection : RenderSections)
         {
@@ -472,12 +482,19 @@ void FSkeletalMeshLODRenderData::ReleaseResources()
 	BeginReleaseResource(&SkinWeightVertexBuffer);
 	BeginReleaseResource(&StaticVertexBuffers.ColorVertexBuffer);
 	BeginReleaseResource(&ClothVertexBuffer);
-    for (auto& RenderSection : RenderSections)
-    {
-        check(RenderSection.DuplicatedVerticesBuffer.DupVertData.Num());
-        BeginReleaseResource(&RenderSection.DuplicatedVerticesBuffer);
-    }
+	// DuplicatedVerticesBuffer is used only for SkinCache and Editor features which is SM5 only
+    if (IsFeatureLevelSupported(GMaxRHIShaderPlatform, ERHIFeatureLevel::SM5))
+	{
+		for (auto& RenderSection : RenderSections)
+		{
+			check(RenderSection.DuplicatedVerticesBuffer.DupVertData.Num());
+			BeginReleaseResource(&RenderSection.DuplicatedVerticesBuffer);
+		}
+	}
 	BeginReleaseResource(&MorphTargetVertexInfoBuffers);
+	
+	DEC_DWORD_STAT_BY(STAT_SkeletalMeshVertexMemory, SkinWeightProfilesData.GetResourcesSize());
+	SkinWeightProfilesData.ReleaseResources();
 }
 
 #if WITH_EDITOR
@@ -563,6 +580,14 @@ void FSkeletalMeshLODRenderData::BuildFromLODModel(const FSkeletalMeshLODModel* 
 
 	// MorphTargetVertexInfoBuffers are created in InitResources
 
+	SkinWeightProfilesData.Init(&SkinWeightVertexBuffer);
+	// Generate runtime version of skin weight profile data, containing all required per-skin weight override data
+	for (const auto& Pair : ImportedModel->SkinWeightProfiles)
+	{
+		FRuntimeSkinWeightProfileData& Override = SkinWeightProfilesData.AddOverrideData(Pair.Key);
+		MeshUtilities.GenerateRuntimeSkinWeightData(ImportedModel, Pair.Value.SkinWeights, Override);
+	}
+
 	ActiveBoneIndices = ImportedModel->ActiveBoneIndices;
 	RequiredBones = ImportedModel->RequiredBones;
 }
@@ -617,6 +642,7 @@ void FSkeletalMeshLODRenderData::GetResourceSizeEx(FResourceSizeEx& CumulativeRe
 	CumulativeResourceSize.AddUnknownMemoryBytes(SkinWeightVertexBuffer.GetVertexDataSize());
 	CumulativeResourceSize.AddUnknownMemoryBytes(StaticVertexBuffers.ColorVertexBuffer.GetAllocatedSize());
 	CumulativeResourceSize.AddUnknownMemoryBytes(ClothVertexBuffer.GetVertexDataSize());
+	CumulativeResourceSize.AddUnknownMemoryBytes(SkinWeightProfilesData.GetResourcesSize());	
 }
 
 void FSkeletalMeshLODRenderData::Serialize(FArchive& Ar, UObject* Owner, int32 Idx)
@@ -638,15 +664,16 @@ void FSkeletalMeshLODRenderData::Serialize(FArchive& Ar, UObject* Owner, int32 I
 
 	USkeletalMesh* OwnerMesh = CastChecked<USkeletalMesh>(Owner);
 	int32 MinMeshLod = 0;
-	
+	bool bMeshDisablesMinLodStrip = false;
 #if WITH_EDITOR
 	if(bIsCook)
 	{
 		MinMeshLod = OwnerMesh ? OwnerMesh->MinLod.GetValueForPlatformIdentifiers(CookTarget->GetPlatformInfo().PlatformGroupName, CookTarget->GetPlatformInfo().VanillaPlatformName) : 0;
+		bMeshDisablesMinLodStrip = OwnerMesh ? OwnerMesh->DisableBelowMinLodStripping.GetValueForPlatformIdentifiers(CookTarget->GetPlatformInfo().PlatformGroupName, CookTarget->GetPlatformInfo().VanillaPlatformName) : false;
 	}
 #endif
 
-	const bool bWantToStripBelowMinLod = bIsCook && GStripSkeletalMeshLodsDuringCooking != 0 && MinMeshLod > Idx;
+	const bool bWantToStripBelowMinLod = bIsCook && GStripSkeletalMeshLodsDuringCooking != 0 && MinMeshLod > Idx && !bMeshDisablesMinLodStrip;
 
 	ClassDataStripFlags |= bWantToStripTessellation ? LodAdjacencyStripFlag : 0;
 	ClassDataStripFlags |= bWantToStripBelowMinLod ? MinLodStripFlag : 0;
@@ -673,6 +700,14 @@ void FSkeletalMeshLODRenderData::Serialize(FArchive& Ar, UObject* Owner, int32 I
 		// set cpu skinning flag on the vertex buffer so that the resource arrays know if they need to be CPU accessible
 		bNeedsCPUAccess = bKeepBuffersInCPUMemory || SkelMeshOwner->GetResourceForRendering()->RequiresCPUSkinning(GMaxRHIFeatureLevel) ||
 			SkelMeshOwner->NeedCPUData(Idx);
+	}
+
+	if (FPlatformProperties::RequiresCookedData())
+	{
+		if (bNeedsCPUAccess && SkelMeshOwner)
+		{
+			UE_LOG(LogStaticMesh, Verbose, TEXT("[%s] Skeletal Mesh is marked for CPU read."), *SkelMeshOwner->GetName());
+		}
 	}
 
 	if (StripFlags.IsDataStrippedForServer() || StripFlags.IsClassDataStripped(MinLodStripFlag))
@@ -721,6 +756,24 @@ void FSkeletalMeshLODRenderData::Serialize(FArchive& Ar, UObject* Owner, int32 I
 		if (HasClothData())
 		{
 			Ar << ClothVertexBuffer;
+		}
+	}	
+
+	Ar << SkinWeightProfilesData;
+	SkinWeightProfilesData.Init(&SkinWeightVertexBuffer);
+
+	if (Ar.IsLoading() && !!GSkinWeightProfilesLoadByDefaultMode)
+	{
+#if !WITH_EDITOR
+		if ( GSkinWeightProfilesLoadByDefaultMode == 1)
+		{
+			// Only allow overriding the base buffer in non-editor builds as it could otherwise be serialized into the asset
+			SkinWeightProfilesData.OverrideBaseBufferSkinWeightData(OwnerMesh, Idx);
+		}
+#endif 	
+		if (GSkinWeightProfilesLoadByDefaultMode == 3)
+		{
+			SkinWeightProfilesData.SetDynamicDefaultSkinWeightProfile(OwnerMesh, Idx);
 		}
 	}
 }

@@ -14,6 +14,16 @@ class UARLightEstimate;
 struct FARTraceResult;
 class UTexture2D;
 
+DECLARE_MULTICAST_DELEGATE_OneParam(FOnTrackableAdded, UARTrackedGeometry*);
+typedef FOnTrackableAdded::FDelegate FOnTrackableAddedDelegate;
+
+DECLARE_MULTICAST_DELEGATE_OneParam(FOnTrackableUpdated, UARTrackedGeometry*);
+typedef FOnTrackableUpdated::FDelegate FOnTrackableUpdatedDelegate;
+
+DECLARE_MULTICAST_DELEGATE_OneParam(FOnTrackableRemoved, UARTrackedGeometry*);
+typedef FOnTrackableRemoved::FDelegate FOnTrackableRemovedDelegate;
+
+
 UENUM(BlueprintType, Category="AR AugmentedReality", meta=(Experimental))
 enum class EARTrackingState : uint8
 {
@@ -68,6 +78,25 @@ enum class EARTrackingQuality : uint8
 	OrientationAndPosition
 };
 
+UENUM(BlueprintType, Category="AR AugmentedReality", meta=(Experimental))
+enum class EARTrackingQualityReason : uint8
+{
+	/** Current Tracking is not limited */
+	None,
+	
+	/** The AR session has not yet gathered enough camera or motion data to provide tracking information. */
+	Initializing,
+	
+	/** The AR session is attempting to resume after an interruption. */
+	Relocalizing,
+	
+	/** The device is moving too fast for accurate image-based position tracking. */
+	ExcessiveMotion,
+	
+	/** The scene visible to the camera does not contain enough distinguishable features for image-based position tracking. */
+	InsufficientFeatures
+};
+
 /**
  * Describes the current status of the AR session.
  */
@@ -104,6 +133,61 @@ enum class EARWorldMappingState : uint8
 	Mapped
 };
 
+/** Describes the tracked plane orientation */
+UENUM(BlueprintType)
+enum class EARPlaneOrientation : uint8
+{
+	Horizontal,
+	Vertical,
+	/** For AR systems that can match planes to slopes */
+	Diagonal,
+};
+
+/** Indicates what type of object the scene understanding system thinks it is */
+UENUM(BlueprintType)
+enum class EARObjectClassification : uint8
+{
+	/** Not applicable to scene understanding */
+	NotApplicable,
+	/** Scene understanding doesn't know what this is */
+	Unknown,
+	/** A vertical plane that is a wall */
+	Wall,
+	/** A horizontal plane that is the ceiling */
+	Ceiling,
+	/** A horizontal plane that is the floor */
+	Floor,
+	/** A horizontal plane that is a table */
+	Table,
+	/** A horizontal plane that is a seat */
+	Seat,
+	/** A human face */
+	Face,
+	/** A recognized image in the scene */
+	Image,
+	/** A chunk of mesh that does not map to a specific object type but is seen by the AR system */
+	World,
+	/** A closed mesh that was identified in the scene */
+	SceneObject,
+	// Add other types here...
+};
+
+/** Describes the potential spaces in which the join transform can be defined with AR pose tracking */
+UENUM(BlueprintType)
+enum class EARJointTransformSpace : uint8
+{
+	/**
+	 * Joint transform is relative to the origin of the model space
+	 * which is usually attached to a particular joint
+	 * such as the hip
+	 */
+	Model,
+	
+	/**
+	* Joint transform is relative to its parent
+	*/
+	ParentJoint,
+};
 
 /** The current state of the AR subsystem including an optional explanation string. */
 USTRUCT(BlueprintType)
@@ -247,6 +331,8 @@ public:
 	/** @see FriendlyName */
 	UFUNCTION(BlueprintPure, Category = "AR AugmentedReality|Object Detection")
 	const FString& GetFriendlyName() const { return FriendlyName; }
+	UFUNCTION(BlueprintCallable, Category = "AR AugmentedReality|Object Detection")
+	void SetFriendlyName(const FString& NewName) { FriendlyName = NewName; }
 
 	/** @see BoundingBox */
 	UFUNCTION(BlueprintPure, Category = "AR AugmentedReality|Object Detection")
@@ -372,5 +458,72 @@ public:
 	int32 Height;
 
 	bool IsValidFormat() { return FPS > 0 && Width > 0 && Height > 0; }
+
+	friend FArchive& operator<<(FArchive& Ar, FARVideoFormat& Format)
+	{
+		return Ar << Format.FPS << Format.Width << Format.Height;
+	}
 };
 
+/** Represents a hierarchy of a human pose skeleton tracked by the AR system */
+USTRUCT(BlueprintType)
+struct AUGMENTEDREALITY_API FARSkeletonDefinition
+{
+	GENERATED_BODY()
+
+public:
+	/** How many joints this skeleton has */
+	UPROPERTY(BlueprintReadOnly, Category="AR AugmentedReality|Pose Tracking")
+	int32 NumJoints = 0;
+	
+	/** The name of each joint in this skeleton */
+	UPROPERTY(BlueprintReadOnly, Category = "AR AugmentedReality|Pose Tracking")
+	TArray<FName> JointNames;
+
+	/** The parent index of each joint in this skeleton */
+	UPROPERTY(BlueprintReadOnly, Category = "AR AugmentedReality|Pose Tracking")
+	TArray<int32> ParentIndices;
+};
+
+/** Represents a human pose tracked in the 2D space */
+USTRUCT(BlueprintType)
+struct AUGMENTEDREALITY_API FARPose2D
+{
+	GENERATED_BODY()
+
+public:
+	/** The definition of this skeleton */
+	UPROPERTY(BlueprintReadOnly, Category="AR AugmentedReality|Pose Tracking")
+	FARSkeletonDefinition SkeletonDefinition;
+	
+	/** The location of each joint in 2D normalized space */
+	UPROPERTY(BlueprintReadOnly, Category = "AR AugmentedReality|Pose Tracking")
+	TArray<FVector2D> JointLocations;
+
+	/** Flags indicating if each joint is tracked */
+	UPROPERTY(BlueprintReadOnly, Category = "AR AugmentedReality|Pose Tracking")
+	TArray<bool> IsJointTracked;
+};
+
+/** Represents a human pose tracked in the 3D space */
+USTRUCT(BlueprintType)
+struct AUGMENTEDREALITY_API FARPose3D
+{
+	GENERATED_BODY()
+
+public:
+	/** The definition of this skeleton */
+	UPROPERTY(BlueprintReadOnly, Category="AR AugmentedReality|Pose Tracking")
+	FARSkeletonDefinition SkeletonDefinition;
+	
+	/** The transform of each join in the model space */
+	UPROPERTY(BlueprintReadOnly, Category = "AR AugmentedReality|Pose Tracking")
+	TArray<FTransform> JointTransforms;
+	
+	/** Flags indicating if each joint is tracked */
+	UPROPERTY(BlueprintReadOnly, Category = "AR AugmentedReality|Pose Tracking")
+	TArray<bool> IsJointTracked;
+	
+	UPROPERTY(BlueprintReadOnly, Category = "AR AugmentedReality|Pose Tracking")
+	EARJointTransformSpace JointTransformSpace = EARJointTransformSpace::Model;
+};

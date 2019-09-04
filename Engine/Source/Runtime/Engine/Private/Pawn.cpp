@@ -42,6 +42,7 @@ APawn::APawn(const FObjectInitializer& ObjectInitializer)
 
 	if (HasAnyFlags(RF_ClassDefaultObject) && GetClass() == APawn::StaticClass())
 	{
+		// WARNING: This line is why the AISupport plugin has to load the AIModule before UObject initialization, otherwise this load fails and CDOs are corrupt in the editor
 		AIControllerClass = LoadClass<AController>(nullptr, *((UEngine*)(UEngine::StaticClass()->GetDefaultObject()))->AIControllerClassName.ToString(), nullptr, LOAD_None, nullptr);
 	}
 	else
@@ -100,21 +101,23 @@ void APawn::PreInitializeComponents()
 
 void APawn::PostInitializeComponents()
 {
+	QUICK_SCOPE_CYCLE_COUNTER(STAT_Pawn_PostInitComponents);
+
 	Super::PostInitializeComponents();
 	
 	if (!IsPendingKill())
 	{
-		GetWorld()->AddPawn( this );
+		UWorld* World = GetWorld();
 
 		// Automatically add Controller to AI Pawns if we are allowed to.
 		if (AutoPossessPlayer == EAutoReceiveInput::Disabled
 			&& AutoPossessAI != EAutoPossessAI::Disabled && Controller == nullptr && GetNetMode() != NM_Client
 #if WITH_EDITOR
-			&& (GIsEditor == false || GetWorld()->IsGameWorld())
+			&& (GIsEditor == false || World->IsGameWorld())
 #endif // WITH_EDITOR
 			)
 		{
-			const bool bPlacedInWorld = (GetWorld()->bStartup);
+			const bool bPlacedInWorld = (World->bStartup);
 			if ((AutoPossessAI == EAutoPossessAI::PlacedInWorldOrSpawned) ||
 				(AutoPossessAI == EAutoPossessAI::PlacedInWorld && bPlacedInWorld) ||
 				(AutoPossessAI == EAutoPossessAI::Spawned && !bPlacedInWorld))
@@ -177,12 +180,8 @@ void APawn::PawnStartFire(uint8 FireModeNum) {}
 
 AActor* APawn::GetMovementBaseActor(const APawn* Pawn)
 {
-	if (Pawn != nullptr && Pawn->GetMovementBase())
-	{
-		return Pawn->GetMovementBase()->GetOwner();
-	}
-
-	return nullptr;
+	UPrimitiveComponent* MovementBase = (Pawn ? Pawn->GetMovementBase() : nullptr);
+	return (MovementBase ? MovementBase->GetOwner() : nullptr);
 }
 
 bool APawn::CanBeBaseForCharacter(class APawn* APawn) const
@@ -309,7 +308,8 @@ void APawn::SpawnDefaultController()
 	{
 		return;
 	}
-	if ( AIControllerClass != nullptr )
+
+	if (AIControllerClass != nullptr)
 	{
 		FActorSpawnParameters SpawnInfo;
 		SpawnInfo.Instigator = Instigator;
@@ -391,7 +391,6 @@ void APawn::PawnClientRestart()
 void APawn::Destroyed()
 {
 	DetachFromControllerPendingDestroy();
-	GetWorld()->RemovePawn( this );
 	Super::Destroyed();
 }
 
@@ -401,7 +400,6 @@ void APawn::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	if (EndPlayReason != EEndPlayReason::Destroyed)
 	{
 		DetachFromControllerPendingDestroy();
-		GetWorld()->RemovePawn( this );
 	}
 	
 	Super::EndPlay(EndPlayReason);

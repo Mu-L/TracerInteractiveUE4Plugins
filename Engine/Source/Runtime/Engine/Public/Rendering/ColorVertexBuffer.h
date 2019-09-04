@@ -57,6 +57,10 @@ public:
 	*/
 	void Serialize(FArchive& Ar, bool bNeedsCPUAccess);
 
+	void SerializeMetaData(FArchive& Ar);
+
+	void ClearMetaData();
+
 	/**
 	* Export the data to a string, used for editor Copy&Paste.
 	* The method must not be called if there is no data.
@@ -132,6 +136,35 @@ public:
 		InitFromColorArray(&InColor, Count, 0);
 	}
 
+	/** Create an RHI vertex buffer with CPU data. CPU data may be discarded after creation (see TResourceArray::Discard) */
+	FVertexBufferRHIRef CreateRHIBuffer_RenderThread();
+	FVertexBufferRHIRef CreateRHIBuffer_Async();
+
+	/** Similar to Init/ReleaseRHI but only update existing SRV so references to the SRV stays valid */
+	template <uint32 MaxNumUpdates>
+	void InitRHIForStreaming(FRHIVertexBuffer* IntermediateBuffer, TRHIResourceUpdateBatcher<MaxNumUpdates>& Batcher)
+	{
+		if (VertexBufferRHI && IntermediateBuffer)
+		{
+			check(ColorComponentsSRV);
+			Batcher.QueueUpdateRequest(VertexBufferRHI, IntermediateBuffer);
+			Batcher.QueueUpdateRequest(ColorComponentsSRV, VertexBufferRHI, 4, PF_R8G8B8A8);
+		}
+	}
+
+	template <uint32 MaxNumUpdates>
+	void ReleaseRHIForStreaming(TRHIResourceUpdateBatcher<MaxNumUpdates>& Batcher)
+	{
+		if (VertexBufferRHI)
+		{
+			Batcher.QueueUpdateRequest(VertexBufferRHI, nullptr);
+		}
+		if (ColorComponentsSRV)
+		{
+			Batcher.QueueUpdateRequest(ColorComponentsSRV, nullptr, 0, 0);
+		}
+	}
+
 	// FRenderResource interface.
 	ENGINE_API virtual void InitRHI() override;
 	ENGINE_API virtual void ReleaseRHI() override;
@@ -140,7 +173,7 @@ public:
 	ENGINE_API void BindColorVertexBuffer(const class FVertexFactory* VertexFactory, struct FStaticMeshDataType& StaticMeshData) const;
 	ENGINE_API static void BindDefaultColorVertexBuffer(const class FVertexFactory* VertexFactory, struct FStaticMeshDataType& StaticMeshData, NullBindStride BindStride);
 
-	FORCEINLINE const FShaderResourceViewRHIParamRef GetColorComponentsSRV() const
+	FORCEINLINE FRHIShaderResourceView* GetColorComponentsSRV() const
 	{
 		return ColorComponentsSRV;
 	}
@@ -170,6 +203,9 @@ private:
 
 	/** Allocates the vertex data storage type. */
 	void AllocateData(bool bNeedsCPUAccess = true);
+
+	template <bool bRenderThread>
+	FVertexBufferRHIRef CreateRHIBuffer_Internal();
 
 	/** Purposely hidden */
 	ENGINE_API FColorVertexBuffer(const FColorVertexBuffer &rhs);

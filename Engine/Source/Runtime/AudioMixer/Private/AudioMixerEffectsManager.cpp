@@ -4,6 +4,7 @@
 #include "AudioMixerDevice.h"
 #include "AudioMixerEffectsManager.h"
 #include "SubmixEffects/AudioMixerSubmixEffectReverb.h"
+#include "SubmixEffects/AudioMixerSubmixEffectReverbFast.h"
 #include "SubmixEffects/AudioMixerSubmixEffectEQ.h"
 
 namespace Audio
@@ -96,7 +97,9 @@ namespace Audio
 
 	FAudioMixerEffectsManager::FAudioMixerEffectsManager(FAudioDevice* InDevice)
 		: FAudioEffectsManager(InDevice)
-	{}
+	{
+		bUseLegacyReverb = GetDefault<UAudioSettings>()->bEnableLegacyReverb;
+	}
 
 	FAudioMixerEffectsManager::~FAudioMixerEffectsManager()
 	{}
@@ -113,8 +116,17 @@ namespace Audio
 			FSoundEffectSubmix* SoundEffectSubmix = MasterReverbSubmixPtr->GetSubmixEffect(0);
 			if (SoundEffectSubmix)
 			{
-				FSubmixEffectReverb* SoundEffectReverb = static_cast<FSubmixEffectReverb*>(SoundEffectSubmix);
-				SoundEffectReverb->SetEffectParameters(ReverbEffectParameters);
+				// Choose correct reverb based upon ini settings.
+				if (bUseLegacyReverb)
+				{
+					FSubmixEffectReverb* SoundEffectReverb = static_cast<FSubmixEffectReverb*>(SoundEffectSubmix);
+					SoundEffectReverb->SetEffectParameters(ReverbEffectParameters);
+				}
+				else
+				{
+					FSubmixEffectReverbFast* SoundEffectReverb = static_cast<FSubmixEffectReverbFast*>(SoundEffectSubmix);
+					SoundEffectReverb->SetEffectParameters(ReverbEffectParameters);
+				}
 				PrintReverbSettings(ReverbEffectParameters);
 			}
 		}

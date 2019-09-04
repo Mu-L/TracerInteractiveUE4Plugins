@@ -68,8 +68,6 @@
   <ItemGroup>
     <Compile Include="Editor\EditorTest.BootTest.cs" />
     <Compile Include="Editor\RunEditorTests.cs" />
-    <Compile Include="EngineTest\RunEngineTests.cs" />
-    <Compile Include="EngineTest\Tests\EngineTest.RunAutomatedTests.cs" />
     <Compile Include="Framework\Account\Gauntlet.AccountPool.cs" />
     <Compile Include="Framework\Base\Gauntlet.AppConfig.cs" />
     <Compile Include="Framework\Base\Gauntlet.AppInstall.cs" />
@@ -83,6 +81,7 @@
     <Compile Include="Framework\Gauntlet.Exception.cs" />
     <Compile Include="Framework\Gauntlet.Params.cs" />
     <Compile Include="Framework\Gauntlet.TestGroup.cs" />
+    <Compile Include="Framework\Utils\Gauntlet.IniConfigUtil.cs" />
     <Compile Include="Framework\Utils\Gauntlet.MarkdownBuilder.cs" />
     <Compile Include="Framework\Utils\Gauntlet.HtmlBuilder.cs" />
     <Compile Include="Platform\Null\Gauntlet.TargetDeviceNull.cs" />
@@ -132,6 +131,7 @@
     <Compile Include="Unreal\Tasks\Gauntlet.Task.CleanDevices.cs" />
     <Compile Include="Unreal\Game\Tests\Gauntlet.UnrealTest.ErrorTest.cs" />
     <Compile Include="Unreal\Game\UE4Game.TestConfig.cs" />
+    <Compile Include="Unreal\Utils\Gauntlet.AutomationLogParser.cs" />
     <Compile Include="Unreal\Utils\Gauntlet.UnrealHelpers.cs" />
     <Compile Include="Unreal\Utils\Gauntlet.UnrealLogParser.cs" />
     <Compile Include="Unreal\BuildSource\Gauntlet.StagedBuildSource.cs" />
@@ -141,6 +141,7 @@
     <ProjectReference Include="..\..\DotNETCommon\DotNETUtilities\DotNETUtilities.csproj">
       <Project>{5d7d66e8-8c76-4af9-b3ec-2ef03421d730}</Project>
       <Name>DotNETUtilities</Name>
+      <Private>False</Private>
     </ProjectReference>
     <ProjectReference Include="..\Android\Android.Automation.csproj">
       <Project>{32e3a47e-359a-4f78-ae6c-703b87de0b97}</Project>
@@ -155,6 +156,7 @@
     <ProjectReference Include="..\Localization\Localization.Automation.csproj">
       <Project>{c2f959b1-1727-4598-9c32-3d9acce72750}</Project>
       <Name>Localization.Automation</Name>
+      <Private>False</Private>
     </ProjectReference>
     <ProjectReference Include="..\XLocLocalization\XLocLocalization.Automation.csproj">
       <Project>{7e2d6784-c9b7-40c6-a89b-0a8afddce60d}</Project>
@@ -164,6 +166,7 @@
     <ProjectReference Include="..\OneSkyLocalization\OneSkyLocalization.Automation.csproj">
       <Project>{39369368-5603-46da-baae-766bb3cb2b51}</Project>
       <Name>OneSkyLocalization.Automation</Name>
+      <Private>False</Private>
     </ProjectReference>
     <ProjectReference Include="..\Scripts\AutomationScripts.Automation.csproj">
       <Project>{8aa00d65-0954-4a27-ac0d-fb8b1106120f}</Project>
@@ -199,6 +202,7 @@
     <Content Include="SelfTest\TestData\LogParser\OrionLogWithExceptionPS4Client.txt" />
     <Content Include="SelfTest\TestData\LogParser\OrionLogWithFatalErrorPS4Client.txt" />
     <Content Include="SelfTest\TestData\LogParser\OrionPS4ClientLogWithPerf.txt" />
+    <Content Include="SelfTest\TestData\LogParser\Win64FatalError.txt" />
   </ItemGroup>
   <ItemGroup />
   <ItemGroup />

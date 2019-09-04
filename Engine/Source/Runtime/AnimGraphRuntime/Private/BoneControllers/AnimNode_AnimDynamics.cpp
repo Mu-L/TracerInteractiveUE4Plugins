@@ -4,6 +4,7 @@
 #include "GameFramework/WorldSettings.h"
 #include "Animation/AnimInstanceProxy.h"
 #include "PhysicsEngine/PhysicsSettings.h"
+#include "CommonAnimationLibrary.h"
 
 DEFINE_STAT(STAT_AnimDynamicsOverall);
 DEFINE_STAT(STAT_AnimDynamicsWindData);
@@ -152,6 +153,7 @@ FAnimNode_AnimDynamics::FAnimNode_AnimDynamics()
 , bLinearSpring(false)
 , bAngularSpring(false)
 , bChain(false)
+, RetargetingSettings(FRotationRetargetingInfo(false /* enabled */))
 #if ENABLE_ANIM_DRAW_DEBUG
 , FilteredBoneIndex(INDEX_NONE)
 #endif
@@ -241,7 +243,7 @@ void FAnimNode_AnimDynamics::EvaluateSkeletalControl_AnyThread(FComponentSpacePo
 			}
 		}
 
-		if (bDoUpdate && NextTimeStep > 0.0f)
+		if (bDoUpdate && NextTimeStep > AnimPhysicsMinDeltaTime)
 		{
 			// Calculate gravity direction
 			SimSpaceGravityDirection = TransformWorldVectorToSimSpace(Output, FVector(0.0f, 0.0f, -1.0f));
@@ -349,6 +351,34 @@ void FAnimNode_AnimDynamics::EvaluateSkeletalControl_AnyThread(FComponentSpacePo
 				FCompactPoseBoneIndex BoneIndex = CurrentChainBone.GetCompactPoseIndex(BoneContainer);
 
 				FTransform NewBoneTransform(CurrentBody.Pose.Orientation, CurrentBody.Pose.Position + CurrentBody.Pose.Orientation.RotateVector(JointOffsets[Idx]));
+
+				if (RetargetingSettings.bEnabled)
+				{
+					FTransform ParentTransform = FTransform::Identity;
+					FCompactPoseBoneIndex ParentBoneIndex = BoneContainer.GetParentBoneIndex(BoneIndex);
+					if (ParentBoneIndex != INDEX_NONE)
+					{
+						ParentTransform = GetBoneTransformInSimSpace(Output, ParentBoneIndex);
+					}
+
+					FQuat RetargetedRotation = CommonAnimationLibrary::RetargetSingleRotation(
+						NewBoneTransform.GetRotation(),
+						RetargetingSettings.Source * ParentTransform,
+						RetargetingSettings.Target * ParentTransform,
+						RetargetingSettings.CustomCurve,
+						RetargetingSettings.EasingType,
+						RetargetingSettings.bFlipEasing,
+						RetargetingSettings.EasingWeight,
+						RetargetingSettings.RotationComponent,
+						RetargetingSettings.TwistAxis,
+						RetargetingSettings.bUseAbsoluteAngle,
+						RetargetingSettings.SourceMinimum,
+						RetargetingSettings.SourceMaximum,
+						RetargetingSettings.TargetMinimum,
+						RetargetingSettings.TargetMaximum);
+
+					NewBoneTransform.SetRotation(RetargetedRotation);
+				}
 
 				NewBoneTransform = GetComponentSpaceTransformFromSimSpace(SimulationSpace, Output, NewBoneTransform);
 
@@ -533,7 +563,7 @@ void FAnimNode_AnimDynamics::InitPhysics(FComponentSpacePoseContext& Output)
 				int32 ParentBoneIndex = BoneContainer.GetParentBoneIndex(ChainEnd.BoneIndex);
 
 				// Walk up the chain until we either find the top or hit the root bone
-				while(ParentBoneIndex != 0)
+				while(ParentBoneIndex > 0)
 				{
 					ChainBoneIndices.Add(ParentBoneIndex);
 					ChainBoneNames.Add(BoneContainer.GetReferenceSkeleton().GetBoneName(ParentBoneIndex));
@@ -672,12 +702,14 @@ void FAnimNode_AnimDynamics::InitPhysics(FComponentSpacePoseContext& Output)
 			// Cache physics settings to avoid accessing UPhysicsSettings continuously
 			if(UPhysicsSettings* Settings = UPhysicsSettings::Get())
 			{
+				AnimPhysicsMinDeltaTime = Settings->AnimPhysicsMinDeltaTime;
 				MaxPhysicsDeltaTime = Settings->MaxPhysicsDeltaTime;
 				MaxSubstepDeltaTime = Settings->MaxSubstepDeltaTime;
 				MaxSubsteps = Settings->MaxSubsteps;
 			}
 			else
 			{
+				AnimPhysicsMinDeltaTime = 0.f;
 				MaxPhysicsDeltaTime = (1.0f/30.0f);
 				MaxSubstepDeltaTime = (1.0f/60.0f);
 				MaxSubsteps = 4;

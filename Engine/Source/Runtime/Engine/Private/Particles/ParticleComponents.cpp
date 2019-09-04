@@ -65,6 +65,7 @@
 #include "Particles/Lifetime/ParticleModuleLifetimeBase.h"
 #include "Particles/Lifetime/ParticleModuleLifetime.h"
 #include "Particles/Light/ParticleModuleLight.h"
+#include "Particles/Location/ParticleModuleLocationBoneSocket.h"
 #include "Particles/Material/ParticleModuleMeshMaterial.h"
 #include "Particles/Modules/Location/ParticleModulePivotOffset.h"
 #include "Particles/Orbit/ParticleModuleOrbit.h"
@@ -382,6 +383,8 @@ void UParticleLODLevel::PostLoad()
 
 void UParticleLODLevel::UpdateModuleLists()
 {
+	LLM_SCOPE(ELLMTag::Particles);
+
 	SpawningModules.Empty();
 	SpawnModules.Empty();
 	UpdateModules.Empty();
@@ -1699,7 +1702,9 @@ void UParticleEmitter::CacheEmitterModuleInfo()
 	LockAxisFlags = EPAL_NONE;
 	ModuleOffsetMap.Empty();
 	ModuleInstanceOffsetMap.Empty();
+	ModuleRandomSeedInstanceOffsetMap.Empty();
 	ModulesNeedingInstanceData.Empty();
+	ModulesNeedingRandomSeedInstanceData.Empty();
 	MeshMaterials.Empty();
 	DynamicParameterDataOffset = 0;
 	LightDataOffset = 0;
@@ -1789,6 +1794,25 @@ void UParticleEmitter::CacheEmitterModuleInfo()
 				}
 				ReqInstanceBytes += TempInstanceBytes;
 			}
+
+			// Add space for per instance random seed value if required
+			if (FApp::bUseFixedSeed || ParticleModule->bSupportsRandomSeed)
+			{
+				// Add the high-lodlevel offset to the lookup map
+				ModuleRandomSeedInstanceOffsetMap.Add(ParticleModule, ReqInstanceBytes);
+				// Remember that this module has emitter-instance data
+				ModulesNeedingRandomSeedInstanceData.Add(ParticleModule);
+
+				// Add all the other LODLevel modules, using the same offset.
+				// This removes the need to always also grab the HighestLODLevel pointer.
+				for (int32 LODIdx = 1; LODIdx < LODLevels.Num(); LODIdx++)
+				{
+					UParticleLODLevel* CurLODLevel = LODLevels[LODIdx];
+					ModuleRandomSeedInstanceOffsetMap.Add(CurLODLevel->Modules[ModuleIdx], ReqInstanceBytes);
+				}
+
+				ReqInstanceBytes += sizeof(FParticleRandomSeedInstancePayload);
+			}
 		}
 
 		if (ParticleModule->IsA(UParticleModuleOrientationAxisLock::StaticClass()))
@@ -1815,6 +1839,15 @@ void UParticleEmitter::CacheEmitterModuleInfo()
 			SubUVAnimation = ModuleSubUVAnimation && ModuleSubUVAnimation->SubUVTexture && ModuleSubUVAnimation->IsBoundingGeometryValid()
 				? ModuleSubUVAnimation
 				: NULL;
+		}
+		// Perform validation / fixup on some modules that can cause crashes if LODs / Modules are out of sync
+		// This should only be applied on uncooked builds to avoid wasting cycles
+		else if ( !FPlatformProperties::RequiresCookedData() )
+		{
+			if (ParticleModule->IsA(UParticleModuleLocationBoneSocket::StaticClass()))
+			{
+				UParticleModuleLocationBoneSocket::ValidateLODLevels(this, ModuleIdx);
+			}
 		}
 
 		// Set bMeshRotationActive if module says so
@@ -2034,6 +2067,15 @@ void UParticleSpriteEmitter::SetToSensibleDefaults()
 #if WITH_EDITOR
 	PostEditChange();
 #endif // WITH_EDITOR
+}
+
+/*-----------------------------------------------------------------------------
+	UFXSystemAsset implementation.
+-----------------------------------------------------------------------------*/
+
+UFXSystemAsset::UFXSystemAsset(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer)
+{
 }
 
 /*-----------------------------------------------------------------------------
@@ -3297,6 +3339,10 @@ bool UParticleSystem::HasGPUEmitter() const
 	return false;
 }
 
+UFXSystemComponent::UFXSystemComponent(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer)
+{}
+
 FOnSystemPreActivationChange UParticleSystemComponent::OnSystemPreActivationChange;
 
 UParticleSystemComponent::UParticleSystemComponent(const FObjectInitializer& ObjectInitializer)
@@ -3310,6 +3356,8 @@ UParticleSystemComponent::UParticleSystemComponent(const FObjectInitializer& Obj
 	bAutoActivate = true;
 	bResetOnDetach = false;
 	OldPosition = FVector(0.0f, 0.0f, 0.0f);
+
+	RandomStream.Initialize(FApp::bUseFixedSeed ? GetFName() : NAME_None);
 
 	PartSysVelocity = FVector(0.0f, 0.0f, 0.0f);
 
@@ -3541,7 +3589,7 @@ bool UParticleSystemComponent::CanConsiderInvisible()const
 		const float ClampedMaxSecondsBeforeInactive = MaxSecondsBeforeInactive > 0 ? FMath::Max(MaxSecondsBeforeInactive, 0.1f) : 0.0f;
 		if (ClampedMaxSecondsBeforeInactive > 0.0f && AccumTickTime > ClampedMaxSecondsBeforeInactive && World->IsGameWorld())
 		{
-			return World->GetTimeSeconds() > (LastRenderTime + ClampedMaxSecondsBeforeInactive);
+			return World->GetTimeSeconds() > (GetLastRenderTime() + ClampedMaxSecondsBeforeInactive);
 		}
 	}
 	return false;
@@ -3808,8 +3856,8 @@ void UParticleSystemComponent::OnRegister()
 	}
 
 	UE_LOG(LogParticles,Verbose,
-		TEXT("OnRegister %s Component=0x%p Scene=0x%p FXSystem=0x%p"),
-		Template != NULL ? *Template->GetName() : TEXT("NULL"), this, World->Scene, FXSystem);
+		TEXT("OnRegister %s Component=0x%p World=0x%p Scene=0x%p FXSystem=0x%p"),
+		Template != NULL ? *Template->GetName() : TEXT("NULL"), this, GetWorld(), World->Scene, FXSystem);
 
 	if (LODLevel == -1)
 	{
@@ -3838,8 +3886,14 @@ void UParticleSystemComponent::OnUnregister()
 	check(FXSystem == NULL);
 }
 
+void UParticleSystemComponent::OnEndOfFrameUpdateDuringTick()
+{
+	WaitForAsyncAndFinalize(STALL);
+}
+
 void UParticleSystemComponent::CreateRenderState_Concurrent()
 {
+	LLM_SCOPE(ELLMTag::Particles);
 	SCOPE_CYCLE_COUNTER(STAT_ParticleSystemComponent_CreateRenderState_Concurrent);
 	SCOPE_CYCLE_COUNTER(STAT_ParticlesOverview_GT_CNC);
 
@@ -3931,7 +3985,13 @@ void UParticleSystemComponent::DestroyRenderState_Concurrent()
 	SCOPE_CYCLE_COUNTER(STAT_ParticleSystemComponent_DestroyRenderState_Concurrent);
 	SCOPE_CYCLE_COUNTER(STAT_ParticlesOverview_GT_CNC);
 
-	ForceAsyncWorkCompletion(ENSURE_AND_STALL);
+	{
+		const bool bSaveSkipUpdate = bSkipUpdateDynamicDataDuringTick;
+		bSkipUpdateDynamicDataDuringTick = true;
+		ForceAsyncWorkCompletion(ENSURE_AND_STALL);
+		bSkipUpdateDynamicDataDuringTick = bSaveSkipUpdate;
+	}
+
 	check( GetWorld() );
 	UE_LOG(LogParticles,Verbose,
 		TEXT("DestroyRenderState_Concurrent @ %fs %s"), GetWorld()->TimeSeconds,
@@ -4374,6 +4434,7 @@ void UParticleSystemComponent::ClearDynamicData()
 void UParticleSystemComponent::UpdateDynamicData()
 {
 	//SCOPE_CYCLE_COUNTER(STAT_ParticleSystemComponent_UpdateDynamicData);
+	LLM_SCOPE(ELLMTag::Particles);
 
 	ForceAsyncWorkCompletion(ENSURE_AND_STALL);
 	if (SceneProxy)
@@ -4935,6 +4996,7 @@ void UParticleSystemComponent::TickComponent(float DeltaTime, enum ELevelTick Ti
 	LLM_SCOPE(ELLMTag::Particles);
 	FInGameScopedCycleCounter InGameCycleCounter(GetWorld(), EInGamePerfTrackers::VFXSignificance, EInGamePerfTrackerThreads::GameThread, bIsManagingSignificance);
 	SCOPE_CYCLE_COUNTER(STAT_ParticlesOverview_GT);
+	FScopeCycleCounterUObject AdditionalScope(AdditionalStatObject(), GET_STATID(STAT_ParticlesOverview_GT));
 
 	if (Template == nullptr || Template->Emitters.Num() == 0)
 	{
@@ -6002,7 +6064,7 @@ void UParticleSystemComponent::ActivateSystem(bool bFlagAsJustAttached)
 	World = GetWorld(); // refresh the world pointer as it may have changed by this point
 	if(!bWasDeactivated && !bWasCompleted && ensure(World))
 	{
-		LastRenderTime = World->GetTimeSeconds();
+		SetLastRenderTime(World->GetTimeSeconds());
 	}
 }
 
@@ -6108,7 +6170,7 @@ void UParticleSystemComponent::DeactivateSystem()
 	//TODO: What if there are immortal particles but bKillOnDeactivate is false? Need to mark emitters with currently immortal particles, kill them and warn the user.
 	SetComponentTickEnabled(true);
 
-	LastRenderTime = World->GetTimeSeconds();
+	SetLastRenderTime(World->GetTimeSeconds());
 }
 
 void UParticleSystemComponent::CancelAutoAttachment(bool bDetachFromParent)
@@ -6527,7 +6589,7 @@ void UParticleSystemComponent::InitializeSystem()
 
 			if( Template->bUseDelayRange )
 			{
-				const float	Rand = FMath::FRand();
+				const float	Rand = RandomStream.FRand();
 				EmitterDelay	 = Template->DelayLow + ((Template->Delay - Template->DelayLow) * Rand);
 			}
 		}
@@ -6970,6 +7032,8 @@ int32 UParticleSystemComponent::GetLODLevel()
  */
 void UParticleSystemComponent::SetFloatParameter(FName Name, float Param)
 {
+	LLM_SCOPE(ELLMTag::Particles);
+
 	if(Name == NAME_None)
 	{
 		return;
@@ -6997,6 +7061,8 @@ void UParticleSystemComponent::SetFloatParameter(FName Name, float Param)
 
 void UParticleSystemComponent::SetFloatRandParameter(FName ParameterName,float Param,float ParamLow)
 {
+	LLM_SCOPE(ELLMTag::Particles);
+
 	if (ParameterName == NAME_None)
 	{
 		return;
@@ -7026,6 +7092,8 @@ void UParticleSystemComponent::SetFloatRandParameter(FName ParameterName,float P
 
 void UParticleSystemComponent::SetVectorParameter(FName Name, FVector Param)
 {
+	LLM_SCOPE(ELLMTag::Particles);
+
 	if (Name == NAME_None)
 	{
 		return;
@@ -7053,6 +7121,8 @@ void UParticleSystemComponent::SetVectorParameter(FName Name, FVector Param)
 
 void UParticleSystemComponent::SetVectorRandParameter(FName ParameterName,const FVector& Param,const FVector& ParamLow)
 {
+	LLM_SCOPE(ELLMTag::Particles);
+
 	if (ParameterName == NAME_None)
 	{
 		return;
@@ -7082,6 +7152,8 @@ void UParticleSystemComponent::SetVectorRandParameter(FName ParameterName,const 
 
 void UParticleSystemComponent::SetColorParameter(FName Name, FLinearColor Param)
 {
+	LLM_SCOPE(ELLMTag::Particles);
+
 	if(Name == NAME_None)
 	{
 		return;
@@ -7111,6 +7183,8 @@ void UParticleSystemComponent::SetColorParameter(FName Name, FLinearColor Param)
 
 void UParticleSystemComponent::SetActorParameter(FName Name, AActor* Param)
 {
+	LLM_SCOPE(ELLMTag::Particles);
+
 	if(Name == NAME_None)
 	{
 		return;
@@ -7138,6 +7212,8 @@ void UParticleSystemComponent::SetActorParameter(FName Name, AActor* Param)
 
 void UParticleSystemComponent::SetMaterialParameter(FName Name, UMaterialInterface* Param)
 {
+	LLM_SCOPE(ELLMTag::Particles);
+
 	if(Name == NAME_None)
 	{
 		return;
@@ -7186,8 +7262,7 @@ bool UParticleSystemComponent::GetFloatParameter(const FName InName,float& OutFl
 			}
 			else if (Param.ParamType == PSPT_ScalarRand)
 			{
-				// check(IsInGameThread()); this isn't exactly cool to call from multiple threads, but it isn't terrible.
-				OutFloat = Param.Scalar + (Param.Scalar_Low - Param.Scalar) * FMath::SRand();
+				OutFloat = Param.Scalar + (Param.Scalar_Low - Param.Scalar) * RandomStream.FRand();
 				return true;
 			}
 		}
@@ -7218,9 +7293,7 @@ bool UParticleSystemComponent::GetVectorParameter(const FName InName,FVector& Ou
 			}
 			else if (Param.ParamType == PSPT_VectorRand)
 			{
-				check(IsInGameThread());
-				FVector RandValue(FMath::SRand(), FMath::SRand(), FMath::SRand());
-				OutVector = Param.Vector + (Param.Vector_Low - Param.Vector) * RandValue;
+				OutVector = Param.Vector + (Param.Vector_Low - Param.Vector) * RandomStream.VRand();
 				return true;
 			}
 		}
@@ -7250,9 +7323,7 @@ bool UParticleSystemComponent::GetAnyVectorParameter(const FName InName,FVector&
 			}
 			if (Param.ParamType == PSPT_VectorRand)
 			{
-				//check(IsInGameThread());
-				FVector RandValue(FMath::SRand(), FMath::SRand(), FMath::SRand());
-				OutVector = Param.Vector + (Param.Vector_Low - Param.Vector) * RandValue;
+				OutVector = Param.Vector + (Param.Vector_Low - Param.Vector) * RandomStream.VRand();
 				return true;
 			}
 			if (Param.ParamType == PSPT_Scalar)
@@ -7263,8 +7334,7 @@ bool UParticleSystemComponent::GetAnyVectorParameter(const FName InName,FVector&
 			}
 			if (Param.ParamType == PSPT_ScalarRand)
 			{
-				// check(IsInGameThread()); this isn't exactly cool to call from multiple threads, but it isn't terrible.
-				float OutFloat = Param.Scalar + (Param.Scalar_Low - Param.Scalar) * FMath::SRand();
+				float OutFloat = Param.Scalar + (Param.Scalar_Low - Param.Scalar) * RandomStream.FRand();
 				OutVector = FVector(OutFloat, OutFloat, OutFloat);
 				return true;
 			}
@@ -7531,7 +7601,7 @@ void AddMaterials(TArray<FMaterialWithScale, TInlineAllocator<12> >& OutMaterial
 	}
 }
 
-void UParticleSystemComponent::GetStreamingTextureInfo(FStreamingTextureLevelContext& LevelContext, TArray<FStreamingTexturePrimitiveInfo>& OutStreamingTextures) const
+void UParticleSystemComponent::GetStreamingRenderAssetInfo(FStreamingTextureLevelContext& LevelContext, TArray<FStreamingRenderAssetPrimitiveInfo>& OutStreamingRenderAssets) const
 {
 	TArray<FMaterialWithScale, TInlineAllocator<12> > MaterialWithScales;
 
@@ -7574,7 +7644,7 @@ void UParticleSystemComponent::GetStreamingTextureInfo(FStreamingTextureLevelCon
 			for (const FMaterialWithScale& MaterialWithScale : MaterialWithScales)
 			{
 				MaterialData.Material = MaterialWithScale.Key;
-				LevelContext.ProcessMaterial(Bounds, MaterialData, Bounds.SphereRadius * MaterialWithScale.Value, OutStreamingTextures);
+				LevelContext.ProcessMaterial(Bounds, MaterialData, Bounds.SphereRadius * MaterialWithScale.Value, OutStreamingRenderAssets);
 			}
 		}
 	}

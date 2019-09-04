@@ -9,6 +9,7 @@
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/App.h"
 #include "Misc/EngineVersion.h"
+#include "UObject/Package.h"
 
 #include "OodleTrainerCommandlet.h"
 #include "OodleAnalytics.h"
@@ -86,6 +87,17 @@ static bool bOodleCompressionDisabled = false;
 /** Stores a runtime list of active OodleHandlerComponent's - for debugging/testing code */
 static TArray<OodleHandlerComponent*> OodleComponentList;
 #endif
+
+
+
+/**
+ * CVars
+ */
+
+TAutoConsoleVariable<int32> CVarOodleMinSizeForCompression(
+	TEXT("net.OodleMinSizeForCompression"), 0,
+	TEXT("The minimum size an outgoing packet must be, for it to be considered for compression (does not count overhead of handler components which process packets after Oodle)."));
+
 
 
 // @todo #JohnB: Remove after Oodle update, and after checking with Luigi
@@ -272,6 +284,8 @@ FOodleDictionary::~FOodleDictionary()
 OodleHandlerComponent::OodleHandlerComponent()
 	: HandlerComponent(FName(TEXT("OodleHandlerComponent")))
 	, bEnableOodle(false)
+	, ServerEnableMode(EOodleEnableMode::AlwaysEnabled)
+	, ClientEnableMode(EOodleEnableMode::AlwaysEnabled)
 #if !UE_BUILD_SHIPPING || OODLE_DEV_SHIPPING
 	, InPacketLog(nullptr)
 	, OutPacketLog(nullptr)
@@ -283,6 +297,7 @@ OodleHandlerComponent::OodleHandlerComponent()
 	, bOodleAnalytics(false)
 	, ServerDictionary()
 	, ClientDictionary()
+	, bInitializedDictionaries(false)
 {
 	SetActive(true);
 
@@ -348,6 +363,29 @@ void OodleHandlerComponent::Initialize()
 		bEnableOodle = true;
 	}
 
+	FString CurEnableModeStr;
+	UEnum* EnableModeEnum = StaticEnum<EOodleEnableMode>();
+
+	if (GConfig->GetString(OODLE_INI_SECTION, TEXT("ServerEnableMode"), CurEnableModeStr, GEngineIni))
+	{
+		int64 EnumVal = EnableModeEnum->GetValueByNameString(CurEnableModeStr);
+
+		if (EnumVal != INDEX_NONE)
+		{
+			ServerEnableMode = (EOodleEnableMode)EnumVal;
+		}
+	}
+
+	if (GConfig->GetString(OODLE_INI_SECTION, TEXT("ClientEnableMode"), CurEnableModeStr, GEngineIni))
+	{
+		int64 EnumVal = EnableModeEnum->GetValueByNameString(CurEnableModeStr);
+
+		if (EnumVal != INDEX_NONE)
+		{
+			ClientEnableMode = (EOodleEnableMode)EnumVal;
+		}
+	}
+
 #if !UE_BUILD_SHIPPING || OODLE_DEV_SHIPPING
 	GConfig->GetBool(OODLE_INI_SECTION, TEXT("bUseDictionaryIfPresent"), bUseDictionaryIfPresent, GEngineIni);
 
@@ -377,7 +415,12 @@ void OodleHandlerComponent::Initialize()
 		}
 #endif
 
-		InitializeDictionaries();
+		EOodleEnableMode EnableMode = (Handler->Mode == Handler::Mode::Server ? ServerEnableMode : ClientEnableMode);
+
+		if (EnableMode == EOodleEnableMode::AlwaysEnabled)
+		{
+			InitializeDictionaries();
+		}
 	}
 
 	if (bEnableOodle)
@@ -414,6 +457,8 @@ void OodleHandlerComponent::InitializeDictionaries()
 	FString ServerDictionaryPath;
 	FString ClientDictionaryPath;
 	bool bGotDictionaryPath = false;
+
+	bInitializedDictionaries = true;
 
 #if (!UE_BUILD_SHIPPING || OODLE_DEV_SHIPPING) && !(PLATFORM_PS4 || PLATFORM_XBOXONE || PLATFORM_SWITCH)
 	if (bUseDictionaryIfPresent)
@@ -822,7 +867,15 @@ void OodleHandlerComponent::Incoming(FBitReader& Packet)
 		// If the packet is not compressed, no further processing is necessary
 		if (bCompressedPacket)
 		{
-			FOodleDictionary* CurDict = ((Handler->Mode == Handler::Mode::Server) ? ClientDictionary.Get() : ServerDictionary.Get());
+			const bool bIsServer = (Handler->Mode == Handler::Mode::Server);
+
+			// Lazy-loading of dictionary when EOodleEnableMode::WhenCompressedPacketReceived is active
+			if (!bInitializedDictionaries && (bIsServer ? ServerEnableMode : ClientEnableMode) == EOodleEnableMode::WhenCompressedPacketReceived)
+			{
+				InitializeDictionaries();
+			}
+
+			FOodleDictionary* CurDict = (bIsServer ? ClientDictionary.Get() : ServerDictionary.Get());
 
 			if (CurDict != nullptr)
 			{
@@ -932,8 +985,10 @@ void OodleHandlerComponent::Incoming(FBitReader& Packet)
 			if (bOodleAnalytics && NetAnalyticsData.IsValid())
 			{
 				FOodleAnalyticsVars* AnalyticsVars = NetAnalyticsData->GetLocalData();
+				uint32 PacketSize = Packet.GetBytesLeft();
 
 				AnalyticsVars->InNotCompressedNum++;
+				AnalyticsVars->InNotCompressedLengthTotal += PacketSize;
 			}
 
 #if !UE_BUILD_SHIPPING || OODLE_DEV_SHIPPING
@@ -973,20 +1028,41 @@ void OodleHandlerComponent::Outgoing(FBitWriter& Packet, FOutPacketTraits& Trait
 		static uint8 UncompressedData[MAX_OODLE_BUFFER];
 		static uint8 CompressedData[MAX_OODLE_BUFFER];
 
-		FOodleDictionary* CurDict = ((Handler->Mode == Handler::Mode::Server) ? ServerDictionary.Get() : ClientDictionary.Get());
+		FOodleAnalyticsVars* AnalyticsVars = (bOodleAnalytics && NetAnalyticsData.IsValid()) ? NetAnalyticsData->GetLocalData() : nullptr;
+		const bool bIsServer = (Handler->Mode == Handler::Mode::Server);
+		FOodleDictionary* CurDict = (bIsServer ? ServerDictionary.Get() : ClientDictionary.Get());
+		uint32 MinSizeForCompression = CVarOodleMinSizeForCompression.GetValueOnAnyThread();
+		uint32 UncompressedBytes = Packet.GetNumBytes();
+		bool bSkipCompressionClientDisabled = false;
+		bool bSkipCompressionTooSmall = false;
+		bool bSkipCompression = false;
 
-#if UE_BUILD_SHIPPING
-		if (CurDict != nullptr)
-#else
-		if (CurDict != nullptr && !bOodleCompressionDisabled)
+#if !UE_BUILD_SHIPPING
+		// Allow a lack of dictionary in capture mode, or when compression is disabled
+		bSkipCompression = (CurDict == nullptr && bCaptureMode) || bOodleCompressionDisabled;
 #endif
+
+		// Skip compression when we are waiting on the remote side to enable compression
+		if (!bSkipCompression && (!bInitializedDictionaries && (bIsServer ? ServerEnableMode : ClientEnableMode) == EOodleEnableMode::WhenCompressedPacketReceived))
+		{
+			bSkipCompression = true;
+			bSkipCompressionClientDisabled = true;
+		}
+
+		// Skip compression when the packet is below the minimum size
+		if (!bSkipCompression && (MinSizeForCompression > 0 && UncompressedBytes < MinSizeForCompression))
+		{
+			bSkipCompression = true;
+			bSkipCompressionTooSmall = true;
+		}
+
+		if (CurDict != nullptr && !bSkipCompression)
 		{
 #if !UE_BUILD_SHIPPING
 			check(MaxOutgoingBits <= (MAX_OODLE_PACKET_BYTES * 8));
 #endif
 			uint32 MaxAdjustedLengthBits = MaxOutgoingBits - OodleReservedPacketBits;
 			uint32 UncompressedBits = Packet.GetNumBits();
-			uint32 UncompressedBytes = Packet.GetNumBytes();
 
 			bool bWithinBitBounds = UncompressedBits > 0 && ensure(UncompressedBits <= MaxAdjustedLengthBits) &&
 									ensure(OodleLZ_GetCompressedBufferSizeNeeded(UncompressedBytes) <= MAX_OODLE_BUFFER);
@@ -1025,14 +1101,6 @@ void OodleHandlerComponent::Outgoing(FBitWriter& Packet, FOutPacketTraits& Trait
 
 					Traits.bIsCompressed = !!bCompressedPacket;
 
-
-					FOodleAnalyticsVars* AnalyticsVars = (bOodleAnalytics && NetAnalyticsData.IsValid()) ? NetAnalyticsData->GetLocalData() : nullptr;
-
-					if (AnalyticsVars != nullptr)
-					{
-						AnalyticsVars->OutBeforeCompressedLengthTotal += UncompressedBytes;
-					}
-
 					if (bCompressedPacket)
 					{
 						// @todo #JohnB: Compress directly into a (deliberately oversized) FBitWriter buffer, which you can shrink after
@@ -1051,10 +1119,16 @@ void OodleHandlerComponent::Outgoing(FBitWriter& Packet, FOutPacketTraits& Trait
 							AnalyticsVars->OutCompressedNum++;
 							AnalyticsVars->OutCompressedWithOverheadLengthTotal += ((Packet.GetNumBits() - 1) + 7) >> 3;
 							AnalyticsVars->OutCompressedLengthTotal += CompressedBytes;
+							AnalyticsVars->OutBeforeCompressedLengthTotal += UncompressedBytes;
 						}
 					}
 					else
 					{
+						if (AnalyticsVars != nullptr)
+						{
+							AnalyticsVars->OutNotCompressedFailedLengthTotal += UncompressedBytes;
+						}
+
 						// @todo #JohnB: Try to eliminate this appBitscpy, by reserving the bCompressedPacket bit and other data,
 						//					at the start of the bit writer
 						Packet.SerializeBits(UncompressedData, UncompressedBits);
@@ -1124,10 +1198,15 @@ void OodleHandlerComponent::Outgoing(FBitWriter& Packet, FOutPacketTraits& Trait
 				Packet.SetError();
 			}
 		}
-#if !UE_BUILD_SHIPPING || OODLE_DEV_SHIPPING
-		// Allow a lack of dictionary in capture mode, or when compression is disabled
-		else if ((CurDict == nullptr && bCaptureMode) || bOodleCompressionDisabled)
+		else if (bSkipCompression)
 		{
+			if (AnalyticsVars != nullptr)
+			{
+				AnalyticsVars->OutNotCompressedSkippedLengthTotal += UncompressedBytes;
+				AnalyticsVars->OutNotCompressedClientDisabledNum += (uint8)bSkipCompressionClientDisabled;
+				AnalyticsVars->OutNotCompressedTooSmallNum += (uint8)bSkipCompressionTooSmall;
+			}
+
 			uint8 bCompresedPacket = false;
 			uint32 UncompressedBits = Packet.GetNumBits();
 
@@ -1137,8 +1216,7 @@ void OodleHandlerComponent::Outgoing(FBitWriter& Packet, FOutPacketTraits& Trait
 			Packet.WriteBit(bCompresedPacket);
 			Packet.SerializeBits(UncompressedData, UncompressedBits);
 		}
-#endif
-		else
+		else // if (CurDict == nullptr)
 		{
 			LowLevelFatalError(TEXT("Tried to compress a packet, but no dictionary is present for compression."));
 
@@ -1148,6 +1226,33 @@ void OodleHandlerComponent::Outgoing(FBitWriter& Packet, FOutPacketTraits& Trait
 	}
 }
 
+bool OodleHandlerComponent::IsCompressionActive() const
+{
+	bool bResult = false;
+
+	if (bEnableOodle && Handler)
+	{
+		const bool bIsServer = (Handler->Mode == Handler::Mode::Server);
+		FOodleDictionary* CurDict = (bIsServer ? ServerDictionary.Get() : ClientDictionary.Get());
+
+		const bool bSkipCompression =
+#if !UE_BUILD_SHIPPING
+			// Allow a lack of dictionary in capture mode, or when compression is disabled
+			(CurDict == nullptr && bCaptureMode) || bOodleCompressionDisabled ||
+#endif
+			// Skip compression when we are waiting on the remote side to enable compression
+			(!bInitializedDictionaries && (bIsServer ? ServerEnableMode : ClientEnableMode) == EOodleEnableMode::WhenCompressedPacketReceived)
+			;
+
+		if (CurDict != nullptr && !bSkipCompression)
+		{
+			bResult = true;
+		}
+	}
+
+	return bResult;
+}
+
 int32 OodleHandlerComponent::GetReservedPacketBits() const
 {
 	return bEnableOodle ? OodleReservedPacketBits : 0;
@@ -1155,15 +1260,14 @@ int32 OodleHandlerComponent::GetReservedPacketBits() const
 
 void OodleHandlerComponent::NotifyAnalyticsProvider()
 {
-	TSharedPtr<FNetAnalyticsAggregator> Aggregator = Handler->GetAggregator();
+	if (!NetAnalyticsData.IsValid())
+	{
+		TSharedPtr<FNetAnalyticsAggregator> Aggregator = Handler->GetAggregator();
 
-	if (Handler->GetProvider().IsValid() && Aggregator.IsValid())
-	{
-		NetAnalyticsData = REGISTER_NET_ANALYTICS(Aggregator, FOodleNetAnalyticsData, TEXT("Oodle.Stats"));
-	}
-	else
-	{
-		NetAnalyticsData.Reset();
+		if (Handler->GetProvider().IsValid() && Aggregator.IsValid())
+		{
+			NetAnalyticsData = REGISTER_NET_ANALYTICS(Aggregator, FOodleNetAnalyticsData, TEXT("Oodle.Stats"));
+		}
 	}
 
 	bOodleAnalytics = NetAnalyticsData.IsValid();

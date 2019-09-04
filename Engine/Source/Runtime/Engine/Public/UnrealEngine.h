@@ -17,6 +17,7 @@ class UFont;
 class ULocalPlayer;
 
 extern ENGINE_API int32 GShowMaterialDrawEvents;
+extern ENGINE_API int32 GDoAsyncLoadingWhileWaitingForVSync;
 
 ENGINE_API DECLARE_LOG_CATEGORY_EXTERN(LogEngine, Log, All);
 //
@@ -54,15 +55,15 @@ public:
 		++Iter;
 		GetCurrent();
 	}
-	ULocalPlayer* operator*()
+	ULocalPlayer* operator*() const
 	{
 		return *Iter;
 	}
-	ULocalPlayer* operator->()
+	ULocalPlayer* operator->() const
 	{
 		return *Iter;
 	}
-	operator bool()
+	explicit operator bool() const
 	{
 		return (bool)Iter;
 	}
@@ -111,15 +112,15 @@ public:
 	{
 		Next();
 	}
-	T* operator*()
+	T* operator*() const
 	{
 		return Current;
 	}
-	T* operator->()
+	T* operator->() const
 	{
 		return Current;
 	}
-	operator bool()
+	explicit operator bool() const
 	{
 		return (Current!=NULL);
 	}

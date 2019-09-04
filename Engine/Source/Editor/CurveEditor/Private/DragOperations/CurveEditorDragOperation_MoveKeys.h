@@ -17,6 +17,7 @@ public:
 	virtual void OnInitialize(FCurveEditor* CurveEditor, const TOptional<FCurvePointHandle>& CardinalPoint) override;
 	virtual void OnBeginDrag(FVector2D InitialPosition, FVector2D CurrentPosition, const FPointerEvent& MouseEvent) override;
 	virtual void OnDrag(FVector2D InitialPosition, FVector2D CurrentPosition, const FPointerEvent& MouseEvent) override;
+	virtual void OnEndDrag(FVector2D InitialPosition, FVector2D CurrentPosition, const FPointerEvent& MouseEvent) override;
 	virtual void OnCancelDrag() override;
 
 private:
@@ -42,4 +43,6 @@ private:
 
 	/** Key dragging data stored per-curve */
 	TArray<FKeyData> KeysByCurve;
+
+	FCurveEditorAxisSnap::FSnapState SnappingState;
 };

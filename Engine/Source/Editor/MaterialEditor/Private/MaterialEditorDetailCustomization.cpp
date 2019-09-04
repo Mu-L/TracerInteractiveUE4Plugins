@@ -11,6 +11,7 @@
 #include "DetailWidgetRow.h"
 #include "DetailCategoryBuilder.h"
 #include "Materials/MaterialExpressionScalarParameter.h"
+#include "Materials/MaterialExpressionVectorParameter.h"
 #include "MaterialLayersFunctionsCustomization.h"
 #include "PropertyEditorModule.h"
 #include "MaterialEditor/MaterialEditorPreviewParameters.h"
@@ -33,6 +34,7 @@
 #include "PropertyCustomizationHelpers.h"
 #include "Curves/CurveLinearColor.h"
 #include "IPropertyUtilities.h"
+#include "Engine/Texture.h"
 
 #define LOCTEXT_NAMESPACE "MaterialEditor"
 
@@ -232,6 +234,51 @@ void FMaterialEditorParameterDetails::CreateParameterValueWidget(UDEditorParamet
 		PropertyRow
 			.DisplayName(FText::FromName(Parameter->ParameterInfo.Name))
 			.ToolTip(GetParameterExpressionDescription(Parameter));
+
+		// Textures need a special widget that filters based on VT or not
+		UDEditorTextureParameterValue* TextureParam = Cast<UDEditorTextureParameterValue>(Parameter);
+		if (TextureParam != nullptr)
+		{
+			UMaterial *Material = MaterialEditorInstance->PreviewMaterial->GetMaterial();
+			if (Material != nullptr)
+			{
+				UMaterialExpressionTextureSampleParameter* Expression = Material->FindExpressionByGUID<UMaterialExpressionTextureSampleParameter>(TextureParam->ExpressionId);
+				if (Expression != nullptr)
+				{
+					TWeakObjectPtr<UMaterialExpressionTextureSampleParameter> SamplerExpression = Expression;
+
+					PropertyRow.CustomWidget()
+					.NameContent()
+					[
+						ParameterValueProperty->CreatePropertyNameWidget()
+					]
+					.ValueContent()
+					.MaxDesiredWidth(TOptional<float>())
+					[
+						SNew(SObjectPropertyEntryBox)
+						.PropertyHandle(ParameterValueProperty)
+						.AllowedClass(UTexture::StaticClass())
+						.ThumbnailPool(PropertyUtilities.Pin()->GetThumbnailPool())
+						.OnShouldFilterAsset_Lambda([SamplerExpression](const FAssetData& AssetData)
+						{
+							if (SamplerExpression.Get())
+							{
+								bool VirtualTextured = false;
+								AssetData.GetTagValue<bool>("VirtualTextureStreaming", VirtualTextured);
+
+								bool ExpressionIsVirtualTextured = IsVirtualSamplerType(SamplerExpression->SamplerType);
+
+								return VirtualTextured != ExpressionIsVirtualTextured;
+							}
+							else
+							{
+								return false;
+							}
+						})
+					];
+				}
+			}
+		}
 	}
 }
 
@@ -449,12 +496,14 @@ void FMaterialExpressionParameterDetails::CustomizeDetails( IDetailLayoutBuilder
 	// for expression parameters all their properties are in one category based on their class name.
 	FName DefaultCategory = NAME_None;
 	IDetailCategoryBuilder& Category = DetailLayout.EditCategory( DefaultCategory );
-
+	
 	TArray< TWeakObjectPtr<UObject> > Objects;
 	DetailLayout.GetObjectsBeingCustomized(Objects);
 
 	DefaultValueHandles.Reset();
 	ScalarParameterObjects.Reset();
+
+	const FName MaterialExpressionCategory = TEXT("MaterialExpression");
 
 	for (const auto& WeakObjectPtr : Objects)
 	{
@@ -486,14 +535,51 @@ void FMaterialExpressionParameterDetails::CustomizeDetails( IDetailLayoutBuilder
 			}
 
 			OnSliderMinMaxEdited();
+
+			TSharedPtr<IPropertyHandle> PropertyHandle = DetailLayout.GetProperty("bUseCustomPrimitiveData", UMaterialExpressionScalarParameter::StaticClass());
+			if (PropertyHandle.IsValid() && PropertyHandle->IsValidHandle())
+			{
+				// Rebuild the layout when the bUseCustomPrimitiveData property changes
+				PropertyHandle->SetOnPropertyValueChanged(FSimpleDelegate::CreateLambda([&DetailLayout]()
+				{
+					DetailLayout.ForceRefreshDetails();
+				}));
+			}
+
+			if (ScalarParameter->bUseCustomPrimitiveData)
+			{
+				DetailLayout.HideCategory(TEXT("MaterialExpressionScalarParameter"));
+				DetailLayout.HideCategory(MaterialExpressionCategory);
+			}
 		}
+
+		UMaterialExpressionVectorParameter* VectorParameter = Cast<UMaterialExpressionVectorParameter>(Object);
+
+		if (VectorParameter)
+		{
+			TSharedPtr<IPropertyHandle> PropertyHandle = DetailLayout.GetProperty("bUseCustomPrimitiveData", UMaterialExpressionVectorParameter::StaticClass());
+			if (PropertyHandle.IsValid() && PropertyHandle->IsValidHandle())
+			{
+				// Rebuild the layout when the bUseCustomPrimitiveData property changes
+				PropertyHandle->SetOnPropertyValueChanged(FSimpleDelegate::CreateLambda([&DetailLayout]()
+				{
+					DetailLayout.ForceRefreshDetails();
+				}));
+			}
+			
+			if (VectorParameter->bUseCustomPrimitiveData)
+			{
+				DetailLayout.HideCategory(TEXT("MaterialExpressionVectorParameter"));
+				DetailLayout.HideCategory(MaterialExpressionCategory);
+			}
+		}
+
 	}
 
 	check(ScalarParameterObjects.Num() == DefaultValueHandles.Num());
 	
 	Category.AddProperty("ParameterName");
 
-	const FName MaterialExpressionCategory = TEXT("MaterialExpression");
 	IDetailCategoryBuilder& ExpressionCategory = DetailLayout.EditCategory(MaterialExpressionCategory);
 
 	// Get a handle to the property we are about to edit
@@ -809,17 +895,54 @@ void FMaterialDetailCustomization::CustomizeDetails( IDetailLayoutBuilder& Detai
 	DetailLayout.GetObjectsBeingCustomized( Objects );
 
 	bool bUIMaterial = true;
+	bool bIsShadingModelFromMaterialExpression = false;
 	for( TWeakObjectPtr<UObject>& Object : Objects )
 	{
 		UMaterial* Material = Cast<UMaterial>( Object.Get() );
 		if( Material )
 		{
 			bUIMaterial &= Material->IsUIMaterial();
+
+			// If any Object has its shading model from material expression
+			bIsShadingModelFromMaterialExpression |= Material->IsShadingModelFromMaterialExpression();
 		}
 		else
 		{
 			// this shouldn't happen but just in case, let all properties through
 			bUIMaterial = false;
+		}
+	}
+
+	// Material category
+	{
+		IDetailCategoryBuilder& MaterialCategory = DetailLayout.EditCategory( TEXT("Material") );
+
+		TArray<TSharedRef<IPropertyHandle>> AllProperties;
+		MaterialCategory.GetDefaultProperties( AllProperties );
+
+		for( TSharedRef<IPropertyHandle>& PropertyHandle : AllProperties )
+		{
+			UProperty* Property = PropertyHandle->GetProperty();
+			FName PropertyName = Property->GetFName();
+
+			if (bUIMaterial)
+			{
+				if(		PropertyName != GET_MEMBER_NAME_CHECKED(UMaterial, MaterialDomain) 
+					&&	PropertyName != GET_MEMBER_NAME_CHECKED(UMaterial, BlendMode) 
+					&&	PropertyName != GET_MEMBER_NAME_CHECKED(UMaterial, OpacityMaskClipValue) 
+					&& 	PropertyName != GET_MEMBER_NAME_CHECKED(UMaterial, NumCustomizedUVs) )
+				{
+					DetailLayout.HideProperty( PropertyHandle );
+				}
+			}
+
+#if WITH_EDITORONLY_DATA
+			// Hide the shading model 
+			if (!bIsShadingModelFromMaterialExpression && PropertyName == GET_MEMBER_NAME_CHECKED(UMaterial, UsedShadingModels))
+			{
+				 DetailLayout.HideProperty(PropertyHandle);
+			}
+#endif
 		}
 	}
 
@@ -834,28 +957,6 @@ void FMaterialDetailCustomization::CustomizeDetails( IDetailLayoutBuilder& Detai
 		DetailLayout.HideCategory( TEXT("MaterialInterface") );
 		DetailLayout.HideCategory( TEXT("PhysicalMaterial") );
 		DetailLayout.HideCategory( TEXT("Usage") );
-
-		// Materail category
-		{
-			IDetailCategoryBuilder& MaterialCategory = DetailLayout.EditCategory( TEXT("Material") );
-
-			TArray<TSharedRef<IPropertyHandle>> AllProperties;
-			MaterialCategory.GetDefaultProperties( AllProperties );
-
-			for( TSharedRef<IPropertyHandle>& PropertyHandle : AllProperties )
-			{
-				UProperty* Property = PropertyHandle->GetProperty();
-				FName PropertyName = Property->GetFName();
-
-				if(		PropertyName != GET_MEMBER_NAME_CHECKED(UMaterial, MaterialDomain) 
-					&&	PropertyName != GET_MEMBER_NAME_CHECKED(UMaterial, BlendMode) 
-					&&	PropertyName != GET_MEMBER_NAME_CHECKED(UMaterial, OpacityMaskClipValue) 
-					&& 	PropertyName != GET_MEMBER_NAME_CHECKED(UMaterial, NumCustomizedUVs) )
-				{
-					DetailLayout.HideProperty( PropertyHandle );
-				}
-			}
-		}
 
 		// Mobile category
 		{

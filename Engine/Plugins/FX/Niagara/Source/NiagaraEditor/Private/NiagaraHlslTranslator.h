@@ -94,9 +94,9 @@ public:
 	class UNiagaraGraph* GetPrecomputedNodeGraph() { return NodeGraphDeepCopy; }
 	const class UNiagaraGraph* GetPrecomputedNodeGraph() const { return NodeGraphDeepCopy; }
 	const FString& GetUniqueEmitterName() const { return EmitterUniqueName; }
-	void VisitReferencedGraphs(UNiagaraGraph* InSrcGraph, UNiagaraGraph* InDupeGraph, ENiagaraScriptUsage InUsage);
-	void DeepCopyGraphs(UNiagaraScriptSource* ScriptSource, ENiagaraScriptUsage InUsage);
-	void FinishPrecompile(UNiagaraScriptSource* ScriptSource, const TArray<FNiagaraVariable>& EncounterableVariables, ENiagaraScriptUsage InUsage);
+	void VisitReferencedGraphs(UNiagaraGraph* InSrcGraph, UNiagaraGraph* InDupeGraph, ENiagaraScriptUsage InUsage, FCompileConstantResolver ConstantResolver);
+	void DeepCopyGraphs(UNiagaraScriptSource* ScriptSource, ENiagaraScriptUsage InUsage, FCompileConstantResolver ConstantResolver);
+	void FinishPrecompile(UNiagaraScriptSource* ScriptSource, const TArray<FNiagaraVariable>& EncounterableVariables, ENiagaraScriptUsage InUsage, FCompileConstantResolver ConstantResolver);
 	virtual int32 GetDependentRequestCount() const override {
 		return EmitterData.Num();
 	};
@@ -132,7 +132,7 @@ public:
 	TMap<const UNiagaraGraph*, TArray<FunctionData>> PreprocessedFunctions;
 	TArray<UNiagaraGraph*> ClonedGraphs;
 protected:
-	void VisitReferencedGraphsRecursive(UNiagaraGraph* InGraph);
+	void VisitReferencedGraphsRecursive(UNiagaraGraph* InGraph, const FCompileConstantResolver& ConstantResolver);
 };
 
 
@@ -472,6 +472,10 @@ public:
 
 
 	static FString GetSanitizedSymbolName(FString SymbolName, bool bCollapseNamespaces=false);
+	static FString GetSanitizedFunctionNameSuffix(FString Name);
+
+	/** Replaces all non-ascii characters with a "ASCXXX" string, where XXX is their int value */
+	static FString ConvertToAsciiString(FString Name);
 
 	bool AddStructToDefinitionSet(const FNiagaraTypeDefinition& TypeDef);
 
@@ -482,6 +486,8 @@ public:
 
 	static FString GetFunctionSignatureSymbol(const FNiagaraFunctionSignature& Sig);
 
+	/** If OutVar can be replaced by a literal constant, it's data is initialized with the correct value and we return true. Returns false otherwise. */
+	bool GetLiteralConstantVariable(FNiagaraVariable& OutVar) const;
 
 private:
 	void InitializeParameterMapDefaults(int32 ParamMapHistoryIdx);
@@ -531,18 +537,17 @@ private:
     void ValidateParticleIDUsage();
 	bool ValidateTypePins(UNiagaraNode* NodeToValidate);
 	void GenerateFunctionSignature(ENiagaraScriptUsage ScriptUsage, FString InName, const FString& InFullName, UNiagaraGraph* FuncGraph, TArray<int32>& Inputs, 
-		bool bHadNumericInputs, bool bHasParameterMapParameters, FNiagaraFunctionSignature& OutSig)const;
+		bool bHadNumericInputs, bool bHasParameterMapParameters, TArray<UEdGraphPin*> StaticSwitchValues, FNiagaraFunctionSignature& OutSig) const;
 
 	UNiagaraGraph* CloneGraphAndPrepareForCompilation(const UNiagaraScript* InScript, const UNiagaraScriptSource* InSource, bool bClearErrors);
 
 	bool ShouldInterpolateParameter(const FNiagaraVariable& Parameter);
 
+	void UpdateStaticSwitchConstants(UEdGraphNode* Node);
+
 	bool IsBulkSystemScript() const;
 	bool IsSpawnScript() const;
 	bool RequiresInterpolation() const;
-
-	/** If OutVar can be replaced by a literal constant, it's data is initialized with the correct value and we return true. Returns false otherwise. */
-	bool GetLiteralConstantVariable(FNiagaraVariable& OutVar) const;
 
 	/** Map of symbol names to count of times it's been used. Used for generating unique symbol names. */
 	TMap<FName, uint32> SymbolCounts;
@@ -622,4 +627,6 @@ private:
 	TArray<FNiagaraVariable> InitialNamespaceVariablesMissingDefault;
 	// Variables that need to be initialized in the body or at the end of spawn.
 	TArray<FNiagaraVariable> DeferredVariablesMissingDefault;
+
+	TMap<FName, TSet<FNiagaraFunctionSignature>> DataInterfaceRegisteredFunctions;
 };

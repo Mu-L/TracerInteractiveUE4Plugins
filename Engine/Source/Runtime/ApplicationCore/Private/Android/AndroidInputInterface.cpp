@@ -105,6 +105,9 @@ FAndroidInputInterface::FAndroidInputInterface(const TSharedRef< FGenericApplica
 	InitialButtonRepeatDelay = 0.2f;
 	ButtonRepeatDelay = 0.1f;
 
+	GConfig->GetFloat(TEXT("/Script/Engine.InputSettings"), TEXT("InitialButtonRepeatDelay"), InitialButtonRepeatDelay, GInputIni);
+	GConfig->GetFloat(TEXT("/Script/Engine.InputSettings"), TEXT("ButtonRepeatDelay"), ButtonRepeatDelay, GInputIni);
+
 	VibeIsOn = false;
 
 	for (int32 DeviceIndex = 0; DeviceIndex < MAX_NUM_CONTROLLERS; DeviceIndex++)
@@ -812,7 +815,7 @@ void FAndroidInputInterface::SendControllerEvents()
 						CurrentDevice.ButtonRemapping = ButtonRemapType::Normal;
 						CurrentDevice.LTAnalogRangeMinimum = 0.0f;
 						CurrentDevice.RTAnalogRangeMinimum = 0.0f;
-						CurrentDevice.bSupportsHat = false;
+						CurrentDevice.bSupportsHat = true;
 						CurrentDevice.bMapL1R1ToTriggers = false;
 						CurrentDevice.bMapZRZToTriggers = false;
 						CurrentDevice.bRightStickZRZ = true;
@@ -827,9 +830,11 @@ void FAndroidInputInterface::SendControllerEvents()
 							}
 							else if (CurrentDevice.DeviceInfo.Name.StartsWith(TEXT("Amazon Fire TV Remote")))
 							{
+								CurrentDevice.bSupportsHat = false;
 							}
 							else
 							{
+								CurrentDevice.bSupportsHat = false;
 							}
 						}
 						else if (CurrentDevice.DeviceInfo.Name.StartsWith(TEXT("NVIDIA Corporation NVIDIA Controller")))

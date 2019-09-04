@@ -35,6 +35,32 @@ namespace Gauntlet
 		static List<Action> InnerPostAbortHandlers = new List<Action>();
 		public static bool CancelSignalled { get; private set; }
 
+		/// <summary>
+		/// Get the worker id of this Gauntlet instance
+		/// returns -1 if instance is not a member of a worker group
+		/// </summary>
+		public static int WorkerID
+		{
+			get
+			{
+				int Default = -1;
+				return Params.ParseValue("workerid", Default);
+			}
+
+		}
+
+		/// <summary>
+		/// Returns true if Gauntlet instance is a member of a worker group
+		/// </summary>
+		public static bool IsWorker
+		{
+			get
+			{
+				return WorkerID != -1;
+			}
+		}
+
+
 		public static string TempDir
 		{
 			get
@@ -524,7 +550,7 @@ namespace Gauntlet
 			public static IEnumerable<Type> GetTypesInNamespaces<BaseType>(IEnumerable<string> Namespaces)
 				where BaseType : class
 			{
-				var AllTypes = Assembly.GetExecutingAssembly().GetTypes().Where(T => typeof(BaseType).IsAssignableFrom(T));
+				var AllTypes = AppDomain.CurrentDomain.GetAssemblies().SelectMany(S => S.GetTypes()).Where(T => typeof(BaseType).IsAssignableFrom(T));
 
 				if (Namespaces.Count() > 0)
 				{
@@ -707,9 +733,61 @@ namespace Gauntlet
 			/// </summary>
 			public enum CopyOptions
 			{
-				Copy		= (1 << 0),		// Normal copy & combine/overwrite
-				Mirror		= (1 << 1),		// copy + remove files from dest if not in src
+				Copy = (1 << 0),        // Normal copy & combine/overwrite
+				Mirror = (1 << 1),      // copy + remove files from dest if not in src
 				Default = Copy
+			}
+
+			/// <summary>
+			/// Options that can be specified to the CopyDirectory function.
+			/// </summary>
+			public class CopyDirectoryOptions
+			{
+				public CopyOptions Mode { get; set; }
+
+				public int Retries { get; set; }
+
+				public Func<string, string> Transform { get; set; }
+
+				public string Pattern { get; set; }
+
+				public Regex Regex { get; set; }
+
+				public bool Recursive { get; set; }
+
+				public bool Verbose { get; set; }
+
+				public CopyDirectoryOptions()
+				{
+					Mode = CopyOptions.Copy;
+					Retries = 10;
+					Transform = delegate (string s)
+					{
+						return s;
+					};
+					Pattern = "*";
+					Recursive = true;
+					Regex = null;
+					Verbose = false;
+				}
+
+				/// <summary>
+				/// Returns true if the pattern indicates entire directory should be copied
+				/// </summary>
+				public bool IsDirectoryPattern
+				{
+					get
+					{
+						return 
+							Regex == null &&
+							(
+								string.IsNullOrEmpty(Pattern)
+								|| Pattern.Equals("*")
+								|| Pattern.Equals("*.*")
+								|| Pattern.Equals("...")
+							);
+					}
+				}
 			}
 			
 			/// <summary>
@@ -719,9 +797,27 @@ namespace Gauntlet
 			/// <param name="DestDirPath"></param>
 			/// <param name="Options"></param>
 			/// <param name="RetryCount"></param>
-			public static void CopyDirectory(string SourceDirPath, string DestDirPath, CopyOptions Options = CopyOptions.Default, int RetryCount = 5)
+			public static void CopyDirectory(string SourceDirPath, string DestDirPath, CopyOptions Mode = CopyOptions.Default, int RetryCount = 5)
 			{
-				CopyDirectory(SourceDirPath, DestDirPath, Options, delegate (string s) { return s; }, RetryCount);
+				CopyDirectory(SourceDirPath, DestDirPath, Mode, delegate (string s) { return s; }, RetryCount);
+			}
+
+			/// <summary>
+			/// Legacy convenience function that exposes transform & Retry count
+			/// </summary>
+			/// <param name="SourceDirPath"></param>
+			/// <param name="DestDirPath"></param>
+			/// <param name="Mode"></param>
+			/// <param name="Transform"></param>
+			/// <param name="RetryCount"></param>
+			public static void CopyDirectory(string SourceDirPath, string DestDirPath, CopyOptions Mode, Func<string, string> Transform, int RetryCount = 5)
+			{
+				CopyDirectoryOptions Options = new CopyDirectoryOptions();
+				Options.Retries = RetryCount;
+				Options.Mode = Mode;
+				Options.Transform = Transform;
+
+				CopyDirectory(SourceDirPath, DestDirPath, Options);
 			}
 
 			/// <summary>
@@ -731,7 +827,7 @@ namespace Gauntlet
 			/// <param name="SourcePath"></param>
 			/// <param name="DestPath"></param>
 			/// <param name="Verbose"></param>
-			public static void CopyDirectory(string SourceDirPath, string DestDirPath, CopyOptions Options, Func<string, string> Transform, int RetryCount = 5)
+			public static void CopyDirectory(string SourceDirPath, string DestDirPath, CopyDirectoryOptions Options)
 			{
 				DateTime StartTime = DateTime.Now;
 				
@@ -742,24 +838,56 @@ namespace Gauntlet
 				{
 					DestDir = Directory.CreateDirectory(DestDir.FullName);
 				}
+				
+				bool IsMirroring = (Options.Mode & CopyOptions.Mirror) == CopyOptions.Mirror;
 
-				System.IO.FileInfo[] SourceFiles = SourceDir.GetFiles("*", SearchOption.AllDirectories);
-				System.IO.FileInfo[] DestFiles = DestDir.GetFiles("*", SearchOption.AllDirectories);
+				if (IsMirroring && !Options.IsDirectoryPattern)
+				{
+					Log.Warning("Can only use mirror with pattern that includes whole directories (e.g. '*')");
+					IsMirroring = false;
+				}
+
+				IEnumerable<FileInfo> SourceFiles = null;
+				FileInfo[] DestFiles = null;
+
+				// find all files. If a directory get them all, else use the pattern/regex
+				if (Options.IsDirectoryPattern)
+				{
+					SourceFiles = SourceDir.GetFiles("*", Options.Recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly);
+				}
+				else
+				{
+					if (Options.Regex == null)
+					{
+						SourceFiles = SourceDir.GetFiles(Options.Pattern, Options.Recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly);
+					}
+					else
+					{
+						SourceFiles = SourceDir.GetFiles("*", Options.Recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly);
+
+						SourceFiles = SourceFiles.Where(F => Options.Regex.IsMatch(F.Name));
+					}
+				}
 
 				// Convert dest into a map of relative paths to absolute
 				Dictionary<string, System.IO.FileInfo> DestStructure = new Dictionary<string, System.IO.FileInfo>();
 
-				foreach (FileInfo Info in DestFiles)
+				if (IsMirroring)
 				{
-					string RelativePath = Info.FullName.Replace(DestDir.FullName, "");
+					DestFiles = DestDir.GetFiles("*", SearchOption.AllDirectories);
 
-					// remove leading seperator
-					if (RelativePath.First() == Path.DirectorySeparatorChar)
+					foreach (FileInfo Info in DestFiles)
 					{
-						RelativePath = RelativePath.Substring(1);
-					}
+						string RelativePath = Info.FullName.Replace(DestDir.FullName, "");
 
-					DestStructure[RelativePath] = Info;
+						// remove leading seperator
+						if (RelativePath.First() == Path.DirectorySeparatorChar)
+						{
+							RelativePath = RelativePath.Substring(1);
+						}
+
+						DestStructure[RelativePath] = Info;
+					}
 				}
 
 				// List of relative-path files to copy to dest
@@ -778,9 +906,26 @@ namespace Gauntlet
 						SourceFilePath = SourceFilePath.Substring(1);
 					}
 
-					string DestFilePath = Transform(SourceFilePath);
+					string DestFilePath = Options.Transform(SourceFilePath);
 
-					if (DestStructure.ContainsKey(DestFilePath) == false)
+					FileInfo DestInfo = null;
+
+					// We may have destination info if mirroring where we prebuild it all, if not
+					// grab it now
+					if (DestStructure.ContainsKey(DestFilePath))
+					{
+						DestInfo = DestStructure[DestFilePath];
+					}
+					else
+					{
+						string FullDestPath = Path.Combine(DestDir.FullName, DestFilePath);
+						if (File.Exists(FullDestPath))
+						{
+							DestInfo = new FileInfo(FullDestPath);
+						}
+					}
+
+					if (DestInfo == null)
 					{
 						// No copy in dest, add it to the list
 						CopyList.Add(SourceFilePath);
@@ -788,7 +933,6 @@ namespace Gauntlet
 					else
 					{
 						// Check the file is the same version
-						FileInfo DestInfo = DestStructure[DestFilePath];
 
 						// Difference in ticks. Even though we set the dest to the src there still appears to be minute
 						// differences in ticks. 1ms is 10k ticks...
@@ -800,6 +944,17 @@ namespace Gauntlet
 						{
 							CopyList.Add(SourceFilePath);
 						}
+						else
+						{
+							if (Options.Verbose)
+							{
+								Log.Info("Will skip copy to {0}. File up to date.", DestInfo.FullName);
+							}
+							else
+							{
+								Log.Verbose("Will skip copy to {0}. File up to date.", DestInfo.FullName);
+							}
+						}
 
 						// Remove it from the map
 						DestStructure.Remove(DestFilePath);
@@ -807,7 +962,7 @@ namespace Gauntlet
 				}
 
 				// If set to mirror, delete all the files that were not in source
-				if ((Options & CopyOptions.Mirror) == CopyOptions.Mirror)
+				if (IsMirroring)
 				{
 					// Now go through the remaining map items and delete them
 					foreach (var Pair in DestStructure)
@@ -818,8 +973,15 @@ namespace Gauntlet
 					foreach (string RelativePath in DeletionList)
 					{
 						FileInfo DestInfo = new FileInfo(Path.Combine(DestDir.FullName, RelativePath));
-						
-						Log.Verbose("Deleting extra file {0}", DestInfo.FullName);
+
+						if (Options.Verbose)
+						{
+							Log.Info("Deleting extra file {0}", DestInfo.FullName);
+						}
+						else
+						{
+							Log.Verbose("Deleting extra file {0}", DestInfo.FullName);
+						}
 
 						try
 						{
@@ -844,7 +1006,14 @@ namespace Gauntlet
 						{
 							if (SubDir.GetFiles().Length == 0 && SubDir.GetDirectories().Length == 0)
 							{
-								Log.Verbose("Deleting empty dir {0}", SubDir.FullName);
+								if (Options.Verbose)
+								{
+									Log.Info("Deleting empty dir {0}", SubDir.FullName);
+								}
+								else
+								{
+									Log.Verbose("Deleting empty dir {0}", SubDir.FullName);
+								}
 
 								SubDir.Delete(true);
 							}
@@ -876,22 +1045,34 @@ namespace Gauntlet
 					// ensure path exists
 					string DestPath = Path.Combine(DestDir.FullName, RelativePath);
 
-					if (Transform != null)
+					if (Options.Transform != null)
 					{
-						DestPath = Transform(DestPath);
+						DestPath = Options.Transform(DestPath);
 					}
 
-					FileInfo DestInfo = new FileInfo(DestPath);
-					FileInfo SrcInfo = new FileInfo(Path.Combine(SourceDir.FullName, RelativePath));
+					string SourcePath = Path.Combine(SourceDir.FullName, RelativePath);
+					FileInfo DestInfo;
+					FileInfo SrcInfo;
+
+					// wrap FileInfo creation with exception handler as can throw and want informative error
+					try
+					{
+						DestInfo = new FileInfo(DestPath);
+						SrcInfo = new FileInfo(SourcePath);
+					}
+					catch (Exception Ex)
+					{
+						throw new Exception(string.Format("FileInfo creation failed for Source:{0}, Dest:{1}, with: {2}", SourcePath, DestPath, Ex.Message));
+					}
 
 					// ensure directory exists
 					DestInfo.Directory.Create();
 
 					string DestFile = DestInfo.FullName;
 
-					if (Transform != null)
+					if (Options.Transform != null)
 					{
-						DestFile = Transform(DestFile);
+						DestFile = Options.Transform(DestFile);
 					}
 
 					int Tries = 0;
@@ -901,7 +1082,14 @@ namespace Gauntlet
 					{
 						try
 						{
-							Log.Verbose("Copying to {0}", DestFile);
+							if (Options.Verbose)
+							{
+								Log.Info("Copying to {0}", DestFile);
+							}
+							else
+							{
+								Log.Verbose("Copying to {0}", DestFile);
+							}
 
 							SrcInfo.CopyTo(DestFile, true);
 
@@ -913,15 +1101,18 @@ namespace Gauntlet
 						}
 						catch (Exception ex)
 						{
-							if (Tries++ < RetryCount)
+							if (Tries++ < Options.Retries)
 							{
-								Log.Info("Copy to {0} failed, retrying {1} of {2} in 30 secs..", DestFile, Tries, RetryCount);
+								Log.Info("Copy to {0} failed, retrying {1} of {2} in 30 secs..", DestFile, Tries, Options.Retries);
 								// todo - make param..
 								Thread.Sleep(30000);
 							}
 							else
 							{
-								Log.Error("File Copy failed with {0}.", ex.Message);
+								using (var PauseEC = new ScopedSuspendECErrorParsing())
+								{
+									Log.Error("File Copy failed with {0}.", ex.Message);
+								}
 								throw new Exception(string.Format("File Copy failed with {0}.", ex.Message));
 							}
 						}
@@ -931,7 +1122,14 @@ namespace Gauntlet
 				TimeSpan Duration = DateTime.Now - StartTime;
 				if (Duration.TotalSeconds > 10)
 				{
-					Log.Verbose("Copied Directory in {0}", Duration.ToString(@"mm\m\:ss\s"));
+					if (Options.Verbose)
+					{
+						Log.Info("Copied Directory in {0}", Duration.ToString(@"mm\m\:ss\s"));
+					}
+					else
+					{
+						Log.Verbose("Copied Directory in {0}", Duration.ToString(@"mm\m\:ss\s"));
+					}
 				}
 
 				// remove cancel handler

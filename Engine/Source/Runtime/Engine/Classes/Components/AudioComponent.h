@@ -1,14 +1,14 @@
 // Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
-
-
 #pragma once
 
-#include "CoreMinimal.h"
-#include "UObject/ObjectMacros.h"
-#include "Engine/EngineTypes.h"
 #include "Components/SceneComponent.h"
+#include "CoreMinimal.h"
+#include "Engine/EngineTypes.h"
+#include "IAudioExtensionPlugin.h"
 #include "Sound/SoundAttenuation.h"
 #include "Sound/SoundWave.h"
+#include "UObject/ObjectMacros.h"
+#include "Math/RandomStream.h"
 
 #include "AudioComponent.generated.h"
 
@@ -16,6 +16,7 @@ class FAudioDevice;
 class USoundBase;
 class USoundClass;
 class USoundConcurrency;
+
 
 /** called when we finish playing audio, either because it played to completion or because a Stop() call turned it off early */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE( FOnAudioFinished );
@@ -35,7 +36,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnAudioPlaybackPercent, const clas
 /** shadow delegate declaration for above */
 DECLARE_MULTICAST_DELEGATE_ThreeParams(FOnAudioPlaybackPercentNative, const class UAudioComponent*, const class USoundWave*, const float);
 
-/** 
+/**
 * Called while a sound plays and returns the sound's envelope value (using an envelope follower in the audio renderer).
 * This only works in the audio mixer.
 */
@@ -73,7 +74,7 @@ struct FAudioComponentParam
 	// Value of the parameter when used as a boolean
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=AudioComponentParam)
 	bool BoolParam;
-	
+
 	// Value of the parameter when used as an integer
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=AudioComponentParam)
 	int32 IntParam;
@@ -336,6 +337,10 @@ public:
 	/** shadow delegate for non UObject subscribers */
 	FOnAudioMultiEnvelopeValueNative OnAudioMultiEnvelopeValueNative;
 
+	/** Modulation for the sound */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Modulation)
+	FSoundModulation Modulation;
+
 	/** Called when subtitles are sent to the SubtitleManager.  Set this delegate if you want to hijack the subtitles for other purposes */
 	UPROPERTY()
 	FOnQueueSubtitles OnQueueSubtitles;
@@ -371,11 +376,15 @@ public:
 
 	/** Start a sound playing on an audio component */
 	UFUNCTION(BlueprintCallable, Category="Audio|Components|Audio")
-	virtual void Play(float StartTime = 0.f);
+	virtual void Play(float StartTime = 0.0f);
 
-	/** Stop an audio component playing its sound cue, issue any delegates if needed */
+	/** Stop an audio component's sound, issue any delegates if needed */
 	UFUNCTION(BlueprintCallable, Category="Audio|Components|Audio")
 	virtual void Stop();
+
+	/** Cues request to stop sound after the provided delay, stopping immediately if delay is zero or negative */
+	UFUNCTION(BlueprintCallable, Category="Audio|Components|Audio")
+	void StopDelayed(float DelayTime);
 
 	/** Pause an audio component playing its sound cue, issue any delegates if needed */
 	UFUNCTION(BlueprintCallable, Category = "Audio|Components|Audio")
@@ -400,7 +409,7 @@ public:
 	/** Set a boolean instance parameter for use in sound cues played by this audio component */
 	UFUNCTION(BlueprintCallable, Category="Audio|Components|Audio", meta=(DisplayName="Set Boolean Parameter"))
 	void SetBoolParameter(FName InName, bool InBool);
-	
+
 	/** Set an integer instance parameter for use in sound cues played by this audio component */
 	UFUNCTION(BlueprintCallable, Category="Audio|Components|Audio", meta=(DisplayName="Set Integer Parameter"))
 	void SetIntParameter(FName InName, int32 InInt);
@@ -425,6 +434,16 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Audio|Components|Audio")
 	void SetSubmixSend(USoundSubmix* Submix, float SendLevel);
 
+	/** Sets how much audio the sound should send to the given Source Bus (PRE Source Effects).
+		if the Bus Send doesn't already exist, it will be added to the overrides on the active sound */
+	UFUNCTION(BlueprintCallable, Category = "Audio|Components|Audio")
+	void SetSourceBusSendPreEffect(USoundSourceBus* SoundSourceBus, float SourceBusSendLevel);
+
+	/** Sets how much audio the sound should send to the given Source Bus (POST Source Effects).
+		if the Bus Send doesn't already exist, it will be added to the overrides on the active sound */
+	UFUNCTION(BlueprintCallable, Category = "Audio|Components|Audio")
+	void SetSourceBusSendPostEffect(USoundSourceBus* SoundSourceBus, float SourceBusSendLevel);
+
 	/** Sets whether or not the low pass filter is enabled on the audio component. */
 	UFUNCTION(BlueprintCallable, Category = "Audio|Components|Audio")
 	void SetLowPassFilterEnabled(bool InLowPassFilterEnabled);
@@ -441,19 +460,46 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Audio|Components|Audio")
 	bool HasCookedAmplitudeEnvelopeData() const;
 
-	/** Returns the current cooked spectral data of the playing audio component. Returns true if there is data and the audio component is playing. */
+	/**
+	* Retrieves the current-time cooked spectral data of the sounds playing on the audio component.
+	* Spectral data is averaged and interpolated for all playing sounds on this audio component.
+	* Returns true if there is data and the audio component is playing.
+	*/
 	UFUNCTION(BlueprintCallable, Category = "Audio|Components|Audio")
 	bool GetCookedFFTData(const TArray<float>& FrequenciesToGet, TArray<FSoundWaveSpectralData>& OutSoundWaveSpectralData);
 
-	/** Returns the current cooked envelope data of the playing audio component. Returns true if there is data and the audio component is playing. */
+	/**
+	* Retrieves the current-time cooked spectral data of the sounds playing audio component.
+	* Spectral data is not averaged or interpolated. Instead an array of data with all playing sound waves with cooked data is returned.
+	* Returns true if there is data and the audio component is playing.
+	*/
+	UFUNCTION(BlueprintCallable, Category = "Audio|Components|Audio")
+	bool GetCookedFFTDataForAllPlayingSounds(TArray<FSoundWaveSpectralDataPerSound>& OutSoundWaveSpectralData);
+
+	/**
+	* Retrieves the current-time cooked envelope data of the playing audio component.
+	* Cooked data is interpolated and averaged across all playing sound waves.
+	* Returns true if there is data and the audio component is playing.
+	*/
 	UFUNCTION(BlueprintCallable, Category = "Audio|Components|Audio")
 	bool GetCookedEnvelopeData(float& OutEnvelopeData);
+
+	/**
+	* Retrieves the current-time envelope data of the sounds playing audio component.
+	* Envelope data is not averaged or interpolated. Instead an array of data with all playing sound waves with cooked data is returned.
+	* Returns true if there is data and the audio component is playing.
+	*/
+	UFUNCTION(BlueprintCallable, Category = "Audio|Components|Audio")
+	bool GetCookedEnvelopeDataForAllPlayingSounds(TArray<FSoundWaveEnvelopeDataPerSound>& OutEnvelopeData);
 
 	static void PlaybackCompleted(uint64 AudioComponentID, bool bFailedToStart);
 
 private:
 	/** Called by the ActiveSound to inform the component that playback is finished */
 	void PlaybackCompleted(bool bFailedToStart);
+
+	/** Whether or not the sound is audible. */
+	bool IsInAudibleRange(float* OutMaxDistance) const;
 
 public:
 
@@ -482,6 +528,8 @@ public:
 	virtual const UObject* AdditionalStatObject() const override;
 	virtual bool IsReadyForOwnerToAutoDestroy() const override;
 	//~ End ActorComponent Interface.
+
+	void AdjustVolumeInternal(float AdjustVolumeDuration, float AdjustVolumeLevel, bool bIsFadeOut);
 
 	/** Returns a pointer to the attenuation settings to be used (if any) for this audio component dependent on the SoundAttenuation asset or overrides set. */
 	const FSoundAttenuationSettings* GetAttenuationSettingsToApply() const;
@@ -526,6 +574,9 @@ private:
 
 	uint64 AudioComponentID;
 
+	float RetriggerTimeSinceLastUpdate;
+	float RetriggerUpdateInterval;
+
 	/** Saved relative transform before auto attachement. Used during detachment to restore the transform if we had automatically attached. */
 	FVector SavedAutoAttachRelativeLocation;
 	FRotator SavedAutoAttachRelativeRotation;
@@ -564,12 +615,12 @@ protected:
 	/** Utility function called by Play and FadeIn to start a sound playing. */
 	void PlayInternal(const float StartTime = 0.f, const float FadeInDuration = 0.f, const float FadeVolumeLevel = 1.f);
 
-private:
-	
 #if WITH_EDITORONLY_DATA
 	/** Utility function that updates which texture is displayed on the sprite dependent on the properties of the Audio Component. */
 	void UpdateSpriteTexture();
 #endif
+
+	FRandomStream RandomStream;
 
 	static uint64 AudioComponentIDCounter;
 	static TMap<uint64, UAudioComponent*> AudioIDToComponentMap;

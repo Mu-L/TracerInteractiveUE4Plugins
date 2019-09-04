@@ -147,7 +147,7 @@ namespace LocalizationConfigurationScript
 		GenerateImportDialogueScriptConfigFile(Target).WriteWithSCC(GetImportDialogueScriptConfigPath(Target));
 		GenerateExportDialogueScriptConfigFile(Target).WriteWithSCC(GetExportDialogueScriptConfigPath(Target));
 		GenerateImportDialogueConfigFile(Target).WriteWithSCC(GetImportDialogueConfigPath(Target));
-		GenerateCompileTextConfigFile(Target).Write(GetCompileTextConfigPath(Target));
+		GenerateCompileTextConfigFile(Target).WriteWithSCC(GetCompileTextConfigPath(Target));
 		GenerateWordCountReportConfigFile(Target).WriteWithSCC(GetWordCountReportConfigPath(Target));
 	}
 
@@ -1068,6 +1068,8 @@ namespace LocalizationConfigurationScript
 			ConfigSection.Add( TEXT("ResourceName"), GetLocResFileName(Target) );
 
 			ConfigSection.Add( TEXT("bSkipSourceCheck"), Target->Settings.CompileSettings.SkipSourceCheck ? TEXT("true") : TEXT("false") );
+			ConfigSection.Add( TEXT("bValidateFormatPatterns"), Target->Settings.CompileSettings.ValidateFormatPatterns ? TEXT("true") : TEXT("false") );
+			ConfigSection.Add( TEXT("bValidateSafeWhitespace"), Target->Settings.CompileSettings.ValidateSafeWhitespace ? TEXT("true") : TEXT("false") );
 
 			if (Target->Settings.SupportedCulturesStatistics.IsValidIndex(Target->Settings.NativeCultureIndex))
 			{

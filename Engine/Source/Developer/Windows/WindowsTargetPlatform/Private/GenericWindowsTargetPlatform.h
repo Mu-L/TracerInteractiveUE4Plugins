@@ -37,7 +37,7 @@ public:
 		// only add local device if actually running on Windows
 		LocalDevice = MakeShareable(new TLocalPcTargetDevice<PLATFORM_64BITS>(*this));
 #endif
-		
+
 	#if WITH_ENGINE
 		FConfigCacheIni::LoadLocalIniFile(EngineSettings, TEXT("Engine"), true, *this->PlatformName());
 		TextureLODSettings = nullptr; // These are registered by the device profile system.
@@ -89,8 +89,8 @@ public:
 		static FName NAME_SF_VULKAN_ES31(TEXT("SF_VULKAN_ES31"));
 		static FName NAME_OPENGL_150_ES2(TEXT("GLSL_150_ES2"));
 		static FName NAME_OPENGL_150_ES3_1(TEXT("GLSL_150_ES31"));
-		bRequiresEncodedHDRReflectionCaptures =	TargetedShaderFormats.Contains(NAME_SF_VULKAN_ES31) 
-												 || TargetedShaderFormats.Contains(NAME_OPENGL_150_ES2) 
+		bRequiresEncodedHDRReflectionCaptures =	TargetedShaderFormats.Contains(NAME_SF_VULKAN_ES31)
+												 || TargetedShaderFormats.Contains(NAME_OPENGL_150_ES2)
 												 || TargetedShaderFormats.Contains(NAME_OPENGL_150_ES3_1);
 	#endif
 	}
@@ -110,7 +110,7 @@ public:
 		}
 	}
 
-	virtual bool GenerateStreamingInstallManifest(const TMultiMap<FString, int32>& ChunkMap, const TSet<int32>& ChunkIDsInUse) const override
+	virtual bool GenerateStreamingInstallManifest(const TMultiMap<FString, int32>& PakchunkMap, const TSet<int32>& PakchunkIndicesInUse) const override
 	{
 		return true;
 	}
@@ -237,7 +237,7 @@ public:
 		// Gather the list of Target RHIs and filter out any that may be invalid.
 		TArray<FName> PossibleShaderFormats;
 		GetAllPossibleShaderFormats(PossibleShaderFormats);
-		
+
 		for (int32 ShaderFormatIdx = TargetedShaderFormats.Num() - 1; ShaderFormatIdx >= 0; ShaderFormatIdx--)
 		{
 			FString ShaderFormat = TargetedShaderFormats[ShaderFormatIdx];
@@ -257,12 +257,11 @@ public:
 		return StaticMeshLODSettings;
 	}
 
-	virtual void GetTextureFormats( const UTexture* InTexture, TArray<FName>& OutFormats ) const override
+	virtual void GetTextureFormats( const UTexture* InTexture, TArray< TArray<FName> >& OutFormats) const override
 	{
 		if (!IS_DEDICATED_SERVER)
 		{
-			FName TextureFormatName = GetDefaultTextureFormatName(this, InTexture, EngineSettings, bSupportDX11TextureFormats, bSupportCompressedVolumeTexture);
-			OutFormats.Add(TextureFormatName);
+			GetDefaultTextureFormatNamePerLayer(OutFormats.AddDefaulted_GetRef(), this, InTexture, EngineSettings, bSupportDX11TextureFormats, bSupportCompressedVolumeTexture);
 		}
 	}
 
@@ -406,9 +405,16 @@ public:
 
 	virtual FName GetWaveFormat( const class USoundWave* Wave ) const override
 	{
-		static FName NAME_OGG(TEXT("OGG"));
-		static FName NAME_OPUS(TEXT("OPUS"));
-		
+		static const FName NAME_ADPCM(TEXT("ADPCM"));
+		static const FName NAME_OGG(TEXT("OGG"));
+		static const FName NAME_OPUS(TEXT("OPUS"));
+
+		// Seekable streams need to pick a codec which allows fixed-sized frames so we can compute stream chunk index to load
+		if (Wave->IsSeekableStreaming())
+		{
+			return NAME_ADPCM;
+		}
+
 #if !USE_VORBIS_FOR_STREAMING
 		if (Wave->IsStreaming())
 		{
@@ -421,8 +427,11 @@ public:
 
 	virtual void GetAllWaveFormats(TArray<FName>& OutFormats) const override
 	{
+		static const FName NAME_ADPCM(TEXT("ADPCM"));
 		static FName NAME_OGG(TEXT("OGG"));
 		static FName NAME_OPUS(TEXT("OPUS"));
+
+		OutFormats.Add(NAME_ADPCM);
 		OutFormats.Add(NAME_OGG);
 		OutFormats.Add(NAME_OPUS);
 	}

@@ -106,7 +106,7 @@ public:
 
 	void SetParameters(const FRenderingCompositePassContext& Context, const FRCPassPostProcessUpscale::PaniniParams& InPaniniConfig)
 	{
-		const FVertexShaderRHIParamRef ShaderRHI = GetVertexShader();
+		FRHIVertexShader* ShaderRHI = GetVertexShader();
 
 		FGlobalShader::SetParameters<FViewUniformShaderParameters>(Context.RHICmdList, ShaderRHI, Context.View.ViewUniformBuffer);
 
@@ -181,11 +181,11 @@ public:
 	template <typename TRHICmdList>
 	void SetPS(TRHICmdList& RHICmdList, const FRenderingCompositePassContext& Context)
 	{
-		const FPixelShaderRHIParamRef ShaderRHI = GetPixelShader();
+		FRHIPixelShader* ShaderRHI = GetPixelShader();
 		
 		FGlobalShader::SetParameters<FViewUniformShaderParameters>(RHICmdList, ShaderRHI, Context.View.ViewUniformBuffer);
 
-		FSamplerStateRHIParamRef FilterTable[2];
+		FRHISamplerState* FilterTable[2];
 		FilterTable[0] = TStaticSamplerState<SF_Bilinear,AM_Clamp,AM_Clamp,AM_Clamp>::GetRHI();
 		FilterTable[1] = TStaticSamplerState<SF_Point,AM_Clamp,AM_Clamp,AM_Clamp>::GetRHI();
 			
@@ -417,10 +417,11 @@ void FRCPassPostProcessUpscale::Process(FRenderingCompositePassContext& Context)
 
 		if (bIsMobileRenderer && RHINeedsToSwitchVerticalAxis(GShaderPlatformForFeatureLevel[Context.GetFeatureLevel()]))
 		{
-			// Move dest rect on y axis as we're rendering directly onto the ogl backbuffer.
-			const int32 OutputTargetHeight = PassOutputs[0].RenderTargetDesc.Extent.Y;
-			int32 NewMaxY = OutputTargetHeight - DestRect.Min.Y;
-			DestRect.Min.Y = OutputTargetHeight - DestRect.Max.Y;
+			// Get get this from the pooled targets as this may have been overridden.
+			FIntPoint DestSize = PassOutputs[0].PooledRenderTarget->GetDesc().Extent;
+			// Move dest rect on y axis as we're rendering directly onto the ogl backbuffer
+			int32 NewMaxY = DestSize.Y - DestRect.Min.Y;
+			DestRect.Min.Y = DestSize.Y - DestRect.Max.Y;
 			DestRect.Max.Y = NewMaxY;
 		}
 

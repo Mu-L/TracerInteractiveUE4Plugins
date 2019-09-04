@@ -173,7 +173,7 @@ namespace UnrealBuildTool
 		{
 			List<FileItem> NewCPPFiles = new List<FileItem>();
 
-			UEBuildPlatform BuildPlatform = UEBuildPlatform.GetBuildPlatformForCPPTargetPlatform(CompileEnvironment.Platform);
+			UEBuildPlatform BuildPlatform = UEBuildPlatform.GetBuildPlatform(CompileEnvironment.Platform);
 
 			// Figure out size of all input files combined. We use this to determine whether to use larger unity threshold or not.
 			long TotalBytesInCPPFiles = CPPFiles.Sum(F => F.Length);
@@ -321,7 +321,7 @@ namespace UnrealBuildTool
 				// Add source files to the unity file
 				foreach (FileItem CPPFile in UnityFile.Files)
 				{
-					OutputUnityCPPWriter.WriteLine("#include \"{0}\"", CPPFile.AbsolutePath);
+					OutputUnityCPPWriter.WriteLine("#include \"{0}\"", CPPFile.AbsolutePath.Replace('\\', '/'));
 				}
 
 				// Determine unity file path name

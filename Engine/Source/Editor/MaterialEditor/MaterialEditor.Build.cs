@@ -41,14 +41,14 @@ public class MaterialEditor : ModuleRules
 				"GraphEditor",
                 "AdvancedPreviewScene",
                 "Projects",
-
+                "AssetRegistry",
+				"MainFrame",
 			}
 		);
 
 		DynamicallyLoadedModuleNames.AddRange(
 			new string[] {
 				"AssetTools",
-				"MainFrame",
 				"SceneOutliner",
 				"ClassViewer",
 				"ContentBrowser",

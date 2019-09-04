@@ -22,7 +22,7 @@ DEFINE_LOG_CATEGORY_STATIC(LogImageUtils, Log, All);
 
 #define LOCTEXT_NAMESPACE "ImageUtils"
 
-static bool GetRawData(UTextureRenderTarget2D* TexRT, TArray<uint8>& RawData)
+static bool GetRawData(UTextureRenderTarget2D* TexRT, TArray64<uint8>& RawData)
 {
 	FRenderTarget* RenderTarget = TexRT->GameThread_GetRenderTargetResource();
 	EPixelFormat Format = TexRT->GetFormat();
@@ -61,10 +61,29 @@ static bool GetRawData(UTextureRenderTarget2D* TexRT, TArray<uint8>& RawData)
  * @param DstData		Destination image data.
  * @param bLinearSpace	If true, convert colors into linear space before interpolating (slower but more accurate)
  */
-void FImageUtils::ImageResize(int32 SrcWidth, int32 SrcHeight, const TArray<FColor> &SrcData, int32 DstWidth, int32 DstHeight, TArray<FColor> &DstData, bool bLinearSpace )
+void FImageUtils::ImageResize(int32 SrcWidth, int32 SrcHeight, const TArray<FColor> &SrcData, int32 DstWidth, int32 DstHeight, TArray<FColor> &DstData, bool bLinearSpace)
 {
 	DstData.Empty(DstWidth*DstHeight);
 	DstData.AddZeroed(DstWidth*DstHeight);
+
+	ImageResize(SrcWidth, SrcHeight, TArrayView<const FColor>(SrcData), DstWidth, DstHeight, TArrayView<FColor>(DstData), bLinearSpace);
+}
+
+/**
+ * Resizes the given image using a simple average filter and stores it in the destination array.  This version constrains aspect ratio.
+ * Accepts TArrayViews but requires that DstData be pre-sized appropriately
+ *
+ * @param SrcWidth	Source image width.
+ * @param SrcHeight	Source image height.
+ * @param SrcData	Source image data.
+ * @param DstWidth	Destination image width.
+ * @param DstHeight Destination image height.
+ * @param DstData	Destination image data. (must already be sized to DstWidth*DstHeight)
+ */
+void FImageUtils::ImageResize(int32 SrcWidth, int32 SrcHeight, const TArrayView<const FColor> &SrcData, int32 DstWidth, int32 DstHeight, const TArrayView<FColor> &DstData, bool bLinearSpace)
+{
+	check(SrcData.Num() >= SrcWidth * SrcHeight);
+	check(DstData.Num() >= DstWidth * DstHeight);
 
 	float SrcX = 0;
 	float SrcY = 0;
@@ -356,7 +375,7 @@ public:
 		Size = RenderTarget->GetSizeXY();
 		Format = TexRT->GetFormat();
 
-		TArray<uint8> RawData;
+		TArray64<uint8> RawData;
 		bool bReadSuccess = GetRawData(TexRT, RawData);
 		if (bReadSuccess)
 		{
@@ -376,7 +395,7 @@ public:
 	{
 		check(Texture != nullptr);
 		bool bReadSuccess = true;
-		TArray<uint8> RawData;
+		TArray64<uint8> RawData;
 
 #if WITH_EDITORONLY_DATA
 		Size = FIntPoint(Texture->Source.GetSizeX(), Texture->Source.GetSizeY());
@@ -460,7 +479,7 @@ public:
 		check(TexCube != nullptr);
 
 		// Generate 2D image.
-		TArray<uint8> RawData;
+		TArray64<uint8> RawData;
 		bool bUnwrapSuccess = CubemapHelpers::GenerateLongLatUnwrap(TexCube, RawData, Size, Format);
 		bool bAcceptableFormat = (Format == PF_B8G8R8A8 || Format == PF_FloatRGBA);
 		if (bUnwrapSuccess == false || bAcceptableFormat == false)
@@ -485,7 +504,7 @@ public:
 		check(TexCube != nullptr);
 
 		// Generate 2D image.
-		TArray<uint8> RawData;
+		TArray64<uint8> RawData;
 		bool bUnwrapSuccess = CubemapHelpers::GenerateLongLatUnwrap(TexCube, RawData, Size, Format);
 		bool bAcceptableFormat = (Format == PF_B8G8R8A8 || Format == PF_FloatRGBA);
 		if (bUnwrapSuccess == false || bAcceptableFormat == false)
@@ -607,7 +626,7 @@ private:
 		Ar.Serialize(Header, Len);
 	}
 
-	void WriteHDRImage(const TArray<uint8>& RawData, FArchive& Ar)
+	void WriteHDRImage(const TArray64<uint8>& RawData, FArchive& Ar)
 	{
 		WriteHDRHeader(Ar);
 		if (Format == PF_FloatRGBA)
@@ -673,7 +692,7 @@ bool FImageUtils::ExportRenderTarget2DAsPNG(UTextureRenderTarget2D* TexRT, FArch
 		FRenderTarget* RenderTarget = TexRT->GameThread_GetRenderTargetResource();
 		FIntPoint Size = RenderTarget->GetSizeXY();
 
-		TArray<uint8> RawData;
+		TArray64<uint8> RawData;
 		bSuccess = GetRawData(TexRT, RawData);
 
 		IImageWrapperModule& ImageWrapperModule = FModuleManager::Get().LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
@@ -699,7 +718,7 @@ ENGINE_API bool FImageUtils::ExportRenderTarget2DAsEXR(UTextureRenderTarget2D* T
 		FRenderTarget* RenderTarget = TexRT->GameThread_GetRenderTargetResource();
 		FIntPoint Size = RenderTarget->GetSizeXY();
 
-		TArray<uint8> RawData;
+		TArray64<uint8> RawData;
 		bSuccess = GetRawData(TexRT, RawData);
 
 		int32 BitsPerPixel = TexRT->GetFormat() == PF_B8G8R8A8 ? 8 : (sizeof(FFloat16Color) / 4) * 8;

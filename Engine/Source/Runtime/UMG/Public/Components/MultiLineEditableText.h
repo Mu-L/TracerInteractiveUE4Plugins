@@ -41,7 +41,7 @@ public:
 public:
 
 	/** The style */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Style", meta=(ShowOnlyInnerProperties))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, BlueprintSetter=SetWidgetStyle, Category="Style", meta=(ShowOnlyInnerProperties))
 	FTextBlockStyle WidgetStyle;
 
 	/** Sets whether this text block can be modified interactively by the user */
@@ -80,7 +80,7 @@ public:
 	UPROPERTY(EditAnywhere, Category=Behavior, AdvancedDisplay)
 	EVirtualKeyboardDismissAction VirtualKeyboardDismissAction;
 
-	/** Called whenever the text is changed interactively by the user */
+	/** Called whenever the text is changed programmatically or interactively by the user */
 	UPROPERTY(BlueprintAssignable, Category="Widget Event", meta=(DisplayName="OnTextChanged (Multi-Line Editable Text)"))
 	FOnMultiLineEditableTextChangedEvent OnTextChanged;
 
@@ -98,8 +98,19 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Widget", meta=(DisplayName="SetText (Multi-Line Editable Text)"))
 	void SetText(FText InText);
 
+	/**  */
+	UFUNCTION(BlueprintCallable, Category="Widget", meta=(DisplayName="GetHintText (Multi-Line Editable Text)"))
+	FText GetHintText() const;
+
+	/**  */
+	UFUNCTION(BlueprintCallable, Category="Widget", meta=(DisplayName="SetHintText (Multi-Line Editable Text)"))
+	void SetHintText(FText InHintText);
+
 	UFUNCTION(BlueprintCallable, Category="Widget", meta=(DisplayName="SetIsReadOnly (Multi-Line Editable Text"))
 	void SetIsReadOnly(bool bReadOnly);
+
+	UFUNCTION(BlueprintSetter)
+	void SetWidgetStyle(const FTextBlockStyle& InWidgetStyle);
 	
 	//~ Begin UWidget Interface
 	virtual void SynchronizeProperties() override;

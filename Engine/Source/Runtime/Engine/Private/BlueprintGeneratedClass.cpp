@@ -116,11 +116,6 @@ void UBlueprintGeneratedClass::PostLoad()
 			}
 		}
 
-		if (Package && Package->HasAnyPackageFlags(PKG_ForDiffing))
-		{
-			ClassFlags |= CLASS_Deprecated;
-		}
-
 #if UE_BLUEPRINT_EVENTGRAPH_FASTCALLS
 		// Patch the fast calls (needed as we can't bump engine version to serialize it directly in UFunction right now)
 		for (const FEventGraphFastCallPair& Pair : FastCallPairs_DEPRECATED)
@@ -304,13 +299,14 @@ UObject* UBlueprintGeneratedClass::GetArchetypeForCDO() const
 }
 #endif //WITH_EDITOR
 
-void UBlueprintGeneratedClass::SerializeDefaultObject(UObject* Object, FArchive& Ar)
+void UBlueprintGeneratedClass::SerializeDefaultObject(UObject* Object, FStructuredArchive::FSlot Slot)
 {
 	FScopeLock SerializeAndPostLoadLock(&SerializeAndPostLoadCritical);
+	FArchive& UnderlyingArchive = Slot.GetUnderlyingArchive();
 
-	Super::SerializeDefaultObject(Object, Ar);
+	Super::SerializeDefaultObject(Object, Slot);
 
-	if (Ar.IsLoading() && !Ar.IsObjectReferenceCollector() && Object == ClassDefaultObject)
+	if (UnderlyingArchive.IsLoading() && !UnderlyingArchive.IsObjectReferenceCollector() && Object == ClassDefaultObject)
 	{
 		// On load, build the custom property list used in post-construct initialization logic. Note that in the editor, this will be refreshed during compile-on-load.
 		// @TODO - Potentially make this serializable (or cooked data) to eliminate the slight load time cost we'll incur below to generate this list in a cooked build. For now, it's not serialized since the raw UProperty references cannot be saved out.
@@ -319,7 +315,7 @@ void UBlueprintGeneratedClass::SerializeDefaultObject(UObject* Object, FArchive&
 		const FString BPGCName = GetName();
 		auto BuildCachedPropertyDataLambda = [BPGCName](FBlueprintCookedComponentInstancingData& CookedData, UActorComponent* SourceTemplate, FString CompVarName)
 		{
-			if (CookedData.bIsValid)
+			if (CookedData.bHasValidCookedData)
 			{
 				// This feature requires EDL at cook time, so ensure that the source template is also fully loaded at this point.
 				if (SourceTemplate != nullptr
@@ -333,7 +329,7 @@ void UBlueprintGeneratedClass::SerializeDefaultObject(UObject* Object, FArchive&
 					UE_LOG(LogBlueprint, Warning, TEXT("BPComp fast path (%s.%s) : Invalid source template. Will use slow path for dynamic instancing."), *BPGCName, *CompVarName);
 
 					// Invalidate the cooked data so that we fall back to using the slow path when dynamically instancing this node.
-					CookedData.bIsValid = false;
+					CookedData.bHasValidCookedData = false;
 				}
 			}
 		};
@@ -684,7 +680,7 @@ void UBlueprintGeneratedClass::InitArrayPropertyFromCustomList(const UArrayPrope
 	}
 }
 
-bool UBlueprintGeneratedClass::IsFunctionImplementedInBlueprint(FName InFunctionName) const
+bool UBlueprintGeneratedClass::IsFunctionImplementedInScript(FName InFunctionName) const
 {
 	UFunction* Function = FindFunctionByName(InFunctionName);
 	return Function && Function->GetOuter() && Function->GetOuter()->IsA(UBlueprintGeneratedClass::StaticClass());
@@ -1004,7 +1000,6 @@ void UBlueprintGeneratedClass::CreateTimelineComponent(AActor* Actor, const UTim
 {
 	if (!Actor
 		|| !TimelineTemplate
-		|| !TimelineTemplate->bValidatedAsWired
 		|| Actor->IsTemplate()
 		|| Actor->IsPendingKill())
 	{
@@ -1132,7 +1127,7 @@ void UBlueprintGeneratedClass::CreateComponentsForActor(const UClass* ThisClass,
 		for (UTimelineTemplate* TimelineTemplate : BPGC->Timelines)
 		{
 			// Not fatal if NULL, but shouldn't happen and ignored if not wired up in graph
-			if (TimelineTemplate && TimelineTemplate->bValidatedAsWired)
+			if (TimelineTemplate)
 			{
 				CreateTimelineComponent(Actor, TimelineTemplate);
 			}
@@ -1144,7 +1139,7 @@ void UBlueprintGeneratedClass::CreateComponentsForActor(const UClass* ThisClass,
 		{
 			const UTimelineTemplate* TimelineTemplate = Cast<const UTimelineTemplate>(MiscObj);
 			// Not fatal if NULL, but shouldn't happen and ignored if not wired up in graph
-			if (TimelineTemplate && TimelineTemplate->bValidatedAsWired)
+			if (TimelineTemplate)
 			{
 				CreateTimelineComponent(Actor, TimelineTemplate);
 			}
@@ -1200,7 +1195,7 @@ void UBlueprintGeneratedClass::CheckAndApplyComponentTemplateOverrides(UObject* 
 						if (ComponentKey.IsValid() && ComponentKey.IsSCSKey())
 						{
 							const FBlueprintCookedComponentInstancingData* OverrideData = ICH->GetOverridenComponentTemplateData(ComponentKey);
-							if (OverrideData != nullptr && OverrideData->bIsValid)
+							if (OverrideData != nullptr && OverrideData->bHasValidCookedData)
 							{
 								// This is the instance of the inherited component subobject that's owned by the given class default object
 								if (UObject* NativizedComponentSubobjectInstance = InClassDefaultObject->GetDefaultSubobjectByName(NativizedComponentSubobjectName))
@@ -1629,6 +1624,13 @@ void UBlueprintGeneratedClass::Serialize(FArchive& Ar)
 	if (Ar.IsLoading() && 0 == (Ar.GetPortFlags() & PPF_Duplicate))
 	{
 		CreatePersistentUberGraphFrame(ClassDefaultObject, true);
+
+		UPackage* Package = GetOutermost();
+		if (Package && Package->HasAnyPackageFlags(PKG_ForDiffing))
+		{
+			// If this is a diff package, set class to deprecated. This happens here to make sure it gets hit in all load cases
+			ClassFlags |= CLASS_Deprecated;
+		}
 	}
 }
 
@@ -1776,7 +1778,7 @@ void FBlueprintCookedComponentInstancingData::BuildCachedPropertyDataFromTemplat
 		}
 	};
 
-	checkSlow(bIsValid);
+	checkSlow(bHasValidCookedData);
 	checkSlow(SourceTemplate != nullptr);
 	checkSlow(!SourceTemplate->HasAnyFlags(RF_NeedLoad));
 

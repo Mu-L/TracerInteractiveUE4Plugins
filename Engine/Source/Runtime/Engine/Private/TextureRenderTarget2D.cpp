@@ -12,6 +12,7 @@
 #include "DeviceProfiles/DeviceProfile.h"
 #include "DeviceProfiles/DeviceProfileManager.h"
 #include "UObject/RenderingObjectVersion.h"
+#include "GenerateMips.h"
 
 int32 GTextureRenderTarget2DMaxSizeX = 999999999;
 int32 GTextureRenderTarget2DMaxSizeY = 999999999;
@@ -30,6 +31,9 @@ UTextureRenderTarget2D::UTextureRenderTarget2D(const FObjectInitializer& ObjectI
 	ClearColor = FLinearColor(0.0f, 0.0f, 0.0f, 1.0f);
 	OverrideFormat = PF_Unknown;
 	bForceLinearGamma = true;
+	MipsSamplerFilter = Filter;
+	MipsAddressU = TA_Clamp;
+	MipsAddressV = TA_Clamp;
 }
 
 FTextureResource* UTextureRenderTarget2D::CreateResource()
@@ -49,6 +53,11 @@ FTextureResource* UTextureRenderTarget2D::CreateResource()
 	if (bAutoGenerateMips)
 	{
 		NumMips = FGenericPlatformMath::CeilToInt(FGenericPlatformMath::Log2(FGenericPlatformMath::Max(SizeX, SizeY)));
+
+		if (RHIRequiresComputeGenerateMips())
+		{
+			bCanCreateUAV = 1;
+		}
 	}
 	else
 	{
@@ -213,14 +222,6 @@ void UTextureRenderTarget2D::PostLoad()
 {
 	float OriginalSizeX = SizeX;
 	float OriginalSizeY = SizeY;
-	
-	if (!FPlatformProperties::SupportsWindowedMode())
-	{
-		// Clamp the render target size in order to avoid reallocating the scene render targets,
-		// before the FTextureRenderTarget2DResource() is created in Super::PostLoad().
-		SizeX = FMath::Min<int32>(SizeX, GSystemResolution.ResX);
-		SizeY = FMath::Min<int32>(SizeY, GSystemResolution.ResY);
-	}
 
 	SizeX = FMath::Min<int32>(SizeX, GTextureRenderTarget2DMaxSizeX);
 	SizeY = FMath::Min<int32>(SizeY, GTextureRenderTarget2DMaxSizeY);
@@ -493,7 +494,7 @@ void FTextureRenderTarget2DResource::ReleaseDynamicRHI()
 	// release the FTexture RHI resources here as well
 	ReleaseRHI();
 
-	RHIUpdateTextureReference(Owner->TextureReference.TextureReferenceRHI,FTextureRHIParamRef());
+	RHIUpdateTextureReference(Owner->TextureReference.TextureReferenceRHI, nullptr);
 	Texture2DRHI.SafeRelease();
 	RenderTargetTextureRHI.SafeRelease();	
 
@@ -501,6 +502,7 @@ void FTextureRenderTarget2DResource::ReleaseDynamicRHI()
 	RemoveFromDeferredUpdateList();
 }
 
+#include "SceneUtils.h"
 /**
  * Updates (resolves) the render target texture.
  * Optionally clears the contents of the render target to green.
@@ -508,6 +510,7 @@ void FTextureRenderTarget2DResource::ReleaseDynamicRHI()
  */
 void FTextureRenderTarget2DResource::UpdateDeferredResource( FRHICommandListImmediate& RHICmdList, bool bClearRenderTarget/*=true*/ )
 {
+	SCOPED_DRAW_EVENT(RHICmdList, GPUResourceUpdate)
 	RemoveFromDeferredUpdateList();
 
  	// clear the target surface to green
@@ -524,7 +527,12 @@ void FTextureRenderTarget2DResource::UpdateDeferredResource( FRHICommandListImme
 	// #todo-renderpasses must generate mips outside of a renderpass?
 	if (Owner->bAutoGenerateMips)
 	{
-		RHICmdList.GenerateMips(RenderTargetTextureRHI);
+		/**Convert the input values from the editor to a compatible format for FSamplerStateInitializerRHI. 
+			Ensure default sampler is Bilinear clamp*/
+		FGenerateMips::Execute(RHICmdList, RenderTargetTextureRHI,
+			Owner->MipsSamplerFilter == TF_Nearest ? SF_Point : (Owner->MipsSamplerFilter == TF_Trilinear ? SF_Trilinear : SF_Bilinear),
+			Owner->MipsAddressU == TA_Wrap ? AM_Wrap : (Owner->MipsAddressU == TA_Mirror ? AM_Mirror : AM_Clamp),
+			Owner->MipsAddressV == TA_Wrap ? AM_Wrap : (Owner->MipsAddressV == TA_Mirror ? AM_Mirror : AM_Clamp));
 	}
 
  	// copy surface to the texture for use

@@ -10,6 +10,7 @@
 #include "Misc/ScopeExit.h"
 #include "Modules/ModuleManifest.h"
 #include "Misc/ScopeLock.h"
+#include "Misc/DataDrivenPlatformInfoRegistry.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogModuleManager, Log, All);
 
@@ -71,9 +72,11 @@ FModuleManager& FModuleManager::Get()
 			//temp workaround for IPlatformFile being used for FPaths::DirectoryExists before main() sets up the commandline.
 #if PLATFORM_DESKTOP && !IS_MONOLITHIC
 		// Ensure that dependency dlls can be found in restricted sub directories
-			const TCHAR* RestrictedFolderNames[] = { TEXT("NoRedist"), TEXT("NotForLicensees"), TEXT("CarefullyRedist"), TEXT("Switch") };
+			TArray<FString> RestrictedFolderNames = { TEXT("NoRedist"), TEXT("NotForLicensees"), TEXT("CarefullyRedist") };
+			RestrictedFolderNames.Append(FDataDrivenPlatformInfoRegistry::GetConfidentialPlatforms());
+
 			FString ModuleDir = FPlatformProcess::GetModulesDirectory();
-			for (const TCHAR* RestrictedFolderName : RestrictedFolderNames)
+			for (const FString& RestrictedFolderName : RestrictedFolderNames)
 			{
 				FString RestrictedFolder = ModuleDir / RestrictedFolderName;
 				if (FPaths::DirectoryExists(RestrictedFolder))
@@ -441,11 +444,15 @@ IModuleInterface* FModuleManager::LoadModuleWithFailureReason(const FName InModu
 
 		if (ModuleInfo->Module.IsValid())
 		{
-			// Startup the module
+			FScopedBootTiming BootScope("LoadModule  - ", InModuleName);
+#if USE_PER_MODULE_UOBJECT_BOOTSTRAP
 			{
-				FScopedBootTiming BootScope("LoadModuleWithFailureReason:StartupModule  - ", InModuleName);
-				ModuleInfo->Module->StartupModule();
+				ProcessLoadedObjectsCallback.Broadcast(InModuleName, bCanProcessNewlyLoadedObjects);
 			}
+#endif
+			// Startup the module
+			ModuleInfo->Module->StartupModule();
+
 			// The module might try to load other dependent modules in StartupModule. In this case, we want those modules shut down AFTER this one because we may still depend on the module at shutdown.
 			ModuleInfo->LoadOrder = FModuleInfo::CurrentLoadOrder++;
 
@@ -477,7 +484,7 @@ IModuleInterface* FModuleManager::LoadModuleWithFailureReason(const FName InModu
 		// in the module being loaded.
 		if (bCanProcessNewlyLoadedObjects)
 		{
-			ProcessLoadedObjectsCallback.Broadcast();
+				ProcessLoadedObjectsCallback.Broadcast(NAME_None, bCanProcessNewlyLoadedObjects);
 		}
 
 		// Try to dynamically load the DLL
@@ -514,16 +521,11 @@ IModuleInterface* FModuleManager::LoadModuleWithFailureReason(const FName InModu
 				// First things first.  If the loaded DLL has UObjects in it, then their generated code's
 				// static initialization will have run during the DLL loading phase, and we'll need to
 				// go in and make sure those new UObject classes are properly registered.
-				{
-					// Sometimes modules are loaded before even the UObject systems are ready.  We need to assume
-					// these modules aren't using UObjects.
-					if (bCanProcessNewlyLoadedObjects)
-					{
-						// OK, we've verified that loading the module caused new UObject classes to be
-						// registered, so we'll treat this module as a module with UObjects in it.
-						ProcessLoadedObjectsCallback.Broadcast();
-					}
-				}
+						// Sometimes modules are loaded before even the UObject systems are ready.  We need to assume
+						// these modules aren't using UObjects.
+							// OK, we've verified that loading the module caused new UObject classes to be
+							// registered, so we'll treat this module as a module with UObjects in it.
+					ProcessLoadedObjectsCallback.Broadcast(InModuleName, bCanProcessNewlyLoadedObjects);
 
 				// Find our "InitializeModule" global function, which must exist for all module DLLs
 				FInitializeModuleFunctionPtr InitializeModuleFunctionPtr =
@@ -678,6 +680,8 @@ void FModuleManager::AbandonModule( const FName InModuleName )
 void FModuleManager::UnloadModulesAtShutdown()
 {
 	ensure(IsInGameThread());
+
+	TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(TEXT("UnloadModulesAtShutdown"));
 
 	struct FModulePair
 	{

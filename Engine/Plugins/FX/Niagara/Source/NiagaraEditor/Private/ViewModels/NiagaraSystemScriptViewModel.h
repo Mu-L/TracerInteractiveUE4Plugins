@@ -4,6 +4,7 @@
 
 #include "NiagaraScriptViewModel.h"
 
+class FNiagaraSystemViewModel;
 class FNiagaraScriptViewModel;
 class UNiagaraSystem;
 
@@ -14,31 +15,22 @@ public:
 	DECLARE_MULTICAST_DELEGATE(FOnSystemCompiled)
 
 public:
-	FNiagaraSystemScriptViewModel(UNiagaraSystem& InSystem, class FNiagaraSystemViewModel* InParent);
+	FNiagaraSystemScriptViewModel();
+
+	void Initialize(UNiagaraSystem& InSystem);
 
 	~FNiagaraSystemScriptViewModel();
-
-	/** Rebuilds the emitter nodes in the System script due to data changes. */
-	void RebuildEmitterNodes();
 
 	FOnSystemCompiled& OnSystemCompiled();
 
 	void CompileSystem(bool bForce);
 
 private:
-	/** Called whenever the graph for the System script changes. */
-	void OnGraphChanged(const struct FEdGraphEditAction& InAction);
-
 	void OnSystemVMCompiled(UNiagaraSystem* InSystem);
 
-	FNiagaraSystemViewModel* Parent;
-
+private:
 	/** The System who's script is getting viewed and edited by this view model. */
-	UNiagaraSystem& System;
-
-	/** A handle to the on graph changed delegate. */
-	FDelegateHandle OnGraphChangedHandle;
-	FDelegateHandle OnRecompileHandle;
+	TWeakObjectPtr<UNiagaraSystem> System;
 
 	FOnSystemCompiled OnSystemCompiledDelegate;
 };

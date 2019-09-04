@@ -34,6 +34,7 @@ class UAnimNotifyState;
 class FParticleDynamicData;
 class FParticleSystemSceneProxy;
 class UAnimNotifyState;
+class UFXSystemAsset;
 struct FDynamicEmitterDataBase;
 struct FDynamicEmitterReplayDataBase;
 struct FParticleAnimTrailEmitterInstance;
@@ -324,11 +325,49 @@ struct FParticleEventKismetData : public FParticleEventData
 {
 };
 
+UCLASS(Abstract)
+class ENGINE_API UFXSystemComponent : public UPrimitiveComponent
+{
+	GENERATED_UCLASS_BODY()
+public:
+
+	/** Change a named float parameter */
+	UFUNCTION(BlueprintCallable, Category="Effects|Components|ParticleSystem")
+	virtual void SetFloatParameter(FName ParameterName, float Param) {}
+
+	/** 
+	 *	Set a named vector instance parameter on this ParticleSystemComponent. 
+	 *	Updates the parameter if it already exists, or creates a new entry if not. 
+	 */
+	UFUNCTION(BlueprintCallable, Category="Effects|Components|ParticleSystem")
+	virtual void SetVectorParameter(FName ParameterName, FVector Param) {}
+
+	/** 
+	 *	Set a named color instance parameter on this ParticleSystemComponent. 
+	 *	Updates the parameter if it already exists, or creates a new entry if not. 
+	 */
+	UFUNCTION(BlueprintCallable, Category="Effects|Components|ParticleSystem")
+	virtual void SetColorParameter(FName ParameterName, FLinearColor Param) {}
+
+	/** 
+	 *	Set a named actor instance parameter on this ParticleSystemComponent. 
+	 *	Updates the parameter if it already exists, or creates a new entry if not. 
+	 */
+	UFUNCTION(BlueprintCallable, Category="Effects|Components|ParticleSystem")
+	virtual void SetActorParameter(FName ParameterName, class AActor* Param) {}
+
+	/** 
+	 * Get the referenced FXSystem asset.
+	*/
+	virtual UFXSystemAsset* GetFXSystemAsset() const { return nullptr; };
+};
+
+
 /** 
  * A particle emitter.
  */
 UCLASS(ClassGroup=(Rendering, Common), hidecategories=Object, hidecategories=Physics, hidecategories=Collision, showcategories=Trigger, editinlinenew, meta=(BlueprintSpawnableComponent))
-class ENGINE_API UParticleSystemComponent : public UPrimitiveComponent
+class ENGINE_API UParticleSystemComponent : public UFXSystemComponent
 {
 	friend class FParticleSystemWorldManager;
 
@@ -631,6 +670,8 @@ public:
 
 	/**
 	 * Socket we automatically attach to on the AutoAttachParent, if bAutoManageAttachment is true.
+	 * If no auto attach socket name is set during registration, the current attach socket will be
+	 * assigned to AutoAttachSocketName and used when activated.
 	 * @see bAutoManageAttachment
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=Attachment, meta=(EditCondition="bAutoManageAttachment"))
@@ -965,29 +1006,30 @@ public:
 	virtual void SetEmitterEnable(FName EmitterName, bool bNewEnableState);
 
 	/** Change a named float parameter */
-	UFUNCTION(BlueprintCallable, Category="Effects|Components|ParticleSystem")
-	void SetFloatParameter(FName ParameterName, float Param);
+	void SetFloatParameter(FName ParameterName, float Param) override;
 
 	/** 
 	 *	Set a named vector instance parameter on this ParticleSystemComponent. 
 	 *	Updates the parameter if it already exists, or creates a new entry if not. 
 	 */
-	UFUNCTION(BlueprintCallable, Category="Effects|Components|ParticleSystem")
-	void SetVectorParameter(FName ParameterName, FVector Param);
+	void SetVectorParameter(FName ParameterName, FVector Param) override;
 
 	/** 
 	 *	Set a named color instance parameter on this ParticleSystemComponent. 
 	 *	Updates the parameter if it already exists, or creates a new entry if not. 
 	 */
-	UFUNCTION(BlueprintCallable, Category="Effects|Components|ParticleSystem")
-	void SetColorParameter(FName ParameterName, FLinearColor Param);
+	void SetColorParameter(FName ParameterName, FLinearColor Param) override;
 
 	/** 
 	 *	Set a named actor instance parameter on this ParticleSystemComponent. 
 	 *	Updates the parameter if it already exists, or creates a new entry if not. 
 	 */
-	UFUNCTION(BlueprintCallable, Category="Effects|Components|ParticleSystem")
-	void SetActorParameter(FName ParameterName, class AActor* Param);
+	void SetActorParameter(FName ParameterName, class AActor* Param) override;
+
+	/**
+	 * Get the referenced FXSystem asset.
+	*/
+	virtual UFXSystemAsset* GetFXSystemAsset() const { return Template; };
 
 	/** 
 	 *	Set a named material instance parameter on this ParticleSystemComponent. 
@@ -1133,6 +1175,9 @@ public:
 	/** Static delegate called for all systems on an activation change. */
 	static FOnSystemPreActivationChange OnSystemPreActivationChange;
 
+	/** Stream of random values to use with this component */
+	FRandomStream RandomStream;
+
 private:
 	/** In some cases the async work for this PSC can be created externally by the manager. */
 	FORCEINLINE void SetAsyncWork(FGraphEventRef& InAsyncWork) { AsyncWork = InAsyncWork; }
@@ -1171,6 +1216,7 @@ public:
 	virtual void OnChildAttached(USceneComponent* ChildComponent)override;
 	virtual void OnChildDetached(USceneComponent* ChildComponent)override;
 
+	virtual void OnEndOfFrameUpdateDuringTick() override;
 protected:
 	virtual void CreateRenderState_Concurrent() override;
 	virtual void SendRenderTransform_Concurrent() override;
@@ -1240,7 +1286,7 @@ public:
 	virtual FBoxSphereBounds CalcBounds(const FTransform& LocalToWorld) const override;
 	virtual FPrimitiveSceneProxy* CreateSceneProxy() override;
 	virtual void GetUsedMaterials( TArray<UMaterialInterface*>& OutMaterials, bool bGetDebugMaterials = false ) const override;
-	virtual void GetStreamingTextureInfo(FStreamingTextureLevelContext& LevelContext, TArray<FStreamingTexturePrimitiveInfo>& OutStreamingTextures) const override;
+	virtual void GetStreamingRenderAssetInfo(FStreamingTextureLevelContext& LevelContext, TArray<FStreamingRenderAssetPrimitiveInfo>& OutStreamingRenderAssets) const override;
 	virtual FBodyInstance* GetBodyInstance(FName BoneName = NAME_None, bool bGetWelded = true) const override;
 	//End UPrimitiveComponent Interface
 

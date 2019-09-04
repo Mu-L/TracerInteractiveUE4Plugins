@@ -81,6 +81,10 @@ public:
 	/**  */
 	UFUNCTION(BlueprintCallable, Category = "Appearance")
 	void SetBrushTintColor(FSlateColor TintColor);
+
+	/**  */
+	UFUNCTION(BlueprintCallable, Category = "Appearance")
+	void SetBrushResourceObject(UObject* ResourceObject);
 	
 	/**  */
 	UFUNCTION(BlueprintCallable, Category="Appearance")
@@ -161,6 +165,10 @@ protected:
 
 	//
 	FReply HandleMouseButtonDown(const FGeometry& Geometry, const FPointerEvent& MouseEvent);
+
+#if WITH_ACCESSIBILITY
+	virtual TSharedPtr<SWidget> GetAccessibleWidget() const override;
+#endif
 
 protected:
 	TSharedPtr<SImage> MyImage;

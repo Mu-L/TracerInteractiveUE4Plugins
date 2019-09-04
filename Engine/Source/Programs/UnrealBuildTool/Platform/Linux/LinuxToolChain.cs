@@ -36,6 +36,11 @@ namespace UnrealBuildTool
 		/// Enable undefined behavior sanitizer
 		/// </summary>
 		EnableUndefinedBehaviorSanitizer = 0x4,
+
+		/// <summary>
+		/// Enable thin LTO
+		/// </summary>
+		EnableThinLTO = 0x8,
 	}
 
 	class LinuxToolChain : UEToolChain
@@ -64,7 +69,7 @@ namespace UnrealBuildTool
 		LinuxToolChainOptions Options;
 
 		public LinuxToolChain(string InArchitecture, LinuxPlatformSDK InSDK, bool InPreservePSYM = false, LinuxToolChainOptions InOptions = LinuxToolChainOptions.None)
-			: this(CppPlatform.Linux, InArchitecture, InSDK, InPreservePSYM, InOptions)
+			: this(UnrealTargetPlatform.Linux, InArchitecture, InSDK, InPreservePSYM, InOptions)
 		{
 			MultiArchRoot = PlatformSDK.GetSDKLocation();
 			BaseLinuxPath = PlatformSDK.GetBaseLinuxPathForArchitecture(InArchitecture);
@@ -99,13 +104,12 @@ namespace UnrealBuildTool
 
 				// set up the path to our toolchain
 				GCCPath = "";
-				// we rely on the fact that appending ".exe" is optional when invoking a binary on Windows
-				ClangPath = Path.Combine(BaseLinuxPath, @"bin", "clang++");
-				ArPath = Path.Combine(Path.Combine(BaseLinuxPath, String.Format("bin/{0}-{1}", Architecture, "ar")));
-				LlvmArPath = Path.Combine(Path.Combine(BaseLinuxPath, String.Format("bin/{0}", "llvm-ar")));
-				RanlibPath = Path.Combine(Path.Combine(BaseLinuxPath, String.Format("bin/{0}-{1}", Architecture, "ranlib")));
-				StripPath = Path.Combine(Path.Combine(BaseLinuxPath, String.Format("bin/{0}-{1}", Architecture, "strip")));
-				ObjcopyPath = Path.Combine(Path.Combine(BaseLinuxPath, String.Format("bin/{0}-{1}", Architecture, "objcopy")));
+				ClangPath = Path.Combine(BaseLinuxPath, @"bin", "clang++" + GetHostPlatformBinarySuffix());
+				ArPath = Path.Combine(Path.Combine(BaseLinuxPath, String.Format("bin/{0}-{1}", Architecture, "ar" + GetHostPlatformBinarySuffix())));
+				LlvmArPath = Path.Combine(Path.Combine(BaseLinuxPath, String.Format("bin/{0}", "llvm-ar" + GetHostPlatformBinarySuffix())));
+				RanlibPath = Path.Combine(Path.Combine(BaseLinuxPath, String.Format("bin/{0}-{1}", Architecture, "ranlib" + GetHostPlatformBinarySuffix())));
+				StripPath = Path.Combine(Path.Combine(BaseLinuxPath, String.Format("bin/{0}-{1}", Architecture, "strip" + GetHostPlatformBinarySuffix())));
+				ObjcopyPath = Path.Combine(Path.Combine(BaseLinuxPath, String.Format("bin/{0}-{1}", Architecture, "objcopy" + GetHostPlatformBinarySuffix())));
 
 				// When cross-compiling on Windows, use old FixDeps. It is slow, but it does not have timing issues
 				bUseFixdeps = (BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Win64 || BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Win32);
@@ -171,10 +175,10 @@ namespace UnrealBuildTool
 				throw new BuildException("Unable to build: no compatible clang version found. Please run Setup.sh");
 			}
 			// prevent unknown clangs since the build is likely to fail on too old or too new compilers
-			else if ((CompilerVersionMajor * 10 + CompilerVersionMinor) > 70 || (CompilerVersionMajor * 10 + CompilerVersionMinor) < 60)
+			else if ((CompilerVersionMajor * 10 + CompilerVersionMinor) > 80 || (CompilerVersionMajor * 10 + CompilerVersionMinor) < 60)
 			{
 				throw new BuildException(
-					string.Format("This version of the Unreal Engine can only be compiled with clang 7.0 and 6.0. clang {0} may not build it - please use a different version.",
+					string.Format("This version of the Unreal Engine can only be compiled with clang 8.0, 7.0 and 6.0. clang {0} may not build it - please use a different version.",
 						CompilerVersionString)
 					);
 			}
@@ -184,13 +188,23 @@ namespace UnrealBuildTool
 			bUseLld = (CompilerVersionMajor >= 5);
 		}
 
-		public LinuxToolChain(CppPlatform InCppPlatform, string InArchitecture, LinuxPlatformSDK InSDK, bool InPreservePSYM = false, LinuxToolChainOptions InOptions = LinuxToolChainOptions.None)
-			: base(InCppPlatform)
+		public LinuxToolChain(UnrealTargetPlatform InPlatform, string InArchitecture, LinuxPlatformSDK InSDK, bool InPreservePSYM = false, LinuxToolChainOptions InOptions = LinuxToolChainOptions.None)
+			: base()
 		{
 			Architecture = InArchitecture;
 			PlatformSDK = InSDK;
 			Options = InOptions;
 			bPreservePSYM = InPreservePSYM;
+		}
+
+		private string GetHostPlatformBinarySuffix()
+		{
+			if (BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Win64 || BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Win32)
+			{
+				return ".exe";
+			}
+
+			return "";
 		}
 
 		protected virtual bool CrossCompiling()
@@ -572,7 +586,6 @@ namespace UnrealBuildTool
 			if (CompileEnvironment.bHideSymbolsByDefault)
 			{
 				Result += " -fvisibility=hidden";
-				Result += " -fvisibility-inlines-hidden";
 			}
 
 			if (String.IsNullOrEmpty(ClangPath))
@@ -664,7 +677,14 @@ namespace UnrealBuildTool
 			// Whether we actually can enable that is checked in CanUseAdvancedLinkerFeatures() earlier
 			if (CompileEnvironment.bAllowLTCG)
 			{
-				Result += " -flto";
+				if((Options & LinuxToolChainOptions.EnableThinLTO) != 0)
+				{
+					Result += " -flto=thin";
+				}
+				else
+				{
+					Result += " -flto";
+				}
 			}
 
 			if (CompileEnvironment.bEnableShadowVariableWarnings)
@@ -738,6 +758,11 @@ namespace UnrealBuildTool
 				// Use local-dynamic TLS model. This generates less efficient runtime code for __thread variables, but avoids problems of running into
 				// glibc/ld.so limit (DTV_SURPLUS) for number of dlopen()'ed DSOs with static TLS (see e.g. https://www.cygwin.com/ml/libc-help/2013-11/msg00033.html)
 				Result += " -ftls-model=local-dynamic";
+			}
+			else
+			{
+				Result += " -ffunction-sections";
+				Result += " -fdata-sections";
 			}
 
 			if (CompileEnvironment.bEnableExceptions)
@@ -910,8 +935,6 @@ namespace UnrealBuildTool
 			Result += " -Wl,-rpath-link=${ORIGIN}";
 			Result += " -Wl,-rpath=${ORIGIN}/../../../Engine/Binaries/Linux";
 			Result += " -Wl,-rpath=${ORIGIN}/..";	// for modules that are in sub-folders of the main Engine/Binary/Linux folder
-			// FIXME: really ugly temp solution. Modules need to be able to specify this
-			Result += " -Wl,-rpath=${ORIGIN}/../../../Engine/Binaries/ThirdParty/Steamworks/Steamv139/x86_64-unknown-linux-gnu";
 			if (LinkEnvironment.Architecture.StartsWith("x86_64"))
 			{
 				Result += " -Wl,-rpath=${ORIGIN}/../../../Engine/Binaries/ThirdParty/Qualcomm/Linux";
@@ -921,7 +944,7 @@ namespace UnrealBuildTool
 				// x86_64 is now using updated ICU that doesn't need extra .so
 				Result += " -Wl,-rpath=${ORIGIN}/../../../Engine/Binaries/ThirdParty/ICU/icu4c-53_1/Linux/" + LinkEnvironment.Architecture;
 			}
-			Result += " -Wl,-rpath=${ORIGIN}/../../../Engine/Binaries/ThirdParty/OpenVR/OpenVRv1_0_16/linux64";
+			Result += " -Wl,-rpath=${ORIGIN}/../../../Engine/Binaries/ThirdParty/OpenVR/OpenVRv1_5_17/linux64";
 
 			// @FIXME: Workaround for generating RPATHs for launching on devices UE-54136
 			Result += " -Wl,-rpath=${ORIGIN}/../../../Engine/Binaries/ThirdParty/PhysX3/Linux/x86_64-unknown-linux-gnu";
@@ -938,9 +961,21 @@ namespace UnrealBuildTool
 
 			// This apparently can help LLDB speed up symbol lookups
 			Result += " -Wl,--build-id";
-			if (bSuppressPIE && !LinkEnvironment.bIsBuildingDLL)
+			if (!LinkEnvironment.bIsBuildingDLL)
 			{
-				Result += " -Wl,-nopie";
+				Result += " -Wl,--gc-sections";
+
+				if (bSuppressPIE)
+				{
+					if (CompilerVersionGreaterOrEqual(7, 0, 0))
+					{
+						Result += " -Wl,-no-pie";
+					}
+					else
+					{
+						Result += " -Wl,-nopie";
+					}
+				}
 			}
 
 			// Profile Guided Optimization (PGO) and Link Time Optimization (LTO)
@@ -967,7 +1002,14 @@ namespace UnrealBuildTool
 			// whether we actually can do that is checked in CanUseAdvancedLinkerFeatures() earlier
 			if (LinkEnvironment.bAllowLTCG)
 			{
-				Result += " -flto";
+				if((Options & LinuxToolChainOptions.EnableThinLTO) != 0)
+				{
+					Result += String.Format(" -flto=thin -Wl,--thinlto-jobs={0}", Utils.GetPhysicalProcessorCount());
+				}
+				else
+				{
+					Result += " -flto";
+				}
 			}
 
 			if (CrossCompiling())
@@ -982,10 +1024,10 @@ namespace UnrealBuildTool
 				// Linking with the toolchain on linux appears to not search usr/
 				if (BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Linux)
 				{
-					Result += String.Format(" -B{0}/usr/lib/", SysRootPath);
-					Result += String.Format(" -B{0}/usr/lib64/", SysRootPath);
-					Result += String.Format(" -L{0}/usr/lib/", SysRootPath);
-					Result += String.Format(" -L{0}/usr/lib64/", SysRootPath);
+					Result += String.Format(" -B\"{0}/usr/lib/\"", SysRootPath);
+					Result += String.Format(" -B\"{0}/usr/lib64/\"", SysRootPath);
+					Result += String.Format(" -L\"{0}/usr/lib/\"", SysRootPath);
+					Result += String.Format(" -L\"{0}/usr/lib64/\"", SysRootPath);
 				}
 			}
 
@@ -1154,7 +1196,7 @@ namespace UnrealBuildTool
 			string Arguments = GetCLArguments_Global(CompileEnvironment);
 			string PCHArguments = "";
 
-			var BuildPlatform = UEBuildPlatform.GetBuildPlatformForCPPTargetPlatform(CompileEnvironment.Platform);
+			var BuildPlatform = UEBuildPlatform.GetBuildPlatform(CompileEnvironment.Platform);
 
 			if (!bHasPrintedBuildDetails)
 			{
@@ -1191,7 +1233,16 @@ namespace UnrealBuildTool
 			// Add include paths to the argument list.
 			foreach (DirectoryReference IncludePath in CompileEnvironment.UserIncludePaths)
 			{
-				Arguments += string.Format(" -I\"{0}\"", IncludePath.FullName.Replace('\\', '/'));
+				string IncludePathString;
+				if (IncludePath.IsUnderDirectory(UnrealBuildTool.RootDirectory))
+				{
+					IncludePathString = IncludePath.MakeRelativeTo(UnrealBuildTool.EngineSourceDirectory);
+				}
+				else
+				{
+					IncludePathString = IncludePath.FullName;
+				}
+				Arguments += string.Format(" -I\"{0}\"", IncludePathString.Replace('\\', '/'));
 			}
 			foreach (DirectoryReference IncludePath in CompileEnvironment.SystemIncludePaths)
 			{
@@ -1266,7 +1317,6 @@ namespace UnrealBuildTool
 				{
 					if (CompileEnvironment.PrecompiledHeaderAction == PrecompiledHeaderAction.Include)
 					{
-						CompileAction.bIsUsingPCH = true;
 						CompileAction.PrerequisiteItems.Add(CompileEnvironment.PrecompiledHeaderFile);
 					}
 
@@ -1691,6 +1741,14 @@ namespace UnrealBuildTool
 
 			LinkCommandString += " -Wl,--start-group";
 			LinkCommandString += ExternalLibraries;
+
+			// make unresolved symbols an error, unless a) building a cross-referenced DSO  b) we opted out
+			if ((!LinkEnvironment.bIsBuildingDLL || !LinkEnvironment.bIsCrossReferenced) && !LinkEnvironment.bIgnoreUnresolvedSymbols)
+			{
+				// This will make the linker report undefined symbols the current module, but ignore in the dependent DSOs.
+				// It is tempting, but may not be possible to change that report-all - due to circular dependencies between our libs.
+				LinkCommandString += " -Wl,--unresolved-symbols=ignore-in-shared-libs";
+			}
 			LinkCommandString += " -Wl,--end-group";
 
 			LinkCommandString += " -lrt"; // needed for clock_gettime()
@@ -1705,6 +1763,7 @@ namespace UnrealBuildTool
 				LinkCommandString += " " + "ThirdParty/Linux/LibCxx/lib/Linux/" + LinkEnvironment.Architecture + "/libc++abi.a";
 				LinkCommandString += " -lm";
 				LinkCommandString += " -lc";
+				LinkCommandString += " -lpthread"; // pthread_mutex_trylock is missing from libc stubs
 				LinkCommandString += " -lgcc_s";
 				LinkCommandString += " -lgcc";
 			}

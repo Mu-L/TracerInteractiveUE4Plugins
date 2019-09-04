@@ -25,6 +25,38 @@ public class VorbisFile : ModuleRules
 			PublicDelayLoadDLLs.Add("libvorbisfile.dll");
 			RuntimeDependencies.Add("$(EngineDir)/Binaries/ThirdParty/Vorbis/Win32/VS" + Target.WindowsPlatform.GetVisualStudioCompilerVersionName() + "/libvorbisfile.dll");
 		}
+		else if (Target.Platform == UnrealTargetPlatform.HoloLens)
+        {
+			string PlatformSubpath = Target.Platform.ToString();
+            string LibFileName = "libvorbisfile";
+            if (Target.WindowsPlatform.Architecture == WindowsArchitecture.ARM64 || Target.WindowsPlatform.Architecture == WindowsArchitecture.x64)
+            {
+                LibFileName += "_64";
+            }
+
+            if (Target.WindowsPlatform.Architecture == WindowsArchitecture.ARM32 || Target.WindowsPlatform.Architecture == WindowsArchitecture.ARM64)
+            {
+                PublicLibraryPaths.Add(System.String.Format("{0}lib/{1}/VS{2}/{3}/", VorbisPath, PlatformSubpath, Target.WindowsPlatform.GetVisualStudioCompilerVersionName(), Target.WindowsPlatform.GetArchitectureSubpath()));
+                RuntimeDependencies.Add(
+                    System.String.Format("$(EngineDir)/Binaries/ThirdParty/Vorbis/{0}/VS{1}/{2}/{3}.dll",
+                        Target.Platform,
+                        Target.WindowsPlatform.GetVisualStudioCompilerVersionName(),
+                        Target.WindowsPlatform.GetArchitectureSubpath(),
+                        LibFileName));
+            }
+            else
+            {
+                PublicLibraryPaths.Add(System.String.Format("{0}lib/{1}/VS{2}/", VorbisPath, PlatformSubpath, Target.WindowsPlatform.GetVisualStudioCompilerVersionName()));
+                RuntimeDependencies.Add(
+                    System.String.Format("$(EngineDir)/Binaries/ThirdParty/Vorbis/{0}/VS{1}/{2}.dll",
+                        Target.Platform,
+                        Target.WindowsPlatform.GetVisualStudioCompilerVersionName(),
+                        LibFileName));
+            }
+
+            PublicAdditionalLibraries.Add(LibFileName + ".lib");
+            PublicDelayLoadDLLs.Add(LibFileName + ".dll");
+        }
 		else if (Target.Platform == UnrealTargetPlatform.HTML5)
 		{
 			string VorbisLibPath = VorbisPath + "lib/HTML5/";
@@ -63,6 +95,18 @@ public class VorbisFile : ModuleRules
 			PublicAdditionalLibraries.Add(VorbisPath + "lib/Linux/" + Target.Architecture + "/libvorbisfile.a");
 			PublicAdditionalLibraries.Add(VorbisPath + "lib/Linux/" + Target.Architecture + "/libvorbisenc.a");
 		}
+        else if (Target.Platform == UnrealTargetPlatform.IOS)
+        {
+            PublicAdditionalLibraries.Add(VorbisPath + "lib/IOS/libvorbis.a");
+            PublicAdditionalLibraries.Add(VorbisPath + "lib/IOS/libvorbisfile.a");
+            PublicAdditionalLibraries.Add(VorbisPath + "lib/IOS/libvorbisenc.a");
+        }
+        else if (Target.Platform == UnrealTargetPlatform.TVOS)
+        {
+            PublicAdditionalLibraries.Add(VorbisPath + "lib/TVOS/libvorbis.a");
+            PublicAdditionalLibraries.Add(VorbisPath + "lib/TVOS/libvorbisfile.a");
+            PublicAdditionalLibraries.Add(VorbisPath + "lib/TVOS/libvorbisenc.a");
+        }
 		else if (Target.Platform == UnrealTargetPlatform.XboxOne)
 		{
 			// Use reflection to allow type not to exist if console code is not present

@@ -21,6 +21,7 @@ class UActorComponent;
 class UEdGraph;
 class UInheritableComponentHandler;
 class FBlueprintActionDatabaseRegistrar;
+struct FDiffResults;
 
 /**
  * Enumerates states a blueprint can be in.
@@ -402,6 +403,19 @@ enum class EBlueprintNativizationFlag : uint8
 	ExplicitlyEnabled
 };
 
+#if WITH_EDITOR
+/** Control flags for current object/world accessor methods */
+enum class EGetObjectOrWorldBeingDebuggedFlags
+{
+	/** Use normal weak ptr semantics when accessing the referenced object. */
+	None = 0,
+	/** Return a valid ptr even if the PendingKill flag is set on the referenced object. */
+	IgnorePendingKill = 1 << 0
+};
+
+ENUM_CLASS_FLAGS(EGetObjectOrWorldBeingDebuggedFlags);
+#endif
+
 
 /**
  * Blueprints are special assets that provide an intuitive, node-based interface that can be used to create new types of Actors
@@ -777,9 +791,18 @@ private:
 public:
 
 	/** @return the current object being debugged, which can be nullptr */
-	virtual UObject* GetObjectBeingDebugged();
+	UObject* GetObjectBeingDebugged(EGetObjectOrWorldBeingDebuggedFlags InFlags = EGetObjectOrWorldBeingDebuggedFlags::None) const
+	{
+		const bool bEvenIfPendingKill = EnumHasAnyFlags(InFlags, EGetObjectOrWorldBeingDebuggedFlags::IgnorePendingKill);
+		return CurrentObjectBeingDebugged.Get(bEvenIfPendingKill);
+	}
 
-	virtual class UWorld* GetWorldBeingDebugged();
+	/** @return the current world being debugged, which can be nullptr */
+	class UWorld* GetWorldBeingDebugged(EGetObjectOrWorldBeingDebuggedFlags InFlags = EGetObjectOrWorldBeingDebuggedFlags::None) const
+	{
+		const bool bEvenIfPendingKill = EnumHasAnyFlags(InFlags, EGetObjectOrWorldBeingDebuggedFlags::IgnorePendingKill);
+		return CurrentWorldBeingDebugged.Get(bEvenIfPendingKill);
+	}
 
 	/** Renames only the generated classes. Should only be used internally or when testing for rename. */
 	virtual bool RenameGeneratedClasses(const TCHAR* NewName = nullptr, UObject* NewOuter = nullptr, ERenameFlags Flags = REN_None);
@@ -798,6 +821,9 @@ public:
 	virtual void ClearAllCachedCookedPlatformData() override;
 	virtual void BeginDestroy() override;
 	//~ End UObject Interface
+
+	/** Removes any child redirectors from the root set and marks them as transient */
+	void RemoveChildRedirectors();
 
 	/** Consigns the GeneratedClass and the SkeletonGeneratedClass to oblivion, and nulls their references */
 	void RemoveGeneratedClasses();
@@ -826,6 +852,16 @@ public:
 
 	/** Returns Valid if this object has data validation rules set up for it and the data for this object is valid. Returns Invalid if it does not pass the rules. Returns NotValidated if no rules are set for this object. */
 	virtual EDataValidationResult IsDataValid(TArray<FText>& ValidationErrors) override;
+
+	/** 
+	 * Fills in a list of differences between this blueprint and another blueprint.
+	 * Default blueprints are handled by SBlueprintDiff, this should be overridden for specific blueprint types.
+	 *
+	 * @param OtherBlueprint	Other blueprint to compare this to, should be the same type
+	 * @param Results			List of diff results to fill in with type-specific differences
+	 * @return					True if these blueprints were checked for specific differences, false if they are not comparable
+	 */
+	virtual bool FindDiffs(const UBlueprint* OtherBlueprint, FDiffResults& Results) const;
 
 #endif	//#if WITH_EDITOR
 

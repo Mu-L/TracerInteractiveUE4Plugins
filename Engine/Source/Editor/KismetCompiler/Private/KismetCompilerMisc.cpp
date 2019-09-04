@@ -744,7 +744,7 @@ UEdGraphPin* FKismetCompilerUtilities::GenerateAssignmentNodes(class FKismetComp
 					
 				if (FBlueprintCompilationManager::GetDefaultValue(ForClass, Property, DefaultValueAsString))
 				{
-					if (DefaultValueAsString == OrgPin->GetDefaultAsString())
+					if (Schema->DoesDefaultValueMatch(*OrgPin, DefaultValueAsString))
 					{
 						continue;
 					}
@@ -1153,7 +1153,7 @@ UProperty* FKismetCompilerUtilities::CreatePropertyOnScope(UStruct* Scope, const
 	else if (Type.PinCategory == UEdGraphSchema_K2::PC_MCDelegate)
 	{
 		UFunction* const SignatureFunction = FMemberReference::ResolveSimpleMemberReference<UFunction>(Type.PinSubCategoryMemberReference);
-		UMulticastDelegateProperty* NewPropertyDelegate = NewObject<UMulticastDelegateProperty>(PropertyScope, ValidatedPropertyName, ObjectFlags);
+		UMulticastDelegateProperty* NewPropertyDelegate = NewObject<UMulticastInlineDelegateProperty>(PropertyScope, ValidatedPropertyName, ObjectFlags);
 		NewPropertyDelegate->SignatureFunction = SignatureFunction;
 		NewProperty = NewPropertyDelegate;
 	}
@@ -1162,7 +1162,7 @@ UProperty* FKismetCompilerUtilities::CreatePropertyOnScope(UStruct* Scope, const
 		NewProperty = CreatePrimitiveProperty(PropertyScope, ValidatedPropertyName, Type.PinCategory, Type.PinSubCategory, Type.PinSubCategoryObject.Get(), SelfClass, Type.bIsWeakPointer, Schema, MessageLog);
 	}
 
-	if (NewContainerProperty && NewProperty && NewProperty->HasAnyPropertyFlags(CPF_ContainsInstancedReference))
+	if (NewContainerProperty && NewProperty && NewProperty->HasAnyPropertyFlags(CPF_ContainsInstancedReference | CPF_InstancedReference))
 	{
 		NewContainerProperty->SetPropertyFlags(CPF_ContainsInstancedReference);
 	}
@@ -1196,9 +1196,9 @@ UProperty* FKismetCompilerUtilities::CreatePropertyOnScope(UStruct* Scope, const
 			}
 			else
 			{
-				if (NewMapProperty->ValueProp && NewMapProperty->ValueProp->HasAnyPropertyFlags(CPF_ContainsInstancedReference))
+				if (NewMapProperty->ValueProp && NewMapProperty->ValueProp->HasAnyPropertyFlags(CPF_ContainsInstancedReference | CPF_InstancedReference))
 				{
-					NewMapProperty->ValueProp->SetPropertyFlags(CPF_ContainsInstancedReference);
+					NewContainerProperty->SetPropertyFlags(CPF_ContainsInstancedReference);
 				}
 
 				NewProperty = NewMapProperty;

@@ -10,6 +10,7 @@ RHIUtilities.cpp:
 #include "RHI.h"
 #include "HAL/Runnable.h"
 #include "HAL/RunnableThread.h"
+#include "Misc/ScopeLock.h"
 
 #define USE_FRAME_OFFSET_THREAD 1
 
@@ -118,6 +119,7 @@ class FRHIFrameFlipTrackingRunnable : public FRunnable
 	static FRunnableThread* Thread;
 	static FRHIFrameFlipTrackingRunnable Singleton;
 	static bool bInitialized;
+	static bool bRun;
 
 	FCriticalSection CS;
 	struct FFramePair
@@ -126,8 +128,6 @@ class FRHIFrameFlipTrackingRunnable : public FRunnable
 		FGraphEventRef Event;
 	};
 	TArray<FFramePair> FramePairs;
-
-	bool bRun;
 
 	FRHIFrameFlipTrackingRunnable();
 
@@ -142,7 +142,6 @@ public:
 };
 
 FRHIFrameFlipTrackingRunnable::FRHIFrameFlipTrackingRunnable()
-	: bRun(true)
 {}
 
 #if USE_FRAME_OFFSET_THREAD
@@ -151,13 +150,23 @@ struct FRHIFrameOffsetThread : public FRunnable
 	static FRunnableThread* Thread;
 	static FRHIFrameOffsetThread Singleton;
 	static bool bInitialized;
+	static bool bRun;
 
 	FCriticalSection CS;
 	FRHIFlipDetails LastFlipFrame;
 
-	bool bRun;
 
 	FEvent* WaitEvent;
+
+#if !UE_BUILD_SHIPPING
+	struct FFrameDebugInfo
+	{
+		uint64 PresentIndex;
+		uint64 FrameIndex;
+		uint64 InputTime;
+	};
+	TArray<FFrameDebugInfo> FrameDebugInfos;
+#endif
 
 	virtual uint32 Run() override
 	{
@@ -180,6 +189,22 @@ struct FRHIFrameOffsetThread : public FRunnable
 				LastFlipFrame.FlipTimeInSeconds = LastFlipFrame.FlipTimeInSeconds + TargetFrameTimeInSeconds - SlackInSeconds;
 				LastFlipFrame.VBlankTimeInSeconds = LastFlipFrame.VBlankTimeInSeconds + TargetFrameTimeInSeconds - SlackInSeconds;
 				LastFlipFrame.PresentIndex++;
+
+#if !UE_BUILD_SHIPPING && PLATFORM_SUPPORTS_FLIP_TRACKING
+				for (int32 DebugInfoIndex = FrameDebugInfos.Num() - 1; DebugInfoIndex >= 0; --DebugInfoIndex)
+				{
+					auto const& DebugInfo = FrameDebugInfos[DebugInfoIndex];
+					if (NewFlipFrame.PresentIndex == DebugInfo.PresentIndex)
+					{
+						GInputLatencyTime = (NewFlipFrame.VBlankTimeInSeconds / FPlatformTime::GetSecondsPerCycle64()) - DebugInfo.InputTime;
+					}
+
+					if (DebugInfo.PresentIndex <= NewFlipFrame.PresentIndex)
+					{
+						FrameDebugInfos.RemoveAtSwap(DebugInfoIndex);
+					}
+				}
+#endif
 			}
 
 			WaitEvent->Trigger();
@@ -195,8 +220,7 @@ struct FRHIFrameOffsetThread : public FRunnable
 
 public:
 	FRHIFrameOffsetThread()
-		: bRun(true)
-		, WaitEvent(nullptr)
+		: WaitEvent(nullptr)
 	{}
 
 	~FRHIFrameOffsetThread()
@@ -211,7 +235,14 @@ public:
 	static FRHIFlipDetails WaitForFlip(double Timeout)
 	{
 		check(Singleton.WaitEvent);
-		Singleton.WaitEvent->Wait((uint32)(Timeout * 1000.0));
+		if (Timeout >= 0)
+		{
+			Singleton.WaitEvent->Wait((uint32)(Timeout * 1000.0));
+		}
+		else
+		{
+			Singleton.WaitEvent->Wait();
+		}
 
 		FScopeLock Lock(&Singleton.CS);
 		return Singleton.LastFlipFrame;
@@ -225,6 +256,7 @@ public:
 	static void Initialize()
 	{
 		bInitialized = true;
+		bRun = true;
 		Singleton.GetOrInitializeWaitEvent();
 		check(Thread == nullptr);
 		Thread = FRunnableThread::Create(&Singleton, TEXT("RHIFrameOffsetThread"), 0, TPri_AboveNormal);
@@ -232,7 +264,7 @@ public:
 
 	static void Shutdown()
 	{
-		// PS4 calls shutdown before initialize has been called, so bail out if that happens  
+		// PS4 calls shutdown before initialize has been called, so bail out if that happens
 		if (!bInitialized)
 		{
 			return;
@@ -248,6 +280,21 @@ public:
 		}
 
 		Singleton.GetOrInitializeWaitEvent()->Trigger();
+	}
+
+	static void SetFrameDebugInfo(uint64 PresentIndex, uint64 FrameIndex, uint64 InputTime)
+	{
+#if !UE_BUILD_SHIPPING && PLATFORM_SUPPORTS_FLIP_TRACKING
+		FScopeLock Lock(&Singleton.CS);
+		if (Thread)
+		{
+			FFrameDebugInfo DebugInfo;
+			DebugInfo.PresentIndex = PresentIndex;
+			DebugInfo.FrameIndex = FrameIndex;
+			DebugInfo.InputTime = InputTime;
+			Singleton.FrameDebugInfos.Add(DebugInfo);
+		}
+#endif
 	}
 
 private:
@@ -266,6 +313,7 @@ private:
 FRunnableThread* FRHIFrameOffsetThread::Thread = nullptr;
 FRHIFrameOffsetThread FRHIFrameOffsetThread::Singleton;
 bool FRHIFrameOffsetThread::bInitialized = false;
+bool FRHIFrameOffsetThread::bRun = false;
 
 #endif // USE_FRAME_OFFSET_THREAD
 
@@ -274,6 +322,11 @@ uint32 FRHIFrameFlipTrackingRunnable::Run()
 	uint64 SyncFrame = 0;
 	double SyncTime = FPlatformTime::Seconds();
 	bool bForceFlipSync = true;
+
+	if ( ! FPlatformMisc::UseRenderThread() )
+	{
+		return 0;
+	}
 
 	while (bRun)
 	{
@@ -338,13 +391,24 @@ void FRHIFrameFlipTrackingRunnable::Stop()
 
 void FRHIFrameFlipTrackingRunnable::Initialize()
 {
+	if ( ! FPlatformMisc::UseRenderThread() )
+	{
+		return;
+	}
+
 	check(Thread == nullptr);
 	bInitialized = true;
+	bRun = true;
 	Thread = FRunnableThread::Create(&Singleton, TEXT("RHIFrameFlipThread"), 0, TPri_AboveNormal);
 }
 
 void FRHIFrameFlipTrackingRunnable::Shutdown()
 {
+	if ( ! FPlatformMisc::UseRenderThread() )
+	{
+		return;
+	}
+
 	if (!bInitialized)
 	{
 		return;
@@ -376,6 +440,11 @@ void FRHIFrameFlipTrackingRunnable::Shutdown()
 
 void FRHIFrameFlipTrackingRunnable::CompleteGraphEventOnFlip(uint64 PresentIndex, FGraphEventRef Event)
 {
+	if ( ! FPlatformMisc::UseRenderThread() )
+	{
+		return;
+	}
+
 	FScopeLock Lock(&Singleton.CS);
 
 	if (Thread)
@@ -405,6 +474,7 @@ void FRHIFrameFlipTrackingRunnable::CompleteGraphEventOnFlip(uint64 PresentIndex
 FRunnableThread* FRHIFrameFlipTrackingRunnable::Thread;
 FRHIFrameFlipTrackingRunnable FRHIFrameFlipTrackingRunnable::Singleton;
 bool FRHIFrameFlipTrackingRunnable::bInitialized = false;
+bool FRHIFrameFlipTrackingRunnable::bRun = false;
 
 RHI_API uint32 RHIGetSyncInterval()
 {
@@ -420,6 +490,13 @@ RHI_API void RHIGetPresentThresholds(float& OutTopPercent, float& OutBottomPerce
 RHI_API void RHICompleteGraphEventOnFlip(uint64 PresentIndex, FGraphEventRef Event)
 {
 	FRHIFrameFlipTrackingRunnable::CompleteGraphEventOnFlip(PresentIndex, Event);
+}
+
+RHI_API void RHISetFrameDebugInfo(uint64 PresentIndex, uint64 FrameIndex, uint64 InputTime)
+{
+#if USE_FRAME_OFFSET_THREAD
+	FRHIFrameOffsetThread::SetFrameDebugInfo(PresentIndex, FrameIndex, InputTime);
+#endif
 }
 
 RHI_API void RHIInitializeFlipTracking()

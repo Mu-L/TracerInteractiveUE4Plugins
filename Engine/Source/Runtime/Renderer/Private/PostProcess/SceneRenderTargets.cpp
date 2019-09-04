@@ -120,6 +120,14 @@ static FAutoConsoleVariableRef CVarAllowCustomResolves(
    ECVF_RenderThreadSafe
    );
 
+int32 GVirtualTextureFeedbackFactor = 16;
+static FAutoConsoleVariableRef CVarVirtualTextureFeedbackFactor(
+	TEXT("r.vt.FeedbackFactor"),
+	GVirtualTextureFeedbackFactor,
+	TEXT("The size of the VT feedback buffer is calculated by dividing the render resolution by this factor"),
+	ECVF_RenderThreadSafe | ECVF_ReadOnly /*Read-only as shaders are compiled with this value*/
+);
+
 /** The global render targets used for scene rendering. */
 static TGlobalResource<FSceneRenderTargets> SceneRenderTargetsSingleton;
 
@@ -289,6 +297,7 @@ FSceneRenderTargets::FSceneRenderTargets(const FViewInfo& View, const FSceneRend
 	SnapshotArray(TranslucencyLightingVolumeAmbient, SnapshotSource.TranslucencyLightingVolumeAmbient);
 	SnapshotArray(TranslucencyLightingVolumeDirectional, SnapshotSource.TranslucencyLightingVolumeDirectional);
 	SnapshotArray(OptionalShadowDepthColor, SnapshotSource.OptionalShadowDepthColor);
+	VirtualTextureFeedback.MakeSnapshot(SnapshotSource.VirtualTextureFeedback);
 }
 
 inline const TCHAR* GetSceneColorTargetName(EShadingPath ShadingPath)
@@ -680,31 +689,37 @@ int32 FSceneRenderTargets::FillGBufferRenderPassInfo(ERenderTargetLoadAction Col
 	OutRenderPassInfo.ColorRenderTargets[MRTCount].MipIndex = 0;
 	MRTCount++;
 
-	OutRenderPassInfo.ColorRenderTargets[MRTCount].Action = MakeRenderTargetActions(ColorLoadAction, ERenderTargetStoreAction::EStore);
-	OutRenderPassInfo.ColorRenderTargets[MRTCount].RenderTarget = GBufferA->GetRenderTargetItem().TargetableTexture;
-	OutRenderPassInfo.ColorRenderTargets[MRTCount].ArraySlice = -1;
-	OutRenderPassInfo.ColorRenderTargets[MRTCount].MipIndex = 0;
-	MRTCount++;
+	const EShaderPlatform ShaderPlatform = GetFeatureLevelShaderPlatform(CurrentFeatureLevel);
+	const bool bUseGBuffer = IsUsingGBuffers(ShaderPlatform);
 
-	OutRenderPassInfo.ColorRenderTargets[MRTCount].Action = MakeRenderTargetActions(ColorLoadAction, ERenderTargetStoreAction::EStore);
-	OutRenderPassInfo.ColorRenderTargets[MRTCount].RenderTarget = GBufferB->GetRenderTargetItem().TargetableTexture;
-	OutRenderPassInfo.ColorRenderTargets[MRTCount].ArraySlice = -1;
-	OutRenderPassInfo.ColorRenderTargets[MRTCount].MipIndex = 0;
-	MRTCount++;
+	if (bUseGBuffer)
+	{
+		OutRenderPassInfo.ColorRenderTargets[MRTCount].Action = MakeRenderTargetActions(ColorLoadAction, ERenderTargetStoreAction::EStore);
+		OutRenderPassInfo.ColorRenderTargets[MRTCount].RenderTarget = GBufferA->GetRenderTargetItem().TargetableTexture;
+		OutRenderPassInfo.ColorRenderTargets[MRTCount].ArraySlice = -1;
+		OutRenderPassInfo.ColorRenderTargets[MRTCount].MipIndex = 0;
+		MRTCount++;
 
-	OutRenderPassInfo.ColorRenderTargets[MRTCount].Action = MakeRenderTargetActions(ColorLoadAction, ERenderTargetStoreAction::EStore);
-	OutRenderPassInfo.ColorRenderTargets[MRTCount].RenderTarget = GBufferC->GetRenderTargetItem().TargetableTexture;
-	OutRenderPassInfo.ColorRenderTargets[MRTCount].ArraySlice = -1;
-	OutRenderPassInfo.ColorRenderTargets[MRTCount].MipIndex = 0;
-	MRTCount++;
+		OutRenderPassInfo.ColorRenderTargets[MRTCount].Action = MakeRenderTargetActions(ColorLoadAction, ERenderTargetStoreAction::EStore);
+		OutRenderPassInfo.ColorRenderTargets[MRTCount].RenderTarget = GBufferB->GetRenderTargetItem().TargetableTexture;
+		OutRenderPassInfo.ColorRenderTargets[MRTCount].ArraySlice = -1;
+		OutRenderPassInfo.ColorRenderTargets[MRTCount].MipIndex = 0;
+		MRTCount++;
+
+		OutRenderPassInfo.ColorRenderTargets[MRTCount].Action = MakeRenderTargetActions(ColorLoadAction, ERenderTargetStoreAction::EStore);
+		OutRenderPassInfo.ColorRenderTargets[MRTCount].RenderTarget = GBufferC->GetRenderTargetItem().TargetableTexture;
+		OutRenderPassInfo.ColorRenderTargets[MRTCount].ArraySlice = -1;
+		OutRenderPassInfo.ColorRenderTargets[MRTCount].MipIndex = 0;
+		MRTCount++;
+	}
 
 	// The velocity buffer needs to be bound before other optionnal rendertargets (when UseSelectiveBasePassOutputs() is true).
 	// Otherwise there is an issue on some AMD hardware where the target does not get updated. Seems to be related to the velocity buffer format as it works fine with other targets.
-	if (bAllocateVelocityGBuffer)
+	if (bAllocateVelocityGBuffer && !IsSimpleForwardShadingEnabled(ShaderPlatform))
 	{
 		OutVelocityRTIndex = MRTCount;
-		check(OutVelocityRTIndex == 4); // As defined in BasePassPixelShader.usf
-
+		check(OutVelocityRTIndex == 4 || (!bUseGBuffer && OutVelocityRTIndex == 1)); // As defined in BasePassPixelShader.usf
+		
 		OutRenderPassInfo.ColorRenderTargets[MRTCount].Action = MakeRenderTargetActions(ColorLoadAction, ERenderTargetStoreAction::EStore);
 		OutRenderPassInfo.ColorRenderTargets[MRTCount].RenderTarget = SceneVelocity->GetRenderTargetItem().TargetableTexture;
 		OutRenderPassInfo.ColorRenderTargets[MRTCount].ArraySlice = -1;
@@ -716,20 +731,23 @@ int32 FSceneRenderTargets::FillGBufferRenderPassInfo(ERenderTargetLoadAction Col
 		OutVelocityRTIndex = -1;
 	}
 
-	OutRenderPassInfo.ColorRenderTargets[MRTCount].Action = MakeRenderTargetActions(ColorLoadAction, ERenderTargetStoreAction::EStore);
-	OutRenderPassInfo.ColorRenderTargets[MRTCount].RenderTarget = GBufferD->GetRenderTargetItem().TargetableTexture;
-	OutRenderPassInfo.ColorRenderTargets[MRTCount].ArraySlice = -1;
-	OutRenderPassInfo.ColorRenderTargets[MRTCount].MipIndex = 0;
-	MRTCount++;
-
-	if (bAllowStaticLighting)
+	if (bUseGBuffer)
 	{
-		check(MRTCount == (bAllocateVelocityGBuffer ? 6 : 5)); // As defined in BasePassPixelShader.usf
 		OutRenderPassInfo.ColorRenderTargets[MRTCount].Action = MakeRenderTargetActions(ColorLoadAction, ERenderTargetStoreAction::EStore);
-		OutRenderPassInfo.ColorRenderTargets[MRTCount].RenderTarget = GBufferE->GetRenderTargetItem().TargetableTexture;
+		OutRenderPassInfo.ColorRenderTargets[MRTCount].RenderTarget = GBufferD->GetRenderTargetItem().TargetableTexture;
 		OutRenderPassInfo.ColorRenderTargets[MRTCount].ArraySlice = -1;
 		OutRenderPassInfo.ColorRenderTargets[MRTCount].MipIndex = 0;
 		MRTCount++;
+
+		if (bAllowStaticLighting)
+		{
+			check(MRTCount == (bAllocateVelocityGBuffer ? 6 : 5)); // As defined in BasePassPixelShader.usf
+			OutRenderPassInfo.ColorRenderTargets[MRTCount].Action = MakeRenderTargetActions(ColorLoadAction, ERenderTargetStoreAction::EStore);
+			OutRenderPassInfo.ColorRenderTargets[MRTCount].RenderTarget = GBufferE->GetRenderTargetItem().TargetableTexture;
+			OutRenderPassInfo.ColorRenderTargets[MRTCount].ArraySlice = -1;
+			OutRenderPassInfo.ColorRenderTargets[MRTCount].MipIndex = 0;
+			MRTCount++;
+		}
 	}
 
 	check(MRTCount <= MaxSimultaneousRenderTargets);
@@ -740,16 +758,22 @@ int32 FSceneRenderTargets::GetGBufferRenderTargets(ERenderTargetLoadAction Color
 {
 	int32 MRTCount = 0;
 	OutRenderTargets[MRTCount++] = FRHIRenderTargetView(GetSceneColorSurface(), 0, -1, ColorLoadAction, ERenderTargetStoreAction::EStore);
-	OutRenderTargets[MRTCount++] = FRHIRenderTargetView(GBufferA->GetRenderTargetItem().TargetableTexture, 0, -1, ColorLoadAction, ERenderTargetStoreAction::EStore);
-	OutRenderTargets[MRTCount++] = FRHIRenderTargetView(GBufferB->GetRenderTargetItem().TargetableTexture, 0, -1, ColorLoadAction, ERenderTargetStoreAction::EStore);
-	OutRenderTargets[MRTCount++] = FRHIRenderTargetView(GBufferC->GetRenderTargetItem().TargetableTexture, 0, -1, ColorLoadAction, ERenderTargetStoreAction::EStore);
+
+	const EShaderPlatform ShaderPlatform = GetFeatureLevelShaderPlatform(CurrentFeatureLevel);
+	const bool bUseGBuffer = IsUsingGBuffers(ShaderPlatform);
+	if (bUseGBuffer)
+	{
+		OutRenderTargets[MRTCount++] = FRHIRenderTargetView(GBufferA->GetRenderTargetItem().TargetableTexture, 0, -1, ColorLoadAction, ERenderTargetStoreAction::EStore);
+		OutRenderTargets[MRTCount++] = FRHIRenderTargetView(GBufferB->GetRenderTargetItem().TargetableTexture, 0, -1, ColorLoadAction, ERenderTargetStoreAction::EStore);
+		OutRenderTargets[MRTCount++] = FRHIRenderTargetView(GBufferC->GetRenderTargetItem().TargetableTexture, 0, -1, ColorLoadAction, ERenderTargetStoreAction::EStore);
+	}
 
 	// The velocity buffer needs to be bound before other optionnal rendertargets (when UseSelectiveBasePassOutputs() is true).
 	// Otherwise there is an issue on some AMD hardware where the target does not get updated. Seems to be related to the velocity buffer format as it works fine with other targets.
-	if (bAllocateVelocityGBuffer)
+	if (bAllocateVelocityGBuffer && !IsSimpleForwardShadingEnabled(ShaderPlatform))
 	{
 		OutVelocityRTIndex = MRTCount;
-		check(OutVelocityRTIndex == 4); // As defined in BasePassPixelShader.usf
+		check(OutVelocityRTIndex == 4 || (!bUseGBuffer && OutVelocityRTIndex == 1)); // As defined in BasePassPixelShader.usf
 		OutRenderTargets[MRTCount++] = FRHIRenderTargetView(SceneVelocity->GetRenderTargetItem().TargetableTexture, 0, -1, ColorLoadAction, ERenderTargetStoreAction::EStore);
 	}
 	else
@@ -757,25 +781,48 @@ int32 FSceneRenderTargets::GetGBufferRenderTargets(ERenderTargetLoadAction Color
 		OutVelocityRTIndex = -1;
 	}
 
-	OutRenderTargets[MRTCount++] = FRHIRenderTargetView(GBufferD->GetRenderTargetItem().TargetableTexture, 0, -1, ColorLoadAction, ERenderTargetStoreAction::EStore);
-
-	if (bAllowStaticLighting)
+	if (bUseGBuffer)
 	{
-		check(MRTCount == (bAllocateVelocityGBuffer ? 6 : 5)); // As defined in BasePassPixelShader.usf
-		OutRenderTargets[MRTCount++] = FRHIRenderTargetView(GBufferE->GetRenderTargetItem().TargetableTexture, 0, -1, ColorLoadAction, ERenderTargetStoreAction::EStore);
+		OutRenderTargets[MRTCount++] = FRHIRenderTargetView(GBufferD->GetRenderTargetItem().TargetableTexture, 0, -1, ColorLoadAction, ERenderTargetStoreAction::EStore);
+
+		if (bAllowStaticLighting)
+		{
+			check(MRTCount == (bAllocateVelocityGBuffer ? 6 : 5)); // As defined in BasePassPixelShader.usf
+			OutRenderTargets[MRTCount++] = FRHIRenderTargetView(GBufferE->GetRenderTargetItem().TargetableTexture, 0, -1, ColorLoadAction, ERenderTargetStoreAction::EStore);
+		}
 	}
 
 	check(MRTCount <= MaxSimultaneousRenderTargets);
 	return MRTCount;
 }
 
+#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+int32 FSceneRenderTargets::GetQuadOverdrawUAVIndex(EShaderPlatform Platform, ERHIFeatureLevel::Type FeatureLevel)
+{
+	if (IsSimpleForwardShadingEnabled(Platform))
+	{
+		return 1;
+	}
+	else if (IsForwardShadingEnabled(Platform))
+	{
+		return FVelocityRendering::BasePassCanOutputVelocity(FeatureLevel) ? 2 : 1;
+	}
+	else // GBuffer
+	{
+		return FVelocityRendering::BasePassCanOutputVelocity(FeatureLevel) ? 7 : 6;
+	}
+}
+#endif // !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+
 void FSceneRenderTargets::SetQuadOverdrawUAV(FRHICommandList& RHICmdList, bool bBindQuadOverdrawBuffers, bool bClearQuadOverdrawBuffers, FRHIRenderPassInfo& OutInfo)
 {
-	if (bBindQuadOverdrawBuffers && AllowDebugViewShaderMode(DVSM_QuadComplexity, GetFeatureLevelShaderPlatform(CurrentFeatureLevel), CurrentFeatureLevel))
+#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+	const EShaderPlatform ShaderPlatform = GetFeatureLevelShaderPlatform(CurrentFeatureLevel);
+	if (bBindQuadOverdrawBuffers && AllowDebugViewShaderMode(DVSM_QuadComplexity, ShaderPlatform, CurrentFeatureLevel))
 	{
 		if (QuadOverdrawBuffer.IsValid() && QuadOverdrawBuffer->GetRenderTargetItem().UAV.IsValid())
 		{
-			QuadOverdrawIndex = IsAnyForwardShadingEnabled(GetFeatureLevelShaderPlatform(CurrentFeatureLevel)) ? 1 : 7; // As defined in QuadOverdraw.usf
+			QuadOverdrawIndex = GetQuadOverdrawUAVIndex(ShaderPlatform, CurrentFeatureLevel);
 
 			// Increase the rendertarget count in order to control the bound slot of the UAV.
 			check(OutInfo.GetNumColorRenderTargets() <= QuadOverdrawIndex);
@@ -791,6 +838,18 @@ void FSceneRenderTargets::SetQuadOverdrawUAV(FRHICommandList& RHICmdList, bool b
 			}
 		}
 	}
+#endif // !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+}
+
+void FSceneRenderTargets::BindVirtualTextureFeedbackUAV(FRHIRenderPassInfo& RPInfo)
+{
+	// must match VT_FEEDBACK_REGISTER in VirtualTextureCommon.ush
+	static const int32 VT_FEEDBACK_REGISTER = 7;
+
+	checkf(VirtualTextureFeedback.FeedbackTextureGPU, TEXT("Invalid attempt to render VT feedback after it has already been transferred to CPU, need to adjust location of TransferGPUToCPU"));
+	check(RPInfo.GetNumColorRenderTargets() <= VT_FEEDBACK_REGISTER);
+	RPInfo.UAVIndex = VT_FEEDBACK_REGISTER;
+	RPInfo.UAVs[RPInfo.NumUAVs++] = VirtualTextureFeedback.FeedbackTextureGPU->GetRenderTargetItem().UAV;
 }
 
 void FSceneRenderTargets::BeginRenderingGBuffer(FRHICommandList& RHICmdList, ERenderTargetLoadAction ColorLoadAction, ERenderTargetLoadAction DepthLoadAction, FExclusiveDepthStencil::Type DepthStencilAccess, bool bBindQuadOverdrawBuffers, bool bClearQuadOverdrawBuffers, const FLinearColor& ClearColor/*=(0,0,0,1)*/, bool bIsWireframe)
@@ -824,22 +883,8 @@ void FSceneRenderTargets::BeginRenderingGBuffer(FRHICommandList& RHICmdList, ERe
 	}
 
 	int32 VelocityRTIndex = -1;
-	int32 MRTCount;
-
 	FRHIRenderPassInfo RPInfo;
-
-	if (IsAnyForwardShadingEnabled(GetFeatureLevelShaderPlatform(CurrentFeatureLevel)))
-	{
-		MRTCount = 1;
-		RPInfo.ColorRenderTargets[0].Action = MakeRenderTargetActions(ColorLoadAction, ERenderTargetStoreAction::EStore);
-		RPInfo.ColorRenderTargets[0].RenderTarget = SceneColorTex;
-		RPInfo.ColorRenderTargets[0].ArraySlice = -1;
-		RPInfo.ColorRenderTargets[0].MipIndex = 0;
-	}
-	else
-	{
-		MRTCount = FillGBufferRenderPassInfo(ColorLoadAction, RPInfo, VelocityRTIndex);
-	}
+	int32 MRTCount = FillGBufferRenderPassInfo(ColorLoadAction, RPInfo, VelocityRTIndex);
 
 	//make sure our conditions for shader clear fallback are valid.
 	check(RPInfo.ColorRenderTargets[0].RenderTarget == SceneColorTex);
@@ -856,13 +901,9 @@ void FSceneRenderTargets::BeginRenderingGBuffer(FRHICommandList& RHICmdList, ERe
 	RPInfo.DepthStencilRenderTarget.DepthStencilTarget = GetSceneDepthSurface();
 	RPInfo.DepthStencilRenderTarget.ExclusiveDepthStencil = DepthStencilAccess;
 
-	static const auto CVarVirtualTextureLightmaps = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.VirtualTexturedLightmaps"));
-	if(CVarVirtualTextureLightmaps && CVarVirtualTextureLightmaps->GetValueOnRenderThread() && !bBindQuadOverdrawBuffers )
+	if(UseVirtualTexturing(CurrentFeatureLevel) && !bBindQuadOverdrawBuffers )
 	{
-		int32 FeedbackIndex = 7;
-		check(RPInfo.GetNumColorRenderTargets() <= FeedbackIndex);
-		RPInfo.UAVIndex = FeedbackIndex;
-		RPInfo.UAVs[RPInfo.NumUAVs++] = GVirtualTextureFeedback.FeedbackTextureGPU->GetRenderTargetItem().UAV;		
+		BindVirtualTextureFeedbackUAV(RPInfo);
 	}	
 
 	RHICmdList.BeginRenderPass(RPInfo, TEXT("GBuffer"));
@@ -870,7 +911,7 @@ void FSceneRenderTargets::BeginRenderingGBuffer(FRHICommandList& RHICmdList, ERe
 	if (bShaderClear)
 	{
 		FLinearColor ClearColors[MaxSimultaneousRenderTargets];
-		FTextureRHIParamRef Textures[MaxSimultaneousRenderTargets];
+		FRHITexture* Textures[MaxSimultaneousRenderTargets];
 		ClearColors[0] = ClearColor;
 		Textures[0] = RPInfo.ColorRenderTargets[0].RenderTarget;
 		for (int32 i = 1; i < MRTCount; ++i)
@@ -912,15 +953,26 @@ void FSceneRenderTargets::FinishGBufferPassAndResolve(FRHICommandListImmediate& 
 {
 	RHICmdList.EndRenderPass();
 
+	const EShaderPlatform ShaderPlatform = GetFeatureLevelShaderPlatform(CurrentFeatureLevel);
+	if (IsSimpleForwardShadingEnabled(ShaderPlatform))
+	{
+		// Currently nothing to do here for simple forward shading.
+		return;
+	}
+
 	int32 VelocityRTIndex;
 	FRHIRenderTargetView RenderTargets[MaxSimultaneousRenderTargets];
 	int32 NumMRTs = GetGBufferRenderTargets(ERenderTargetLoadAction::ELoad, RenderTargets, VelocityRTIndex);
 
 	FResolveParams ResolveParams;
-	for (int32 i = 0; i < NumMRTs; ++i)
+
+	// Skip the SceneColor resolve when using forward shading as this is done after this function is called.
+	int32 i = IsForwardShadingEnabled(ShaderPlatform) ? 1 : 0;
+
+	for ( ; i < NumMRTs; ++i)
 	{
 		 // When the basepass outputs to the velocity buffer, don't resolve it yet if selective outputs are enabled, as it will be resolved after the velocity pass.
-		if (i != VelocityRTIndex || !UseSelectiveBasePassOutputs())
+		if (i != VelocityRTIndex || !IsUsingSelectiveBasePassOutputs(ShaderPlatform))
 		{
 			RHICmdList.CopyToResolveTarget(RenderTargets[i].Texture, RenderTargets[i].Texture, ResolveParams);
 		}
@@ -933,10 +985,14 @@ int32 FSceneRenderTargets::GetNumGBufferTargets() const
 {
 	int32 NumGBufferTargets = 1;
 
-	if (CurrentFeatureLevel >= ERHIFeatureLevel::SM4 && !IsAnyForwardShadingEnabled(GetFeatureLevelShaderPlatform(CurrentFeatureLevel)))
+	if (CurrentFeatureLevel >= ERHIFeatureLevel::SM4)
 	{
-		// This needs to match TBasePassPixelShaderBaseType::ModifyCompilationEnvironment()
-		NumGBufferTargets = bAllowStaticLighting ? 6 : 5;
+		const EShaderPlatform ShaderPlatform = GetFeatureLevelShaderPlatform(CurrentFeatureLevel);
+		if (IsUsingGBuffers(ShaderPlatform))
+		{
+			// This needs to match TBasePassPixelShaderBaseType::ModifyCompilationEnvironment()
+			NumGBufferTargets = bAllowStaticLighting ? 6 : 5;
+		}
 
 		if (bAllocateVelocityGBuffer)
 		{
@@ -1032,7 +1088,7 @@ void FSceneRenderTargets::AllocMobileMultiViewDepth(FRHICommandList& RHICmdList,
 		const FIntPoint MultiViewBufferSize(BufferSize.X / ScaleFactor, BufferSize.Y);
 
 		// Using the result of GetDepthFormat() without stencil due to packed depth-stencil not working in array frame buffers.
-		FPooledRenderTargetDesc Desc(FPooledRenderTargetDesc::Create2DDesc(MultiViewBufferSize, PF_D24, DefaultDepthClear, TexCreate_None, TexCreate_DepthStencilTargetable, false));
+		FPooledRenderTargetDesc Desc(FPooledRenderTargetDesc::Create2DDesc(MultiViewBufferSize, PF_D24, DefaultDepthClear, TexCreate_None, TexCreate_DepthStencilTargetable | TexCreate_ShaderResource | TexCreate_InputAttachmentRead, false));
 		Desc.Flags |= TexCreate_FastVRAM;
 		Desc.NumSamples = GetNumSceneColorMSAASamples(CurrentFeatureLevel);
 		Desc.ArraySize = 2;
@@ -1164,15 +1220,15 @@ void FSceneRenderTargets::AllocGBufferTargets(FRHICommandList& RHICmdList)
 			GRenderTargetPool.FindFreeElement(RHICmdList, Desc, GBufferE, TEXT("GBufferE"));
 		}
 
-		if (bAllocateVelocityGBuffer)
-		{
-			FPooledRenderTargetDesc VelocityRTDesc = FVelocityRendering::GetRenderTargetDesc();
-			VelocityRTDesc.Flags |= GFastVRamConfig.GBufferVelocity; 
-			GRenderTargetPool.FindFreeElement(RHICmdList, VelocityRTDesc, SceneVelocity, TEXT("GBufferVelocity"));
-		}
-
 		// otherwise we have a severe problem
 		check(GBufferA);
+	}
+
+	if (bAllocateVelocityGBuffer)
+	{
+		FPooledRenderTargetDesc VelocityRTDesc = FVelocityRendering::GetRenderTargetDesc();
+		VelocityRTDesc.Flags |= GFastVRamConfig.GBufferVelocity;
+		GRenderTargetPool.FindFreeElement(RHICmdList, VelocityRTDesc, SceneVelocity, TEXT("GBufferVelocity"));
 	}
 
 	GBufferRefCount = 1;
@@ -1510,8 +1566,27 @@ void FSceneRenderTargets::BeginRenderingTranslucency(FRHICommandList& RHICmdList
 {
 	check(RHICmdList.IsOutsideRenderPass());
 
-	// Use the scene color buffer.
-	BeginRenderingSceneColor(RHICmdList, ESimpleRenderTargetMode::EExistingColorAndDepth, FExclusiveDepthStencil::DepthRead_StencilWrite);
+	// Use the scene color buffer (similar logic to BeginRenderingSceneColor, except VT feedback UAV is also bound)
+	SCOPED_DRAW_EVENT(RHICmdList, BeginRenderingTranslucency);
+	AllocSceneColor(RHICmdList);
+
+	ERenderTargetLoadAction ColorLoadAction, DepthLoadAction, StencilLoadAction;
+	ERenderTargetStoreAction ColorStoreAction, DepthStoreAction, StencilStoreAction;
+	DecodeRenderTargetMode(ESimpleRenderTargetMode::EExistingColorAndDepth, ColorLoadAction, ColorStoreAction, DepthLoadAction, DepthStoreAction, StencilLoadAction, StencilStoreAction, FExclusiveDepthStencil::DepthRead_StencilWrite);
+
+	FRHIRenderPassInfo RPInfo(GetSceneColorSurface(), MakeRenderTargetActions(ColorLoadAction, ColorStoreAction));
+	RPInfo.DepthStencilRenderTarget.Action = MakeDepthStencilTargetActions(MakeRenderTargetActions(DepthLoadAction, DepthStoreAction), MakeRenderTargetActions(StencilLoadAction, StencilStoreAction));
+	RPInfo.DepthStencilRenderTarget.DepthStencilTarget = GetSceneDepthSurface();
+	RPInfo.DepthStencilRenderTarget.ExclusiveDepthStencil = FExclusiveDepthStencil::DepthRead_StencilWrite;
+
+	if (UseVirtualTexturing(CurrentFeatureLevel))
+	{
+		BindVirtualTextureFeedbackUAV(RPInfo);
+	}
+
+	TransitionRenderPassTargets(RHICmdList, RPInfo);
+
+	RHICmdList.BeginRenderPass(RPInfo, TEXT("BeginRenderingTranslucency"));
 
 	if (bFirstTimeThisFrame)
 	{
@@ -1586,6 +1661,11 @@ void FSceneRenderTargets::BeginRenderingSeparateTranslucency(FRHICommandList& RH
 	{
 		// Clear the color target the first pass through and re-use after
 		RPInfo.ColorRenderTargets[0].Action = ERenderTargetActions::Clear_Store;
+	}
+	
+	if (UseVirtualTexturing(CurrentFeatureLevel))
+	{
+		BindVirtualTextureFeedbackUAV(RPInfo);
 	}
 
 	RHICmdList.BeginRenderPass(RPInfo, TEXT("BeginRenderingSeparateTranslucency"));
@@ -1726,7 +1806,7 @@ void FSceneRenderTargets::ResolveDepthTexture(FRHICommandList& RHICmdList, const
 	TShaderMapRef<FResolveDepth8XPS> ResolvePixelShader8X(ShaderMap);
 
 	int32 TextureIndex = -1;
-	FPixelShaderRHIParamRef ResolvePixelShader;
+	FRHIPixelShader* ResolvePixelShader;
 	switch (SourceTexture->GetNumSamples())
 	{
 	case 2:
@@ -1801,9 +1881,11 @@ void FSceneRenderTargets::ResolveSceneDepthTexture(FRHICommandList& RHICmdList, 
 
 	SCOPED_DRAW_EVENT(RHICmdList, ResolveSceneDepthTexture);
 
+	FResolveParams ResolveParams;
 	if (ResolveRect.IsValid())
 	{
-		RHICmdList.SetScissorRect(true, ResolveRect.X1, ResolveRect.Y1, ResolveRect.X2, ResolveRect.Y2);
+		ResolveParams.DestRect = ResolveRect;
+		ResolveParams.Rect = ResolveRect;
 	}
 
 	FSceneRenderTargets& SceneContext = FSceneRenderTargets::Get(RHICmdList);
@@ -1812,16 +1894,11 @@ void FSceneRenderTargets::ResolveSceneDepthTexture(FRHICommandList& RHICmdList, 
 	const EShaderPlatform CurrentShaderPlatform = GShaderPlatformForFeatureLevel[SceneContext.GetCurrentFeatureLevel()];
 	if ((CurrentNumSamples <= 1 || !RHISupportsSeparateMSAAAndResolveTextures(CurrentShaderPlatform)) || !GAllowCustomMSAAResolves)
 	{
-		RHICmdList.CopyToResolveTarget(GetSceneDepthSurface(), GetSceneDepthTexture(), FResolveParams());
+		RHICmdList.CopyToResolveTarget(GetSceneDepthSurface(), GetSceneDepthTexture(), ResolveParams);
 	}
 	else
 	{
-		ResolveDepthTexture(RHICmdList, GetSceneDepthSurface(), GetSceneDepthTexture(), FResolveParams());
-	}
-
-	if (ResolveRect.IsValid())
-	{
-		RHICmdList.SetScissorRect(false, 0, 0, 0, 0);
+		ResolveDepthTexture(RHICmdList, GetSceneDepthSurface(), GetSceneDepthTexture(), ResolveParams);
 	}
 }
 
@@ -1971,11 +2048,8 @@ void FSceneRenderTargets::AllocateMobileRenderTargets(FRHICommandList& RHICmdLis
 	if (bIsUsingMobileMultiView)
 	{
 		const int32 ScaleFactor = (bIsMobileMultiViewDirectEnabled) ? 1 : 2;
-		if (!bIsMobileMultiViewDirectEnabled)
-		{
-			AllocMobileMultiViewSceneColor(RHICmdList, ScaleFactor);
-		}
 
+		AllocMobileMultiViewSceneColor(RHICmdList, ScaleFactor);
 		AllocMobileMultiViewDepth(RHICmdList, ScaleFactor);
 	}
 #endif
@@ -2130,18 +2204,20 @@ void FSceneRenderTargets::AllocateCommonDepthTargets(FRHICommandList& RHICmdList
 	if (!SceneDepthZ || GFastVRamConfig.bDirty)
 	{
 		FTexture2DRHIRef DepthTex, SRTex;
-		const bool bHMDAllocated = StereoRenderTargetManager && StereoRenderTargetManager->AllocateDepthTexture(0, BufferSize.X, BufferSize.Y, PF_X24_G8, 0, TexCreate_None, TexCreate_DepthStencilTargetable, DepthTex, SRTex, GetNumSceneColorMSAASamples(CurrentFeatureLevel));
+		bHMDAllocatedDepthTarget = StereoRenderTargetManager && StereoRenderTargetManager->AllocateDepthTexture(0, BufferSize.X, BufferSize.Y, PF_X24_G8, 0, TexCreate_None, TexCreate_DepthStencilTargetable, DepthTex, SRTex, GetNumSceneColorMSAASamples(CurrentFeatureLevel));
 
 		// Create a texture to store the resolved scene depth, and a render-targetable surface to hold the unresolved scene depth.
-		FPooledRenderTargetDesc Desc(FPooledRenderTargetDesc::Create2DDesc(BufferSize, PF_DepthStencil, DefaultDepthClear, TexCreate_None, TexCreate_DepthStencilTargetable | TexCreate_ShaderResource, false));
+		FPooledRenderTargetDesc Desc(FPooledRenderTargetDesc::Create2DDesc(BufferSize, PF_DepthStencil, DefaultDepthClear, TexCreate_None, TexCreate_DepthStencilTargetable | TexCreate_ShaderResource | TexCreate_InputAttachmentRead, false));
 		Desc.NumSamples = GetNumSceneColorMSAASamples(CurrentFeatureLevel);
 		Desc.Flags |= GFastVRamConfig.SceneDepth;
-		GRenderTargetPool.FindFreeElement(RHICmdList, Desc, SceneDepthZ, TEXT("SceneDepthZ"));
 
-		if (bHMDAllocated)
+		// Only defer texture allocation if we're an HMD-allocated target, and we're not MSAA.
+		const bool bDeferTextureAllocation = bHMDAllocatedDepthTarget && Desc.NumSamples == 1;
+		GRenderTargetPool.FindFreeElement(RHICmdList, Desc, SceneDepthZ, TEXT("SceneDepthZ"), true, ERenderTargetTransience::Transient, bDeferTextureAllocation);
+
+		if (SceneDepthZ && bHMDAllocatedDepthTarget)
 		{
 			const uint32 OldElementSize = SceneDepthZ->ComputeMemorySize();
-			bHMDAllocatedDepthTarget = true;
 		
 			// If SRT and texture are different (MSAA), only modify the resolve render target, to avoid creating a swapchain of MSAA textures
 			if (SceneDepthZ->GetRenderTargetItem().ShaderResourceTexture == SceneDepthZ->GetRenderTargetItem().TargetableTexture)
@@ -2156,12 +2232,18 @@ void FSceneRenderTargets::AllocateCommonDepthTargets(FRHICommandList& RHICmdList
 			GRenderTargetPool.UpdateElementSize(SceneDepthZ, OldElementSize);
 		}
 
-		SceneStencilSRV = RHICreateShaderResourceView((FTexture2DRHIRef&)SceneDepthZ->GetRenderTargetItem().TargetableTexture, 0, 1, PF_X24_G8);
+		SceneStencilSRV.SafeRelease();
 	}
-	else if (bStereo && bHMDAllocatedDepthTarget)
+
+	// We need to update the stencil SRV every frame if the depth target was allocated by an HMD.
+	// TODO: This should be handled by the HMD depth target swap chain, but currently it only updates the depth SRV.
+	if (bHMDAllocatedDepthTarget)
 	{
-		// We need to update the stencil SRV every frame if the depth target was allocated by an HMD.
-		// TODO: This should be handled by the HMD depth target swap chain, but currently it only updates the depth SRV.
+		SceneStencilSRV.SafeRelease();
+	}
+
+	if (SceneDepthZ && !SceneStencilSRV)
+	{
 		SceneStencilSRV = RHICreateShaderResourceView((FTexture2DRHIRef&)SceneDepthZ->GetRenderTargetItem().TargetableTexture, 0, 1, PF_X24_G8);
 	}
 
@@ -2357,6 +2439,12 @@ void FSceneRenderTargets::AllocateDeferredShadingPathRenderTargets(FRHICommandLi
 		VelocityRTDesc.Flags |= GFastVRamConfig.GBufferVelocity;
 		GRenderTargetPool.FindFreeElement(RHICmdList, VelocityRTDesc, SceneVelocity, TEXT("GBufferVelocity"));
 	}
+
+	if (UseVirtualTexturing(CurrentFeatureLevel))
+	{
+		FIntPoint FeedbackSize = FIntPoint::DivideAndRoundUp(BufferSize, FMath::Max(GVirtualTextureFeedbackFactor, 1));
+		VirtualTextureFeedback.CreateResourceGPU(RHICmdList, FeedbackSize);
+	}
 }
 
 EPixelFormat FSceneRenderTargets::GetDesiredMobileSceneColorFormat() const
@@ -2397,7 +2485,7 @@ void FSceneRenderTargets::ClearTranslucentVolumeLighting(FRHICommandListImmediat
 			IConsoleManager::Get().FindConsoleVariable(TEXT("r.TranslucencyVolumeBlur"));
 		static constexpr int32 Num3DTextures = NumTranslucentVolumeRenderTargetSets << 1;
 
-		FTextureRHIParamRef RenderTargets[Num3DTextures];
+		FRHITexture* RenderTargets[Num3DTextures];
 		bool bUseTransLightingVolBlur = CVarTranslucencyVolumeBlur->GetInt() > 0;
 		const int32 NumIterations = bUseTransLightingVolBlur ?
 			NumTranslucentVolumeRenderTargetSets : NumTranslucentVolumeRenderTargetSets - 1;
@@ -2423,7 +2511,7 @@ void FSceneRenderTargets::ClearTranslucentVolumeLighting(FRHICommandListImmediat
 
 /** Helper function that clears the given volume texture render targets. */
 template<int32 NumRenderTargets>
-void FSceneRenderTargets::ClearVolumeTextures(FRHICommandList& RHICmdList, ERHIFeatureLevel::Type FeatureLevel, FTextureRHIParamRef* RenderTargets, const FLinearColor* ClearColors)
+void FSceneRenderTargets::ClearVolumeTextures(FRHICommandList& RHICmdList, ERHIFeatureLevel::Type FeatureLevel, FRHITexture** RenderTargets, const FLinearColor* ClearColors)
 {
 	check(!RHICmdList.IsInsideRenderPass());
 
@@ -2448,7 +2536,9 @@ void FSceneRenderTargets::ClearVolumeTextures(FRHICommandList& RHICmdList, ERHIF
 
 	GraphicsPSOInit.BoundShaderState.VertexDeclarationRHI = GScreenVertexDeclaration.VertexDeclarationRHI;
 	GraphicsPSOInit.BoundShaderState.VertexShaderRHI = GETSAFERHISHADER_VERTEX(*VertexShader);
+#if PLATFORM_SUPPORTS_GEOMETRY_SHADERS
 	GraphicsPSOInit.BoundShaderState.GeometryShaderRHI = GETSAFERHISHADER_GEOMETRY(*GeometryShader);
+#endif
 	GraphicsPSOInit.BoundShaderState.PixelShaderRHI = GETSAFERHISHADER_PIXEL(*PixelShader);
 	GraphicsPSOInit.PrimitiveType = PT_TriangleStrip;
 
@@ -2465,16 +2555,16 @@ void FSceneRenderTargets::ClearVolumeTextures(FRHICommandList& RHICmdList, ERHIF
 	}
 	RHICmdList.EndRenderPass();
 
-	RHICmdList.TransitionResources(EResourceTransitionAccess::EReadable, (FTextureRHIParamRef*)RenderTargets, NumRenderTargets);
+	RHICmdList.TransitionResources(EResourceTransitionAccess::EReadable, (FRHITexture**)RenderTargets, NumRenderTargets);
 }
-template void FSceneRenderTargets::ClearVolumeTextures<1>(FRHICommandList& RHICmdList, ERHIFeatureLevel::Type FeatureLevel, FTextureRHIParamRef* RenderTargets, const FLinearColor* ClearColors);
-template void FSceneRenderTargets::ClearVolumeTextures<2>(FRHICommandList& RHICmdList, ERHIFeatureLevel::Type FeatureLevel, FTextureRHIParamRef* RenderTargets, const FLinearColor* ClearColors);
-template void FSceneRenderTargets::ClearVolumeTextures<3>(FRHICommandList& RHICmdList, ERHIFeatureLevel::Type FeatureLevel, FTextureRHIParamRef* RenderTargets, const FLinearColor* ClearColors);
-template void FSceneRenderTargets::ClearVolumeTextures<4>(FRHICommandList& RHICmdList, ERHIFeatureLevel::Type FeatureLevel, FTextureRHIParamRef* RenderTargets, const FLinearColor* ClearColors);
-template void FSceneRenderTargets::ClearVolumeTextures<5>(FRHICommandList& RHICmdList, ERHIFeatureLevel::Type FeatureLevel, FTextureRHIParamRef* RenderTargets, const FLinearColor* ClearColors);
-template void FSceneRenderTargets::ClearVolumeTextures<6>(FRHICommandList& RHICmdList, ERHIFeatureLevel::Type FeatureLevel, FTextureRHIParamRef* RenderTargets, const FLinearColor* ClearColors);
-template void FSceneRenderTargets::ClearVolumeTextures<7>(FRHICommandList& RHICmdList, ERHIFeatureLevel::Type FeatureLevel, FTextureRHIParamRef* RenderTargets, const FLinearColor* ClearColors);
-template void FSceneRenderTargets::ClearVolumeTextures<8>(FRHICommandList& RHICmdList, ERHIFeatureLevel::Type FeatureLevel, FTextureRHIParamRef* RenderTargets, const FLinearColor* ClearColors);
+template void FSceneRenderTargets::ClearVolumeTextures<1>(FRHICommandList& RHICmdList, ERHIFeatureLevel::Type FeatureLevel, FRHITexture** RenderTargets, const FLinearColor* ClearColors);
+template void FSceneRenderTargets::ClearVolumeTextures<2>(FRHICommandList& RHICmdList, ERHIFeatureLevel::Type FeatureLevel, FRHITexture** RenderTargets, const FLinearColor* ClearColors);
+template void FSceneRenderTargets::ClearVolumeTextures<3>(FRHICommandList& RHICmdList, ERHIFeatureLevel::Type FeatureLevel, FRHITexture** RenderTargets, const FLinearColor* ClearColors);
+template void FSceneRenderTargets::ClearVolumeTextures<4>(FRHICommandList& RHICmdList, ERHIFeatureLevel::Type FeatureLevel, FRHITexture** RenderTargets, const FLinearColor* ClearColors);
+template void FSceneRenderTargets::ClearVolumeTextures<5>(FRHICommandList& RHICmdList, ERHIFeatureLevel::Type FeatureLevel, FRHITexture** RenderTargets, const FLinearColor* ClearColors);
+template void FSceneRenderTargets::ClearVolumeTextures<6>(FRHICommandList& RHICmdList, ERHIFeatureLevel::Type FeatureLevel, FRHITexture** RenderTargets, const FLinearColor* ClearColors);
+template void FSceneRenderTargets::ClearVolumeTextures<7>(FRHICommandList& RHICmdList, ERHIFeatureLevel::Type FeatureLevel, FRHITexture** RenderTargets, const FLinearColor* ClearColors);
+template void FSceneRenderTargets::ClearVolumeTextures<8>(FRHICommandList& RHICmdList, ERHIFeatureLevel::Type FeatureLevel, FRHITexture** RenderTargets, const FLinearColor* ClearColors);
 
 EPixelFormat FSceneRenderTargets::GetSceneColorFormat() const
 {
@@ -2604,6 +2694,8 @@ void FSceneRenderTargets::ReleaseAllTargets()
 
 	EditorPrimitivesColor.SafeRelease();
 	EditorPrimitivesDepth.SafeRelease();
+
+	VirtualTextureFeedback.ReleaseResources();
 }
 
 void FSceneRenderTargets::ReleaseDynamicRHI()
@@ -2880,9 +2972,9 @@ void SetupSceneTextureUniformParameters(
 	ESceneTextureSetupMode SetupMode,
 	FSceneTexturesUniformParameters& SceneTextureParameters)
 {
-	FTextureRHIParamRef WhiteDefault2D = GSystemTextures.WhiteDummy->GetRenderTargetItem().ShaderResourceTexture;
-	FTextureRHIParamRef BlackDefault2D = GSystemTextures.BlackDummy->GetRenderTargetItem().ShaderResourceTexture;
-	FTextureRHIParamRef DepthDefault = GSystemTextures.DepthDummy->GetRenderTargetItem().ShaderResourceTexture;
+	FRHITexture* WhiteDefault2D = GSystemTextures.WhiteDummy->GetRenderTargetItem().ShaderResourceTexture;
+	FRHITexture* BlackDefault2D = GSystemTextures.BlackDummy->GetRenderTargetItem().ShaderResourceTexture;
+	FRHITexture* DepthDefault = GSystemTextures.DepthDummy->GetRenderTargetItem().ShaderResourceTexture;
 
 	// Scene Color / Depth
 	{
@@ -2965,8 +3057,8 @@ void SetupSceneTextureUniformParameters(
 	{
 		const bool bSetupCustomDepth = (SetupMode & ESceneTextureSetupMode::CustomDepth) != ESceneTextureSetupMode::None;
 
-		FTextureRHIParamRef CustomDepth = DepthDefault;
-		FShaderResourceViewRHIParamRef CustomStencilSRV = GSystemTextures.WhiteDummySRV;
+		FRHITexture* CustomDepth = DepthDefault;
+		FRHIShaderResourceView* CustomStencilSRV = GSystemTextures.WhiteDummySRV;
 
 		// if there is no custom depth it's better to have the far distance there
 		IPooledRenderTarget* CustomDepthTarget = SceneContext.bCustomDepthIsValid ? SceneContext.CustomDepth.GetReference() : 0;
@@ -3034,8 +3126,8 @@ void SetupMobileSceneTextureUniformParameters(
 	bool bSceneTexturesValid,
 	FMobileSceneTextureUniformParameters& SceneTextureParameters)
 {
-	FTextureRHIParamRef BlackDefault2D = GSystemTextures.BlackDummy->GetRenderTargetItem().ShaderResourceTexture;
-	FTextureRHIParamRef DepthDefault = GSystemTextures.DepthDummy->GetRenderTargetItem().ShaderResourceTexture;
+	FRHITexture* BlackDefault2D = GSystemTextures.BlackDummy->GetRenderTargetItem().ShaderResourceTexture;
+	FRHITexture* DepthDefault = GSystemTextures.DepthDummy->GetRenderTargetItem().ShaderResourceTexture;
 
 	SceneTextureParameters.SceneColorTexture = bSceneTexturesValid ? SceneContext.GetSceneColorTexture().GetReference() : BlackDefault2D;
 	SceneTextureParameters.SceneColorTextureSampler = TStaticSamplerState<SF_Point, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
@@ -3047,7 +3139,7 @@ void SetupMobileSceneTextureUniformParameters(
 	SceneTextureParameters.SceneAlphaCopyTexture = bSceneTexturesValid && SceneContext.HasSceneAlphaCopyTexture() ? SceneContext.GetSceneAlphaCopyTexture() : BlackDefault2D;
 	SceneTextureParameters.SceneAlphaCopyTextureSampler = TStaticSamplerState<SF_Point,AM_Clamp,AM_Clamp,AM_Clamp>::GetRHI();
 
-	FTextureRHIParamRef CustomDepth = DepthDefault;
+	FRHITexture* CustomDepth = DepthDefault;
 
 	// if there is no custom depth it's better to have the far distance there
 	IPooledRenderTarget* CustomDepthTarget = SceneContext.bCustomDepthIsValid ? SceneContext.CustomDepth.GetReference() : 0;
@@ -3059,7 +3151,7 @@ void SetupMobileSceneTextureUniformParameters(
 	SceneTextureParameters.CustomDepthTexture = CustomDepth;
 	SceneTextureParameters.CustomDepthTextureSampler = TStaticSamplerState<>::GetRHI();
 
-	FTextureRHIParamRef MobileCustomStencil = BlackDefault2D;
+	FRHITexture* MobileCustomStencil = BlackDefault2D;
 
 	if (SceneContext.MobileCustomStencil.IsValid())
 	{

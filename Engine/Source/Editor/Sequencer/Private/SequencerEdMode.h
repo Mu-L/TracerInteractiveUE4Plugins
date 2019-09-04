@@ -71,15 +71,12 @@ public:
 
 protected:
 	void DrawTracks3D(FPrimitiveDrawInterface* PDI);
-	void DrawTransformTrack(const TSharedPtr<FSequencer>& Sequencer, FPrimitiveDrawInterface* PDI, UMovieScene3DTransformTrack* TransformTrack, const TArray<TWeakObjectPtr<UObject>>& BoundObjects, const bool bIsSelected);
+	void DrawTransformTrack(const TSharedPtr<FSequencer>& Sequencer, FPrimitiveDrawInterface* PDI, UMovieScene3DTransformTrack* TransformTrack, TArrayView<const TWeakObjectPtr<>> BoundObjects, const bool bIsSelected);
 
 protected:
 	static void GetLocationAtTime(FMovieSceneEvaluationTrack* Track, UObject* BoundObject, FFrameTime KeyTime, FVector& KeyPos, FRotator& KeyRot, const TSharedPtr<FSequencer>& Sequencer);
-	static FTransform GetRefFrame(const TSharedPtr<FSequencer>& Sequencer, const UObject* InObject, FFrameTime KeyTime);
-	static FTransform GetRefFrame(const TSharedPtr<FSequencer>& Sequencer, const AActor* Actor, FFrameTime KeyTime);
-	static FTransform GetRefFrame(const TSharedPtr<FSequencer>& Sequencer, const USceneComponent* SceneComponent, FFrameTime KeyTime);
 	static void GetParents(TArray<const UObject *>& Parents, const UObject* InObject);
-	static FTransform GetRefFrame(const TSharedPtr<FSequencer>& Sequencer, const TArray<const UObject *>& Parents, FFrameTime KeyTime);
+	static FTransform GetRefFrameFromParents(const TSharedPtr<FSequencer>& Sequencer, const TArray<const UObject *>& Parents, FFrameTime KeyTime);
 	static bool GetParentTM(FTransform& CurrentRefTM, const TSharedPtr<FSequencer>& Sequencer, UObject* ParentObject, FFrameTime KeyTime);
 private:
 	TArray<TWeakPtr<FSequencer>> Sequencers;

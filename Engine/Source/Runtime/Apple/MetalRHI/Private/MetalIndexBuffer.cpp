@@ -40,9 +40,23 @@ FMetalIndexBuffer::~FMetalIndexBuffer()
 {
 }
 
-FIndexBufferRHIRef FMetalDynamicRHI::RHICreateIndexBuffer(uint32 Stride,uint32 Size, uint32 InUsage, FRHIResourceCreateInfo& CreateInfo)
+void FMetalIndexBuffer::Swap(FMetalIndexBuffer& Other)
 {
 	@autoreleasepool {
+	FRHIIndexBuffer::Swap(Other);
+	FMetalRHIBuffer::Swap(Other);
+	::Swap(IndexType, Other.IndexType);
+	}
+}
+
+FIndexBufferRHIRef FMetalDynamicRHI::RHICreateIndexBuffer(uint32 Stride, uint32 Size, uint32 InUsage, FRHIResourceCreateInfo& CreateInfo)
+{
+	@autoreleasepool {
+	if (CreateInfo.bWithoutNativeResource)
+	{
+		return new FMetalIndexBuffer(2, 0, 0);
+	}
+		
 	// make the RHI object, which will allocate memory
 	FMetalIndexBuffer* IndexBuffer = new FMetalIndexBuffer(Stride, Size, InUsage);
 	
@@ -65,7 +79,6 @@ FIndexBufferRHIRef FMetalDynamicRHI::RHICreateIndexBuffer(uint32 Stride,uint32 S
 	{
 		if (IndexBuffer->UsePrivateMemory())
 		{
-			LLM_SCOPE(ELLMTag::IndexBuffer);
 			SafeReleaseMetalBuffer(IndexBuffer->CPUBuffer);
 			IndexBuffer->CPUBuffer = nil;
 		}
@@ -86,7 +99,26 @@ FIndexBufferRHIRef FMetalDynamicRHI::RHICreateIndexBuffer(uint32 Stride,uint32 S
 	}
 }
 
-void* FMetalDynamicRHI::RHILockIndexBuffer(FIndexBufferRHIParamRef IndexBufferRHI, uint32 Offset, uint32 Size, EResourceLockMode LockMode)
+void FMetalDynamicRHI::RHITransferIndexBufferUnderlyingResource(FRHIIndexBuffer* DestIndexBuffer, FRHIIndexBuffer* SrcIndexBuffer)
+{
+	@autoreleasepool {
+	check(DestIndexBuffer);
+	FMetalIndexBuffer* Dest = ResourceCast(DestIndexBuffer);
+	if (!SrcIndexBuffer)
+	{
+		FRHIResourceCreateInfo CreateInfo;
+		TRefCountPtr<FMetalIndexBuffer> DeletionProxy = new FMetalIndexBuffer(2, 0, 0);
+		Dest->Swap(*DeletionProxy);
+	}
+	else
+	{
+		FMetalIndexBuffer* Src = ResourceCast(SrcIndexBuffer);
+		Dest->Swap(*Src);
+	}
+	}
+}
+
+void* FMetalDynamicRHI::RHILockIndexBuffer(FRHIIndexBuffer* IndexBufferRHI, uint32 Offset, uint32 Size, EResourceLockMode LockMode)
 {
 	@autoreleasepool {
 	FMetalIndexBuffer* IndexBuffer = ResourceCast(IndexBufferRHI);
@@ -95,7 +127,7 @@ void* FMetalDynamicRHI::RHILockIndexBuffer(FIndexBufferRHIParamRef IndexBufferRH
 	}
 }
 
-void FMetalDynamicRHI::RHIUnlockIndexBuffer(FIndexBufferRHIParamRef IndexBufferRHI)
+void FMetalDynamicRHI::RHIUnlockIndexBuffer(FRHIIndexBuffer* IndexBufferRHI)
 {
 	@autoreleasepool {
 	FMetalIndexBuffer* IndexBuffer = ResourceCast(IndexBufferRHI);
@@ -124,7 +156,6 @@ struct FMetalRHICommandInitialiseIndexBuffer : public FRHICommand<FMetalRHIComma
 			GetMetalDeviceContext().AsyncCopyFromBufferToBuffer(Buffer->CPUBuffer, 0, Buffer->Buffer, 0, Buffer->Buffer.GetLength());
 			if (Buffer->UsePrivateMemory())
 			{
-				LLM_SCOPE(ELLMTag::IndexBuffer);
 				SafeReleaseMetalBuffer(Buffer->CPUBuffer);
 			}
 			else
@@ -142,6 +173,11 @@ struct FMetalRHICommandInitialiseIndexBuffer : public FRHICommand<FMetalRHIComma
 FIndexBufferRHIRef FMetalDynamicRHI::CreateIndexBuffer_RenderThread(class FRHICommandListImmediate& RHICmdList, uint32 Stride, uint32 Size, uint32 InUsage, FRHIResourceCreateInfo& CreateInfo)
 {
 	@autoreleasepool {
+		if (CreateInfo.bWithoutNativeResource)
+		{
+			return new FMetalIndexBuffer(2, 0, 0);
+		}
+		
 		// make the RHI object, which will allocate memory
 		TRefCountPtr<FMetalIndexBuffer> IndexBuffer = new FMetalIndexBuffer(Stride, Size, InUsage);
 		
@@ -188,7 +224,6 @@ FIndexBufferRHIRef FMetalDynamicRHI::CreateIndexBuffer_RenderThread(class FRHICo
 		{
 			if (IndexBuffer->UsePrivateMemory())
 			{
-				LLM_SCOPE(ELLMTag::IndexBuffer);
 				SafeReleaseMetalBuffer(IndexBuffer->CPUBuffer);
 				IndexBuffer->CPUBuffer = nil;
 			}

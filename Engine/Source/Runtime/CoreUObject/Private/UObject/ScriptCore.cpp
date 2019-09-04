@@ -16,6 +16,7 @@
 #include "UObject/Script.h"
 #include "UObject/ObjectMacros.h"
 #include "UObject/UObjectBaseUtility.h"
+#include "UObject/UObjectIterator.h"
 #include "UObject/Object.h"
 #include "UObject/CoreNative.h"
 #include "UObject/Class.h"
@@ -82,6 +83,23 @@ COREUOBJECT_API void GInitRunaway()
 COREUOBJECT_API void GInitRunaway() {}
 #endif
 
+#define STORE_INSTRUCTION_NAMES SCRIPT_AUDIT_ROUTINES
+
+#if STORE_INSTRUCTION_NAMES
+const char* GNativeFuncNames[EX_Max];
+
+#define STORE_INSTRUCTION_NAME(inst) \
+static struct F##inst##Registrar \
+{ \
+	F##inst##Registrar() \
+	{ \
+		GNativeFuncNames[inst] = #inst; \
+	} \
+} inst##RegistrarInst;
+#else
+#define STORE_INSTRUCTION_NAME(inst)
+#endif//STORE_INSTRUCTION_NAMES
+
 #define IMPLEMENT_FUNCTION(func) \
 	static FNativeFunctionRegistrar UObject##func##Registar(UObject::StaticClass(),#func,&UObject::func);
 
@@ -90,6 +108,7 @@ COREUOBJECT_API void GInitRunaway() {}
 	static uint8 UObject##func##CastTemp = GRegisterCast( CastIndex, &UObject::func );
 
 #define IMPLEMENT_VM_FUNCTION(BytecodeIndex, func) \
+	STORE_INSTRUCTION_NAME(BytecodeIndex) \
 	IMPLEMENT_FUNCTION(func) \
 	static uint8 UObject##func##BytecodeTemp = GRegisterNative( BytecodeIndex, &UObject::func );
 
@@ -824,6 +843,8 @@ DEFINE_FUNCTION(UObject::execCallMathFunction)
 	UFunction* Function = (UFunction*)Stack.ReadObject();
 	checkSlow(Function);
 	checkSlow(Function->FunctionFlags & FUNC_Native);
+	// ProcessContext is the arbiter of net callspace, so we can't call net functions using this instruction:
+	checkSlow(!Function->HasAnyFunctionFlags(FUNC_NetFuncFlags|FUNC_BlueprintAuthorityOnly|FUNC_BlueprintCosmetic|FUNC_NetRequest|FUNC_NetResponse));
 	UObject* NewContext = Function->GetOuterUClassUnchecked()->ClassDefaultObject;
 	checkSlow(NewContext);
 	{
@@ -857,12 +878,14 @@ void UObject::CallFunction( FFrame& Stack, RESULT_DECL, UFunction* Function )
 
 	if (Function->FunctionFlags & FUNC_Native)
 	{
-		uint8* Buffer = (uint8*)FMemory_Alloca(Function->ParmsSize);
-		int32 FunctionCallspace = GetFunctionCallspace( Function, Buffer, &Stack );
+		const bool bNetFunction = Function->HasAnyFunctionFlags(FUNC_NetFuncFlags|FUNC_BlueprintAuthorityOnly|FUNC_BlueprintCosmetic|FUNC_NetRequest|FUNC_NetResponse);
+		const int32 FunctionCallspace = bNetFunction ? GetFunctionCallspace( Function, &Stack ) : FunctionCallspace::Local;
+
 		uint8* SavedCode = NULL;
 		if (FunctionCallspace & FunctionCallspace::Remote)
 		{
 			// Call native networkable function.
+			uint8* Buffer = (uint8*)FMemory_Alloca(Function->ParmsSize);
 
 			SavedCode = Stack.Code; // Since this is native, we need to rollback the stack if we are calling both remotely and locally
 
@@ -1047,7 +1070,7 @@ DEFINE_FUNCTION(UObject::ProcessInternal)
 #endif
 
 	UFunction* Function = (UFunction*)Stack.Node;
-	int32 FunctionCallspace = P_THIS->GetFunctionCallspace(Function, Stack.Locals, NULL);
+	int32 FunctionCallspace = P_THIS->GetFunctionCallspace(Function, NULL);
 	if (FunctionCallspace & FunctionCallspace::Remote)
 	{
 		P_THIS->CallRemoteFunction(Function, Stack.Locals, Stack.OutParms, NULL);
@@ -1289,6 +1312,431 @@ FBlueprintEventTimer::FScopedNativeTimer::~FScopedNativeTimer()
 
 #endif
 
+#if SCRIPT_AUDIT_ROUTINES
+
+// heap would be more time efficient:
+template<typename T>
+void NBest(TArray<T>& OutBest, const T& NewEntry, TFunctionRef<bool(const T&, const T&)> IsBetter)
+{
+	if(IsBetter(NewEntry, OutBest.Last()))
+	{
+		// find insertion point:
+		int32 InsertIdx = INDEX_NONE;
+		// O(n):
+		for(int32 I = 0; I < OutBest.Num(); ++I)
+		{
+			if(IsBetter( NewEntry, OutBest[I] ))
+			{
+				InsertIdx = I;
+				break;
+			}
+		}
+
+		// O(n):
+		OutBest.Insert(NewEntry, InsertIdx);
+		OutBest.Pop();
+	}
+}
+
+static void OutputLongestFunctions(FOutputDevice& Ar, int32 Num)
+{
+	// max heap would be more efficient
+	TArray<UFunction*> LongestFunctions;
+	LongestFunctions.AddDefaulted(Num);
+
+	for( TObjectIterator<UClass> It; It; ++It)
+	{
+		UClass* BPGC = *It;
+		for(TFieldIterator<UFunction> FuncIt(BPGC, EFieldIteratorFlags::ExcludeSuper); FuncIt; ++FuncIt)
+		{
+			UFunction* Fn = *FuncIt;
+			int32 LenScript = Fn->Script.Num();
+
+			NBest<UFunction*>(LongestFunctions, Fn, 
+				[LenScript](UFunction* A, UFunction* B)
+				{
+					return B == nullptr || LenScript > B->Script.Num();
+				}
+			);
+		}
+	}
+
+	if(LongestFunctions.Num() == 0)
+	{
+		Ar.Log(TEXT("No script functions found when looking for longest functions."));
+	}
+	else
+	{
+		for(UFunction* Fn : LongestFunctions)
+		{
+			if(!Fn)
+			{
+				break;
+			}
+
+			Ar.Logf(TEXT("%s %s %d"), *Fn->GetName(), *Fn->GetOuter()->GetName(), Fn->Script.Num());
+		}
+	}
+}
+
+static void OutputMostFrequentlyCalledFunctions(FOutputDevice& OutputAr, int32 Num)
+{
+	// Script serialization is recursive and requires certain symbols (e.g. Script, a reference
+	// to the bytecode), so we declare a type so that we have some scope:
+	struct FCallFrequencyCounter
+	{
+		FCallFrequencyCounter(TArray<uint8>& InScript)
+			: Script(InScript)
+		{
+		}
+
+		TArray<uint8>& Script;
+		TMap<UFunction*, int32>* FunctionCallCounts = nullptr;
+		// Could try and get more context on vcalls, but for
+		// this macro auditing tool name should be enough:
+		TMap<FName, int32>* VirtualFunctionCallCounts = nullptr;
+
+		void* GetLinker() { return nullptr; }
+
+		EExprToken SerializeExpr(int32& iCode, FArchive& Ar)
+		{
+			#define SERIALIZEEXPR_INC
+			#define SERIALIZEEXPR_AUTO_UNDEF_XFER_MACROS
+			
+				if(iCode < Script.Num())
+				{
+					switch((EExprToken)Script[iCode])
+					{
+					case EX_CallMath:
+					case EX_LocalFinalFunction:
+					case EX_FinalFunction:
+						{
+							// peak UFunction*:
+							if(FunctionCallCounts)
+							{
+								UFunction* Fn = nullptr;
+								FMemory::Memcpy( &Fn, &Script[iCode+1], sizeof(UFunction*) );
+								if(ensure(Fn))
+								{
+									check(Fn->IsValidLowLevel());
+									FunctionCallCounts->FindOrAdd(Fn)++;
+								}
+							}
+						}
+						break;
+					case EX_VirtualFunction:
+					case EX_LocalVirtualFunction:
+						{
+							// peak function name:
+							if(VirtualFunctionCallCounts)
+							{
+								FScriptName ScriptName;
+								FMemory::Memcpy( &ScriptName, &Script[iCode+1], sizeof(FScriptName) );
+								VirtualFunctionCallCounts->FindOrAdd(ScriptNameToName(ScriptName))++;
+							}
+						}
+						break;
+
+					}
+				}
+
+			#include "UObject/ScriptSerialization.h"
+				return Expr;
+			#undef SERIALIZEEXPR_INC
+			#undef SERIALIZEEXPR_AUTO_UNDEF_XFER_MACROS
+		}
+
+		void CountCalls(TMap<UFunction*, int32>* InFunctionCallCounts, TMap<FName, int32>* InVirtualFunctionCallCounts)
+		{
+			FunctionCallCounts = InFunctionCallCounts;
+			VirtualFunctionCallCounts = InVirtualFunctionCallCounts;
+
+			int32 iCode = 0;
+			const int32 ScriptSizeBytes = Script.Num();
+			FArchive DummyArchive;
+
+			while (iCode < ScriptSizeBytes)
+			{
+				SerializeExpr(iCode, DummyArchive);
+			}
+		}
+	};
+
+	TMap<UFunction*, int32> FunctionCallCounts;
+	TMap<FName, int32> VirtualFunctionCallCounts;
+
+	for( TObjectIterator<UClass> It; It; ++It)
+	{
+		UClass* BPGC = *It;
+		for(TFieldIterator<UFunction> FuncIt(BPGC, EFieldIteratorFlags::ExcludeSuper); FuncIt; ++FuncIt)
+		{
+			UFunction* Fn = *FuncIt;
+
+			// disassem and log function calls:
+			FCallFrequencyCounter Counter(Fn->Script);
+			Counter.CountCalls(&FunctionCallCounts, &VirtualFunctionCallCounts);
+		}
+	}
+
+	// sort by # calls:
+	{
+		TArray< TPair<UFunction*, int32> > FunctionCallsSorted;
+		FunctionCallsSorted.AddDefaulted(Num);
+		for(const TPair<UFunction*, int32>& Calls : FunctionCallCounts )
+		{
+			NBest<TPair<UFunction*, int32>>(FunctionCallsSorted, Calls, 
+				[](const TPair<UFunction*, int32>& A, const TPair<UFunction*, int32>& B) -> bool
+				{
+					return B.Key == nullptr || A.Value > B.Value;
+				}
+			);
+		}
+
+		if(FunctionCallsSorted.Num())
+		{
+			OutputAr.Logf(TEXT("Top %d function call targets"), FunctionCallsSorted.Num());
+			for(TPair<UFunction*, int32>& Calls : FunctionCallsSorted )
+			{
+				if(Calls.Key == nullptr)
+				{
+					break;
+				}
+
+				OutputAr.Logf(TEXT("%s %s %d"), *Calls.Key->GetName(), *Calls.Key->GetOuter()->GetName(), Calls.Value);
+			}
+		}
+		else
+		{
+			OutputAr.Log(TEXT("No function call instructions found in memory"));
+		}
+	}
+
+	{
+		TArray< TPair<FName, int32>> VirtualFunctionCallsSorted;
+		VirtualFunctionCallsSorted.AddDefaulted(Num);
+		for(const TPair<FName, int32>& Calls : VirtualFunctionCallCounts )
+		{
+			NBest<TPair<FName, int32>>(VirtualFunctionCallsSorted, Calls, 
+				[](const TPair<FName, int32>& A, const TPair<FName, int32>& B) -> bool
+				{
+					return B.Key == FName() || A.Value > B.Value;
+				}
+			);
+		}
+
+		if(VirtualFunctionCallsSorted.Num())
+		{
+			OutputAr.Logf(TEXT("Top %d virtual function call targets"), VirtualFunctionCallsSorted.Num());
+			for(TPair<FName, int32>& Calls : VirtualFunctionCallsSorted )
+			{
+				if(Calls.Key == FName())
+				{
+					break;
+				}
+
+				OutputAr.Logf(TEXT("%s %d"), *(Calls.Key.ToString()), Calls.Value);
+			}
+		}
+		else
+		{
+			OutputAr.Log(TEXT("No virtual function call instructions in memory"));
+		}
+	}
+}
+
+static void OutputMostFrequentlyUsedInstructions(FOutputDevice& OutputAr, int32 Num)
+{
+	// Script serialization is recursive and requires certain symbols (e.g. Script, a reference
+	// to the bytecode), so we declare a type so that we have some scope:
+	struct FInstructionFrequencyCounter
+	{
+		FInstructionFrequencyCounter(TArray<uint8>& InScript)
+			: Script(InScript)
+		{
+		}
+		
+		TArray<uint8>& Script;
+		TMap<EExprToken, int32>* InstructionCallCounts;
+
+		void* GetLinker() { return nullptr; }
+
+		
+		EExprToken SerializeExpr(int32& iCode, FArchive& Ar)
+		{
+			#define SERIALIZEEXPR_INC
+			#define SERIALIZEEXPR_AUTO_UNDEF_XFER_MACROS
+			
+				if(iCode < Script.Num())
+				{
+					if(InstructionCallCounts)
+					{
+						InstructionCallCounts->FindOrAdd((EExprToken)Script[iCode])++;
+					}
+				}
+
+			#include "UObject/ScriptSerialization.h"
+				return Expr;
+			#undef SERIALIZEEXPR_INC
+			#undef SERIALIZEEXPR_AUTO_UNDEF_XFER_MACROS
+		}
+
+		void CountInstructions(TMap<EExprToken, int32>* InInstructionCallCounts)
+		{
+			InstructionCallCounts = InInstructionCallCounts;
+
+			int32 iCode = 0;
+			const int32 ScriptSizeBytes = Script.Num();
+			FArchive DummyArchive;
+
+			while (iCode < ScriptSizeBytes)
+			{
+				SerializeExpr(iCode, DummyArchive);
+			}
+		}
+	};
+
+	
+	TMap<EExprToken, int32> InstructionCallCounts;
+
+	for( TObjectIterator<UClass> It; It; ++It)
+	{
+		UClass* BPGC = *It;
+		for(TFieldIterator<UFunction> FuncIt(BPGC, EFieldIteratorFlags::ExcludeSuper); FuncIt; ++FuncIt)
+		{
+			UFunction* Fn = *FuncIt;
+
+			// disassem and log function calls:
+			FInstructionFrequencyCounter Counter(Fn->Script);
+			Counter.CountInstructions(&InstructionCallCounts);
+		}
+	}
+
+	// sort by #:
+	{
+		TArray<TPair<EExprToken, int32>> InstructionCountsSorted;
+		InstructionCountsSorted.AddDefaulted(Num);
+		
+		for(const TPair<EExprToken, int32>& Instruction : InstructionCallCounts )
+		{
+			NBest<TPair<EExprToken, int32>>(InstructionCountsSorted, Instruction, 
+				[](const TPair<EExprToken, int32>& A, const TPair<EExprToken, int32>& B) -> bool
+				{
+					return A.Value > B.Value;
+				}
+			);
+		}
+
+		if(InstructionCountsSorted.Num())
+		{
+			OutputAr.Logf(TEXT("Top %d bytecode instructions"), InstructionCountsSorted.Num());
+			for(TPair<EExprToken, int32>& Instruction : InstructionCountsSorted )
+			{
+				if(Instruction.Value == 0)
+				{
+					break;
+				}
+
+#if STORE_INSTRUCTION_NAMES
+				if(GNativeFuncNames[Instruction.Key])
+				{
+					FString AsString = GNativeFuncNames[Instruction.Key];
+					OutputAr.Logf(TEXT("%s %d"), *AsString, Instruction.Value);
+				}
+				else
+				{
+					OutputAr.Logf(TEXT("0x%x %d"), Instruction.Key, Instruction.Value);
+				}
+#else
+				OutputAr.Logf(TEXT("0x%x %d"), Instruction.Key, Instruction.Value);
+#endif
+			}
+		}
+		else
+		{
+			OutputAr.Log(TEXT("No instructions found in memory"));
+		}
+	}
+}
+
+static void OutputTotalBytecodeSize(FOutputDevice& Ar)
+{
+	uint32 TotalSize = 0;
+	
+	for( TObjectIterator<UClass> It; It; ++It)
+	{
+		UClass* BPGC = *It;
+		for(TFieldIterator<UFunction> FuncIt(BPGC, EFieldIteratorFlags::ExcludeSuper); FuncIt; ++FuncIt)
+		{
+			UFunction* Fn = *FuncIt;
+
+			TotalSize += Fn->Script.Num();
+		}
+	}
+
+	Ar.Logf(TEXT("Total bytecode size: %d"), TotalSize);
+}
+
+struct FScriptAuditExec 
+	: public FSelfRegisteringExec
+{
+	// FSelfRegisteringExec:
+	virtual bool Exec(UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar) override;
+} ScriptAudit;
+
+bool FScriptAuditExec::Exec(UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar)
+{
+	if (FParse::Command(&Cmd, TEXT("ScriptAudit")))
+	{
+		FString ParsedCommand = FParse::Token(Cmd, 0);
+
+		if (ParsedCommand.Equals(TEXT("LongestFunctions"),ESearchCase::IgnoreCase))
+		{
+			int32 NumToOutput = 20;
+
+			FString Num = FParse::Token(Cmd, 0);
+			if(!Num.IsEmpty())
+			{
+				NumToOutput = FCString::Atoi(*Num);
+			}
+			OutputLongestFunctions(Ar, NumToOutput);
+			return true;
+		}
+		else if (ParsedCommand.Equals(TEXT("FrequentFunctionsCalled"),ESearchCase::IgnoreCase))
+		{
+			int32 NumToOutput = 20;
+
+			FString Num = FParse::Token(Cmd, 0);
+			if(!Num.IsEmpty())
+			{
+				NumToOutput = FCString::Atoi(*Num);
+			}
+			OutputMostFrequentlyCalledFunctions(Ar, NumToOutput);
+			return true;
+		}
+		else if (ParsedCommand.Equals(TEXT("FrequentInstructions"),ESearchCase::IgnoreCase))
+		{
+			int32 NumToOutput = 20;
+
+			FString Num = FParse::Token(Cmd, 0);
+			if(!Num.IsEmpty())
+			{
+				NumToOutput = FCString::Atoi(*Num);
+			}
+			OutputMostFrequentlyUsedInstructions(Ar, NumToOutput);
+			return true;
+		}
+		else if (ParsedCommand.Equals(TEXT("TotalBytecodeSize"),ESearchCase::IgnoreCase))
+		{
+			OutputTotalBytecodeSize(Ar);
+			return true;
+		}
+	}
+
+	return false;
+}
+
+#endif //SCRIPT_AUDIT_ROUTINES
+
 // Switch for a lightweight process event counter, useful when disabling the blueprint guard
 // which can taint profiling results:
 #define LIGHTWEIGHT_PROCESS_EVENT_COUNTER 0 && !DO_BLUEPRINT_GUARD
@@ -1339,7 +1787,7 @@ void UObject::ProcessEvent( UFunction* Function, void* Parms )
 
 	if ((Function->FunctionFlags & FUNC_Native) != 0)
 	{
-		int32 FunctionCallspace = GetFunctionCallspace(Function, Parms, NULL);
+		int32 FunctionCallspace = GetFunctionCallspace(Function, NULL);
 		if (FunctionCallspace & FunctionCallspace::Remote)
 		{
 			CallRemoteFunction(Function, Parms, NULL, NULL);
@@ -2249,13 +2697,14 @@ DEFINE_FUNCTION(UObject::execLetMulticastDelegate)
 	Stack.MostRecentProperty = NULL;
 	Stack.Step( Stack.Object, NULL ); // Variable.
 
-	FMulticastScriptDelegate* DelegateAddr = (FMulticastScriptDelegate*)Stack.MostRecentPropertyAddress;
+	UMulticastDelegateProperty* DelegateProp = CastChecked<UMulticastDelegateProperty>(Stack.MostRecentProperty, ECastCheckedType::NullAllowed);
+	void* DelegateAddr = Stack.MostRecentPropertyAddress;
 	FMulticastScriptDelegate Delegate;
 	Stack.Step( Stack.Object, &Delegate );
 
-	if (DelegateAddr != NULL)
+	if (DelegateProp && DelegateAddr)
 	{
-		*DelegateAddr = Delegate;
+		DelegateProp->SetMulticastDelegate(DelegateAddr, MoveTemp(Delegate));
 	}
 }
 IMPLEMENT_VM_FUNCTION( EX_LetMulticastDelegate, execLetMulticastDelegate );
@@ -2451,7 +2900,8 @@ public:
 		Stack.MostRecentPropertyAddress = NULL;
 		Stack.MostRecentProperty = NULL;
 		Stack.Step( Stack.Object, NULL );
-		const FMulticastScriptDelegate* DelegateAddr = (FMulticastScriptDelegate*)Stack.MostRecentPropertyAddress;
+		UMulticastDelegateProperty* DelegateProp = CastChecked<UMulticastDelegateProperty>(Stack.MostRecentProperty, ECastCheckedType::NullAllowed);
+		const FMulticastScriptDelegate* DelegateAddr = (DelegateProp ? DelegateProp->GetMulticastDelegate(Stack.MostRecentPropertyAddress) : nullptr);
 
 		//Fill parameters
 		uint8* Parameters = (uint8*)FMemory_Alloca(SignatureFunction->ParmsSize);
@@ -2506,13 +2956,15 @@ DEFINE_FUNCTION(UObject::execAddMulticastDelegate)
 	Stack.MostRecentProperty = NULL;
 	Stack.Step( Stack.Object, NULL ); // Variable.
 
-	FMulticastScriptDelegate* DelegateAddr = (FMulticastScriptDelegate*)Stack.MostRecentPropertyAddress;
+	UMulticastDelegateProperty* DelegateProp = CastChecked<UMulticastDelegateProperty>(Stack.MostRecentProperty, ECastCheckedType::NullAllowed);
+	void* DelegateAddr = Stack.MostRecentPropertyAddress;
+
 	FScriptDelegate Delegate;
 	Stack.Step( Stack.Object, &Delegate );
 
-	if (DelegateAddr != NULL)
+	if (DelegateProp && DelegateAddr)
 	{
-		DelegateAddr->AddUnique(Delegate);
+		DelegateProp->AddDelegate(MoveTemp(Delegate), nullptr, DelegateAddr);
 	}
 }
 IMPLEMENT_VM_FUNCTION( EX_AddMulticastDelegate, execAddMulticastDelegate );
@@ -2524,13 +2976,15 @@ DEFINE_FUNCTION(UObject::execRemoveMulticastDelegate)
 	Stack.MostRecentProperty = NULL;
 	Stack.Step( Stack.Object, NULL ); // Variable.
 
-	FMulticastScriptDelegate* DelegateAddr = (FMulticastScriptDelegate*)Stack.MostRecentPropertyAddress;
+	UMulticastDelegateProperty* DelegateProp = CastChecked<UMulticastDelegateProperty>(Stack.MostRecentProperty, ECastCheckedType::NullAllowed);
+	void* DelegateAddr = Stack.MostRecentPropertyAddress;
+
 	FScriptDelegate Delegate;
 	Stack.Step( Stack.Object, &Delegate );
 
-	if (DelegateAddr != NULL)
+	if (DelegateProp && DelegateAddr)
 	{
-		DelegateAddr->Remove(Delegate);
+		DelegateProp->RemoveDelegate(Delegate, nullptr, DelegateAddr);
 	}
 }
 IMPLEMENT_VM_FUNCTION( EX_RemoveMulticastDelegate, execRemoveMulticastDelegate );
@@ -2542,10 +2996,12 @@ DEFINE_FUNCTION(UObject::execClearMulticastDelegate)
 	Stack.MostRecentProperty = NULL;
 	Stack.Step( Stack.Object, NULL );
 
-	FMulticastScriptDelegate* DelegateAddr = (FMulticastScriptDelegate*)Stack.MostRecentPropertyAddress;
-	if (DelegateAddr != NULL)
+	UMulticastDelegateProperty* DelegateProp = CastChecked<UMulticastDelegateProperty>(Stack.MostRecentProperty, ECastCheckedType::NullAllowed);
+	void* DelegateAddr = Stack.MostRecentPropertyAddress;
+
+	if (DelegateProp && DelegateAddr)
 	{
-		DelegateAddr->Clear();
+		DelegateProp->ClearDelegate(nullptr, DelegateAddr);
 	}
 }
 IMPLEMENT_VM_FUNCTION( EX_ClearMulticastDelegate, execClearMulticastDelegate );

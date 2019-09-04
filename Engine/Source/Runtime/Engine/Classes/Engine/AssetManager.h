@@ -319,6 +319,7 @@ public:
 
 	/** Changes the management rules for a specific asset, this overrides the type rules. If passed in Rules is default, delete override */
 	virtual void SetPrimaryAssetRules(FPrimaryAssetId PrimaryAssetId, const FPrimaryAssetRules& Rules);
+	virtual void SetPrimaryAssetRulesExplicitly(FPrimaryAssetId PrimaryAssetId, const FPrimaryAssetRulesExplicitOverride& ExplicitRules);
 
 	/** Gets the management rules for a specific asset, this will merge the type and individual values */
 	virtual FPrimaryAssetRules GetPrimaryAssetRules(FPrimaryAssetId PrimaryAssetId) const;
@@ -392,6 +393,9 @@ public:
 
 	/** Get the encryption key guid attached to this primary asset. Can be invalid if the asset is not encrypted */
 	virtual void GetCachedPrimaryAssetEncryptionKeyGuid(FPrimaryAssetId InPrimaryAssetId, FGuid& OutGuid);
+
+	/** Loads the redirector maps */
+	virtual void LoadRedirectorMaps();
 
 #if WITH_EDITOR
 	// EDITOR ONLY FUNCTIONALITY
@@ -508,9 +512,6 @@ protected:
 	FPrimaryAssetData* GetNameData(const FPrimaryAssetId& PrimaryAssetId, bool bCheckRedirector = true);
 	const FPrimaryAssetData* GetNameData(const FPrimaryAssetId& PrimaryAssetId, bool bCheckRedirector = true) const;
 
-	/** Loads the redirector maps */
-	virtual void LoadRedirectorMaps();
-
 	/** Rebuilds the ObjectReferenceList, needed after global object state has changed */
 	virtual void RebuildObjectReferenceList();
 
@@ -600,7 +601,7 @@ protected:
 	TMap<FName, FPrimaryAssetId> AssetPathMap;
 
 	/** Overridden asset management data for specific types */
-	TMap<FPrimaryAssetId, FPrimaryAssetRules> AssetRuleOverrides;
+	TMap<FPrimaryAssetId, FPrimaryAssetRulesExplicitOverride> AssetRuleOverrides;
 
 	/** Map from PrimaryAssetId to list of PrimaryAssetIds that are the parent of this one, for determining chunking/cooking */
 	TMap<FPrimaryAssetId, TArray<FPrimaryAssetId>> ManagementParentMap;
@@ -697,6 +698,12 @@ protected:
 	FDelegateHandle ChunkInstallDelegateHandle;
 
 private:
+
+#if WITH_EDITOR
+	/** Recursive handler for InitializeAssetBundlesFromMetadata */
+	virtual void InitializeAssetBundlesFromMetadata_Recursive(const UStruct* Struct, const void* StructValue, FAssetBundleData& AssetBundle, FName DebugName, TSet<const void*>& AllVisitedStructValues) const;
+#endif
+
 	/** Per-type asset information, cannot be accessed by children as it is defined in CPP file */
 	TMap<FName, TSharedRef<FPrimaryAssetTypeData>> AssetTypeMap;
 

@@ -149,7 +149,19 @@ protected:
 	 */
 	void CreateOutputRenderTarget(const TSharedPtr<IMediaTextureSample, ESPMode::ThreadSafe>& InSample, const FRenderParams& InParams);
 
+	/**
+	 * Caches next available sample from queue in MediaTexture owner to keep single consumer access
+	 *
+	 * @param InSampleQueue SampleQueue to query sample information from
+	 */
+	void CacheNextAvailableSampleTime(const TSharedPtr<FMediaTextureSampleSource, ESPMode::ThreadSafe>& InSampleQueue) const;
+
 private:
+
+	/**
+	* Cycle our cached samples
+	*/
+	void CycleCachedSamples();
 
 	/** Whether the texture has been cleared. */
 	bool Cleared;
@@ -177,4 +189,7 @@ private:
 
 	/** The current media player facade to get video samples from. */
 	TWeakPtr<FMediaPlayerFacade, ESPMode::ThreadSafe> PlayerFacadePtr;
+
+	/** cached media sample to postpone releasing it until the next sample rendering as it can get overwritten due to asynchronous rendering */
+	TArray<TSharedPtr<IMediaTextureSample, ESPMode::ThreadSafe>> CachedSamples;
 };

@@ -62,13 +62,6 @@ void FRemoteSessionHost::SetScreenSharing(const bool bEnabled)
 {
 }
 
-void FRemoteSessionHost::SetConsumeInput(const bool bConsume)
-{
-	/*if (PlaybackMessageHandler.IsValid())
-	{
-		PlaybackMessageHandler->SetConsumeInput(bConsume);
-	}*/
-}
 
 bool FRemoteSessionHost::StartListening(const uint16 InPort)
 {
@@ -147,7 +140,7 @@ void FRemoteSessionHost::OnCreateChannels()
 	
 	// setup framebuffer capture
 	TSharedPtr<FRemoteSessionFrameBufferChannel> FBChannel = IRemoteSessionRole::GetChannel<FRemoteSessionFrameBufferChannel>();
-	if (FBChannel.IsValid())
+	if (FBChannel.IsValid() && SceneViewport.IsValid())
 	{
 		FBChannel->SetCaptureViewport(SceneViewport.ToSharedRef());
 		FBChannel->SetCaptureQuality(Quality, Framerate);

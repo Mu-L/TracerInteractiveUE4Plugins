@@ -443,7 +443,8 @@ void UAbilitySystemComponent::OnRemoveAbility(FGameplayAbilitySpec& Spec)
 
 		auto& TriggeredAbilityMap = (TriggerData.TriggerSource == EGameplayAbilityTriggerSource::GameplayEvent) ? GameplayEventTriggeredAbilities : OwnedTagTriggeredAbilities;
 
-		if (TriggeredAbilityMap.Contains(EventTag))
+		if (ensureMsgf(TriggeredAbilityMap.Contains(EventTag), 
+			TEXT("%s::%s not found in TriggeredAbilityMap while removing, TriggerSource: %d"), *Spec.Ability->GetName(), *EventTag.ToString(), (int32)TriggerData.TriggerSource))
 		{
 			TriggeredAbilityMap[EventTag].Remove(Spec.Handle);
 			if (TriggeredAbilityMap[EventTag].Num() == 0)
@@ -551,7 +552,7 @@ void UAbilitySystemComponent::CheckForClearedAbilities()
 		{
 			if (AbilitySpec.AssignedHandle.IsValid() && FindAbilitySpecFromHandle(AbilitySpec.AssignedHandle) == nullptr)
 			{
-				ABILITY_LOG(Display, TEXT("::CheckForClearedAbilities is clearing AssignedHandle %s from GE %s / %s"), *AbilitySpec.AssignedHandle.ToString(), *ActiveGE.GetDebugString(), *ActiveGE.Handle.ToString() );
+				ABILITY_LOG(Verbose, TEXT("::CheckForClearedAbilities is clearing AssignedHandle %s from GE %s / %s"), *AbilitySpec.AssignedHandle.ToString(), *ActiveGE.GetDebugString(), *ActiveGE.Handle.ToString() );
 				AbilitySpec.AssignedHandle = FGameplayAbilitySpecHandle();
 			}
 		}
@@ -1914,13 +1915,14 @@ int32 UAbilitySystemComponent::HandleGameplayEvent(FGameplayTag EventTag, const 
 {
 	int32 TriggeredCount = 0;
 	FGameplayTag CurrentTag = EventTag;
+	ABILITYLIST_SCOPE_LOCK();
 	while (CurrentTag.IsValid())
 	{
 		if (GameplayEventTriggeredAbilities.Contains(CurrentTag))
 		{
 			TArray<FGameplayAbilitySpecHandle> TriggeredAbilityHandles = GameplayEventTriggeredAbilities[CurrentTag];
 
-			for (auto AbilityHandle : TriggeredAbilityHandles)
+			for (const FGameplayAbilitySpecHandle& AbilityHandle : TriggeredAbilityHandles)
 			{
 				if (TriggerAbilityFromGameplayEvent(AbilityHandle, AbilityActorInfo.Get(), EventTag, Payload, *this))
 				{

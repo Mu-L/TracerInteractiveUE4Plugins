@@ -24,9 +24,15 @@ namespace PropertyPathHelpersInternal
 		// Obtain the property info from the given structure definition
 		if ( UField* Field = Segment.Resolve(InStruct) )
 		{
+			const bool bFinalSegment = SegmentIndex == (InPropertyPath.GetNumSegments() - 1);
+
 			if ( UProperty* Property = Cast<UProperty>(Field) )
 			{
-				if ( SegmentIndex < ( InPropertyPath.GetNumSegments() - 1 ) )
+				if (bFinalSegment)
+				{
+					return InResolver.Resolve(static_cast<ContainerType*>(InContainer), InPropertyPath);
+				}
+				else
 				{
 					// Check first to see if this is a simple object (eg. not an array of objects)
 					if ( UObjectProperty* ObjectProperty = Cast<UObjectProperty>(Property) )
@@ -107,17 +113,34 @@ namespace PropertyPathHelpersInternal
 						// TODO: we dont support map properties yet
 					}
 				}
-				else
-				{
-					return InResolver.Resolve(static_cast<ContainerType*>(InContainer), InPropertyPath);
-				}
 			}
 			else
 			{
-				// Only allow functions as the final link in the chain.
-				if ( SegmentIndex == ( InPropertyPath.GetNumSegments() - 1 ) )
+				// If it's the final segment, use the resolver to get the value.
+				if (bFinalSegment)
 				{
 					return InResolver.Resolve(static_cast<ContainerType*>(InContainer), InPropertyPath);
+				}
+				else
+				{
+					// If it's not the final segment, but still a function, we're going to treat it as an Object* getter.
+					// in the hopes that it leads to another object that we can resolve the next segment on.  These
+					// getter functions must be very simple.
+
+					UObject* CurrentObject = nullptr;
+					UProperty* GetterProperty = nullptr;
+					FInternalGetterResolver<UObject*> GetterResolver(CurrentObject, GetterProperty);
+
+					FCachedPropertyPath TempPath(Segment);
+					if (GetterResolver.Resolve(InContainer, TempPath))
+					{
+						if (CurrentObject)
+						{
+							InPropertyPath.SetCanSafelyUsedCachedAddress(false);
+
+							return IteratePropertyPathRecursive(CurrentObject->GetClass(), CurrentObject, SegmentIndex + 1, InPropertyPath, InResolver);
+						}
+					}
 				}
 			}
 		}
@@ -451,13 +474,23 @@ namespace PropertyPathHelpersInternal
 
 	bool ResolvePropertyPath(UObject* InContainer, const FString& InPropertyPath, FPropertyPathResolver& InResolver)
 	{
-		FCachedPropertyPath InternalPropertyPath(InPropertyPath);
-		return IteratePropertyPathRecursive<UObject>(InContainer->GetClass(), InContainer, 0, InternalPropertyPath, InResolver);
+		if (InContainer)
+		{
+			FCachedPropertyPath InternalPropertyPath(InPropertyPath);
+			return IteratePropertyPathRecursive<UObject>(InContainer->GetClass(), InContainer, 0, InternalPropertyPath, InResolver);
+		}
+
+		return false;
 	}
 
 	bool ResolvePropertyPath(UObject* InContainer, const FCachedPropertyPath& InPropertyPath, FPropertyPathResolver& InResolver)
 	{
-		return IteratePropertyPathRecursive<UObject>(InContainer->GetClass(), InContainer, 0, InPropertyPath, InResolver);
+		if (InContainer)
+		{
+			return IteratePropertyPathRecursive<UObject>(InContainer->GetClass(), InContainer, 0, InPropertyPath, InResolver);
+		}
+
+		return false;
 	}
 
 	bool ResolvePropertyPath(void* InContainer, UStruct* InStruct, const FString& InPropertyPath, FPropertyPathResolver& InResolver)
@@ -493,14 +526,25 @@ FPropertyPathSegment::FPropertyPathSegment()
 
 }
 
-FPropertyPathSegment::FPropertyPathSegment(const FString& SegmentName)
+FPropertyPathSegment::FPropertyPathSegment(int32 InCount, const TCHAR* InString)
 	: ArrayIndex(INDEX_NONE)
 	, Struct(nullptr)
 	, Field(nullptr)
 {
-	FString PropertyName;
-	PropertyPathHelpers::FindFieldNameAndArrayIndex(SegmentName, PropertyName, ArrayIndex);
-	Name = FName(*PropertyName);
+	const TCHAR* PropertyName = nullptr;
+	int32 PropertyNameLength = 0;
+	PropertyPathHelpers::FindFieldNameAndArrayIndex(InCount, InString, PropertyNameLength, &PropertyName, ArrayIndex);
+	ensure(PropertyName != nullptr);
+	FString PropertyNameString(PropertyNameLength, PropertyName);
+	Name = FName(*PropertyNameString, FNAME_Find);
+}
+
+FPropertyPathSegment FPropertyPathSegment::MakeUnresolvedCopy(const FPropertyPathSegment& ToCopy)
+{
+	FPropertyPathSegment Segment;
+	Segment.Name = ToCopy.Name;
+	Segment.ArrayIndex = ToCopy.ArrayIndex;
+	return Segment;
 }
 
 UField* FPropertyPathSegment::Resolve(UStruct* InStruct) const
@@ -562,7 +606,7 @@ FCachedPropertyPath::FCachedPropertyPath(const FString& Path)
 	MakeFromString(Path);
 }
 
-FCachedPropertyPath::FCachedPropertyPath(const TArray<FString>& PropertyChain)
+FCachedPropertyPath::FCachedPropertyPath(const TArray<FString>& PathSegments)
 	: CachedAddress(nullptr)
 	, CachedFunction(nullptr)
 #if DO_CHECK
@@ -570,22 +614,50 @@ FCachedPropertyPath::FCachedPropertyPath(const TArray<FString>& PropertyChain)
 #endif
 	, bCanSafelyUsedCachedAddress(false)
 {
-	MakeFromStringArray(PropertyChain);
+	for (const FString& Segment : PathSegments)
+	{
+		Segments.Add(FPropertyPathSegment(Segment.Len(), *Segment));
+	}
+}
+
+FCachedPropertyPath::FCachedPropertyPath(const FPropertyPathSegment& Segment)
+	: CachedAddress(nullptr)
+	, CachedFunction(nullptr)
+#if DO_CHECK
+	, CachedContainer(nullptr)
+#endif
+	, bCanSafelyUsedCachedAddress(false)
+{
+	Segments.Add(Segment);
 }
 
 void FCachedPropertyPath::MakeFromString(const FString& InPropertyPath)
 {
-	TArray<FString> PropertyPathArray;
-	InPropertyPath.ParseIntoArray(PropertyPathArray, TEXT("."));
-	MakeFromStringArray(PropertyPathArray);
+	const TCHAR Delim = TEXT('.');
+	const TCHAR* Path = *InPropertyPath;
+	int32 Length = InPropertyPath.Len();
+	int32 Offset = 0;
+	int32 Start = 0;
+	while(Offset < Length)
+	{
+		if (Path[Offset] == Delim)
+		{
+			Segments.Add(FPropertyPathSegment(Offset - Start, &Path[Start]));
+			Start = ++Offset;
+		}
+		Offset++;
+	}
+	Segments.Add(FPropertyPathSegment(Length - Start, &Path[Start]));
 }
 
-void FCachedPropertyPath::MakeFromStringArray(const TArray<FString>& InPropertyPathArray)
+FCachedPropertyPath FCachedPropertyPath::MakeUnresolvedCopy(const FCachedPropertyPath& ToCopy)
 {
-	for ( const FString& Segment : InPropertyPathArray )
+	FCachedPropertyPath Path;
+	for (const FPropertyPathSegment& Segment : ToCopy.Segments)
 	{
-		Segments.Add(FPropertyPathSegment(Segment));
+		Path.Segments.Add(FPropertyPathSegment::MakeUnresolvedCopy(Segment));
 	}
+	return Path;
 }
 
 int32 FCachedPropertyPath::GetNumSegments() const
@@ -722,6 +794,16 @@ FString FCachedPropertyPath::ToString() const
 	return OutString;
 }
 
+bool FCachedPropertyPath::operator==(const FString& Other) const
+{
+	return Equals(Other);
+}
+
+bool FCachedPropertyPath::Equals(const FString& Other) const
+{
+	return ToString() == Other;
+}
+
 #if DO_CHECK
 void* FCachedPropertyPath::GetCachedContainer() const
 {
@@ -776,24 +858,33 @@ void FCachedPropertyPath::RemoveFromStart(int32 InNumSegments)
 	}
 }
 
+UProperty* FCachedPropertyPath::GetUProperty() const
+{
+	return Cast<UProperty>(GetLastSegment().GetField());
+}
+
 namespace PropertyPathHelpers
 {
-	void FindFieldNameAndArrayIndex(const FString& InSegmentName, FString& OutFieldName, int32& OutArrayIndex)
+	void FindFieldNameAndArrayIndex(int32 InCount, const TCHAR* InString, int32& OutCount, const TCHAR** OutPropertyName, int32& OutArrayIndex)
 	{
-		OutFieldName = InSegmentName;
+		*OutPropertyName = InString;
 
 		// Parse the property name and (optional) array index
-		int32 ArrayPos = OutFieldName.Find(TEXT("["));
-		if ( ArrayPos != INDEX_NONE )
+		OutArrayIndex = INDEX_NONE;
+		OutCount = InCount;
+		int32 Offset = 1;
+		const TCHAR Bracket = '[';
+		while ( Offset < InCount )
 		{
-			FString IndexToken = OutFieldName.RightChop(ArrayPos + 1).LeftChop(1);
-			LexFromString(OutArrayIndex, *IndexToken);
-
-			OutFieldName = OutFieldName.Left(ArrayPos);
-		}
-		else
-		{
-			OutArrayIndex = INDEX_NONE;
+			if (InString[Offset] == Bracket)
+			{
+				OutCount = Offset;
+				// here we need to copy - since we need a section of the string only
+				FString ArrayIndexString(InCount - Offset - 2, &InString[Offset + 1]);
+				OutArrayIndex = FCString::Atoi(*ArrayIndexString);
+				break;
+			}
+			Offset++;
 		}
 	}
 

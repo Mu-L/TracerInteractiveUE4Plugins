@@ -498,17 +498,17 @@ public:
 	FText ToUpper() const;
 
 	/**
-	 * Removes whitespace characters from the front of the string.
+	 * Removes any whitespace characters from the start of the text.
 	 */
 	static FText TrimPreceding( const FText& );
 
 	/**
-	 * Removes trailing whitespace characters
+	 * Removes any whitespace characters from the end of the text.
 	 */
 	static FText TrimTrailing( const FText& );
 
 	/**
-	 * Does both of the above without needing to create an additional FText in the interim.
+	 * Removes any whitespace characters from the start and end of the text.
 	 */
 	static FText TrimPrecedingAndTrailing( const FText& );
 
@@ -559,6 +559,34 @@ public:
 	 */
 	template < typename... TArguments >
 	static FText FormatOrdered( FTextFormat Fmt, TArguments&&... Args );
+
+	/**
+	 * Join an arbitrary list of formattable values together, separated by the given delimiter
+	 * @note Internally this uses FText::Format with a generated culture invariant format pattern
+	 *
+	 * @param Delimiter The delimiter to insert between the items
+	 * @param Args An array of formattable values to join together
+	 * @return The joined FText
+	 */
+	static FText Join(const FText& Delimiter, const FFormatOrderedArguments& Args);
+	static FText Join(const FText& Delimiter, const TArray<FText>& Args);
+
+	/**
+	 * Join an arbitrary list of formattable items together, separated by the given delimiter
+	 * @note Internally this uses FText::Format with a generated culture invariant format pattern
+	 *
+	 * @param Delimiter The delimiter to insert between the items
+	 * @param Args A variadic list of values to join together
+	 * @return The joined FText
+	 */
+	template <typename... ArgTypes>
+	static FORCEINLINE FText Join(const FText& Delimiter, ArgTypes... Args)
+	{
+		static_assert(TAnd<TIsConstructible<FFormatArgumentValue, ArgTypes>...>::Value, "Invalid argument type passed to FText::Join");
+		static_assert(sizeof...(Args) > 0, "FText::Join expects at least one non-format argument"); // we do this to ensure that people don't call Join for no good reason
+
+		return Join(Delimiter, FFormatOrderedArguments{ MoveTemp(Args)... });
+	}
 
 	/**
 	 * Produces a custom-generated FText. Can be used for objects that produce text dependent on localized strings but
@@ -1092,100 +1120,79 @@ private:
 class CORE_API FTextBuilder
 {
 public:
-	FTextBuilder()
-		: IndentCount(0)
+	/**
+	 * Increase the running indentation of the builder.
+	 */
+	void Indent();
+
+	/**
+	 * Decrease the running indentation of the builder.
+	 */
+	void Unindent();
+
+	/**
+	 * Append an empty line to the builder, indented by the running indentation of the builder.
+	 */
+	void AppendLine();
+
+	/**
+	 * Append the given text line to the builder, indented by the running indentation of the builder.
+	 */
+	void AppendLine(const FText& Text);
+
+	/**
+	 * Append the given string line to the builder, indented by the running indentation of the builder.
+	 */
+	void AppendLine(const FString& String);
+
+	/**
+	 * Append the given name line to the builder, indented by the running indentation of the builder.
+	 */
+	void AppendLine(const FName& Name);
+
+	/**
+	 * Append the given formatted text line to the builder, indented by the running indentation of the builder.
+	 */
+	void AppendLineFormat(const FTextFormat& Pattern, const FFormatNamedArguments& Arguments);
+
+	/**
+	 * Append the given formatted text line to the builder, indented by the running indentation of the builder.
+	 */
+	void AppendLineFormat(const FTextFormat& Pattern, const FFormatOrderedArguments& Arguments);
+
+	/**
+	 * Append the given formatted text line to the builder, indented by the running indentation of the builder.
+	 */
+	template <typename... ArgTypes>
+	FORCEINLINE void AppendLineFormat(FTextFormat Pattern, ArgTypes... Args)
 	{
+		static_assert(TAnd<TIsConstructible<FFormatArgumentValue, ArgTypes>...>::Value, "Invalid argument type passed to FTextBuilder::AppendLineFormat");
+		static_assert(sizeof...(Args) > 0, "FTextBuilder::AppendLineFormat expects at least one non-format argument"); // we do this to ensure that people don't call AppendLineFormat for no good reason
+
+		BuildAndAppendLine(FText::Format(MoveTemp(Pattern), FFormatOrderedArguments{ MoveTemp(Args)... }));
 	}
 
-	void Indent()
-	{
-		++IndentCount;
-	}
+	/**
+	 * Clear the builder and reset it to its default state.
+	 */
+	void Clear();
 
-	void Unindent()
-	{
-		--IndentCount;
-	}
+	/**
+	 * Check to see if the builder has any data.
+	 */
+	bool IsEmpty();
 
-	void AppendLine()
-	{
-		if (!Report.IsEmpty())
-		{
-			Report += LINE_TERMINATOR;
-		}
-
-		for (int32 Index = 0; Index < IndentCount; Index++)
-		{
-			Report += TEXT("    ");
-		}
-	}
-
-	void AppendLine(const FText& Text)
-	{
-		AppendLine();
-		Report += Text.ToString();
-	}
-
-	void AppendLine(const FString& String)
-	{
-		AppendLine();
-		Report += String;
-	}
-
-	void AppendLine(const FName& Name)
-	{
-		AppendLine();
-		Report += Name.ToString();
-	}
-
-	void AppendLineFormat(const FTextFormat& Pattern, const FFormatNamedArguments& Arguments)
-	{
-		AppendLine(FText::Format(Pattern, Arguments));
-	}
-
-	void AppendLineFormat(const FTextFormat& Pattern, const FFormatOrderedArguments& Arguments)
-	{
-		AppendLine(FText::Format(Pattern, Arguments));
-	}
-
-	void AppendLineFormat(const FTextFormat& Fmt, const FFormatArgumentValue& v1)
-	{
-		AppendLine(FText::Format(Fmt, v1));
-	}
-
-	void AppendLineFormat(const FTextFormat& Fmt, const FFormatArgumentValue& v1, const FFormatArgumentValue& v2)
-	{
-		AppendLine(FText::Format(Fmt, v1, v2));
-	}
-
-	void AppendLineFormat(const FTextFormat& Fmt, const FFormatArgumentValue& v1, const FFormatArgumentValue& v2, const FFormatArgumentValue& v3)
-	{
-		AppendLine(FText::Format(Fmt, v1, v2, v3));
-	}
-
-	void AppendLineFormat(const FTextFormat& Fmt, const FFormatArgumentValue& v1, const FFormatArgumentValue& v2, const FFormatArgumentValue& v3, const FFormatArgumentValue& v4)
-	{
-		AppendLine(FText::Format(Fmt, v1, v2, v3, v4));
-	}
-
-	void Clear()
-	{
-		Report.Empty();
-	}
-
-	bool IsEmpty()
-	{
-		return Report.IsEmpty();
-	}
-
-	FText ToText() const
-	{
-		return FText::FromString(Report);
-	}
+	/**
+	 * Build the current set of input into a FText.
+	 */
+	FText ToText() const;
 
 private:
-	FString Report;
-	int32 IndentCount;
+	void BuildAndAppendLine(FString&& Data);
+	void BuildAndAppendLine(FText&& Data);
+
+	TArray<FText> Lines;
+	int32 IndentCount = 0;
 };
 
 class CORE_API FScopedTextIdentityPreserver

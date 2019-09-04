@@ -213,69 +213,7 @@ namespace UnrealBuildTool
 						ExportEnv.Add((string)(Pair.Key), (string)(Pair.Value));
 					}
 				}
-
-				int NumSortErrors = 0;
-				for (int ActionIndex = 0; ActionIndex < InActions.Count; ActionIndex++)
-				{
-					Action Action = InActions[ActionIndex];
-					foreach (Action PrerequisiteAction in Action.PrerequisiteActions)
-					{
-						if (InActions.Contains(PrerequisiteAction))
-						{
-							int DepIndex = InActions.IndexOf(PrerequisiteAction);
-							if (DepIndex > ActionIndex)
-							{
-								NumSortErrors++;
-							}
-						}
-					}
-				}
-				if (NumSortErrors > 0)
-				{
-					Actions = new List<Action>();
-					HashSet<int> UsedActions = new HashSet<int>();
-					for (int ActionIndex = 0; ActionIndex < InActions.Count; ActionIndex++)
-					{
-						if (UsedActions.Contains(ActionIndex))
-						{
-							continue;
-						}
-						Action Action = InActions[ActionIndex];
-						foreach(Action PrerequisiteAction in Action.PrerequisiteActions)
-						{
-							if (InActions.Contains(PrerequisiteAction))
-							{
-								int DepIndex = InActions.IndexOf(PrerequisiteAction);
-								if (UsedActions.Contains(DepIndex))
-								{
-									continue;
-								}
-								Actions.Add(PrerequisiteAction);
-								UsedActions.Add(DepIndex);
-							}
-						}
-						Actions.Add(Action);
-						UsedActions.Add(ActionIndex);
-					}
-					for (int ActionIndex = 0; ActionIndex < Actions.Count; ActionIndex++)
-					{
-						Action Action = Actions[ActionIndex];
-						foreach(Action PrerequisiteAction in Action.PrerequisiteActions)
-						{
-							if (Actions.Contains(PrerequisiteAction))
-							{
-								int DepIndex = Actions.IndexOf(PrerequisiteAction);
-								if (DepIndex > ActionIndex)
-								{
-									throw new BuildException("Action is not topologically sorted.\n  {0} {1}\nDependency\n  {2} {3}", Action.CommandPath, Action.CommandArguments, PrerequisiteAction.CommandPath, PrerequisiteAction.CommandArguments);
-								}
-							}
-						}
-					}
-				}
-
 			}
-
 
 			XmlDocument XGETaskDocument = new XmlDocument();
 
@@ -364,6 +302,11 @@ namespace UnrealBuildTool
 							).ToArray()
 						)
 					);
+
+				if(Action.ActionType == ActionType.Link)
+				{
+					ToolElement.SetAttribute("AutoRecover", "Unexpected PDB error; OK (0)");
+				}
 			}
 
 			// <Project Name="Default" Env="Default">...</Project>
@@ -393,6 +336,7 @@ namespace UnrealBuildTool
 				TaskElement.SetAttribute("Tool", string.Format("Tool{0}", ActionIndex));
 				TaskElement.SetAttribute("WorkingDir", Action.WorkingDirectory.FullName);
 				TaskElement.SetAttribute("SkipIfProjectFailed", "true");
+				TaskElement.SetAttribute("AllowRestartOnLocal", "true");
 
 				// Create a semi-colon separated list of the other tasks this task depends on the results of.
 				List<string> DependencyNames = new List<string>();
@@ -456,11 +400,17 @@ namespace UnrealBuildTool
 				}
 			}
 
+			string XgConsolePath;
+			if(!TryGetXgConsoleExecutable(out XgConsolePath))
+			{
+				throw new BuildException("Unable to find xgConsole executable.");
+			}
+
 			bool bSilentCompileOutput = false;
 			string SilentOption = bSilentCompileOutput ? "/Silent" : "";
 
 			ProcessStartInfo XGEStartInfo = new ProcessStartInfo(
-				"xgConsole",
+				XgConsolePath,
 				string.Format("\"{0}\" /Rebuild /NoWait {1} /NoLogo {2} /ShowAgent /ShowTime {3}",
 					TaskFilePath,
 					bStopXGECompilationAfterErrors ? "/StopOnErrors" : "",

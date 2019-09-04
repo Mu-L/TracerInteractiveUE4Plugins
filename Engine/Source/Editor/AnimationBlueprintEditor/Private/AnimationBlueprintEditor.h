@@ -11,6 +11,7 @@
 #include "IAnimationBlueprintEditor.h"
 #include "Containers/ArrayView.h"
 
+class UAnimationBlueprintEditorOptions;
 class IPersonaToolkit;
 class IPersonaViewport;
 class ISkeletonTree;
@@ -24,6 +25,8 @@ struct FAnimationBlueprintEditorModes
 {
 	// Mode constants
 	static const FName AnimationBlueprintEditorMode;
+	static const FName AnimationBlueprintInterfaceEditorMode;
+
 	static FText GetLocalizedMode(const FName InMode)
 	{
 		static TMap< FName, FText > LocModes;
@@ -31,6 +34,7 @@ struct FAnimationBlueprintEditorModes
 		if (LocModes.Num() == 0)
 		{
 			LocModes.Add(AnimationBlueprintEditorMode, NSLOCTEXT("AnimationBlueprintEditorModes", "AnimationBlueprintEditorMode", "Animation Blueprint"));
+			LocModes.Add(AnimationBlueprintInterfaceEditorMode, NSLOCTEXT("AnimationBlueprintEditorModes", "AnimationBlueprintInterface EditorMode", "Animation Blueprint Interface"));
 		}
 
 		check(InMode != NAME_None);
@@ -84,6 +88,10 @@ public:
 	void SetDetailObjects(const TArray<UObject*>& InObjects);
 	void SetDetailObject(UObject* Obj);
 
+	/** IAnimationBlueprintEditor interface */
+	virtual const FEdGraphPinType& GetLastGraphPinTypeUsed() const override { return LastGraphPinType; }
+	virtual void SetLastGraphPinTypeUsed(const FEdGraphPinType& InType) override { LastGraphPinType = InType; }
+
 	/** IHasPersonaToolkit interface */
 	virtual TSharedRef<class IPersonaToolkit> GetPersonaToolkit() const { return PersonaToolkit.ToSharedRef(); }
 
@@ -117,6 +125,10 @@ public:
 
 	/** Get the object to be displayed in the asset properties */
 	UObject* HandleGetObject();
+	
+	//~ Begin FGCObject Interface
+	virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
+	//~ End FGCObject Interface
 
 	/** Handle opening a new asset from the asset browser */
 	void HandleOpenNewAsset(UObject* InNewAsset);
@@ -262,6 +274,16 @@ private:
 	/** Handle the viewport being created */
 	void HandleViewportCreated(const TSharedRef<IPersonaViewport>& InPersonaViewport);
 
+    /**
+	 * Load editor settings from disk (docking state, window pos/size, option state, etc).
+	 */
+	virtual void LoadEditorSettings();
+
+	/**
+	 * Saves editor settings to disk (docking state, window pos/size, option state, etc).
+	 */
+	virtual void SaveEditorSettings();
+
 	/** The extender to pass to the level editor to extend it's window menu */
 	TSharedPtr<FExtender> MenuExtender;
 
@@ -282,4 +304,10 @@ private:
 
 	/** Delegate handle registered for when pin default values change */
 	FDelegateHandle OnPinDefaultValueChangedHandle;
+
+	/** The last pin type we added to a graph's inputs */
+	FEdGraphPinType LastGraphPinType;
+
+    /** Configuration class used to store editor settings across sessions. */
+	UAnimationBlueprintEditorOptions* EditorOptions;
 };

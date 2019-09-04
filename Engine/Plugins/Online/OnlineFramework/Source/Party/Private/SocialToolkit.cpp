@@ -110,7 +110,7 @@ public:
 
 //@todo DanH Social: Need a non-backdoor way to get toolkits from the manager (an issue when we don't know where the manager is) - new game subsystems should be a nice solve
 TMap<TWeakObjectPtr<ULocalPlayer>, TWeakObjectPtr<USocialToolkit>> USocialToolkit::AllToolkitsByOwningPlayer;
-USocialToolkit* USocialToolkit::GetToolkitForPlayer(ULocalPlayer* LocalPlayer)
+USocialToolkit* USocialToolkit::GetToolkitForPlayerInternal(ULocalPlayer* LocalPlayer)
 {
 	TWeakObjectPtr<USocialToolkit>* FoundToolkit = AllToolkitsByOwningPlayer.Find(LocalPlayer);
 	return FoundToolkit ? FoundToolkit->Get() : nullptr;
@@ -247,9 +247,23 @@ void USocialToolkit::TrySendFriendInvite(const FString& DisplayNameOrEmail) cons
 	IOnlineUserPtr UserInterface = PrimaryOSS ? PrimaryOSS->GetUserInterface() : nullptr;
 	if (UserInterface.IsValid())
 	{
-		IOnlineUser::FOnQueryUserMappingComplete QueryCompleteDelegate = IOnlineUser::FOnQueryUserMappingComplete::CreateUObject(this, &USocialToolkit::HandleQueryPrimaryUserIdMappingComplete);
+		IOnlineUser::FOnQueryUserMappingComplete QueryCompleteDelegate = IOnlineUser::FOnQueryUserMappingComplete::CreateUObject(const_cast<USocialToolkit*>(this), &USocialToolkit::HandleQueryPrimaryUserIdMappingComplete);
 		UserInterface->QueryUserIdMapping(*GetLocalUserNetId(ESocialSubsystem::Primary), DisplayNameOrEmail, QueryCompleteDelegate);
 	}
+}
+
+bool USocialToolkit::GetAuthAttribute(ESocialSubsystem SubsystemType, const FString& AttributeKey, FString& OutValue) const
+{
+	IOnlineSubsystem* SocialOSS = GetSocialOss(SubsystemType);
+	if (IOnlineIdentityPtr IdentityInterface = SocialOSS ? SocialOSS->GetIdentityInterface() : nullptr)
+	{
+		FUniqueNetIdRepl LocalUserId = GetLocalUserNetId(SubsystemType);
+		if (TSharedPtr<FUserOnlineAccount> UserAccount = LocalUserId.IsValid() ? IdentityInterface->GetUserAccount(*LocalUserId) : nullptr)
+		{
+			return UserAccount->GetAuthAttribute(AttributeKey, OutValue);
+		}
+	}
+	return false;
 }
 
 #if PLATFORM_PS4
@@ -276,6 +290,15 @@ void USocialToolkit::QueueUserDependentAction(const FUniqueNetIdRepl& UserId, TF
 	}
 }
 
+void USocialToolkit::QueueUserDependentAction(const FUniqueNetIdRepl& SubsystemId, FUserDependentAction UserActionDelegate)
+{
+	// MERGE-REVIEW: Was changed from FindOrCreate
+	if (USocialUser* SocialUser = FindUser(SubsystemId))
+	{
+		SocialUser->RegisterInitCompleteHandler(UserActionDelegate);
+	}
+}
+
 void USocialToolkit::QueueUserDependentActionInternal(const FUniqueNetIdRepl& SubsystemId, ESocialSubsystem SubsystemType, TFunction<void(USocialUser&)>&& UserActionFunc, bool bExecutePostInit)
 {
 	if (!ensure(SubsystemId.IsValid()))
@@ -284,7 +307,8 @@ void USocialToolkit::QueueUserDependentActionInternal(const FUniqueNetIdRepl& Su
 	}
 	
 	USocialUser* User = FindUser(SubsystemId);
-	if (!User)
+
+	if (!User && ensureMsgf(USocialToolkit::IsOwnerLoggedIn(), TEXT("Cannot QueueUserDependentAction while local user is logged out! Toolkit [%d], ID [%s], Subsystem [%s]"), GetLocalUserNum(), *SubsystemId.ToDebugString(), ToString(SubsystemType)))
 	{
 		if (SubsystemType == ESocialSubsystem::Primary)
 		{
@@ -354,27 +378,6 @@ void USocialToolkit::HandleControllerIdChanged(int32 NewId, int32 OldId)
 	}
 }
 
-void USocialToolkit::RequestDisplayPlatformSocialUI() const
-{
-	//@todo DanH Social: If the local player is on a platform with its own Social overlay, show it #required
-
-	/*if (ShouldShowExternalFriendsUI())
-	{
-		if (IOnlineSubsystem* PlatformOSS = UFortGlobals::GetPlatformOSS(GetWorld()))
-		{
-			IOnlineExternalUIPtr ExternalUI = PlatformOSS->GetExternalUIInterface();
-			if (ExternalUI.IsValid())
-			{
-				const UFortLocalPlayer& LocalPlayer = GetFortLocalPlayer();
-				if (ExternalUI->ShowFriendsUI(LocalPlayer.GetControllerId()))
-				{
-					return;
-				}
-			}
-		}
-	}*/
-}
-
 void USocialToolkit::NotifySubsystemIdEstablished(USocialUser& SocialUser, ESocialSubsystem SubsystemType, const FUniqueNetIdRepl& SubsystemId)
 {
 	if (ensure(!UsersBySubsystemIds.Contains(SubsystemId)))
@@ -412,7 +415,7 @@ bool USocialToolkit::TrySendFriendInvite(USocialUser& SocialUser, ESocialSubsyst
 
 		if (FriendsInterface && SubsystemId.IsValid() && !bIsFriendshipRestricted)
 		{
-			return FriendsInterface->SendInvite(GetLocalUserNum(), *SubsystemId, FriendListToQuery, FOnSendInviteComplete::CreateUObject(this, &USocialToolkit::HandleFriendInviteSent, SubsystemType, SocialUser.GetDisplayName()));
+			return FriendsInterface->SendInvite(GetLocalUserNum(), *SubsystemId, FriendListToQuery, FOnSendInviteComplete::CreateUObject(const_cast<USocialToolkit*>(this), &USocialToolkit::HandleFriendInviteSent, SubsystemType, SocialUser.GetDisplayName()));
 		}
 	}
 	return false;
@@ -605,8 +608,10 @@ void USocialToolkit::HandlePlayerLoginStatusChanged(int32 LocalUserNum, ELoginSt
 	{
 		if (NewStatus == ELoginStatus::LoggedIn)
 		{
-			if (!ensure(AllUsers.Num() == 0))
+			if (AllUsers.Num() != 0)
 			{
+				UE_LOG(LogParty, Error, TEXT("HandlePlayerLoginStatusChanged: Changed login status but we were not informed their status had changed previously"));
+
 				// Nobody told us we logged out! Handle it now just so we're fresh, but not good!
 				OnOwnerLoggedOut();
 			}
@@ -644,6 +649,8 @@ void USocialToolkit::HandleReadFriendsListComplete(int32 LocalUserNum, bool bWas
 		//@todo DanH: This is a really big deal on primary and a frustrating deal on platform
 		// In both cases I think we should give it another shot, but I dunno how long to wait and if we should behave differently between the two
 	}
+
+	HandleExistingPartyInvites(SubsystemType);
 }
 
 void USocialToolkit::HandleQueryBlockedPlayersComplete(const FUniqueNetId& UserId, bool bWasSuccessful, const FString& ErrorStr, ESocialSubsystem SubsystemType)
@@ -953,4 +960,30 @@ void USocialToolkit::HandlePartyMemberExited(const FUniqueNetId& LocalUserId, co
 void USocialToolkit::HandleGameDestroyed(const FName SessionName, bool bWasSuccessful)
 {
 	// Update the recent player list whenever a game session ends
+}
+
+void USocialToolkit::HandleUserInvalidated(USocialUser* InvalidUser)
+{
+	AllUsers.Remove(InvalidUser);
+}
+
+void USocialToolkit::HandleExistingPartyInvites(ESocialSubsystem SubsystemType)
+{
+	if (SubsystemType == ESocialSubsystem::Primary)
+	{
+		if (IOnlineSubsystem* Oss = GetSocialOss(SubsystemType))
+		{
+			IOnlinePartyPtr PartyInterface = Oss->GetPartyInterface();
+			FUniqueNetIdRepl LocalUserId = GetLocalUserNetId(SubsystemType);
+			if (PartyInterface.IsValid() && LocalUserId.IsValid())
+			{
+				TArray<IOnlinePartyJoinInfoConstRef> PendingInvites;
+				PartyInterface->GetPendingInvites(*LocalUserId, PendingInvites);
+				for (const IOnlinePartyJoinInfoConstRef& PendingInvite : PendingInvites)
+				{
+					HandlePartyInviteReceived(*LocalUserId, *PendingInvite->GetPartyId(), *PendingInvite->GetSourceUserId());
+				}
+			}
+		}
+	}
 }

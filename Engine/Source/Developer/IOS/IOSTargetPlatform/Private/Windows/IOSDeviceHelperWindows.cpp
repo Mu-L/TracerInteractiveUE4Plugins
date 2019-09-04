@@ -7,6 +7,7 @@
 #include "HAL/RunnableThread.h"
 #include "Interfaces/ITargetPlatformManagerModule.h"
 #include "Interfaces/ITargetPlatform.h"
+#include "Interfaces/IProjectManager.h"
 
 struct FDeviceNotificationCallbackInformation
 {
@@ -46,6 +47,9 @@ private:
  */
 DECLARE_MULTICAST_DELEGATE_OneParam(FDeviceNotification, void*)
 
+// recheck once per minute
+#define		RECHECK_COUNTER_RESET			12
+
 class FDeviceQueryTask
 	: public FRunnable
 {
@@ -66,6 +70,36 @@ public:
 	{
 		while (!Stopping)
 		{
+			if (GIsRequestingExit)
+			{
+				break;
+			}
+			if (GetTargetPlatformManager())
+			{
+				FString OutTutorialPath;
+				const ITargetPlatform* Platform = GetTargetPlatformManager()->FindTargetPlatform(TEXT("IOS"));
+				if (Platform)
+				{
+					if (Platform->IsSdkInstalled(false, OutTutorialPath))
+					{
+						break;
+					}
+				}
+				Enable(false);
+				return 0;
+			}
+			else
+			{
+				FPlatformProcess::Sleep(1.0f);
+			}
+		}
+		int RecheckCounter = RECHECK_COUNTER_RESET;
+		while (!Stopping)
+		{
+			if (GIsRequestingExit)
+			{
+				break;
+			}
 			if (bCheckDevices)
 			{
 #if WITH_EDITOR
@@ -73,23 +107,11 @@ public:
 				{
 					if (NeedSDKCheck)
 					{
-						if (GetTargetPlatformManager())
+						NeedSDKCheck = false;
+						FProjectStatus ProjectStatus;
+						if (!IProjectManager::Get().QueryStatusForCurrentProject(ProjectStatus) || (!ProjectStatus.IsTargetPlatformSupported(TEXT("IOS")) && !ProjectStatus.IsTargetPlatformSupported(TEXT("TVOS"))))
 						{
-							bool CanQuery = false;
-							FString OutTutorialPath;
-							const ITargetPlatform* Platform = GetTargetPlatformManager()->FindTargetPlatform(TEXT("IOS"));
-							if (Platform)
-							{
-								if (Platform->IsSdkInstalled(false, OutTutorialPath))
-								{
-									CanQuery = true;
-								}
-							}
-							NeedSDKCheck = false;
-							if (!CanQuery)
-							{
-								Enable(false);
-							}
+							Enable(false);
 						}
 					}
 					else
@@ -99,6 +121,13 @@ public:
 					}
 				}
 #endif
+			}
+			RecheckCounter--;
+			if (RecheckCounter < 0)
+			{
+				RecheckCounter = RECHECK_COUNTER_RESET;
+				bCheckDevices = true;
+				NeedSDKCheck = true;
 			}
 
 			FPlatformProcess::Sleep(5.0f);
@@ -137,7 +166,7 @@ private:
 			RetryQuery--;
 			if (RetryQuery < 0 || Response < 0)
 			{
-				UE_LOG(LogTemp, Log, TEXT("IOS device listing is disabled (to many failed attempts)!"));
+				//UE_LOG(LogTemp, Log, TEXT("IOS device listing is disabled (to many failed attempts)!"));
 				Enable(false);
 			}
 			return;

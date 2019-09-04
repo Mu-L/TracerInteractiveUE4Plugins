@@ -136,18 +136,18 @@ class RecordPerformance : BuildCommand
 
 	private Platform GetPlatformByName(string PlatformName)
 	{
-		UnrealTargetPlatform PlatformType;
-		if (!Enum.TryParse(PlatformName, true, out PlatformType))
+		UnrealTargetPlatform TargetPlatform;
+		if (UnrealTargetPlatform.TryParse(PlatformName, out TargetPlatform))
 		{
 			return null;
 		}
 
-		return Platform.GetPlatform(PlatformType);
+		return Platform.GetPlatform(TargetPlatform);
 	}
 
 	private void RunCsvTool(string ToolName, string Arguments)
 	{
-		var ToolPath = FileReference.Combine(DirectoryReference.Combine(RootDir, "Engine", "Source", "Programs", "NotForLicensees", "CSVTools", "Binaries"), ToolName + ".exe");
+		var ToolPath = FileReference.Combine(DirectoryReference.Combine(RootDir, "Engine", "Source", "Programs", "CSVTools", "Binaries"), ToolName + ".exe");
 		Run(ToolPath.FullName, Arguments);
 	}
 

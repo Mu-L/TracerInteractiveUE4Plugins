@@ -39,14 +39,14 @@ public:
 	}
 
 	// FAnimInstanceProxy interface
-	virtual void CacheBones() override;
 	virtual void Initialize(UAnimInstance* InAnimInstance) override;
 	virtual void Update(float DeltaSeconds) override;
+	virtual FAnimNode_Base* GetCustomRootNode() override;
 
 	// FAnimSequencerInstanceProxy interface
 	virtual void ResetNodes() override;
 
-	bool UpdateControlRig(UControlRig* InControlRig, uint32 SequenceId, bool bAdditive, bool bApplyBoneFilter, const FInputBlendPose& BoneFilter, float Weight);
+	bool UpdateControlRig(UControlRig* InControlRig, uint32 SequenceId, bool bAdditive, bool bApplyBoneFilter, const FInputBlendPose& BoneFilter, float Weight, bool bExternalSource);
 
 private:
 	void InitControlRigTrack(UControlRig* InControlRig, bool bAdditive, bool bApplyBoneFilter, const FInputBlendPose& BoneFilter, uint32 SequenceId);

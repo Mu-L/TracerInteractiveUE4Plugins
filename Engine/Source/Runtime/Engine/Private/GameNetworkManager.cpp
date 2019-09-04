@@ -17,12 +17,19 @@ DEFINE_LOG_CATEGORY_STATIC(LogGameNetworkManager, Log, All);
 AGameNetworkManager::AGameNetworkManager(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
+	BadPacketLossThreshold = 0.05f;
+	SeverePacketLossThreshold = 0.15f;
+	BadPingThreshold = 200;
+	SeverePingThreshold = 500;
+
 	MoveRepSize = 42.0f;
 	MAXPOSITIONERRORSQUARED = 3.0f;
 	MAXNEARZEROVELOCITYSQUARED = 9.0f;
 	CLIENTADJUSTUPDATECOST = 180.0f;
 	MAXCLIENTUPDATEINTERVAL = 0.25f;
 	MaxClientForcedUpdateDuration=1.0f;
+	ServerForcedUpdateHitchThreshold = 0.150f;
+	ServerForcedUpdateHitchCooldown = 0.100f;
 	MaxMoveDeltaTime = 0.125f;
 	MaxClientSmoothingDeltaTime = 0.50f;
 	ClientNetSendMoveDeltaTime = 0.0166f;
@@ -32,6 +39,8 @@ AGameNetworkManager::AGameNetworkManager(const FObjectInitializer& ObjectInitial
 	ClientNetSendMoveThrottleOverPlayerCount = 10;
 	ClientAuthorativePosition = false;
 	ClientErrorUpdateRateLimit = 0.0f;
+	ClientNetCamUpdateDeltaTime = 0.0166f;
+	ClientNetCamUpdatePositionLimit = 1000.0f;
 	bMovementTimeDiscrepancyDetection = false;
 	bMovementTimeDiscrepancyResolution = false;
 	MovementTimeDiscrepancyMaxTimeMargin = 0.25f;

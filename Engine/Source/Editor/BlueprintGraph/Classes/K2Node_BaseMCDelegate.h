@@ -33,6 +33,8 @@ public:
 	virtual bool HasExternalDependencies(TArray<class UStruct*>* OptionalOutput) const override;
 	virtual void GetNodeAttributes( TArray<TKeyValuePair<FString, FString>>& OutNodeAttributes ) const override;
 	virtual void AutowireNewNode(UEdGraphPin* FromPin) override;
+	virtual bool HasDeprecatedReference() const override;
+	virtual FEdGraphNodeDeprecationResponse GetDeprecationResponse(EEdGraphNodeDeprecationType DeprecationType) const override;
 	// End of UK2Node interface
 
 	// UEdGraphNode interface
@@ -48,12 +50,18 @@ public:
 
 	BLUEPRINTGRAPH_API UProperty* GetProperty() const
 	{
-		return DelegateReference.ResolveMember<UProperty>(GetBlueprintClassFromNode());
+		return DelegateReference.ResolveMember<UMulticastDelegateProperty>(GetBlueprintClassFromNode());
 	}
 
 	BLUEPRINTGRAPH_API FName GetPropertyName() const
 	{
 		return DelegateReference.GetMemberName();
+	}
+
+	BLUEPRINTGRAPH_API FText GetPropertyDisplayName() const
+	{
+		UProperty* Prop = GetProperty();
+		return (Prop ? Prop->GetDisplayNameText() : FText::FromName(GetPropertyName()));
 	}
 
 	BLUEPRINTGRAPH_API UFunction* GetDelegateSignature(bool bForceNotFromSkelClass = false) const;

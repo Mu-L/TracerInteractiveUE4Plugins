@@ -256,9 +256,9 @@ FText UNiagaraNodeEmitter::GetNameFromEmitter()
 	return FText();
 }
 
-void UNiagaraNodeEmitter::BuildParameterMapHistory(FNiagaraParameterMapHistoryBuilder& OutHistory, bool bRecursive)
+void UNiagaraNodeEmitter::BuildParameterMapHistory(FNiagaraParameterMapHistoryBuilder& OutHistory, bool bRecursive /*= true*/, bool bFilterForCompilation /*= true*/) const
 {
-	Super::BuildParameterMapHistory(OutHistory, bRecursive);
+	Super::BuildParameterMapHistory(OutHistory, bRecursive, bFilterForCompilation);
 
 	if (!IsNodeEnabled() && OutHistory.GetIgnoreDisabled())
 	{
@@ -308,6 +308,7 @@ void UNiagaraNodeEmitter::BuildParameterMapHistory(FNiagaraParameterMapHistoryBu
 
 			// Build up a new parameter map history with all the child graph nodes..
 			FNiagaraParameterMapHistoryBuilder ChildBuilder;
+			ChildBuilder.ConstantResolver = OutHistory.ConstantResolver;
 			ChildBuilder.RegisterEncounterableVariables(OutHistory.GetEncounterableVariables());
 			ChildBuilder.EnableScriptWhitelist(true, GetUsage());
 			FString LocalEmitterName = TEXT("Emitter");
@@ -422,16 +423,16 @@ void UNiagaraNodeEmitter::Compile(FHlslNiagaraTranslator *Translator, TArray<int
 	}
 }
 
-void UNiagaraNodeEmitter::GatherExternalDependencyIDs(ENiagaraScriptUsage InMasterUsage, const FGuid& InMasterUsageId, TArray<FGuid>& InReferencedIDs, TArray<UObject*>& InReferencedObjs) const
+void UNiagaraNodeEmitter::GatherExternalDependencyIDs(ENiagaraScriptUsage InMasterUsage, const FGuid& InMasterUsageId, TArray<FNiagaraCompileHash>& InReferencedCompileHashes, TArray<FGuid>& InReferencedIDs, TArray<UObject*>& InReferencedObjs) const
 {
 	UNiagaraGraph* CalledGraph = GetCalledGraph();
 
 	if (CalledGraph)
 	{
 		ENiagaraScriptUsage TargetUsage = InMasterUsage == ENiagaraScriptUsage::SystemSpawnScript ? ENiagaraScriptUsage::EmitterSpawnScript : ENiagaraScriptUsage::EmitterUpdateScript;
-		InReferencedIDs.Add(CalledGraph->GetCompileID(TargetUsage, FGuid(0,0,0,0)));
+		InReferencedCompileHashes.Add(CalledGraph->GetCompileDataHash(TargetUsage, FGuid(0,0,0,0)));
 		InReferencedObjs.Add(CalledGraph);
-		CalledGraph->GatherExternalDependencyIDs(TargetUsage, FGuid(0, 0, 0, 0), InReferencedIDs, InReferencedObjs);
+		CalledGraph->GatherExternalDependencyIDs(TargetUsage, FGuid(0, 0, 0, 0), InReferencedCompileHashes, InReferencedIDs, InReferencedObjs);
 	}
 }
 

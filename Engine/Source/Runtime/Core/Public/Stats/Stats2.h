@@ -7,6 +7,7 @@
 #include "HAL/ThreadSafeCounter.h"
 #include "Math/NumericLimits.h"
 #include "HAL/ThreadSingleton.h"
+#include "HAL/LowLevelMemTracker.h"
 #include "Containers/Array.h"
 #include "Containers/UnrealString.h"
 #include "HAL/PlatformTime.h"
@@ -17,8 +18,10 @@
 #include "Templates/Atomic.h"
 #include "Math/Color.h"
 #include "StatsCommon.h"
-#include "HAL/ThreadManager.h"
 #include "Templates/UniquePtr.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
+#include "ProfilingDebugging/MiscTrace.h"
+#include "StatsTrace.h"
 
 class FScopeCycleCounter;
 class FThreadStats;
@@ -120,6 +123,10 @@ struct TStatIdData
 
 	/** const WIDECHAR* pointer to a string describing the stat */
 	TUniquePtr<ANSICHAR[]> StatDescriptionAnsi;
+
+#if CPUPROFILERTRACE_ENABLED
+	uint32 TraceCpuProfilerSpecId = 0;
+#endif
 };
 
 struct TStatId
@@ -154,6 +161,13 @@ struct TStatId
 	{
 		return MinimalNameToName(StatIdPtr->Name);
 	}
+
+#if CPUPROFILERTRACE_ENABLED
+	FORCEINLINE uint16 GetTraceCpuProfilerSpecId() const
+	{
+		return StatIdPtr->TraceCpuProfilerSpecId;
+	}
+#endif
 
 	FORCEINLINE static const TStatIdData& GetStatNone()
 	{
@@ -651,7 +665,7 @@ private:
 	/** For FName. */
 	CORE_API const FString GetName() const
 	{
-		return FName::SafeString( (int32)Cycles );
+		return FName::SafeString(FNameEntryId::FromUnstableInt(static_cast<uint32>(Cycles)));
 	}
 };
 
@@ -1123,9 +1137,6 @@ struct FStatPacket
 	/** Size we presize the message buffer to, currently the max of what we have seen for the last PRESIZE_MAX_NUM_ENTRIES. **/
 	TArray<int32> StatMessagesPresize;
 
-	/** If true, we dump ThreadedStats to track number of statmessage in each thread **/
-	static bool bDumpStatPacket;
-
 	/** constructor **/
 	FStatPacket()
 		: Frame(1)
@@ -1167,11 +1178,6 @@ struct FStatPacket
 	void AssignFrame( int64 InFrame )
 	{
 		Frame = InFrame;
-
-		if (bDumpStatPacket)
-		{
-			UE_LOG(LogStats, Display, TEXT("Frame %d, Size of StatMessages for Thread %d(%s) is %d"), Frame, ThreadId, *FThreadManager::Get().GetThreadName(ThreadId), StatMessages.Num());
-		}
 	}
 };
 
@@ -1356,6 +1362,7 @@ public:
 
 	FORCEINLINE_STATS void AddStatMessage( const FStatMessage& StatMessage )
 	{
+		LLM_SCOPE(ELLMTag::Stats);
 		FStatMessageLock MessageLock(MemoryMessageScope);
 		Packet.StatMessages.AddElement(StatMessage);
 	}
@@ -1552,6 +1559,9 @@ class FCycleCounter
 {
 	/** Name of the stat, usually a short name **/
 	FName StatId;
+#if CPUPROFILERTRACE_ENABLED
+	uint16 TraceCpuProfilerSpecId = 0;
+#endif
 
 public:
 
@@ -1566,6 +1576,13 @@ public:
 		{
 			return;
 		}
+#if CPUPROFILERTRACE_ENABLED
+		if (bAlways || GCycleStatsShouldEmitNamedEvents > 0)
+		{
+			TraceCpuProfilerSpecId = InStatId.GetTraceCpuProfilerSpecId();
+			FCpuProfilerTrace::OutputBeginEvent(TraceCpuProfilerSpecId);
+		}
+#endif
 
 		if( (bAlways && FThreadStats::WillEverCollectData()) || FThreadStats::IsCollectingData() )
 		{
@@ -1590,6 +1607,13 @@ public:
 	 */
 	FORCEINLINE_STATS void Stop()
 	{
+#if CPUPROFILERTRACE_ENABLED
+		if (TraceCpuProfilerSpecId)
+		{
+			FCpuProfilerTrace::OutputEndEvent();
+			TraceCpuProfilerSpecId = 0;
+		}
+#endif
 		if( !StatId.IsNone() )
 		{
 			FThreadStats::AddMessage(StatId, EStatOperation::CycleScopeEnd);
@@ -1953,74 +1977,126 @@ struct FStat_##StatName\
 #define INC_DWORD_STAT(Stat) \
 {\
 	if (FThreadStats::IsCollectingData() || !GET_STATISEVERYFRAME(Stat)) \
+	{ \
 		FThreadStats::AddMessage(GET_STATFNAME(Stat), EStatOperation::Add, int64(1));\
+		TRACE_STAT_INCREMENT(GET_STATFNAME(Stat)); \
+	} \
 }
 #define INC_FLOAT_STAT_BY(Stat, Amount) \
 {\
 	if (Amount != 0.0f) \
+	{ \
 		if (FThreadStats::IsCollectingData() || !GET_STATISEVERYFRAME(Stat)) \
-				FThreadStats::AddMessage(GET_STATFNAME(Stat), EStatOperation::Add, double(Amount));\
+		{ \
+			FThreadStats::AddMessage(GET_STATFNAME(Stat), EStatOperation::Add, double(Amount));\
+			TRACE_STAT_ADD(GET_STATFNAME(Stat), double(Amount)); \
+		} \
+	} \
 }
 #define INC_DWORD_STAT_BY(Stat, Amount) \
 {\
 	if (Amount != 0) \
+	{ \
 		if (FThreadStats::IsCollectingData() || !GET_STATISEVERYFRAME(Stat)) \
+		{ \
 			FThreadStats::AddMessage(GET_STATFNAME(Stat), EStatOperation::Add, int64(Amount));\
+			TRACE_STAT_ADD(GET_STATFNAME(Stat), int64(Amount)); \
+		} \
+	} \
 }
 #define INC_DWORD_STAT_FNAME_BY(StatFName, Amount) \
 {\
 	if (Amount != 0) \
-			FThreadStats::AddMessage(StatFName, EStatOperation::Add, int64(Amount));\
+	{ \
+		FThreadStats::AddMessage(StatFName, EStatOperation::Add, int64(Amount));\
+		TRACE_STAT_ADD(StatFName, int64(Amount)); \
+	} \
 }
 #define INC_MEMORY_STAT_BY(Stat, Amount) \
 {\
 	if (Amount != 0) \
+	{ \
 		if (FThreadStats::IsCollectingData() || !GET_STATISEVERYFRAME(Stat)) \
+		{ \
 			FThreadStats::AddMessage(GET_STATFNAME(Stat), EStatOperation::Add, int64(Amount));\
+			TRACE_STAT_ADD(GET_STATFNAME(Stat), int64(Amount)); \
+		} \
+	} \
 }
 #define DEC_DWORD_STAT(Stat) \
 {\
 	if (FThreadStats::IsCollectingData() || !GET_STATISEVERYFRAME(Stat)) \
+	{ \
 		FThreadStats::AddMessage(GET_STATFNAME(Stat), EStatOperation::Subtract, int64(1));\
+		TRACE_STAT_DECREMENT(GET_STATFNAME(Stat)); \
+	} \
 }
 #define DEC_FLOAT_STAT_BY(Stat,Amount) \
 {\
 	if (Amount != 0.0f) \
+	{ \
 		if (FThreadStats::IsCollectingData() || !GET_STATISEVERYFRAME(Stat)) \
+		{ \
 			FThreadStats::AddMessage(GET_STATFNAME(Stat), EStatOperation::Subtract, double(Amount));\
+			TRACE_STAT_ADD(GET_STATFNAME(Stat), -double(Amount)); \
+		} \
+	} \
 }
 #define DEC_DWORD_STAT_BY(Stat,Amount) \
 {\
 	if (Amount != 0) \
+	{ \
 		if (FThreadStats::IsCollectingData() || !GET_STATISEVERYFRAME(Stat)) \
+		{ \
 			FThreadStats::AddMessage(GET_STATFNAME(Stat), EStatOperation::Subtract, int64(Amount));\
+			TRACE_STAT_ADD(GET_STATFNAME(Stat), -int64(Amount)); \
+		} \
+	} \
 }
 #define DEC_DWORD_STAT_FNAME_BY(StatFName,Amount) \
 {\
 	if (Amount != 0) \
- 			FThreadStats::AddMessage(StatFName, EStatOperation::Subtract, int64(Amount));\
+	{ \
+		FThreadStats::AddMessage(StatFName, EStatOperation::Subtract, int64(Amount));\
+		TRACE_STAT_ADD(StatFName, -int64(Amount)); \
+	} \
 }
 #define DEC_MEMORY_STAT_BY(Stat,Amount) \
 {\
 	if (Amount != 0) \
+	{ \
 		if (FThreadStats::IsCollectingData() || !GET_STATISEVERYFRAME(Stat)) \
+		{ \
 			FThreadStats::AddMessage(GET_STATFNAME(Stat), EStatOperation::Subtract, int64(Amount));\
+			TRACE_STAT_ADD(GET_STATFNAME(Stat), -int64(Amount)); \
+		} \
+	} \
 }
 #define SET_MEMORY_STAT(Stat,Value) \
 {\
 	if (FThreadStats::IsCollectingData() || !GET_STATISEVERYFRAME(Stat)) \
+	{ \
 		FThreadStats::AddMessage(GET_STATFNAME(Stat), EStatOperation::Set, int64(Value));\
+		TRACE_STAT_SET(GET_STATFNAME(Stat), int64(Value)); \
+	} \
 }
 #define SET_DWORD_STAT(Stat,Value) \
 {\
 	if (FThreadStats::IsCollectingData() || !GET_STATISEVERYFRAME(Stat)) \
+	{ \
 		FThreadStats::AddMessage(GET_STATFNAME(Stat), EStatOperation::Set, int64(Value));\
+		TRACE_STAT_SET(GET_STATFNAME(Stat), int64(Value)); \
+	} \
 }
 #define SET_FLOAT_STAT(Stat,Value) \
 {\
 	if (FThreadStats::IsCollectingData() || !GET_STATISEVERYFRAME(Stat)) \
+	{ \
 		FThreadStats::AddMessage(GET_STATFNAME(Stat), EStatOperation::Set, double(Value));\
+		TRACE_STAT_SET(GET_STATFNAME(Stat), double(Value)); \
+	} \
 }
+
 #define STAT_ADD_CUSTOMMESSAGE_NAME(Stat,Value) \
 {\
 	FThreadStats::AddMessage(GET_STATFNAME(Stat), EStatOperation::SpecialMessageMarker, FName(Value));\
@@ -2038,52 +2114,75 @@ struct FStat_##StatName\
 #define INC_DWORD_STAT_FName(Stat) \
 {\
 	FThreadStats::AddMessage(Stat, EStatOperation::Add, int64(1));\
+	TRACE_STAT_INCREMENT(Stat); \
 }
 #define INC_FLOAT_STAT_BY_FName(Stat, Amount) \
 {\
 	if (Amount != 0.0f) \
+	{ \
 		FThreadStats::AddMessage(Stat, EStatOperation::Add, double(Amount));\
+		TRACE_STAT_ADD(Stat, double(Amount)); \
+	} \
 }
 #define INC_DWORD_STAT_BY_FName(Stat, Amount) \
 {\
 	if (Amount != 0) \
+	{ \
 		FThreadStats::AddMessage(Stat, EStatOperation::Add, int64(Amount));\
+		TRACE_STAT_ADD(Stat, int64(Amount)); \
+	} \
 }
 #define INC_MEMORY_STAT_BY_FName(Stat, Amount) \
 {\
 	if (Amount != 0) \
+	{ \
 		FThreadStats::AddMessage(Stat, EStatOperation::Add, int64(Amount));\
+		TRACE_STAT_ADD(Stat, int64(Amount)); \
+	} \
 }
 #define DEC_DWORD_STAT_FName(Stat) \
 {\
 	FThreadStats::AddMessage(Stat, EStatOperation::Subtract, int64(1));\
+	TRACE_STAT_DECREMENT(Stat); \
 }
 #define DEC_FLOAT_STAT_BY_FName(Stat,Amount) \
 {\
 	if (Amount != 0.0f) \
+	{ \
 		FThreadStats::AddMessage(Stat, EStatOperation::Subtract, double(Amount));\
+		TRACE_STAT_ADD(Stat, -double(Amount)); \
+	} \
 }
 #define DEC_DWORD_STAT_BY_FName(Stat,Amount) \
 {\
 	if (Amount != 0) \
+	{ \
 		FThreadStats::AddMessage(Stat, EStatOperation::Subtract, int64(Amount));\
+		TRACE_STAT_ADD(Stat, -int64(Amount)); \
+	} \
 }
 #define DEC_MEMORY_STAT_BY_FName(Stat,Amount) \
 {\
 	if (Amount != 0) \
+	{ \
 		FThreadStats::AddMessage(Stat, EStatOperation::Subtract, int64(Amount));\
+		TRACE_STAT_ADD(Stat, -int64(Amount)); \
+	} \
 }
 #define SET_MEMORY_STAT_FName(Stat,Value) \
 {\
 	FThreadStats::AddMessage(Stat, EStatOperation::Set, int64(Value));\
+	TRACE_STAT_SET(Stat, int64(Value)); \
 }
 #define SET_DWORD_STAT_FName(Stat,Value) \
 {\
 	FThreadStats::AddMessage(Stat, EStatOperation::Set, int64(Value));\
+	TRACE_STAT_SET(Stat, int64(Value)); \
 }
 #define SET_FLOAT_STAT_FName(Stat,Value) \
 {\
 	FThreadStats::AddMessage(Stat, EStatOperation::Set, double(Value));\
+	TRACE_STAT_SET(Stat, double(Value)); \
 }
 
 

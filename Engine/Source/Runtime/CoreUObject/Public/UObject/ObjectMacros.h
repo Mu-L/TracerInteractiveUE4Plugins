@@ -293,55 +293,58 @@ enum EClassCastFlags : uint64
 {
 	CASTCLASS_None = 0x0000000000000000,
 
-	CASTCLASS_UField						= 0x0000000000000001,
-	CASTCLASS_UInt8Property					= 0x0000000000000002,
-	CASTCLASS_UEnum							= 0x0000000000000004,
-	CASTCLASS_UStruct						= 0x0000000000000008,
-	CASTCLASS_UScriptStruct					= 0x0000000000000010,
-	CASTCLASS_UClass						= 0x0000000000000020,
-	CASTCLASS_UByteProperty					= 0x0000000000000040,
-	CASTCLASS_UIntProperty					= 0x0000000000000080,
-	CASTCLASS_UFloatProperty				= 0x0000000000000100,
-	CASTCLASS_UUInt64Property				= 0x0000000000000200,
-	CASTCLASS_UClassProperty				= 0x0000000000000400,
-	CASTCLASS_UUInt32Property				= 0x0000000000000800,
-	CASTCLASS_UInterfaceProperty			= 0x0000000000001000,
-	CASTCLASS_UNameProperty					= 0x0000000000002000,
-	CASTCLASS_UStrProperty					= 0x0000000000004000,
-	CASTCLASS_UProperty						= 0x0000000000008000,
-	CASTCLASS_UObjectProperty				= 0x0000000000010000,
-	CASTCLASS_UBoolProperty					= 0x0000000000020000,
-	CASTCLASS_UUInt16Property				= 0x0000000000040000,
-	CASTCLASS_UFunction						= 0x0000000000080000,
-	CASTCLASS_UStructProperty				= 0x0000000000100000,
-	CASTCLASS_UArrayProperty				= 0x0000000000200000,
-	CASTCLASS_UInt64Property				= 0x0000000000400000,
-	CASTCLASS_UDelegateProperty				= 0x0000000000800000,
-	CASTCLASS_UNumericProperty				= 0x0000000001000000,
-	CASTCLASS_UMulticastDelegateProperty	= 0x0000000002000000,
-	CASTCLASS_UObjectPropertyBase			= 0x0000000004000000,
-	CASTCLASS_UWeakObjectProperty			= 0x0000000008000000,
-	CASTCLASS_ULazyObjectProperty			= 0x0000000010000000,
-	CASTCLASS_USoftObjectProperty			= 0x0000000020000000,
-	CASTCLASS_UTextProperty					= 0x0000000040000000,
-	CASTCLASS_UInt16Property				= 0x0000000080000000,
-	CASTCLASS_UDoubleProperty				= 0x0000000100000000,
-	CASTCLASS_USoftClassProperty			= 0x0000000200000000,
-	CASTCLASS_UPackage						= 0x0000000400000000,
-	CASTCLASS_ULevel						= 0x0000000800000000,
-	CASTCLASS_AActor						= 0x0000001000000000,
-	CASTCLASS_APlayerController				= 0x0000002000000000,
-	CASTCLASS_APawn							= 0x0000004000000000,
-	CASTCLASS_USceneComponent				= 0x0000008000000000,
-	CASTCLASS_UPrimitiveComponent			= 0x0000010000000000,
-	CASTCLASS_USkinnedMeshComponent			= 0x0000020000000000,
-	CASTCLASS_USkeletalMeshComponent		= 0x0000040000000000,
-	CASTCLASS_UBlueprint					= 0x0000080000000000,
-	CASTCLASS_UDelegateFunction				= 0x0000100000000000,
-	CASTCLASS_UStaticMeshComponent			= 0x0000200000000000,
-	CASTCLASS_UMapProperty					= 0x0000400000000000,
-	CASTCLASS_USetProperty					= 0x0000800000000000,
-	CASTCLASS_UEnumProperty					= 0x0001000000000000,
+	CASTCLASS_UField							= 0x0000000000000001,
+	CASTCLASS_UInt8Property						= 0x0000000000000002,
+	CASTCLASS_UEnum								= 0x0000000000000004,
+	CASTCLASS_UStruct							= 0x0000000000000008,
+	CASTCLASS_UScriptStruct						= 0x0000000000000010,
+	CASTCLASS_UClass							= 0x0000000000000020,
+	CASTCLASS_UByteProperty						= 0x0000000000000040,
+	CASTCLASS_UIntProperty						= 0x0000000000000080,
+	CASTCLASS_UFloatProperty					= 0x0000000000000100,
+	CASTCLASS_UUInt64Property					= 0x0000000000000200,
+	CASTCLASS_UClassProperty					= 0x0000000000000400,
+	CASTCLASS_UUInt32Property					= 0x0000000000000800,
+	CASTCLASS_UInterfaceProperty				= 0x0000000000001000,
+	CASTCLASS_UNameProperty						= 0x0000000000002000,
+	CASTCLASS_UStrProperty						= 0x0000000000004000,
+	CASTCLASS_UProperty							= 0x0000000000008000,
+	CASTCLASS_UObjectProperty					= 0x0000000000010000,
+	CASTCLASS_UBoolProperty						= 0x0000000000020000,
+	CASTCLASS_UUInt16Property					= 0x0000000000040000,
+	CASTCLASS_UFunction							= 0x0000000000080000,
+	CASTCLASS_UStructProperty					= 0x0000000000100000,
+	CASTCLASS_UArrayProperty					= 0x0000000000200000,
+	CASTCLASS_UInt64Property					= 0x0000000000400000,
+	CASTCLASS_UDelegateProperty					= 0x0000000000800000,
+	CASTCLASS_UNumericProperty					= 0x0000000001000000,
+	CASTCLASS_UMulticastDelegateProperty		= 0x0000000002000000,
+	CASTCLASS_UObjectPropertyBase				= 0x0000000004000000,
+	CASTCLASS_UWeakObjectProperty				= 0x0000000008000000,
+	CASTCLASS_ULazyObjectProperty				= 0x0000000010000000,
+	CASTCLASS_USoftObjectProperty				= 0x0000000020000000,
+	CASTCLASS_UTextProperty						= 0x0000000040000000,
+	CASTCLASS_UInt16Property					= 0x0000000080000000,
+	CASTCLASS_UDoubleProperty					= 0x0000000100000000,
+	CASTCLASS_USoftClassProperty				= 0x0000000200000000,
+	CASTCLASS_UPackage							= 0x0000000400000000,
+	CASTCLASS_ULevel							= 0x0000000800000000,
+	CASTCLASS_AActor							= 0x0000001000000000,
+	CASTCLASS_APlayerController					= 0x0000002000000000,
+	CASTCLASS_APawn								= 0x0000004000000000,
+	CASTCLASS_USceneComponent					= 0x0000008000000000,
+	CASTCLASS_UPrimitiveComponent				= 0x0000010000000000,
+	CASTCLASS_USkinnedMeshComponent				= 0x0000020000000000,
+	CASTCLASS_USkeletalMeshComponent			= 0x0000040000000000,
+	CASTCLASS_UBlueprint						= 0x0000080000000000,
+	CASTCLASS_UDelegateFunction					= 0x0000100000000000,
+	CASTCLASS_UStaticMeshComponent				= 0x0000200000000000,
+	CASTCLASS_UMapProperty						= 0x0000400000000000,
+	CASTCLASS_USetProperty						= 0x0000800000000000,
+	CASTCLASS_UEnumProperty						= 0x0001000000000000,
+	CASTCLASS_USparseDelegateFunction			= 0x0002000000000000,
+	CASTCLASS_UMulticastInlineDelegateProperty	= 0x0004000000000000,
+	CASTCLASS_UMulticastSparseDelegateProperty	= 0x0008000000000000,
 };
 
 #define CASTCLASS_AllFlags ((EClassCastFlags)0xFFFFFFFFFFFFFFFF)
@@ -382,7 +385,7 @@ enum EPropertyFlags : uint64
 	CPF_DuplicateTransient				= 0x0000000000200000,	///< Property should always be reset to the default value during any type of duplication (copy/paste, binary duplication, etc.)
 	CPF_SubobjectReference				= 0x0000000000400000,	///< Property contains subobject references (TSubobjectPtr)
 	//CPF_    							= 0x0000000000800000,	///< 
-	CPF_SaveGame						= 0x0000000001000000,	///< Property should be serialized for save games
+	CPF_SaveGame						= 0x0000000001000000,	///< Property should be serialized for save games, this is only checked for game-specific archives with ArIsSaveGame
 	CPF_NoClear							= 0x0000000002000000,	///< Hide clear (and browse) button.
 	//CPF_  							= 0x0000000004000000,	///<
 	CPF_ReferenceParm					= 0x0000000008000000,	///< Value is passed by reference; CPF_OutParam and CPF_Param should also be set.
@@ -933,7 +936,8 @@ namespace UP
 		/// to use on struct properties or parameters.
 		AssetRegistrySearchable,
 
-		/// Property should be serialized for save game.
+		/// Property should be serialized for save games.
+		/// This is only checked for game-specific archives with ArIsSaveGame set
 		SaveGame,
 
 		/// MC Delegates only.  Property should be exposed for calling in blueprint code
@@ -983,6 +987,9 @@ namespace UM
 
 		/// A short tooltip that is used in some contexts where the full tooltip might be overwhelming (such as the parent class picker dialog)
 		ShortTooltip,
+
+		/// A setting to determine validation of tooltips and comments. Needs to be set to "Strict"
+		DocumentationPolicy,
 	};
 
 	// Metadata usable in UCLASS
@@ -1060,7 +1067,10 @@ namespace UM
 		/// [PropertyMetadata] Used for Subclass and SoftClass properties.  Indicates whether abstract class types should be shown in the class picker.
 		AllowAbstract,
 
-		/// [PropertyMetadata] Used for FSoftObjectPath properties.  Comma delimited list that indicates the class type(s) of assets to be displayed in the asset picker.
+		/// [PropertyMetadata] Used for ComponentReference properties.  Indicates whether other actor that are not in the property outer hierarchy should be shown in the component picker.
+		AllowAnyActor,
+
+		/// [PropertyMetadata] Used for FSoftObjectPath, ComponentReference and UClass properties.  Comma delimited list that indicates the class type(s) of assets to be displayed in the asset picker(FSoftObjectPath) or component picker or class viewer (UClass).
 		AllowedClasses,
 
 		/// [PropertyMetadata] Used for FVector properties.  It causes a ratio lock to be added when displaying this property in details panels.
@@ -1105,6 +1115,9 @@ namespace UM
 		/// [ClassMetadata] [PropertyMetadata] [FunctionMetadata] The name to use for this class, property, or function when exporting it to a scripting language. May include deprecated names as additional semi-colon separated entries.
 		//ScriptName, (Commented out so as to avoid duplicate name with version in the Class section, but still show in the property section)
 
+		/// [PropertyMetadata] Used for FSoftObjectPath, ActorComponentReference and UClass properties.  Comma delimited list that indicates the class type(s) of assets that will NOT be displayed in the asset picker (FSoftObjectPath) or component picker or class viewer (UClass).
+		DisallowedClasses,
+
 		/// [PropertyMetadata] Indicates that the property should be displayed immediately after the property named in the metadata.
 		DisplayAfter,
 
@@ -1141,6 +1154,9 @@ namespace UM
 
 		/// [PropertyMetadata] Used for FColor and FLinearColor properties. Indicates that the Alpha property should be hidden when displaying the property widget in the details.
 		HideAlphaChannel,
+
+		/// [PropertyMetadata] Indicates that the property should be hidden in the details panel. Currently only used by events.
+		HideInDetailPanel,
 
 		/// [PropertyMetadata] Used for Subclass and SoftClass properties. Specifies to hide the ability to change view options in the class picker
 		HideViewOptions,
@@ -1570,6 +1586,7 @@ public: \
 				PrivateStaticClass, \
 				StaticRegisterNatives##TClass, \
 				sizeof(TClass), \
+				alignof(TClass), \
 				(EClassFlags)TClass::StaticClassFlags, \
 				TClass::StaticClassCastFlags(), \
 				TClass::StaticConfigName(), \
@@ -1638,6 +1655,7 @@ public: \
 			PrivateStaticClass, \
 			StaticRegisterNatives##TClass, \
 			sizeof(TClass), \
+			alignof(TClass), \
 			(EClassFlags)TClass::StaticClassFlags, \
 			TClass::StaticClassCastFlags(), \
 			TClass::StaticConfigName(), \

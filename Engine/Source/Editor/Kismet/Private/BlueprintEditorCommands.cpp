@@ -63,7 +63,7 @@ void FBlueprintEditorCommands::RegisterCommands()
 	UI_COMMAND( AddNewLocalVariable, "Local Variable", "Adds a new local variable to this graph.", EUserInterfaceActionType::Button, FInputChord() );
 	UI_COMMAND( AddNewFunction, "Function", "Add a new function graph", EUserInterfaceActionType::Button, FInputChord() );
 	UI_COMMAND(	AddNewMacroDeclaration, "Macro", "Add a new macro declaration graph", EUserInterfaceActionType::Button, FInputChord() );
-	UI_COMMAND( AddNewAnimationGraph, "Anim Graph", "Add a new animation graph", EUserInterfaceActionType::Button, FInputChord() );
+	UI_COMMAND( AddNewAnimationLayer, "Animation Layer", "Add a new animation layer", EUserInterfaceActionType::Button, FInputChord() );
 	UI_COMMAND( AddNewEventGraph, "Graph", "Add a new event graph", EUserInterfaceActionType::Button, FInputChord() );
 	UI_COMMAND( AddNewDelegate, "Event Dispatcher", "Add a new event dispatcher", EUserInterfaceActionType::Button, FInputChord() );
 
@@ -74,6 +74,9 @@ void FBlueprintEditorCommands::RegisterCommands()
 	
 	// SCC commands
 	UI_COMMAND( BeginBlueprintMerge, "Merge", "Shows the Blueprint merge panel and toolbar, allowing the user to resolve conflicted blueprints", EUserInterfaceActionType::Button, FInputChord() );
+	
+	// Hide unrelated nodes
+	UI_COMMAND( ToggleHideUnrelatedNodes, "Hide Unrelated", "Toggles  automatically hiding nodes which are unrelated to the selected nodes.", EUserInterfaceActionType::ToggleButton, FInputChord() );
 }
 
 PRAGMA_ENABLE_OPTIMIZATION

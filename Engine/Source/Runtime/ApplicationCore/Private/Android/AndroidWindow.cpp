@@ -71,6 +71,8 @@ void FAndroidWindow::SetOSWindowHandle(void* InWindow)
 //This function is declared in the Java-defined class, GameActivity.java: "public native void nativeSetObbInfo(String PackageName, int Version, int PatchVersion);"
 static bool GAndroidIsPortrait = false;
 static int GAndroidDepthBufferPreference = 0;
+static FVector4 GAndroidPortraitSafezone = FVector4(-1.0f, -1.0f, -1.0f, -1.0f);
+static FVector4 GAndroidLandscapeSafezone = FVector4(-1.0f, -1.0f, -1.0f, -1.0f);
 #if USE_ANDROID_JNI
 JNI_METHOD void Java_com_epicgames_ue4_GameActivity_nativeSetWindowInfo(JNIEnv* jenv, jobject thiz, jboolean bIsPortrait, jint DepthBufferPreference)
 {
@@ -86,7 +88,35 @@ JNI_METHOD void Java_com_epicgames_ue4_GameActivity_nativeSetSurfaceViewInfo(JNI
 	GSurfaceViewHeight = height;
 	UE_LOG(LogAndroid, Log, TEXT("nativeSetSurfaceViewInfo width=%d and height=%d"), GSurfaceViewWidth, GSurfaceViewHeight);
 }
+
+JNI_METHOD void Java_com_epicgames_ue4_GameActivity_nativeSetSafezoneInfo(JNIEnv* jenv, jobject thiz, jboolean bIsPortrait, jfloat left, jfloat top, jfloat right, jfloat bottom)
+{
+	if (bIsPortrait)
+	{
+		GAndroidPortraitSafezone.X = left;
+		GAndroidPortraitSafezone.Y = top;
+		GAndroidPortraitSafezone.Z = right;
+		GAndroidPortraitSafezone.W = bottom;
+	}
+	else
+	{
+		GAndroidLandscapeSafezone.X = left;
+		GAndroidLandscapeSafezone.Y = top;
+		GAndroidLandscapeSafezone.Z = right;
+		GAndroidLandscapeSafezone.W = bottom;
+	}
+}
 #endif
+
+bool FAndroidWindow::IsPortraitOrientation()
+{
+	return GAndroidIsPortrait;
+}
+
+FVector4 FAndroidWindow::GetSafezone(bool bPortrait)
+{
+	return bPortrait ? GAndroidPortraitSafezone : GAndroidLandscapeSafezone;
+}
 
 int32 FAndroidWindow::GetDepthBufferPreference()
 {
@@ -154,7 +184,7 @@ void* FAndroidWindow::WaitForHardwareWindow()
 }
 
 #if USE_ANDROID_JNI
-extern bool AndroidThunkCpp_IsGearVRApplication();
+extern bool AndroidThunkCpp_IsOculusMobileApplication();
 #endif
 
 bool FAndroidWindow::IsCachedRectValid(const bool bMosaicEnabled, const float RequestedContentScaleFactor, ANativeWindow* Window)
@@ -224,7 +254,7 @@ FPlatformRect FAndroidWindow::GetScreenRect()
 	return FPlatformRect();
 #else
 
-	static const bool bIsGearVRApp = AndroidThunkCpp_IsGearVRApplication();
+	static const bool bIsOculusMobileApp = AndroidThunkCpp_IsOculusMobileApplication();
 
 	ANativeWindow* Window = (ANativeWindow*)FAndroidWindow::GetHardwareWindow();
 	static const bool bIsDaydreamApp = FAndroidMisc::IsDaydreamApplication();
@@ -249,12 +279,12 @@ FPlatformRect FAndroidWindow::GetScreenRect()
 	}
 
 	// determine mosaic requirements:
-	const bool bMosaicEnabled = AndroidWindowUtils::ShouldEnableMosaic() && !(bIsGearVRApp || bIsDaydreamApp);
+	const bool bMosaicEnabled = AndroidWindowUtils::ShouldEnableMosaic() && !(bIsOculusMobileApp || bIsDaydreamApp);
 
 	// CSF is a multiplier to 1280x720
 	static IConsoleVariable* CVar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.MobileContentScaleFactor"));
-	// If the app is for Gear VR then always use 0 as ScaleFactor (to match window size).
-	float RequestedContentScaleFactor = bIsGearVRApp ? 0.0f : CVar->GetFloat();
+	// If the app is for Oculus Mobile then always use 0 as ScaleFactor (to match window size).
+	float RequestedContentScaleFactor = bIsOculusMobileApp ? 0.0f : CVar->GetFloat();
 
 	FString CmdLineCSF;
 	if (FParse::Value(FCommandLine::Get(), TEXT("mcsf="), CmdLineCSF, false))
@@ -276,7 +306,7 @@ FPlatformRect FAndroidWindow::GetScreenRect()
 		const bool bMobileHDR = (MobileHDRCvar && MobileHDRCvar->GetValueOnAnyThread() == 1);
 		UE_LOG(LogAndroid, Log, TEXT("Mobile HDR: %s"), bMobileHDR ? TEXT("YES") : TEXT("no"));
 
-		if (!bIsGearVRApp)
+		if (!bIsOculusMobileApp)
 		{
 			bool bSupportsES30 = FAndroidMisc::SupportsES30();
 			if (!bIsDaydreamApp && !bSupportsES30)
@@ -317,7 +347,7 @@ void FAndroidWindow::CalculateSurfaceSize(void* InWindow, int32_t& SurfaceWidth,
 
 #else
 
-	static const bool bIsMobileVRApp = AndroidThunkCpp_IsGearVRApplication() || FAndroidMisc::IsDaydreamApplication();
+	static const bool bIsMobileVRApp = AndroidThunkCpp_IsOculusMobileApplication() || FAndroidMisc::IsDaydreamApplication();
 
 	ANativeWindow* Window = (ANativeWindow*)InWindow;
 

@@ -36,24 +36,24 @@ struct FNetworkObjectInfo;
 ENGINE_API DECLARE_LOG_CATEGORY_EXTERN(LogActor, Log, Warning);
 
 // Delegate signatures
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_FiveParams( FTakeAnyDamageSignature, AActor*, DamagedActor, float, Damage, const class UDamageType*, DamageType, class AController*, InstigatedBy, AActor*, DamageCauser );
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_NineParams( FTakePointDamageSignature, AActor*, DamagedActor, float, Damage, class AController*, InstigatedBy, FVector, HitLocation, class UPrimitiveComponent*, FHitComponent, FName, BoneName, FVector, ShotFromDirection, const class UDamageType*, DamageType, AActor*, DamageCauser );
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_SevenParams( FTakeRadialDamageSignature, AActor*, DamagedActor, float, Damage, const class UDamageType*, DamageType, FVector, Origin, FHitResult, HitInfo, class AController*, InstigatedBy, AActor*, DamageCauser );
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams( FActorBeginOverlapSignature, AActor*, OverlappedActor, AActor*, OtherActor );
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams( FActorEndOverlapSignature, AActor*, OverlappedActor, AActor*, OtherActor );
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams( FActorHitSignature, AActor*, SelfActor, AActor*, OtherActor, FVector, NormalImpulse, const FHitResult&, Hit );
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_FiveParams( FTakeAnyDamageSignature, AActor, OnTakeAnyDamage, AActor*, DamagedActor, float, Damage, const class UDamageType*, DamageType, class AController*, InstigatedBy, AActor*, DamageCauser );
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_NineParams( FTakePointDamageSignature, AActor, OnTakePointDamage, AActor*, DamagedActor, float, Damage, class AController*, InstigatedBy, FVector, HitLocation, class UPrimitiveComponent*, FHitComponent, FName, BoneName, FVector, ShotFromDirection, const class UDamageType*, DamageType, AActor*, DamageCauser );
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_SevenParams( FTakeRadialDamageSignature, AActor, OnTakeRadialDamage, AActor*, DamagedActor, float, Damage, const class UDamageType*, DamageType, FVector, Origin, FHitResult, HitInfo, class AController*, InstigatedBy, AActor*, DamageCauser );
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_TwoParams( FActorBeginOverlapSignature, AActor, OnActorBeginOverlap, AActor*, OverlappedActor, AActor*, OtherActor );
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_TwoParams( FActorEndOverlapSignature, AActor, OnActorEndOverlap, AActor*, OverlappedActor, AActor*, OtherActor );
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_FourParams( FActorHitSignature, AActor, OnActorHit, AActor*, SelfActor, AActor*, OtherActor, FVector, NormalImpulse, const FHitResult&, Hit );
 
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam( FActorBeginCursorOverSignature, AActor*, TouchedActor );
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam( FActorEndCursorOverSignature, AActor*, TouchedActor );
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams( FActorOnClickedSignature, AActor*, TouchedActor , FKey, ButtonPressed );
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams( FActorOnReleasedSignature, AActor*, TouchedActor , FKey, ButtonReleased );
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams( FActorOnInputTouchBeginSignature, ETouchIndex::Type, FingerIndex, AActor*, TouchedActor );
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams( FActorOnInputTouchEndSignature, ETouchIndex::Type, FingerIndex, AActor*, TouchedActor );
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams( FActorBeginTouchOverSignature, ETouchIndex::Type, FingerIndex, AActor*, TouchedActor );
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams( FActorEndTouchOverSignature, ETouchIndex::Type, FingerIndex, AActor*, TouchedActor );
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_OneParam( FActorBeginCursorOverSignature, AActor, OnBeginCursorOver, AActor*, TouchedActor );
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_OneParam( FActorEndCursorOverSignature, AActor, OnEndCursorOver, AActor*, TouchedActor );
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_TwoParams( FActorOnClickedSignature, AActor, OnClicked, AActor*, TouchedActor , FKey, ButtonPressed );
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_TwoParams( FActorOnReleasedSignature, AActor, OnReleased, AActor*, TouchedActor , FKey, ButtonReleased );
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_TwoParams( FActorOnInputTouchBeginSignature, AActor, OnInputTouchBegin, ETouchIndex::Type, FingerIndex, AActor*, TouchedActor );
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_TwoParams( FActorOnInputTouchEndSignature, AActor, OnInputTouchEnd, ETouchIndex::Type, FingerIndex, AActor*, TouchedActor );
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_TwoParams( FActorBeginTouchOverSignature, AActor, OnInputTouchEnter, ETouchIndex::Type, FingerIndex, AActor*, TouchedActor );
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_TwoParams( FActorEndTouchOverSignature, AActor, OnInputTouchLeave, ETouchIndex::Type, FingerIndex, AActor*, TouchedActor );
 
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FActorDestroyedSignature, AActor*, DestroyedActor );
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FActorEndPlaySignature, AActor*, Actor , EEndPlayReason::Type, EndPlayReason);
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_OneParam(FActorDestroyedSignature, AActor, OnDestroyed, AActor*, DestroyedActor );
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_TwoParams(FActorEndPlaySignature, AActor, OnEndPlay, AActor*, Actor , EEndPlayReason::Type, EndPlayReason);
 
 DECLARE_DELEGATE_SixParams(FMakeNoiseDelegate, AActor*, float /*Loudness*/, class APawn*, const FVector&, float /*MaxRange*/, FName /*Tag*/);
 
@@ -494,8 +494,14 @@ public:
 	float NetPriority;
 
 private:
-	/** Caches the most recent last render time we've looked at for this actor */
-	mutable float CachedLastRenderTime;
+	/**
+	 * The value of WorldSettings->TimeSeconds for the frame when one of this actor's components was last rendered.  This is written
+	 * from the render thread, which is up to a frame behind the game thread, so you should allow this time to
+	 * be at least a frame behind the game thread's world time before you consider the actor non-visible.
+	 */
+	float LastRenderTime;
+
+	friend struct FActorLastRenderTime;
 
 public:
 	/**
@@ -621,11 +627,11 @@ public:
 	uint8 bHiddenEd:1;
 
 	/** True if this actor is the preview actor dragged out of the content browser */
-	UPROPERTY()
+	UPROPERTY(Transient)
 	uint8 bIsEditorPreviewActor:1;
 
 	/** Whether this actor is hidden by the layer browser. */
-	UPROPERTY()
+	UPROPERTY(Transient)
 	uint8 bHiddenEdLayer:1;
 
 	/** Whether this actor is hidden by the level browser. */
@@ -1280,7 +1286,7 @@ public:
 
 	/** The number of seconds (in game time) since this Actor was created, relative to Get Game Time In Seconds. */
 	UFUNCTION(BlueprintPure, Category=Actor)
-	float GetGameTimeSinceCreation();
+	float GetGameTimeSinceCreation() const;
 
 protected:
 	/** Event when play begins for this actor. */
@@ -1490,7 +1496,7 @@ public:
 	virtual void PostInitProperties() override;
 	virtual bool Modify( bool bAlwaysMarkDirty=true ) override;
 	virtual void ProcessEvent( UFunction* Function, void* Parameters ) override;
-	virtual int32 GetFunctionCallspace( UFunction* Function, void* Parameters, FFrame* Stack ) override;
+	virtual int32 GetFunctionCallspace( UFunction* Function, FFrame* Stack ) override;
 	virtual bool CallRemoteFunction( UFunction* Function, void* Parameters, FOutParmRec* OutParms, FFrame* Stack ) override;
 	virtual void Serialize(FArchive& Ar) override;
 	virtual void PostLoad() override;
@@ -2315,7 +2321,7 @@ public:
 	 * @param  Params          Additional parameters used for the trace
 	 * @return TRUE if a blocking hit is found
 	 */
-	bool ActorLineTraceSingle(struct FHitResult& OutHit, const FVector& Start, const FVector& End, ECollisionChannel TraceChannel, const struct FCollisionQueryParams& Params);
+	bool ActorLineTraceSingle(struct FHitResult& OutHit, const FVector& Start, const FVector& End, ECollisionChannel TraceChannel, const struct FCollisionQueryParams& Params) const;
 
 	/** 
 	 * returns Distance to closest Body Instance surface. 
@@ -2446,6 +2452,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Utilities")
 	FName GetAttachParentSocketName() const;
 
+	/** Call a functor for Actors which are attached directly to a component in this actor. Functor should return true to carry on, false to abort. */
+	void ForEachAttachedActors(TFunctionRef<bool(class AActor*)> Functor) const;
+	
 	/** Find all Actors which are attached directly to a component in this actor */
 	UFUNCTION(BlueprintPure, Category = "Utilities")
 	void GetAttachedActors(TArray<AActor*>& OutActors) const;
@@ -2989,6 +2998,9 @@ private:
 	friend struct FMarkActorIsBeingDestroyed;
 	friend struct FActorParentComponentSetter;
 	friend struct FSetActorWantsDestroyDuringBeginPlay;
+#if WITH_EDITOR
+	friend struct FSetActorHiddenInSceneOutliner;
+#endif
 
 	// Static helpers for accessing functions on SceneComponent.
 	// These are templates for no other reason than to delay compilation until USceneComponent is defined.
@@ -3066,6 +3078,37 @@ private:
 
 	friend UWorld;
 };
+
+/** Helper struct that allows UPrimitiveComponent and FPrimitiveSceneInfo write to the Actor's LastRenderTime member */
+struct FActorLastRenderTime
+{
+private:
+	static void Set(AActor* InActor, float LastRenderTime)
+	{
+		InActor->LastRenderTime = LastRenderTime;
+	}
+
+	static float* GetPtr(AActor* InActor)
+	{
+		return (InActor ? &InActor->LastRenderTime : nullptr);
+	}
+
+	friend class UPrimitiveComponent;
+	friend class FPrimitiveSceneInfo;
+};
+
+#if WITH_EDITOR
+struct FSetActorHiddenInSceneOutliner
+{
+private:
+	FSetActorHiddenInSceneOutliner(AActor* InActor)
+	{
+		InActor->bListedInSceneOutliner = false;
+	}
+
+	friend UWorld;
+};
+#endif
 
 /**
  * TInlineComponentArray is simply a TArray that reserves a fixed amount of space on the stack

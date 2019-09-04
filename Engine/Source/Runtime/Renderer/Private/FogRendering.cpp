@@ -69,7 +69,7 @@ void SetupFogUniformParameters(const FViewInfo& View, FFogUniformParameters& Out
 
 	// Volumetric Fog
 	{
-		FTextureRHIParamRef IntegratedLightScatteringTexture = nullptr;
+		FRHITexture* IntegratedLightScatteringTexture = nullptr;
 
 		if (View.VolumetricFogResources.IntegratedLightScattering)
 		{
@@ -290,20 +290,33 @@ void FSceneRenderer::InitFogConstants()
 			if (Scene->ExponentialFogs.Num() > 0)
 			{
 				const FExponentialHeightFogSceneInfo& FogInfo = Scene->ExponentialFogs[0];
-				const float CosTerminatorAngle = FMath::Clamp(FMath::Cos(FogInfo.LightTerminatorAngle * PI / 180.0f), -1.0f + DELTA, 1.0f - DELTA);
-				float CollapsedFogParameter[2];
+				float CollapsedFogParameter[FExponentialHeightFogSceneInfo::NumFogs];
+				static constexpr float MaxObserverHeightDifference = 65536.0f;
+				float MaxObserverHeight = FLT_MAX;
+				for (int i = 0; i < FExponentialHeightFogSceneInfo::NumFogs; i++)
+				{
+					// Only limit the observer height to fog if it has any density
+					if (FogInfo.FogData[i].Density > 0.0f)
+					{
+						MaxObserverHeight = FMath::Min(MaxObserverHeight, FogInfo.FogData[i].Height + MaxObserverHeightDifference);
+					}
+				}
+				
+				// Clamping the observer height to avoid numerical precision issues in the height fog equation. The max observer height is relative to the fog height.
+				const float ObserverHeight = FMath::Min(View.ViewMatrices.GetViewOrigin().Z, MaxObserverHeight);
+
 				for (int i = 0; i < FExponentialHeightFogSceneInfo::NumFogs; i++)
 				{
 					const float CollapsedFogParameterPower = FMath::Clamp(
-						-FogInfo.FogData[i].HeightFalloff * (View.ViewMatrices.GetViewOrigin().Z - FogInfo.FogData[i].Height),
+						-FogInfo.FogData[i].HeightFalloff * (ObserverHeight - FogInfo.FogData[i].Height),
 						-126.f + 1.f, // min and max exponent values for IEEE floating points (http://en.wikipedia.org/wiki/IEEE_floating_point)
 						+127.f - 1.f
 					);
 
 					CollapsedFogParameter[i] = FogInfo.FogData[i].Density * FMath::Pow(2.0f, CollapsedFogParameterPower);
-
 				}
-				View.ExponentialFogParameters = FVector4(CollapsedFogParameter[0], FogInfo.FogData[0].HeightFalloff, CosTerminatorAngle, FogInfo.StartDistance);
+
+				View.ExponentialFogParameters = FVector4(CollapsedFogParameter[0], FogInfo.FogData[0].HeightFalloff, MaxObserverHeight, FogInfo.StartDistance);
 				View.ExponentialFogParameters2 = FVector4(CollapsedFogParameter[1], FogInfo.FogData[1].HeightFalloff, FogInfo.FogData[1].Density, FogInfo.FogData[1].Height);
 				View.ExponentialFogColor = FVector(FogInfo.FogColor.R, FogInfo.FogColor.G, FogInfo.FogColor.B);
 				View.FogMaxOpacity = FogInfo.FogMaxOpacity;
@@ -322,26 +335,13 @@ void FSceneRenderer::InitFogConstants()
 
 				View.DirectionalInscatteringExponent = FogInfo.DirectionalInscatteringExponent;
 				View.DirectionalInscatteringStartDistance = FogInfo.DirectionalInscatteringStartDistance;
-				View.bUseDirectionalInscattering = false;
 				View.InscatteringLightDirection = FVector(0);
-
-				for (TSparseArray<FLightSceneInfoCompact>::TConstIterator It(Scene->Lights); It; ++It)
+				if (Scene->SunLight)
 				{
-					const FLightSceneInfoCompact& LightInfo = *It;
-
-					// This will find the first directional light that is set to be used as an atmospheric sun light of sufficient brightness.
-					// If you have more than one directional light with these properties then all subsequent lights will be ignored.
-					if (LightInfo.LightSceneInfo->Proxy->GetLightType() == LightType_Directional
-						&& LightInfo.LightSceneInfo->Proxy->IsUsedAsAtmosphereSunLight()
-						&& LightInfo.LightSceneInfo->Proxy->GetColor().ComputeLuminance() > KINDA_SMALL_NUMBER
-						&& FogInfo.DirectionalInscatteringColor.ComputeLuminance() > KINDA_SMALL_NUMBER)
-					{
-						View.InscatteringLightDirection = -LightInfo.LightSceneInfo->Proxy->GetDirection();
-						View.bUseDirectionalInscattering = true;
-						View.DirectionalInscatteringColor = FogInfo.DirectionalInscatteringColor * LightInfo.LightSceneInfo->Proxy->GetColor().ComputeLuminance();
-						break;
-					}
+					View.InscatteringLightDirection = -Scene->SunLight->Proxy->GetDirection();
+					View.DirectionalInscatteringColor = FogInfo.DirectionalInscatteringColor * Scene->SunLight->Proxy->GetColor().ComputeLuminance();
 				}
+				View.bUseDirectionalInscattering = Scene->SunLight!=nullptr;
 			}
 		}
 	}

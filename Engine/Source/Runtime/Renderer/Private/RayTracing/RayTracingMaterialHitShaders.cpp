@@ -32,11 +32,15 @@ static bool IsSupportedVertexFactoryType(const FVertexFactoryType* VertexFactory
 	static FName InstancedVfFname = FName(TEXT("FInstancedStaticMeshVertexFactory"), FNAME_Find);
 	static FName NiagaraSpriteVfFname = FName(TEXT("FNiagaraSpriteVertexFactory"), FNAME_Find);
 	static FName GeometryCacheVfFname = FName(TEXT("FGeometryCacheVertexVertexFactory"), FNAME_Find);
+	static FName LandscapeVfFname = FName(TEXT("FLandscapeVertexFactory"), FNAME_Find);
+	static FName LandscapeXYOffsetVfFname = FName(TEXT("FLandscapeXYOffsetVertexFactory"), FNAME_Find);
 
-	return (VertexFactoryType == FindVertexFactoryType(LocalVfFname)
+	return VertexFactoryType == FindVertexFactoryType(LocalVfFname)
 		|| VertexFactoryType == FindVertexFactoryType(LSkinnedVfFname)
 		|| VertexFactoryType == FindVertexFactoryType(NiagaraSpriteVfFname)
-		|| VertexFactoryType == FindVertexFactoryType(GeometryCacheVfFname));
+		|| VertexFactoryType == FindVertexFactoryType(GeometryCacheVfFname)
+		|| VertexFactoryType == FindVertexFactoryType(LandscapeVfFname)
+		|| VertexFactoryType == FindVertexFactoryType(LandscapeXYOffsetVfFname);
 }
 
 class FMaterialCHS : public FMeshMaterialShader, public FUniformLightMapPolicyShaderParametersType
@@ -81,7 +85,7 @@ public:
 		const FScene* Scene,
 		const FSceneView* ViewIfDynamicMeshCommand,
 		const FVertexFactory* VertexFactory,
-		bool bShaderRequiresPositionOnlyStream,
+		const EVertexInputStreamType InputStreamType,
 		ERHIFeatureLevel::Type FeatureLevel,
 		const FPrimitiveSceneProxy* PrimitiveSceneProxy,
 		const FMeshBatch& MeshBatch, 
@@ -90,7 +94,7 @@ public:
 		FMeshDrawSingleShaderBindings& ShaderBindings,
 		FVertexInputStreamArray& VertexStreams) const
 	{
-		FMeshMaterialShader::GetElementShaderBindings(Scene, ViewIfDynamicMeshCommand, VertexFactory, bShaderRequiresPositionOnlyStream, FeatureLevel, PrimitiveSceneProxy, MeshBatch, BatchElement, ShaderElementData, ShaderBindings, VertexStreams);
+		FMeshMaterialShader::GetElementShaderBindings(Scene, ViewIfDynamicMeshCommand, VertexFactory, InputStreamType, FeatureLevel, PrimitiveSceneProxy, MeshBatch, BatchElement, ShaderElementData, ShaderBindings, VertexStreams);
 	}
 };
 
@@ -106,21 +110,20 @@ public:
 
 	TMaterialCHS() {}
 
-	static bool ShouldCompilePermutation(EShaderPlatform Platform, const FMaterial* Material, const FVertexFactoryType* VertexFactoryType)
+	static bool ShouldCompilePermutation(const FMeshMaterialShaderPermutationParameters& Parameters)
 	{
-		// #dxr_todo: this should also check if ray tracing is enabled for the target platform & project
-		return IsSupportedVertexFactoryType(VertexFactoryType)
-			&& (Material->IsMasked() == UseAnyHitShader)
-			&& LightMapPolicyType::ShouldCompilePermutation(Platform, Material, VertexFactoryType)
-			&& ShouldCompileRayTracingShadersForProject(Platform);
+		return IsSupportedVertexFactoryType(Parameters.VertexFactoryType)
+			&& (Parameters.Material->IsMasked() == UseAnyHitShader)
+			&& LightMapPolicyType::ShouldCompilePermutation(Parameters)
+			&& ShouldCompileRayTracingShadersForProject(Parameters.Platform);
 	}
 
-	static void ModifyCompilationEnvironment(EShaderPlatform Platform, const FMaterial* Material, FShaderCompilerEnvironment& OutEnvironment)
+	static void ModifyCompilationEnvironment(const FMaterialShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
 		OutEnvironment.SetDefine(TEXT("USE_RAYTRACED_TEXTURE_RAYCONE_LOD"), UseRayConeTextureLod ? 1 : 0);
 		OutEnvironment.SetDefine(TEXT("SCENE_TEXTURES_DISABLED"), 1);
-		LightMapPolicyType::ModifyCompilationEnvironment(Platform, Material, OutEnvironment);
-		FMeshMaterialShader::ModifyCompilationEnvironment(Platform, Material, OutEnvironment);
+		LightMapPolicyType::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+		FMeshMaterialShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
 	}
 
 	static bool ValidateCompiledResult(EShaderPlatform Platform, const TArray<FMaterial*>& Materials, const FVertexFactoryType* VertexFactoryType, const FShaderParameterMap& ParameterMap, TArray<FString>& OutError)
@@ -154,7 +157,6 @@ IMPLEMENT_MATERIALCHS_TYPE(TUniformLightMapPolicy<LMP_DISTANCE_FIELD_SHADOWS_AND
 
 IMPLEMENT_GLOBAL_SHADER(FHiddenMaterialHitGroup, "/Engine/Private/RayTracing/RayTracingMaterialDefaultHitShaders.usf", "closesthit=HiddenMaterialCHS anyhit=HiddenMaterialAHS", SF_RayHitGroup);
 IMPLEMENT_GLOBAL_SHADER(FOpaqueShadowHitGroup, "/Engine/Private/RayTracing/RayTracingMaterialDefaultHitShaders.usf", "closesthit=OpaqueShadowCHS", SF_RayHitGroup);
-IMPLEMENT_GLOBAL_SHADER(FDefaultMaterialMS, "/Engine/Private/RayTracing/RayTracingMaterialDefaultHitShaders.usf", "DefaultMaterialMS", SF_RayMiss);
 
 template<typename LightMapPolicyType>
 static FMaterialCHS* GetMaterialHitShader(const FMaterial& RESTRICT MaterialResource, const FVertexFactory* VertexFactory, bool UseTextureLod)
@@ -202,11 +204,12 @@ void FRayTracingMeshProcessor::BuildRayTracingMeshCommands(
 
 	SharedCommand.SetShaders(PassShaders.GetUntypedShaders());
 	SharedCommand.InstanceMask = ComputeBlendModeMask(MaterialResource.GetBlendMode());
-	SharedCommand.bCastRayTracedShadows = MeshBatch.CastRayTracedShadow;
+	SharedCommand.bCastRayTracedShadows = MeshBatch.CastRayTracedShadow && MaterialResource.CastsRayTracedShadows();
 	SharedCommand.bOpaque = MaterialResource.GetBlendMode() == EBlendMode::BLEND_Opaque;
+	SharedCommand.bDecal = MaterialResource.GetMaterialDomain() == EMaterialDomain::MD_DeferredDecal;
 
 	FVertexInputStreamArray VertexStreams;
-	VertexFactory->GetStreams(ERHIFeatureLevel::SM5, VertexStreams);
+	VertexFactory->GetStreams(ERHIFeatureLevel::SM5, EVertexInputStreamType::Default, VertexStreams);
 
 	if (PassShaders.RayHitGroupShader)
 	{
@@ -226,7 +229,7 @@ void FRayTracingMeshProcessor::BuildRayTracingMeshCommands(
 			if (PassShaders.RayHitGroupShader)
 			{
 				FMeshDrawSingleShaderBindings RayHitGroupShaderBindings = RayTracingMeshCommand.ShaderBindings.GetSingleShaderBindings(SF_RayHitGroup);
-				PassShaders.RayHitGroupShader->GetElementShaderBindings(Scene, ViewIfDynamicMeshCommand, VertexFactory, false, FeatureLevel, PrimitiveSceneProxy, MeshBatch, BatchElement, ShaderElementData, RayHitGroupShaderBindings, VertexStreams);
+				PassShaders.RayHitGroupShader->GetElementShaderBindings(Scene, ViewIfDynamicMeshCommand, VertexFactory, EVertexInputStreamType::Default, FeatureLevel, PrimitiveSceneProxy, MeshBatch, BatchElement, ShaderElementData, RayHitGroupShaderBindings, VertexStreams);
 			}
 
 			int32 GeometrySegmentIndex = MeshBatch.SegmentIndex + BatchElementIndex;
@@ -243,7 +246,7 @@ void FRayTracingMeshProcessor::Process(
 	const FPrimitiveSceneProxy* RESTRICT PrimitiveSceneProxy,
 	const FMaterialRenderProxy& RESTRICT MaterialRenderProxy,
 	const FMaterial& RESTRICT MaterialResource,
-	EMaterialShadingModel ShadingModel,
+	FMaterialShadingModelField ShadingModels,
 	const FUniformLightMapPolicy& RESTRICT LightMapPolicy,
 	const typename FUniformLightMapPolicy::ElementDataType& RESTRICT LightMapElementData)
 {
@@ -309,7 +312,7 @@ void FRayTracingMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshBatch
 		const FMaterialRenderProxy& MaterialRenderProxy = FallbackMaterialRenderProxyPtr ? *FallbackMaterialRenderProxyPtr : *MeshBatch.MaterialRenderProxy;
 
 		const EBlendMode BlendMode = Material.GetBlendMode();
-		const EMaterialShadingModel ShadingModel = Material.GetShadingModel();
+		const FMaterialShadingModelField ShadingModels = Material.GetShadingModels();
 		const bool bIsTranslucent = IsTranslucentBlendMode(BlendMode);
 
 		// Only draw opaque materials.
@@ -317,7 +320,7 @@ void FRayTracingMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshBatch
 			&& ShouldIncludeDomainInMeshPass(Material.GetMaterialDomain()))
 		{
 			// Check for a cached light-map.
-			const bool bIsLitMaterial = (ShadingModel != MSM_Unlit);
+			const bool bIsLitMaterial = ShadingModels.IsLit();
 			static const auto AllowStaticLightingVar = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.AllowStaticLighting"));
 			const bool bAllowStaticLighting = (!AllowStaticLightingVar || AllowStaticLightingVar->GetValueOnRenderThread() != 0);
 
@@ -342,7 +345,7 @@ void FRayTracingMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshBatch
 					if (bAllowHighQualityLightMaps)
 					{
 						const FShadowMapInteraction ShadowMapInteraction = (bAllowStaticLighting && MeshBatch.LCI && bIsLitMaterial)
-							? MeshBatch.LCI->GetShadowMapInteraction()
+							? MeshBatch.LCI->GetShadowMapInteraction(FeatureLevel)
 							: FShadowMapInteraction();
 
 						if (ShadowMapInteraction.GetType() == SMIT_Texture)
@@ -353,7 +356,7 @@ void FRayTracingMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshBatch
 								PrimitiveSceneProxy,
 								MaterialRenderProxy,
 								Material,
-								ShadingModel,
+								ShadingModels,
 								FUniformLightMapPolicy(LMP_DISTANCE_FIELD_SHADOWS_AND_HQ_LIGHTMAP),
 								MeshBatch.LCI);
 						}
@@ -365,7 +368,7 @@ void FRayTracingMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshBatch
 								PrimitiveSceneProxy,
 								MaterialRenderProxy,
 								Material,
-								ShadingModel,
+								ShadingModels,
 								FUniformLightMapPolicy(LMP_HQ_LIGHTMAP),
 								MeshBatch.LCI);
 						}
@@ -378,7 +381,7 @@ void FRayTracingMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshBatch
 							PrimitiveSceneProxy,
 							MaterialRenderProxy,
 							Material,
-							ShadingModel,
+							ShadingModels,
 							FUniformLightMapPolicy(LMP_LQ_LIGHTMAP),
 							MeshBatch.LCI);
 					}
@@ -390,7 +393,7 @@ void FRayTracingMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshBatch
 							PrimitiveSceneProxy,
 							MaterialRenderProxy,
 							Material,
-							ShadingModel,
+							ShadingModels,
 							FUniformLightMapPolicy(LMP_NO_LIGHTMAP),
 							MeshBatch.LCI);
 					}
@@ -411,7 +414,7 @@ void FRayTracingMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshBatch
 							PrimitiveSceneProxy,
 							MaterialRenderProxy,
 							Material,
-							ShadingModel,
+							ShadingModels,
 							FUniformLightMapPolicy(LMP_PRECOMPUTED_IRRADIANCE_VOLUME_INDIRECT_LIGHTING),
 							MeshBatch.LCI);
 					}
@@ -423,7 +426,7 @@ void FRayTracingMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshBatch
 							PrimitiveSceneProxy,
 							MaterialRenderProxy,
 							Material,
-							ShadingModel,
+							ShadingModels,
 							FUniformLightMapPolicy(LMP_NO_LIGHTMAP),
 							MeshBatch.LCI);
 					}
@@ -434,17 +437,16 @@ void FRayTracingMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshBatch
 	}
 }
 
-FRHIRayTracingPipelineState* FDeferredShadingSceneRenderer::BindRayTracingMaterialPipeline(
+FRayTracingPipelineState* FDeferredShadingSceneRenderer::BindRayTracingMaterialPipeline(
 	FRHICommandList& RHICmdList,
 	const FViewInfo& View,
-	const TArrayView<const FRayTracingShaderRHIParamRef>& RayGenShaderTable,
-	FRayTracingShaderRHIParamRef MissShader,
-	FRayTracingShaderRHIParamRef DefaultClosestHitShader
+	const TArrayView<FRHIRayTracingShader*>& RayGenShaderTable,
+	FRHIRayTracingShader* DefaultClosestHitShader
 )
 {
 	SCOPE_CYCLE_COUNTER(STAT_BindRayTracingPipeline);
 
-	FRHIRayTracingPipelineState* PipelineState = nullptr;
+	FRayTracingPipelineState* PipelineState = nullptr;
 
 	FRayTracingPipelineStateInitializer Initializer;
 
@@ -453,12 +455,9 @@ FRHIRayTracingPipelineState* FDeferredShadingSceneRenderer::BindRayTracingMateri
 
 	Initializer.SetRayGenShaderTable(RayGenShaderTable);
 
-	FRayTracingShaderRHIParamRef MissShaderTable[] = { MissShader };
-	Initializer.SetMissShaderTable(MissShaderTable);
-
 	const bool bEnableMaterials = GEnableRayTracingMaterials != 0;
 
-	TArray<FRayTracingShaderRHIParamRef> RayTracingMaterialLibrary;
+	TArray<FRHIRayTracingShader*> RayTracingMaterialLibrary;
 
 	if (bEnableMaterials)
 	{
@@ -474,7 +473,7 @@ FRHIRayTracingPipelineState* FDeferredShadingSceneRenderer::BindRayTracingMateri
 
 	Initializer.SetHitGroupTable(RayTracingMaterialLibrary);
 
-	PipelineState = PipelineStateCache::GetAndOrCreateRayTracingPipelineState(Initializer);
+	PipelineState = PipelineStateCache::GetAndOrCreateRayTracingPipelineState(RHICmdList, Initializer);
 
 	const FViewInfo& ReferenceView = Views[0];
 
@@ -511,12 +510,14 @@ FRHIRayTracingPipelineState* FDeferredShadingSceneRenderer::BindRayTracingMateri
 					MeshCommand.GeometrySegmentIndex,
 					RAY_TRACING_SHADER_SLOT_SHADOW,
 					PipelineState, OpaqueShadowMaterialIndex,
-					0, nullptr, 0);
+					0, nullptr, // uniform buffers
+					0, nullptr, // loose data
+					0);
 			}
 			else
 			{
 				// Masked materials require full material evaluation with any-hit shader.
-				// #dxr_todo: we need to generate a shadow-specific closest hit shader for this!
+				// Full CHS is bound, however material evaluation is skipped for shadow rays using a dynamic branch on a ray payload flag.
 				MeshCommand.ShaderBindings.SetRayTracingShaderBindingsForHitGroup(RHICmdList,
 					View.RayTracingScene.RayTracingSceneRHI,
 					VisibleMeshCommand.InstanceIndex,
@@ -533,7 +534,9 @@ FRHIRayTracingPipelineState* FDeferredShadingSceneRenderer::BindRayTracingMateri
 				MeshCommand.GeometrySegmentIndex,
 				RAY_TRACING_SHADER_SLOT_SHADOW,
 				PipelineState, HiddenMaterialIndex,
-				0, nullptr, 0);
+				0, nullptr, // uniform buffers
+				0, nullptr, // loose data
+				0);
 		}
 	}
 

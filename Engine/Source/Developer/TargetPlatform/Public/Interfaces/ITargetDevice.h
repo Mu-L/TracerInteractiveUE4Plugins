@@ -51,7 +51,10 @@ enum class ETargetDeviceTypes
 	Phone,
 
 	/** The device is a tablet computer. */
-	Tablet
+	Tablet,
+
+	/** The device is a standalone HMD */
+	HMD
 };
 
 
@@ -408,6 +411,11 @@ public:
 	* @param ProcessIdentifier The bundle id
 	*/
 	virtual bool TerminateLaunchedProcess(const FString & ProcessIdentifier) { return false;  };
+
+	/**
+	* Get the message endpoint to use for the session manager, if required
+	*/
+	virtual TSharedPtr<const class FInternetAddr> GetMessagingEndpoint() const { return nullptr; }
 
 public:
 

@@ -236,6 +236,12 @@ struct FCachedActorLabels
 		ActorLabels.Add(InLabel);
 	}
 
+	/** Remove a label from this set */
+	FORCEINLINE void Remove(const FString& InLabel)
+	{
+		ActorLabels.Remove(InLabel);
+	}
+
 	/** Check if the specified label exists */
 	FORCEINLINE bool Contains(const FString& InLabel) const
 	{
@@ -339,7 +345,7 @@ struct FSelectionStateOfLevel
 	TArray<FString> SelectedComponents;
 };
 
-/** Overrides you can pass when starting PIE to temporarily supress the user's options for dedicated server, number of clients..etc. */
+/** Overrides you can pass when starting PIE to temporarily suppress the user's options for dedicated server, number of clients..etc. */
 struct FPlayInEditorOverrides
 {
 	FPlayInEditorOverrides()
@@ -1111,6 +1117,13 @@ public:
 	* @param	bActiveViewportOnly		If true, move/reorient only the active viewport.
 	*/
 	void MoveViewportCamerasToComponent(USceneComponent* Component, bool bActiveViewportOnly);
+
+	/**
+	 * Moves all viewport cameras to focus on the provided bounding box.
+	 * @param	BoundingBox				Target box
+	 * @param	bActiveViewportOnly		If true, move/reorient only the active viewport.
+	 */
+	void MoveViewportCamerasToBox(const FBox& BoundingBox, bool bActiveViewportOnly) const;
 
 	/** 
 	 * Snaps an actor in a direction.  Optionally will align with the trace normal.
@@ -2659,12 +2672,23 @@ public:
 	 */
 	bool CreatePIEWorldFromLogin(FWorldContext& PieWorldContext, EPlayNetMode PlayNetMode, FPieLoginStruct& DataStruct);
 
+	/** Called before creating a PIE server instance. */
+	virtual FGameInstancePIEResult PreCreatePIEServerInstance(const bool bAnyBlueprintErrors, const bool bStartInSpectatorMode, const float PIEStartTime, const bool bSupportsOnlinePIE, int32& InNumOnlinePIEInstances);
+
 	/*
 	 * Handler for when viewport close request is made. 
 	 *
 	 * @param InViewport the viewport being closed.
 	 */
 	void OnViewportCloseRequested(FViewport* InViewport);
+
+	/*
+	 * Fills level viewport client transform used in simulation mode 
+	 *
+	 * @param OutViewTransform filled view transform used in SIE
+	 * @return true if function succeeded, false if failed
+	 */
+	bool GetSimulateInEditorViewTransform(FTransform& OutViewTransform) const;
 
 private:
 	/** Gets the scene viewport for a viewport client */
@@ -3019,13 +3043,6 @@ private:
 	/** Gets the init values for worlds opened via Map_Load in the editor */
 	UWorld::InitializationValues GetEditorWorldInitializationValues() const;
 
-	/**
-	* Moves all viewport cameras to focus on the provided bounding box.
-	* @param	BoundingBox				Target box
-	* @param	bActiveViewportOnly		If true, move/reorient only the active viewport.
-	*/
-	void MoveViewportCamerasToBox(const FBox& BoundingBox, bool bActiveViewportOnly) const;
-
 public:
 	// Launcher Worker
 	TSharedPtr<class ILauncherWorker> LauncherWorker;
@@ -3046,11 +3063,17 @@ public:
 	/** Toggle the feature level preview */
 	void ToggleFeatureLevelPreview();
 
-	/** Return whether the feature level preview is able to be enabled */
+	/** Return whether the feature level preview is enabled for use via the user accessing Settings->Preview Rendering Level. */
 	bool IsFeatureLevelPreviewEnabled() const;
 
-	/** Return whether the feature level preview is currently active */
+	/** Return whether the feature level preview enabled via Settings->Preview Rendering Level is currently active/displaying. */
 	bool IsFeatureLevelPreviewActive() const;
+
+	/**
+	 * Return the active feature level. This will be the chosen Settings->Preview Rendering Level if the Preview Mode button
+	 * is highlighted or SM5 if the Preview Mode button has been clicked and isn't highlighted.
+	 */
+	ERHIFeatureLevel::Type GetActiveFeatureLevelPreviewType() const;
 
 	/** Return the delegate that is called when the preview feature level changes */
 	FPreviewFeatureLevelChanged& OnPreviewFeatureLevelChanged() { return PreviewFeatureLevelChanged; }
@@ -3068,13 +3091,6 @@ protected:
 	/** Function pair used to save and restore the global feature level */
 	void LoadEditorFeatureLevel();
 	void SaveEditorFeatureLevel();
-
-	/** For some platforms (e.g. mobiles), when running in editor mode, we emulate the shaders functionality on available running GPU (e.g. DirectX),
-	 *  but when displaying the shader complexity we need to be able compile and extract statistics (instruction count) from the real shaders that
-	 *  will be compiled when the game will run on the specific platform. Thus (if compiler available) we perform an 'offline' shader compilation step,
-	 *  extract the needed statistics and transfer them to the emulated editor running shaders.
-	 *  This function will be called from OnSceneMaterialsModified() */
-	void UpdateShaderComplexityMaterials();
 
 	/** Utility function that can determine whether some input world is using materials who's shaders are emulated in the editor */
 	bool IsEditorShaderPlatformEmulated(UWorld* World);

@@ -694,7 +694,29 @@ void FDynamicMeshBuilder::GetMesh(const FMatrix& LocalToWorld, const FMaterialRe
 	GetMesh(LocalToWorld, MaterialRenderProxy, DepthPriorityGroup, Settings, nullptr, ViewIndex, Collector, HitProxyId);
 }
 
-void FDynamicMeshBuilder::GetMesh(const FMatrix& LocalToWorld,const FMaterialRenderProxy* MaterialRenderProxy, uint8 DepthPriorityGroup, const FDynamicMeshBuilderSettings& Settings, FDynamicMeshDrawOffset const * const DrawOffset, int32 ViewIndex, FMeshElementCollector& Collector, const FHitProxyId HitProxyId )
+void FDynamicMeshBuilder::GetMesh(
+	const FMatrix& LocalToWorld,
+	const FMaterialRenderProxy* MaterialRenderProxy,
+	uint8 DepthPriorityGroup,
+	const FDynamicMeshBuilderSettings& Settings,
+	FDynamicMeshDrawOffset const * const DrawOffset,
+	int32 ViewIndex,
+	FMeshElementCollector& Collector,
+	const FHitProxyId HitProxyId)
+{
+	GetMesh(LocalToWorld, LocalToWorld, MaterialRenderProxy, DepthPriorityGroup, Settings, DrawOffset, ViewIndex, Collector, HitProxyId);
+}
+
+void FDynamicMeshBuilder::GetMesh(
+	const FMatrix& LocalToWorld,
+	const FMatrix& PreviousLocalToWorld,
+	const FMaterialRenderProxy* MaterialRenderProxy,
+	uint8 DepthPriorityGroup,
+	const FDynamicMeshBuilderSettings& Settings,
+	FDynamicMeshDrawOffset const * const DrawOffset,
+	int32 ViewIndex,
+	FMeshElementCollector& Collector,
+	const FHitProxyId HitProxyId )
 {
 	// Only draw non-empty meshes.
 	if((VertexBuffer && VertexBuffer->Vertices.Num() > 0) || (DrawOffset != nullptr))
@@ -723,7 +745,7 @@ void FDynamicMeshBuilder::GetMesh(const FMatrix& LocalToWorld,const FMaterialRen
 			OneFrameResources->PrimitiveUniformBuffer = new FDynamicMeshPrimitiveUniformBuffer();
 			FPrimitiveUniformShaderParameters PrimitiveParams = GetPrimitiveUniformShaderParameters(
 				LocalToWorld,
-				LocalToWorld,
+				PreviousLocalToWorld,
 				LocalToWorld.GetOrigin(),
 				FBoxSphereBounds(EForceInit::ForceInit),
 				FBoxSphereBounds(EForceInit::ForceInit),
@@ -732,11 +754,12 @@ void FDynamicMeshBuilder::GetMesh(const FMatrix& LocalToWorld,const FMaterialRen
 				false,
 				false,
 				false,
-				false,
+				/* bDrawsVelocity = */ true,
 				GetDefaultLightingChannelMask(),
 				0,
 				INDEX_NONE,
-				INDEX_NONE
+				INDEX_NONE,
+				false
 			);
 
 
@@ -822,11 +845,12 @@ void FDynamicMeshBuilder::GetMeshElement(const FMatrix& LocalToWorld, const FMat
 				false,
 				false,
 				false,
-				false,
+				/* bDrawsVelocity = */ true,
 				GetDefaultLightingChannelMask(),
 				0,
 				INDEX_NONE,
-				INDEX_NONE
+				INDEX_NONE,
+				false
 			);
 
 
@@ -899,11 +923,12 @@ void FDynamicMeshBuilder::Draw(FPrimitiveDrawInterface* PDI,const FMatrix& Local
 			false,
 			false,
 			false,
-			false,
+			/* bDrawsVelocity = */ true,
 			GetDefaultLightingChannelMask(),
 			0,
 			INDEX_NONE,
-			INDEX_NONE
+			INDEX_NONE,
+			false
 			);
 
 

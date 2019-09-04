@@ -15,9 +15,27 @@
 
 const FName UPythonCallableForDelegate::GeneratedFuncName = "CallPython";
 
-void UPythonCallableForDelegate::BeginDestroy()
+DEFINE_FUNCTION(UPythonCallableForDelegate::CallPythonNative)
 {
 #if WITH_PYTHON
+	// Note: This function *must not* return until InvokePythonCallableFromUnrealFunctionThunk has been called, as we need to step over the correct amount of data from the bytecode stack!
+
+	const UFunction* Func = Stack.CurrentNativeFunction;
+
+	// Execute Python code within this block
+	{
+		FPyScopedGIL GIL;
+		if (!PyGenUtil::InvokePythonCallableFromUnrealFunctionThunk(FPyObjectPtr(), P_THIS->PyCallable, Func, Context, Stack, RESULT_PARAM))
+		{
+			PyUtil::ReThrowPythonError();
+		}
+	}
+#endif	// WITH_PYTHON
+}
+
+#if WITH_PYTHON
+void UPythonCallableForDelegate::BeginDestroy()
+{
 	// This may be called after Python has already shut down
 	if (Py_IsInitialized())
 	{
@@ -29,95 +47,15 @@ void UPythonCallableForDelegate::BeginDestroy()
 		// Release ownership if Python has been shut down to avoid attempting to delete the callable (which is already dead)
 		PyCallable.Release();
 	}
-#endif	// WITH_PYTHON
 
 	Super::BeginDestroy();
 }
 
-DEFINE_FUNCTION(UPythonCallableForDelegate::CallPythonNative)
+void UPythonCallableForDelegate::ReleasePythonResources()
 {
-#if WITH_PYTHON
-	if (P_THIS->PyCallable)
-	{
-		auto DoCall = [&]() -> bool
-		{
-			if (Stack.Node->Children == nullptr)
-			{
-				// Simple case, no parameters or return value
-				FPyObjectPtr RetVals = FPyObjectPtr::StealReference(PyObject_CallObject(P_THIS->PyCallable, nullptr));
-				if (!RetVals)
-				{
-					return false;
-				}
-			}
-			else
-			{
-				PyGenUtil::FGeneratedWrappedFunction DelegateFuncDef;
-				DelegateFuncDef.SetFunction(Stack.Node, PyGenUtil::FGeneratedWrappedFunction::SFF_ExtractParameters);
-
-				// Complex case, parameters or return value
-				TArray<FPyObjectPtr, TInlineAllocator<4>> PyParams;
-
-				// Get the value of the input params for the Python args
-				{
-					int32 ArgIndex = 0;
-					for (const PyGenUtil::FGeneratedWrappedMethodParameter& ParamDef : DelegateFuncDef.InputParams)
-					{
-						FPyObjectPtr& PyParam = PyParams.AddDefaulted_GetRef();
-						if (!PyConversion::PythonizeProperty_InContainer(ParamDef.ParamProp, Stack.Locals, 0, PyParam.Get()))
-						{
-							PyUtil::SetPythonError(PyExc_TypeError, P_THIS->PyCallable, *FString::Printf(TEXT("Failed to convert argument at pos '%d' when calling function '%s' on '%s'"), ArgIndex + 1, *Stack.Node->GetName(), *P_THIS_OBJECT->GetName()));
-							return false;
-						}
-						++ArgIndex;
-					}
-				}
-
-				FPyObjectPtr PyArgs = FPyObjectPtr::StealReference(PyTuple_New(PyParams.Num()));
-				for (int32 PyParamIndex = 0; PyParamIndex < PyParams.Num(); ++PyParamIndex)
-				{
-					PyTuple_SetItem(PyArgs, PyParamIndex, PyParams[PyParamIndex].Release()); // SetItem steals the reference
-				}
-
-				FPyObjectPtr RetVals = FPyObjectPtr::StealReference(PyObject_CallObject(P_THIS->PyCallable, PyArgs));
-				if (!RetVals)
-				{
-					return false;
-				}
-
-				if (!PyGenUtil::UnpackReturnValues(RetVals, Stack.Locals, DelegateFuncDef.OutputParams, *PyUtil::GetErrorContext(P_THIS->PyCallable), *FString::Printf(TEXT("function '%s' on '%s'"), *Stack.Node->GetName(), *P_THIS_OBJECT->GetName())))
-				{
-					return false;
-				}
-
-				// Copy the data back out of the function call
-				if (const UProperty* ReturnProp = Stack.Node->GetReturnProperty())
-				{
-					ReturnProp->CopyCompleteValue(RESULT_PARAM, ReturnProp->ContainerPtrToValuePtr<void>(Stack.Locals));
-				}
-				for (FOutParmRec* OutParamRec = Stack.OutParms; OutParamRec; OutParamRec = OutParamRec->NextOutParm)
-				{
-					OutParamRec->Property->CopyCompleteValue(OutParamRec->PropAddr, OutParamRec->Property->ContainerPtrToValuePtr<void>(Stack.Locals));
-				}
-			}
-
-			return true;
-		};
-
-		// Execute Python code within this block
-		{
-			FPyScopedGIL GIL;
-
-			if (!DoCall())
-			{
-				PyUtil::ReThrowPythonError();
-			}
-		}
-	}
-#endif	// WITH_PYTHON
+	PyCallable.Reset();
 }
 
-#if WITH_PYTHON
 PyObject* UPythonCallableForDelegate::GetCallable() const
 {
 	return (PyObject*)PyCallable.GetPtr();
@@ -1289,8 +1227,6 @@ PyTypeObject PyWrapperMulticastDelegateType = InitializePyWrapperMulticastDelega
 
 void FPyWrapperDelegateMetaData::AddReferencedObjects(FPyWrapperBase* Instance, FReferenceCollector& Collector)
 {
-	TPyWrapperDelegateMetaData<FPyWrapperDelegate>::AddReferencedObjects(Instance, Collector);
-
 	FPyWrapperDelegate* Self = static_cast<FPyWrapperDelegate*>(Instance);
 	if (Self->DelegateInstance)
 	{
@@ -1300,8 +1236,6 @@ void FPyWrapperDelegateMetaData::AddReferencedObjects(FPyWrapperBase* Instance, 
 
 void FPyWrapperMulticastDelegateMetaData::AddReferencedObjects(FPyWrapperBase* Instance, FReferenceCollector& Collector)
 {
-	TPyWrapperDelegateMetaData<FPyWrapperMulticastDelegate>::AddReferencedObjects(Instance, Collector);
-
 	FPyWrapperMulticastDelegate* Self = static_cast<FPyWrapperMulticastDelegate*>(Instance);
 	if (Self->DelegateInstance)
 	{

@@ -8,6 +8,7 @@
 #include "Engine/TextureStreamingTypes.h"
 #include "Components/PrimitiveComponent.h"
 #include "PerPlatformProperties.h"
+#include "LandscapeWeightmapUsage.h"
 
 #include "LandscapeComponent.generated.h"
 
@@ -60,7 +61,8 @@ public:
 		DebugChannelR(INDEX_NONE),
 		DebugChannelG(INDEX_NONE),
 		DebugChannelB(INDEX_NONE),
-		DataTexture(NULL)
+		DataTexture(NULL),
+		LayerContributionTexture(NULL)
 	{}
 
 	// Material used to render the tool.
@@ -86,6 +88,9 @@ public:
 
 	UPROPERTY(NonTransactional)
 	UTexture2D* DataTexture; // Data texture other than height/weight
+
+	UPROPERTY(NonTransactional)
+	UTexture2D* LayerContributionTexture; // Data texture used to represent layer contribution
 
 #if WITH_EDITOR
 	void UpdateDebugColorMaterial(const ULandscapeComponent* const Component);
@@ -194,6 +199,8 @@ struct FWeightmapLayerAllocationInfo
 	}
 	
 	FName GetLayerName() const;
+
+	uint32 GetHash() const;
 };
 
 struct FLandscapeComponentGrassData
@@ -244,14 +251,96 @@ struct FLandscapeComponentMaterialOverride
 {
 	GENERATED_USTRUCT_BODY()
 
-	UPROPERTY(EditAnywhere, Category = LandscapeComponent)
+	UPROPERTY(EditAnywhere, Category = LandscapeComponent, meta=(UIMin=0, UIMax=8, ClampMin=0, ClampMax=8))
 	FPerPlatformInt LODIndex;
 
 	UPROPERTY(EditAnywhere, Category = LandscapeComponent)
 	UMaterialInterface* Material;
 };
 
-UCLASS(hidecategories=(Display, Attachment, Physics, Debug, Collision, Movement, Rendering, PrimitiveComponent, Object, Transform, Mobility), showcategories=("Rendering|Material"), MinimalAPI, Within=LandscapeProxy)
+USTRUCT(NotBlueprintable)
+struct FWeightmapData
+{
+	GENERATED_USTRUCT_BODY()
+
+	UPROPERTY()
+	TArray<UTexture2D*> Textures;
+	
+	UPROPERTY()
+	TArray<FWeightmapLayerAllocationInfo> LayerAllocations;
+
+	UPROPERTY(Transient)
+	TArray<ULandscapeWeightmapUsage*> TextureUsages;
+};
+
+USTRUCT(NotBlueprintable)
+struct FHeightmapData
+{
+	GENERATED_USTRUCT_BODY()
+
+	UPROPERTY()
+	UTexture2D* Texture;
+};
+
+USTRUCT(NotBlueprintable)
+struct FLandscapeLayerComponentData
+{
+	GENERATED_USTRUCT_BODY()
+
+	UPROPERTY()
+	FHeightmapData HeightmapData;
+
+	UPROPERTY()
+	FWeightmapData WeightmapData;
+
+	bool IsInitialized() const { return HeightmapData.Texture != nullptr || WeightmapData.Textures.Num() > 0;  }
+};
+
+#if WITH_EDITOR
+enum ELandscapeComponentUpdateFlag : uint32
+{
+	// Will call UpdateCollisionHeightData, UpdateCacheBounds, UpdateComponentToWorld on Component
+	Component_Update_Heightmap_Collision = 1 << 0,
+	// Will call UdateCollisionLayerData on Component
+	Component_Update_Weightmap_Collision = 1 << 1,
+	// Will call RecreateCollision on Component
+	Component_Update_Recreate_Collision = 1 << 2,
+	// Will update Component clients: Navigation data, Foliage, Grass, etc.
+	Component_Update_Client = 1 << 3,
+	// Will update Component clients while editing
+	Component_Update_Client_Editing = 1 << 4,
+	// Will compute component approximated bounds
+	Component_Update_Approximated_Bounds = 1 << 5
+};
+
+enum ELandscapeLayerUpdateMode : uint32
+{ 
+	Update_Heightmap_All = 1 << 0,
+	Update_Heightmap_Editing = 1 << 1,
+	Update_Heightmap_Editing_NoCollision = 1 << 2,
+	Update_Weightmap_All = 1 << 3,
+	Update_Weightmap_Editing = 1 << 4,
+	Update_Weightmap_Editing_NoCollision = 1 << 5,
+	Update_All = Update_Weightmap_All | Update_Heightmap_All,
+	Update_All_Editing = Update_Weightmap_Editing | Update_Heightmap_Editing,
+	Update_All_Editing_NoCollision = Update_Weightmap_Editing_NoCollision | Update_Heightmap_Editing_NoCollision,
+	// In cases where we couldn't update the clients right away this flag will be set in RegenerateLayersContent
+	Update_Client_Deferred = 1 << 4,
+	// Update landscape component clients while editing
+	Update_Client_Editing = 1 << 5
+};
+
+#endif
+
+UENUM()
+enum ELandscapeClearMode
+{
+	Clear_Weightmap = 1 << 0 UMETA(DisplayName = "Paint"),
+	Clear_Heightmap = 1 << 1 UMETA(DisplayName = "Sculpt"),
+	Clear_All = Clear_Weightmap | Clear_Heightmap UMETA(DisplayName = "All")
+};
+
+UCLASS(hidecategories=(Display, Attachment, Physics, Debug, Collision, Movement, Rendering, PrimitiveComponent, Object, Transform, Mobility, VirtualTexture), showcategories=("Rendering|Material"), MinimalAPI, Within=LandscapeProxy)
 class ULandscapeComponent : public UPrimitiveComponent
 {
 	GENERATED_UCLASS_BODY()
@@ -304,14 +393,6 @@ class ULandscapeComponent : public UPrimitiveComponent
 	UPROPERTY(TextExportTransient)
 	TArray<int8> MaterialIndexToDisabledTessellationMaterial;
 
-	/** List of layers, and the weightmap and channel they are stored */
-	UPROPERTY()
-	TArray<FWeightmapLayerAllocationInfo> WeightmapLayerAllocations;
-
-	/** Weightmap texture reference */
-	UPROPERTY(TextExportTransient)
-	TArray<UTexture2D*> WeightmapTextures;
-
 	/** XYOffsetmap texture reference */
 	UPROPERTY(TextExportTransient)
 	UTexture2D* XYOffsetmapTexture;
@@ -342,14 +423,36 @@ private:
 	UPROPERTY()
 	FGuid LightingGuid;
 
-	/** Heightmap texture reference */
-	UPROPERTY(Transient, TextExportTransient)
-	UTexture2D* CurrentEditingHeightmapTexture;
+	UPROPERTY()
+	TMap<FGuid, FLandscapeLayerComponentData> LayersData;
+
+	/** Compoment's Data for Editing Layer */
+	FGuid LandscapeEditingLayer;
+	mutable FGuid CachedEditingLayer;
+	mutable FLandscapeLayerComponentData* CachedEditingLayerData;
+		
+	// Final layer data
+	UPROPERTY(Transient)
+	TArray<ULandscapeWeightmapUsage*> WeightmapTexturesUsage;
+
+	UPROPERTY(Transient)
+	uint32 LayerUpdateFlagPerMode;
+
+	/** Dirtied collision height region when painting (only used by Landscape Layer System) */
+	FIntRect LayerDirtyCollisionHeightData;
 #endif // WITH_EDITORONLY_DATA
 
 	/** Heightmap texture reference */
 	UPROPERTY(TextExportTransient)
 	UTexture2D* HeightmapTexture;
+
+	/** List of layers, and the weightmap and channel they are stored */
+	UPROPERTY()
+	TArray<FWeightmapLayerAllocationInfo> WeightmapLayerAllocations;
+
+	/** Weightmap texture reference */
+	UPROPERTY(TextExportTransient)
+	TArray<UTexture2D*> WeightmapTextures;
 
 public:
 
@@ -371,12 +474,12 @@ public:
 
 	/** Allows overriding the landscape bounds. This is useful if you distort the landscape with world-position-offset, for example
 	 *  Extension value in the negative Z axis, positive value increases bound size */
-	UPROPERTY(EditAnywhere, Category=LandscapeComponent, meta=(EditCondition="bOverrideBounds"))
+	UPROPERTY(EditAnywhere, Category=LandscapeComponent)
 	float NegativeZBoundsExtension;
 
 	/** Allows overriding the landscape bounds. This is useful if you distort the landscape with world-position-offset, for example
 	 *  Extension value in the positive Z axis, positive value increases bound size */
-	UPROPERTY(EditAnywhere, Category=LandscapeComponent, meta=(EditCondition="bOverrideBounds"))
+	UPROPERTY(EditAnywhere, Category=LandscapeComponent)
 	float PositiveZBoundsExtension;
 
 	/** StaticLightingResolution overriding per component, default value 0 means no overriding */
@@ -422,6 +525,9 @@ public:
 	/** Represent the chosen material for each LOD */
 	UPROPERTY(DuplicateTransient)
 	TMap<UMaterialInterface*, int8> MaterialPerLOD;
+
+	/** Represents hash of last weightmap usage update */
+	uint32 WeightmapsHash;
 #endif
 
 	/** For ES2 */
@@ -468,7 +574,6 @@ public:
 	virtual void Serialize(FArchive& Ar) override;
 	virtual void GetResourceSizeEx(FResourceSizeEx& CumulativeResourceSize) override;
 	virtual void BeginDestroy() override;
-	static void AddReferencedObjects(UObject* InThis, FReferenceCollector& Collector);
 	virtual void PostDuplicate(bool bDuplicateForPIE) override;
 #if WITH_EDITOR
 	virtual void BeginCacheForCookedPlatformData(const ITargetPlatform* TargetPlatform) override;
@@ -497,12 +602,43 @@ public:
 	virtual void GetUsedMaterials(TArray<UMaterialInterface*>& OutMaterials, bool bGetDebugMaterials = false) const override;
 	virtual FPrimitiveSceneProxy* CreateSceneProxy() override;
 	virtual ELightMapInteractionType GetStaticLightingType() const override { return LMIT_Texture;	}
-	virtual void GetStreamingTextureInfo(FStreamingTextureLevelContext& LevelContext, TArray<FStreamingTexturePrimitiveInfo>& OutStreamingTextures) const override;
+	virtual void GetStreamingRenderAssetInfo(FStreamingTextureLevelContext& LevelContext, TArray<FStreamingRenderAssetPrimitiveInfo>& OutStreamingRenderAssets) const override;
 	virtual bool IsPrecomputedLightingValid() const override;
 
-	LANDSCAPE_API UTexture2D* GetHeightmap(bool InReturnCurrentEditingHeightmap = false) const;
+	virtual TArray<URuntimeVirtualTexture*> const& GetRuntimeVirtualTextures() const override;
+	virtual ERuntimeVirtualTextureMainPassType GetVirtualTextureRenderPassType() const override;
+
+	LANDSCAPE_API UTexture2D* GetHeightmap(bool InReturnEditingHeightmap = false) const;
+	LANDSCAPE_API TArray<UTexture2D*>& GetWeightmapTextures(bool InReturnEditingWeightmap = false);
+	LANDSCAPE_API const TArray<UTexture2D*>& GetWeightmapTextures(bool InReturnEditingWeightmap = false) const;
+
+	LANDSCAPE_API TArray<FWeightmapLayerAllocationInfo>& GetWeightmapLayerAllocations(bool InReturnEditingWeightmap = false);
+	LANDSCAPE_API const TArray<FWeightmapLayerAllocationInfo>& GetWeightmapLayerAllocations(bool InReturnEditingWeightmap = false) const;
+	LANDSCAPE_API const TArray<FWeightmapLayerAllocationInfo>& GetWeightmapLayerAllocations(const FGuid& InLayerGuid) const;
+
+#if WITH_EDITOR
 	LANDSCAPE_API void SetHeightmap(UTexture2D* NewHeightmap);
-	LANDSCAPE_API void SetCurrentEditingHeightmap(UTexture2D* InNewHeightmap);
+
+	LANDSCAPE_API void SetWeightmapTextures(const TArray<UTexture2D*>& InNewWeightmapTextures, bool InApplyToEditingWeightmap = false);
+
+	LANDSCAPE_API void SetWeightmapLayerAllocations(const TArray<FWeightmapLayerAllocationInfo>& InNewWeightmapLayerAllocations);
+	LANDSCAPE_API void SetWeightmapTexturesUsage(const TArray<ULandscapeWeightmapUsage*>& InNewWeightmapTexturesUsage, bool InApplyToEditingWeightmap = false);
+	LANDSCAPE_API TArray<ULandscapeWeightmapUsage*>& GetWeightmapTexturesUsage(bool InReturnEditingWeightmap = false);
+	LANDSCAPE_API const TArray<ULandscapeWeightmapUsage*>& GetWeightmapTexturesUsage(bool InReturnEditingWeightmap = false) const;
+
+	LANDSCAPE_API bool HasLayersData() const;
+	LANDSCAPE_API const FLandscapeLayerComponentData* GetLayerData(const FGuid& InLayerGuid) const;
+	LANDSCAPE_API FLandscapeLayerComponentData* GetLayerData(const FGuid& InLayerGuid);
+	LANDSCAPE_API void AddLayerData(const FGuid& InLayerGuid, const FLandscapeLayerComponentData& InData);
+	LANDSCAPE_API void AddDefaultLayerData(const FGuid& InLayerGuid, const TArray<ULandscapeComponent*>& InComponentsUsingHeightmap, TMap<UTexture2D*, UTexture2D*>& InOutCreatedHeightmapTextures);
+	LANDSCAPE_API void RemoveLayerData(const FGuid& InLayerGuid);
+	LANDSCAPE_API void ForEachLayer(TFunctionRef<void(const FGuid&, struct FLandscapeLayerComponentData&)> Fn);
+
+	LANDSCAPE_API void SetEditingLayer(const FGuid& InEditingLayer);
+	FLandscapeLayerComponentData* GetEditingLayer();
+	const FLandscapeLayerComponentData* GetEditingLayer() const;
+	FGuid GetEditingLayerGUID() const;
+#endif 
 
 #if WITH_EDITOR
 	virtual int32 GetNumMaterials() const override;
@@ -633,13 +769,14 @@ public:
 	/**
 	 * Recalculate cached bounds using height values.
 	 */
-	LANDSCAPE_API void UpdateCachedBounds();
+	LANDSCAPE_API void UpdateCachedBounds(bool bInApproximateBounds = false);
 
 	/**
 	 * Update the MaterialInstance parameters to match the layer and weightmaps for this component
 	 * Creates the MaterialInstance if it doesn't exist.
 	 */
 	LANDSCAPE_API void UpdateMaterialInstances();
+	LANDSCAPE_API void UpdateMaterialInstances(FMaterialUpdateContext& InOutMaterialContext, TArray<class FComponentRecreateRenderStateContext>& InOutRecreateRenderStateContext);
 
 	// Internal implementation of UpdateMaterialInstances, not safe to call directly
 	void UpdateMaterialInstances_Internal(FMaterialUpdateContext& Context);
@@ -697,12 +834,24 @@ public:
 	 * @param ComponentX1, ComponentY1, ComponentX2, ComponentY2: region to update
 	 * @param bUpdateBounds: Whether to update bounds from render component.
 	 * @param XYOffsetTextureMipData: xy-offset map data
+	 * @returns True if CollisionComponent was created in this update.
 	 */
-	void UpdateCollisionHeightData(const FColor* HeightmapTextureMipData, const FColor* SimpleCollisionHeightmapTextureData, int32 ComponentX1=0, int32 ComponentY1=0, int32 ComponentX2=MAX_int32, int32 ComponentY2=MAX_int32, bool bUpdateBounds=false, const FColor* XYOffsetTextureMipData=nullptr);
+	void UpdateCollisionHeightData(const FColor* HeightmapTextureMipData, const FColor* SimpleCollisionHeightmapTextureData, int32 ComponentX1=0, int32 ComponentY1=0, int32 ComponentX2=MAX_int32, int32 ComponentY2=MAX_int32, bool bUpdateBounds=false, const FColor* XYOffsetTextureMipData=nullptr, bool bInUpdateHeightfieldRegion=true);
+
+	/**
+	 * Deletes Collision Component
+	 */
+	void DestroyCollisionData();
 
 	/** Updates collision component height data for the entire component, locking and unlocking heightmap textures
-	 * @param: bRebuild: If true, recreates the collision component */
-	void UpdateCollisionData(bool bRebuild);
+	 */
+	void UpdateCollisionData(bool bInUpdateHeightfieldRegion = true);
+
+	/** Cumulates component's dirtied collision region that will need to be updated (used by Layer System)*/
+	void UpdateDirtyCollisionHeightData(FIntRect Region);
+
+	/** Clears component's dirtied collision region (used by Layer System)*/
+	void ClearDirtyCollisionHeightData();
 
 	/**
 	 * Update collision component dominant layer data
@@ -720,7 +869,7 @@ public:
 	/**
 	 * Create weightmaps for this component for the layers specified in the WeightmapLayerAllocations array
 	 */
-	void ReallocateWeightmaps(FLandscapeEditDataInterface* DataInterface=NULL);
+	LANDSCAPE_API void ReallocateWeightmaps(FLandscapeEditDataInterface* DataInterface = nullptr, bool InCanUseEditingWeightmap = true, bool InSaveToTransactionBuffer = true, bool InInitPlatformDataAsync = false, bool InForceReallocate = false, ALandscapeProxy* InTargetProxy = nullptr, TArray<UTexture2D*>* OutNewCreatedTextures = nullptr);
 
 	/** Returns the actor's LandscapeMaterial, or the Component's OverrideLandscapeMaterial if set */
 	LANDSCAPE_API UMaterialInterface* GetLandscapeMaterial(int8 InLODIndex = INDEX_NONE) const;
@@ -765,6 +914,14 @@ public:
 	
 	/** Updates the values of component-level properties exposed by the Landscape Actor */
 	LANDSCAPE_API void UpdatedSharedPropertiesFromActor();
+
+	LANDSCAPE_API bool IsUpdateFlagEnabledForModes(ELandscapeComponentUpdateFlag InFlag, uint32 InModeMask) const;
+	LANDSCAPE_API void ClearUpdateFlagsForModes(uint32 InModeMask);
+	LANDSCAPE_API void RequestWeightmapUpdate(bool bUpdateAll = false, bool bUpdateCollision = true);
+	LANDSCAPE_API void RequestHeightmapUpdate(bool bUpdateAll = false, bool bUpdateCollision = true);
+	LANDSCAPE_API void RequestEditingClientUpdate();
+	LANDSCAPE_API void RequestDeferredClientUpdate();
+	LANDSCAPE_API uint32 ComputeWeightmapsHash();
 #endif
 
 	friend class FLandscapeComponentSceneProxy;
@@ -774,10 +931,17 @@ public:
 
 protected:
 
+#if WITH_EDITOR
+	void RecreateCollisionComponent(bool bUseSimpleCollision);
+	void UpdateCollisionHeightBuffer(int32 InComponentX1, int32 InComponentY1, int32 InComponentX2, int32 InComponentY2, int32 InCollisionMipLevel, int32 InHeightmapSizeU, int32 InHeightmapSizeV,
+		const FColor* const InHeightmapTextureMipData, uint16* CollisionHeightData, uint16* GrassHeightData,
+		const FColor* const InXYOffsetTextureMipData, uint16* CollisionXYOffsetData);
+	void UpdateDominantLayerBuffer(int32 InComponentX1, int32 InComponentY1, int32 InComponentX2, int32 InComponentY2, int32 InCollisionMipLevel, int32 InWeightmapSizeU, int32 InDataLayerIdx, const TArray<uint8*>& InCollisionDataPtrs, uint8* DominantLayerData);
+#endif
+
 	/** Whether the component type supports static lighting. */
 	virtual bool SupportsStaticLighting() const override
 	{
 		return true;
 	}
 };
-

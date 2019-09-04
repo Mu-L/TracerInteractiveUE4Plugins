@@ -6,6 +6,7 @@
 #include "Serialization/MemoryWriter.h"
 #include "Rendering/SkeletalMeshModel.h"
 #include "Engine/SkeletalMesh.h"
+#include "Factories/FbxSkeletalMeshImportData.h"
 
 /**
 * Takes an imported bone name, removes any leading or trailing spaces, and converts the remaining spaces to dashes.
@@ -224,35 +225,55 @@ bool FSkeletalMeshImportData::ApplyRigToGeo(FSkeletalMeshImportData& Other)
 			TArray<FWedgeInfo> NearestWedges;
 			FVector SearchPosition = Points[NewVertexIndex];
 			OctreeQueryHelper.FindNearestWedgeIndexes(SearchPosition, NearestWedges);
+			//The best old wedge match is base on those weight ratio
+			const int32 UVWeightRatioIndex = 0;
+			const int32 NormalWeightRatioIndex = 1;
+			const float MatchWeightRatio[3] = { 0.99f, 0.01f };
 			if (NearestWedges.Num() > 0)
 			{
-				float MinDistance = MAX_FLT;
-				float MinNormalDiff = MAX_FLT;
 				int32 BestOldVertexIndex = INDEX_NONE;
+				float MaxUVDistance = 0.0f;
+				float MaxNormalDelta = 0.0f;
+				TArray<float> UvDistances;
+				UvDistances.Reserve(NearestWedges.Num());
+				TArray<float> NormalDeltas;
+				NormalDeltas.Reserve(NearestWedges.Num());
 				for (const FWedgeInfo& WedgeInfo : NearestWedges)
 				{
 					int32 OldWedgeIndex = WedgeInfo.WedgeIndex;
 					int32 OldVertexIndex = Other.Wedges[OldWedgeIndex].VertexIndex;
 					int32 OldFaceIndex = (OldWedgeIndex / 3);
 					int32 OldFaceCorner = (OldWedgeIndex % 3);
-					FVector OldNormal = Other.Faces[OldFaceIndex].TangentZ[OldFaceCorner];
-
-					const FVector& OtherPosition = Other.Points[OldVertexIndex];
-					float VectorDelta = FVector::DistSquared(OtherPosition, SearchPosition);
-					if (VectorDelta <= (MinDistance + KINDA_SMALL_NUMBER))
+					const FVector2D& OldUV = Other.Wedges[OldWedgeIndex].UVs[0];
+					const FVector& OldNormal = Other.Faces[OldFaceIndex].TangentZ[OldFaceCorner];
+					float UVDelta = FVector2D::DistSquared(CurWedgeUV, OldUV);
+					float NormalDelta = FMath::Abs(FMath::Acos(FVector::DotProduct(NewNormal, OldNormal)));
+					if (UVDelta > MaxUVDistance)
 					{
-						if (VectorDelta < MinDistance - KINDA_SMALL_NUMBER)
-						{
-							MinDistance = VectorDelta;
-							MinNormalDiff = MAX_FLT;
-						}
-						float AngleDiff = FMath::Abs(FMath::Acos(FVector::DotProduct(NewNormal, OldNormal)));
-						if (AngleDiff < MinNormalDiff)
-						{
-							MinNormalDiff = AngleDiff;
-							BestOldVertexIndex = OldVertexIndex;
-						}
+						MaxUVDistance = UVDelta;
 					}
+					UvDistances.Add(UVDelta);
+					if (NormalDelta > MaxNormalDelta)
+					{
+						MaxNormalDelta = NormalDelta;
+					}
+					NormalDeltas.Add(NormalDelta);
+				}
+				float BestContribution = 0.0f;
+				for (int32 NearestWedgeIndex = 0; NearestWedgeIndex < UvDistances.Num(); ++NearestWedgeIndex)
+				{
+					float Contribution = ((MaxUVDistance - UvDistances[NearestWedgeIndex])/MaxUVDistance)*MatchWeightRatio[UVWeightRatioIndex];
+					Contribution += ((MaxNormalDelta - NormalDeltas[NearestWedgeIndex]) / MaxNormalDelta)*MatchWeightRatio[NormalWeightRatioIndex];
+					if (Contribution > BestContribution)
+					{
+						BestContribution = Contribution;
+						BestOldVertexIndex = Other.Wedges[NearestWedges[NearestWedgeIndex].WedgeIndex].VertexIndex;
+					}
+				}
+				if (BestOldVertexIndex == INDEX_NONE)
+				{
+					//Use the first NearestWedges entry, we end up here because all NearestWedges entries all equals, so the ratio will be zero in such a case
+					BestOldVertexIndex = Other.Wedges[NearestWedges[0].WedgeIndex].VertexIndex;
 				}
 				OldToNewRemap[BestOldVertexIndex].AddUnique(NewVertexIndex);
 			}
@@ -362,11 +383,41 @@ void FReductionBaseSkeletalMeshBulkData::Serialize(FArchive& Ar, TArray<FReducti
 
 void FReductionBaseSkeletalMeshBulkData::Serialize(FArchive& Ar, UObject* Owner)
 {
+	if (Ar.IsLoading())
+	{
+		//Save the custom version so we can load FReductionSkeletalMeshData later
+		SerializeLoadingCustomVersionContainer = Ar.GetCustomVersions();
+		bUseSerializeLoadingCustomVersion = false;
+		const FCustomVersionContainer& RegisteredCustomVersionContainer = FCustomVersionContainer::GetRegistered();
+		const FCustomVersionArray& ArchiveCustomVersionArray = SerializeLoadingCustomVersionContainer.GetAllVersions();
+		for (const FCustomVersion& ArchiveVersion : ArchiveCustomVersionArray)
+		{
+			const FCustomVersion* RegisteredVersion = RegisteredCustomVersionContainer.GetVersion(ArchiveVersion.Key);
+			if (!RegisteredVersion || RegisteredVersion->Version != ArchiveVersion.Version)
+			{
+				bUseSerializeLoadingCustomVersion = true;
+				break;
+			}
+		}
+	}
+
+	if (Ar.IsSaving() && bUseSerializeLoadingCustomVersion == true)
+	{
+		//We need to update the FReductionSkeletalMeshData serialize version to the latest in case we save the Parent bulkdata
+		FSkeletalMeshLODModel BaseLODModel;
+		TMap<FString, TArray<FMorphTargetDelta>> BaseLODMorphTargetData;
+		LoadReductionData(BaseLODModel, BaseLODMorphTargetData);
+		SaveReductionData(BaseLODModel, BaseLODMorphTargetData);
+	}
+
 	BulkData.Serialize(Ar, Owner);
 }
 
 void FReductionBaseSkeletalMeshBulkData::SaveReductionData(FSkeletalMeshLODModel& BaseLODModel, TMap<FString, TArray<FMorphTargetDelta>>& BaseLODMorphTargetData)
 {
+	//Saving the bulk data mean we do not need anymore the SerializeLoadingCustomVersionContainer of the parent bulk data
+	SerializeLoadingCustomVersionContainer.Empty();
+	bUseSerializeLoadingCustomVersion = false;
 	FReductionSkeletalMeshData ReductionSkeletalMeshData(BaseLODModel, BaseLODMorphTargetData);
 	TArray<uint8> TempBytes;
 	FMemoryWriter Ar(TempBytes, /*bIsPersistent=*/ true);
@@ -387,6 +438,11 @@ void FReductionBaseSkeletalMeshBulkData::LoadReductionData(FSkeletalMeshLODModel
 			BulkData.Lock(LOCK_READ_ONLY), BulkData.GetElementCount(),
 			/*bInFreeOnClose=*/ false, /*bIsPersistent=*/ true
 		);
+		//If we load the bulkdata content and the bulk was using customVersion, we must set the same until we save the reduction data
+		if (bUseSerializeLoadingCustomVersion)
+		{
+			Ar.SetCustomVersions(SerializeLoadingCustomVersionContainer);
+		}
 		Ar << ReductionSkeletalMeshData;
 		BulkData.Unlock();
 	}
@@ -410,6 +466,7 @@ enum
 {
 	// Engine raw mesh version:
 	RAW_SKELETAL_MESH_BULKDATA_VER_INITIAL = 0,
+	RAW_SKELETAL_MESH_BULKDATA_VER_AlternateInfluence = 1,
 	// Add new raw mesh versions here.
 
 	RAW_SKELETAL_MESH_BULKDATA_VER_PLUS_ONE,
@@ -450,6 +507,13 @@ FArchive& operator<<(FArchive& Ar, FSkeletalMeshImportData& RawMesh)
 	Ar << RawMesh.PointToRawMap;
 	Ar << RawMesh.RefBonesBinary;
 	Ar << RawMesh.Wedges;
+	
+	//In the old version this processing was done after we save the asset
+	//We now save it after the processing is done so for old version we do it here when loading
+	if (Ar.IsLoading() && Version < RAW_SKELETAL_MESH_BULKDATA_VER_AlternateInfluence)
+	{
+		ProcessImportMeshInfluences(RawMesh);
+	}
 	return Ar;
 }
 
@@ -611,7 +675,7 @@ void FOctreeQueryHelper::FindNearestWedgeIndexes(const FVector& SearchPosition, 
 	float MinSquaredDistance = MAX_FLT;
 	OutNearestWedges.Empty();
 	
-	FVector Extend(1.0f);
+	FVector Extend(2.0f);
 	for (int i = 0; i < 2; ++i)
 	{
 		TWedgeInfoPosOctree::TConstIterator<> OctreeIter((*WedgePosOctree));
@@ -636,11 +700,8 @@ void FOctreeQueryHelper::FindNearestWedgeIndexes(const FVector& SearchPosition, 
 			for (const FWedgeInfo& WedgeInfo : CurNode.GetElements())
 			{
 				float VectorDelta = FVector::DistSquared(SearchPosition, WedgeInfo.Position);
-				if (VectorDelta <= (MinSquaredDistance + SMALL_NUMBER))
-				{
-					MinSquaredDistance = FMath::Min(VectorDelta, MinSquaredDistance);
-					OutNearestWedges.Add(WedgeInfo);
-				}
+				MinSquaredDistance = FMath::Min(VectorDelta, MinSquaredDistance);
+				OutNearestWedges.Add(WedgeInfo);
 			}
 			OctreeIter.Advance();
 		}

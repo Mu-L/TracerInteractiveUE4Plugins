@@ -17,7 +17,7 @@ public:
 		FString InOwningEmitterUniqueName,
 		UNiagaraNodeFunctionCall* InFunctionCallNode);
 
-	void Refresh(const FString* Condition);
+	void Refresh(const FNiagaraInputConditionMetadata& InputCondition, FText& OutErrorMessage);
 
 	bool IsValid() const;
 
@@ -31,7 +31,7 @@ public:
 
 	FNiagaraTypeDefinition GetConditionInputType() const;
 
-	FNiagaraVariableMetaData* GetConditionInputMetaData() const;
+	TOptional<FNiagaraVariableMetaData> GetConditionInputMetaData() const;
 
 private:
 	UNiagaraScript* Script;
@@ -44,5 +44,5 @@ private:
 
 	FNiagaraStackFunctionInputBinder InputBinder;
 
-	TArray<uint8> TargetValueData;
+	TArray<TArray<uint8>> TargetValuesData;
 };

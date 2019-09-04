@@ -107,7 +107,7 @@ public partial class Project : CommandUtils
 		UniquePlatforms.UnionWith(Params.ServerTargetPlatforms.Select(x => x.Type));
 		foreach (UnrealTargetPlatform TargetPlatform in UniquePlatforms)
 		{
-			Platform.GetPlatform(TargetPlatform).PreBuildAgenda(UE4Build, Agenda);
+			Platform.GetPlatform(TargetPlatform).PreBuildAgenda(UE4Build, Agenda, Params);
 		}
 
 		// Build any tools we need to stage
@@ -124,7 +124,10 @@ public partial class Project : CommandUtils
 
 		if (string.IsNullOrEmpty(Params.UbtArgs) == false)
 		{
-			AdditionalArgs += " " + Params.UbtArgs;
+			string Arg = Params.UbtArgs;
+			Arg = Arg.TrimStart(new char[] { '\"' });
+			Arg = Arg.TrimEnd(new char[] { '\"' });
+			AdditionalArgs += " " + Arg;
 		}
 
 		if (Params.MapFile)

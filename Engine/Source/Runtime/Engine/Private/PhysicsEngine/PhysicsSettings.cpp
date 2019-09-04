@@ -5,6 +5,12 @@
 #include "PhysicalMaterials/PhysicalMaterial.h"
 #include "UObject/Package.h"
 
+#include "Framework/Threading.h"
+
+#if INCLUDE_CHAOS
+#include "ChaosSolversModule.h"
+#endif
+
 UPhysicsSettings::UPhysicsSettings(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 	, DefaultGravityZ(-980.f)
@@ -30,6 +36,8 @@ UPhysicsSettings::UPhysicsSettings(const FObjectInitializer& ObjectInitializer)
 	, bSuppressFaceRemapTable(false)
 	, bDisableActiveActors(false)
 	, bEnableEnhancedDeterminism(false)
+	, AnimPhysicsMinDeltaTime(0.f)
+	, bSimulateAnimPhysicsAfterReset(false)
 	, MaxPhysicsDeltaTime(1.f / 30.f)
 	, bSubstepping(false)
 	, MaxSubstepDeltaTime(1.f / 60.f)
@@ -110,6 +118,12 @@ void UPhysicsSettings::PostEditChangeProperty(struct FPropertyChangedEvent& Prop
 	{
 		UMovementComponent::PhysicsLockedAxisSettingChanged();
 	}
+
+	const FName MemberName = PropertyChangedEvent.MemberProperty ? PropertyChangedEvent.MemberProperty->GetFName() : NAME_None;
+	if(MemberName == GET_MEMBER_NAME_CHECKED(UPhysicsSettings, ChaosSettings))
+	{
+		ChaosSettings.OnSettingsUpdated();
+	}
 }
 
 void UPhysicsSettings::LoadSurfaceType()
@@ -145,4 +159,23 @@ void UPhysicsSettings::LoadSurfaceType()
 		Enum->RemoveMetaData(*HiddenMeta, Iter->Type);
 	}
 }
+
 #endif	// WITH_EDITOR
+
+FChaosPhysicsSettings::FChaosPhysicsSettings() 
+	: DefaultThreadingModel(EChaosThreadingMode::DedicatedThread)
+	, DedicatedThreadTickMode(EChaosSolverTickMode::VariableCappedWithTarget)
+	, DedicatedThreadBufferMode(EChaosBufferMode::Double)
+{
+
+}
+
+void FChaosPhysicsSettings::OnSettingsUpdated()
+{
+#if INCLUDE_CHAOS
+	if(FChaosSolversModule* SolverModule = FChaosSolversModule::GetModule())
+	{
+		SolverModule->OnSettingsChanged();
+	}
+#endif
+}

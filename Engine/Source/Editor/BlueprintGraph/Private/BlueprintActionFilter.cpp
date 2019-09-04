@@ -382,7 +382,7 @@ namespace BlueprintActionFilterImpl
 	 * @return True if the action is an animnotification that is incompatible with the current skeleton
 	 */
 	static bool IsIncompatibleAnimNotification( FBlueprintActionFilter const& Filter, FBlueprintActionInfo& BlueprintAction); 
-
+	
 	/**
 	 * 
 	 * 
@@ -762,6 +762,15 @@ static bool BlueprintActionFilterImpl::IsRestrictedClassMember(FBlueprintActionF
 		if (ActionClass->HasMetaData(FBlueprintMetadata::MD_RestrictedToClasses))
 		{
 			FString const& ClassRestrictions = ActionClass->GetMetaData(FBlueprintMetadata::MD_RestrictedToClasses);
+			
+			// Parse the the metadata into an array that is delimited by ',' and trim whitespace
+			TArray<FString> ParsedClassRestrictions;
+			ClassRestrictions.ParseIntoArray(ParsedClassRestrictions, TEXT(","));
+			for (FString& ValidClassName : ParsedClassRestrictions)
+			{
+				ValidClassName = ValidClassName.TrimStartAndEnd();
+			}
+
 			for (UBlueprint const* TargetContext : FilterContext.Blueprints)
 			{
 				UClass* TargetClass = TargetContext->GeneratedClass;
@@ -769,7 +778,7 @@ static bool BlueprintActionFilterImpl::IsRestrictedClassMember(FBlueprintActionF
 				{
 					// Skip possible null classes (e.g. macros, etc)
 					continue;
-				};
+				}
 
 				bool bIsClassListed = false;
 				
@@ -779,7 +788,15 @@ static bool BlueprintActionFilterImpl::IsRestrictedClassMember(FBlueprintActionF
 				while (!bIsClassListed && (QueryClass != nullptr))
 				{
 					FString const ClassName = QueryClass->GetName();
-					bIsClassListed = (ClassName == ClassRestrictions) || !!FCString::StrfindDelim(*ClassRestrictions, *ClassName, TEXT(" "));
+					// If this class is on the list of valid classes
+					for (const FString& ValidClassName : ParsedClassRestrictions)
+					{
+						bIsClassListed = (ClassName == ValidClassName);
+						if (bIsClassListed)
+						{
+							break;
+						}
+					}
 					
 					QueryClass = QueryClass->GetSuperClass();
 				}

@@ -22,6 +22,7 @@ USoundSubmix::USoundSubmix(const FObjectInitializer& ObjectInitializer)
 {
 	EnvelopeFollowerAttackTime = 10;
 	EnvelopeFollowerReleaseTime = 500;
+	OutputVolume = 1.0f;
 }
 
 void USoundSubmix::StartRecordingOutput(const UObject* WorldContextObject, float ExpectedDuration)
@@ -186,6 +187,21 @@ void USoundSubmix::AddEnvelopeFollowerDelegate(const UObject* WorldContextObject
 	}
 }
 
+void USoundSubmix::SetSubmixOutputVolume(const UObject* WorldContextObject, float InOutputVolume)
+{
+	if (!GEngine)
+	{
+		return;
+	}
+
+	UWorld* ThisWorld = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
+	FAudioDevice* AudioDevice = ThisWorld->GetAudioDevice();
+	if (AudioDevice)
+	{
+		AudioDevice->SetSubmixOutputVolume(this, InOutputVolume);
+	}
+}
+
 FString USoundSubmix::GetDesc()
 {
 	return FString(TEXT("Sound submix"));
@@ -236,10 +252,14 @@ void USoundSubmix::PreEditChange(UProperty* PropertyAboutToChange)
 
 void USoundSubmix::PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent)
 {
+	// Whether or not we need to reinit the submix. Not all properties require reinitialization.
+	bool bReinitSubmix = true;
+
 	if (PropertyChangedEvent.Property != nullptr)
 	{
 		static const FName NAME_ChildSubmixes(TEXT("ChildSubmixes"));
 		static const FName NAME_ParentSubmix(TEXT("ParentSubmix"));
+		static const FName NAME_OutputVolume(TEXT("OutputVolume"));
 
 		if (PropertyChangedEvent.Property->GetFName() == NAME_ChildSubmixes)
 		{
@@ -306,15 +326,27 @@ void USoundSubmix::PostEditChangeProperty(struct FPropertyChangedEvent& Property
 			Modify();
 			RefreshAllGraphs(false);
 		}
+		else if (PropertyChangedEvent.Property->GetFName() == NAME_OutputVolume)
+		{
+			FAudioDeviceManager* AudioDeviceManager = (GEngine ? GEngine->GetAudioDeviceManager() : nullptr);
+			if (AudioDeviceManager)
+			{
+				AudioDeviceManager->UpdateSubmix(this);
+			}
+			bReinitSubmix = false;
+		}
 	}
 
-	// Use the main/default audio device for storing and retrieving sound class properties
-	FAudioDeviceManager* AudioDeviceManager = (GEngine ? GEngine->GetAudioDeviceManager() : nullptr);
-
-	// Force the properties to be initialized for this SoundSubmix on all active audio devices
-	if (AudioDeviceManager)
+	if (bReinitSubmix)
 	{
-		AudioDeviceManager->RegisterSoundSubmix(this);
+		// Use the main/default audio device for storing and retrieving sound class properties
+		FAudioDeviceManager* AudioDeviceManager = (GEngine ? GEngine->GetAudioDeviceManager() : nullptr);
+
+		// Force the properties to be initialized for this SoundSubmix on all active audio devices
+		if (AudioDeviceManager)
+		{
+			AudioDeviceManager->RegisterSoundSubmix(this);
+		}
 	}
 
 	Super::PostEditChangeProperty(PropertyChangedEvent);

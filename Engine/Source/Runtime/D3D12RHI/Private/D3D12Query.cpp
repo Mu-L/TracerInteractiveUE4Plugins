@@ -36,7 +36,7 @@ FRenderQueryRHIRef FD3D12DynamicRHI::RHICreateRenderQuery(ERenderQueryType Query
 	});
 }
 
-bool FD3D12DynamicRHI::RHIGetRenderQueryResult(FRenderQueryRHIParamRef QueryRHI, uint64& OutResult, bool bWait)
+bool FD3D12DynamicRHI::RHIGetRenderQueryResult(FRHIRenderQuery* QueryRHI, uint64& OutResult, bool bWait)
 {
 	check(IsInRenderingThread());
 	FD3D12Adapter& Adapter = GetAdapter();
@@ -452,7 +452,8 @@ void FD3D12QueryHeap::DestroyQueryHeap(bool bDeferDelete)
 	{
 		if (bDeferDelete)
 		{
-			GetParentDevice()->GetParentAdapter()->GetDeferredDeletionQueue().EnqueueResource(QueryHeap);
+			FD3D12Fence& Fence = GetParentDevice()->GetCommandListManager().GetFence();
+			GetParentDevice()->GetParentAdapter()->GetDeferredDeletionQueue().EnqueueResource(QueryHeap, &Fence);
 		}
 		else
 		{

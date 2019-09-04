@@ -46,8 +46,42 @@ static const int INTERNAL_LOAD_OBJECT_RECURSION_LIMIT = 16;
 
 static TAutoConsoleVariable<int32> CVarAllowAsyncLoading( TEXT( "net.AllowAsyncLoading" ), 0, TEXT( "Allow async loading" ) );
 static TAutoConsoleVariable<int32> CVarIgnoreNetworkChecksumMismatch( TEXT( "net.IgnoreNetworkChecksumMismatch" ), 0, TEXT( "" ) );
+static TAutoConsoleVariable<int32> CVarReservedNetGuidSize(TEXT("net.ReservedNetGuidSize"), 512, TEXT("Reserved size in bytes for NetGUID serialization"));
 extern FAutoConsoleVariableRef CVarEnableMultiplayerWorldOriginRebasing;
 extern TAutoConsoleVariable<int32> CVarFilterGuidRemapping;
+
+static float GGuidCacheTrackAsyncLoadingGUIDTreshold = 0.f;
+static FAutoConsoleVariableRef CVarTrackAsyncLoadingGUIDTreshold(
+	TEXT("net.TrackAsyncLoadingGUIDThreshold"),
+	GGuidCacheTrackAsyncLoadingGUIDTreshold,
+	TEXT("When > 0, any objects that take longer than the threshold to async load will be tracked."
+		" Threshold in seconds, @see FNetGUIDCache::ConsumeDelinquencyAnalytics. Used for Debugging and Analytics")
+);
+
+static float GPackageMapTrackQueuedActorTreshold = 0.f;
+static FAutoConsoleVariableRef CVarTrackQueuedActorTreshold(
+	TEXT("net.TrackQueuedActorThreshold"),
+	GPackageMapTrackQueuedActorTreshold,
+	TEXT("When > 0, any actors that spend longer than the threshold with queued bunches will be tracked."
+		" Threshold in seconds, @see UPackageMap::ConsumeDelinquencyAnalytics. Used for Debugging and Analytics")
+);
+
+static int32 GDelinquencyNumberOfTopOffendersToTrack = 10;
+static FAutoConsoleVariableRef CVarDelinquencyNumberOfTopOffendersToTrack(
+	TEXT("net.DelinquencyNumberOfTopOffendersToTrack"),
+	GDelinquencyNumberOfTopOffendersToTrack,
+	TEXT("When > 0 , this will be the number of 'TopOffenders' that are tracked by the PackageMap and GuidCache for"
+		" Queued Actors and Async Loads respectively."
+		" net.TrackAsyncLoadingGUIDThreshold / net.TrackQueuedActorThreshold still dictate whether or not any of these"
+		" items are tracked.")
+);
+
+static bool GbAllowClientRemapCacheObject = false;
+static FAutoConsoleVariableRef CVarAllowClientRemapCacheObject(
+	TEXT("net.AllowClientRemapCacheObject"),
+	GbAllowClientRemapCacheObject,
+	TEXT("When enabled, we will allow clients to remap read only cache objects and keep the same NetGUID.")
+);
 
 void BroadcastNetFailure(UNetDriver* Driver, ENetworkFailure::Type FailureType, const FString& ErrorStr)
 {
@@ -89,7 +123,8 @@ void BroadcastNetFailure(UNetDriver* Driver, ENetworkFailure::Type FailureType, 
 -----------------------------------------------------------------------------*/
 UPackageMapClient::UPackageMapClient(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
-  , Connection(nullptr)
+	, Connection(nullptr)
+	, DelinquentQueuedActors(GDelinquencyNumberOfTopOffendersToTrack > 0 ? GDelinquencyNumberOfTopOffendersToTrack : 0)
 {
 }
 
@@ -464,21 +499,6 @@ bool UPackageMapClient::SerializeNewActor(FArchive& Ar, class UActorChannel *Cha
 			else
 			{
 				Velocity = FVector::ZeroVector;
-			}
-
-			if ( Ar.IsSaving() )
-			{
-				FObjectReplicator * RepData = &Channel->GetActorReplicationData();
-				uint8* Recent = RepData && RepData->RepState.IsValid() && RepData->RepState->StaticBuffer.Num() ? RepData->RepState->StaticBuffer.GetData() : NULL;
-				if ( Recent )
-				{
-					FRepMovement* RepMovement = RepData->RepLayout->GetShadowStateValue<FRepMovement>(Recent, GET_MEMBER_NAME_CHECKED(AActor, ReplicatedMovement));
-					check(RepMovement);
-
-					RepMovement->Location = LocalLocation;
-					RepMovement->Rotation = Rotation;
-					RepMovement->LinearVelocity = Velocity;
-				}
 			}
 		}
 
@@ -1021,10 +1041,9 @@ UObject* UPackageMapClient::ResolvePathAndAssignNetGUID( const FNetworkGUID& Net
 //
 //--------------------------------------------------------------------
 
-// MAX_BUNCH_SIZE is in bits, so shift to get bytes.
+
 // TODO: This limit might not actually need to be enforced anymore.
-static const int32 MAX_GUID_MEMORY = MAX_BUNCH_SIZE >> 3;
-static const int32 MAX_GUID_COUNT = 2048;
+constexpr int32 MAX_GUID_COUNT = 2048;
 
 bool UPackageMapClient::ExportNetGUIDForReplay(FNetworkGUID& NetGUID, UObject* Object, FString& PathName, UObject* ObjOuter)
 {
@@ -1035,14 +1054,18 @@ bool UPackageMapClient::ExportNetGUIDForReplay(FNetworkGUID& NetGUID, UObject* O
 	{
 		TGuardValue<bool> ExportingGUID(GuidCache->IsExportingNetGUIDBunch, true);
 
+		const int32 MaxReservedSize(CVarReservedNetGuidSize.GetValueOnAnyThread());
+
 		TArray<uint8>& GUIDMemory = ExportGUIDArchives.Emplace_GetRef();
-		GUIDMemory.Reserve(MAX_GUID_MEMORY);
+		GUIDMemory.Reserve(MaxReservedSize);
 
 		FMemoryWriter Writer(GUIDMemory);
 		InternalWriteObject(Writer, NetGUID, Object, PathName, ObjOuter);
 
 		check(!Writer.IsError());
-		ensureMsgf(GUIDMemory.Num() <= MAX_GUID_MEMORY, TEXT("ExportNetGUIDForReplay exceeded MAX_GUID_MEMORY. Max=%l Count=%l"), MAX_GUID_MEMORY, GUIDMemory.Num());
+		ensureMsgf(GUIDMemory.Num() <= MaxReservedSize, TEXT("ExportNetGUIDForReplay exceeded CVarReservedNetGuidSize. Max=%l Count=%l"), MaxReservedSize, GUIDMemory.Num());
+
+		GUIDMemory.Shrink();
 
 		// It's possible InternalWriteObject has modified the NetGUIDAckStatus, so
 		// do a quick sanity check to make sure the ID wasn't removed before updating the status.
@@ -1353,11 +1376,57 @@ void UPackageMapClient::ReceiveExportData(FArchive& Archive)
 	ReceiveNetExportGUIDs(Archive);
 }
 
+void UPackageMapClient::SerializeNetFieldExportDelta(FArchive& Ar)
+{
+	if (Ar.IsSaving())
+	{
+		TSet<uint64> DeltaNetFieldExports;
+		
+		for ( auto It = GuidCache->NetFieldExportGroupMap.CreateIterator(); It; ++It )
+		{
+			// Save out the export group
+			TSharedPtr<FNetFieldExportGroup> ExportGroup = It.Value();
+			if (ExportGroup.IsValid())
+			{
+				for ( int32 i = 0; i < ExportGroup->NetFieldExports.Num(); i++ )
+				{
+					if (ExportGroup->NetFieldExports[i].bExported && ExportGroup->NetFieldExports[i].bDirtyForReplay)
+					{
+						check(ExportGroup->PathNameIndex != 0);
+
+						const uint64 CmdHandle = ((uint64)ExportGroup->PathNameIndex) << 32 | (uint64)i;
+
+						check(i == ExportGroup->NetFieldExports[i].Handle);
+
+						DeltaNetFieldExports.Add(CmdHandle);
+
+						ExportGroup->NetFieldExports[i].bDirtyForReplay = false;
+					}
+				}
+			}
+		}
+
+		AppendNetFieldExportsInternal(Ar, DeltaNetFieldExports, EAppendNetExportFlags::ForceExportDirtyGroups);
+
+		NetFieldExports.Empty();
+	}
+	else
+	{
+		ReceiveNetFieldExports(Ar);
+	}
+}
+
 void UPackageMapClient::AppendNetFieldExports(FArchive& Archive)
+{
+	AppendNetFieldExportsInternal(Archive, NetFieldExports, EAppendNetExportFlags::None);
+	NetFieldExports.Empty();
+}
+
+void UPackageMapClient::AppendNetFieldExportsInternal(FArchive& Archive, const TSet<uint64>& InNetFieldExports, EAppendNetExportFlags Flags)
 {
 	check(Connection->InternalAck);
 
-	uint32 NetFieldCount = NetFieldExports.Num();
+	uint32 NetFieldCount = InNetFieldExports.Num();
 	Archive.SerializeIntPacked(NetFieldCount);
 
 	if (0 == NetFieldCount)
@@ -1368,7 +1437,7 @@ void UPackageMapClient::AppendNetFieldExports(FArchive& Archive)
 	TArray< uint32, TInlineAllocator<64> > ExportedPathInThisBunchAlready;
 	ExportedPathInThisBunchAlready.Reserve(NetFieldCount);
 
-	for (const uint64 FieldExport : NetFieldExports)
+	for (const uint64 FieldExport : InNetFieldExports)
 	{
 		// Parse the path name index and cmd index out of the uint64
 		uint32 PathNameIndex = FieldExport >> 32;
@@ -1382,7 +1451,9 @@ void UPackageMapClient::AppendNetFieldExports(FArchive& Archive)
 		check(NetFieldExportHandle == NetFieldExportGroup->NetFieldExports[NetFieldExportHandle].Handle);
 
 		// Export the path if we need to
-		uint32 NeedsExport = (OverrideAckState->NetFieldExportGroupPathAcked.Contains(PathNameIndex) || ExportedPathInThisBunchAlready.Contains(PathNameIndex)) ? 0 : 1;
+		const bool bForceExportDirty = EnumHasAnyFlags(Flags, EAppendNetExportFlags::ForceExportDirtyGroups) && NetFieldExportGroup->bDirtyForReplay;
+
+		uint32 NeedsExport = ((bForceExportDirty || !OverrideAckState->NetFieldExportGroupPathAcked.Contains(PathNameIndex)) && !ExportedPathInThisBunchAlready.Contains(PathNameIndex)) ? 1 : 0;
 
 		Archive.SerializeIntPacked(PathNameIndex);
 		Archive.SerializeIntPacked(NeedsExport);
@@ -1395,6 +1466,11 @@ void UPackageMapClient::AppendNetFieldExports(FArchive& Archive)
 			Archive.SerializeIntPacked(NumExports);
 
 			ExportedPathInThisBunchAlready.Add(PathNameIndex);
+
+			if (bForceExportDirty)
+			{
+				NetFieldExportGroup->bDirtyForReplay = false;
+			}
 		}
 
 		Archive << NetFieldExportGroup->NetFieldExports[NetFieldExportHandle];
@@ -1402,8 +1478,6 @@ void UPackageMapClient::AppendNetFieldExports(FArchive& Archive)
 		OverrideAckState->NetFieldExportGroupPathAcked.Add( PathNameIndex );
 		OverrideAckState->NetFieldExportAcked.Add( FieldExport );
 	}
-
-	NetFieldExports.Empty();
 }
 
 void UPackageMapClient::ReceiveNetFieldExportsCompat(FInBunch &InBunch)
@@ -1541,22 +1615,31 @@ void UPackageMapClient::ReceiveNetFieldExports(FArchive& Archive)
 		}
 		else
 		{
-			NetFieldExportGroup = GuidCache->NetFieldExportGroupIndexToGroup.FindChecked(PathNameIndex);
+			FNetFieldExportGroup** FoundNetFieldExport = GuidCache->NetFieldExportGroupIndexToGroup.Find(PathNameIndex);
+			NetFieldExportGroup = FoundNetFieldExport ? *FoundNetFieldExport : nullptr;
 		}
 
-		TArray<FNetFieldExport>& Exports = NetFieldExportGroup->NetFieldExports;
 		FNetFieldExport Export;
 		Archive << Export;
 
-		if (Exports.IsValidIndex(Export.Handle))
+		if (NetFieldExportGroup)
 		{
-			// preserve compatibility flag
-			Export.bIncompatible = Exports[Export.Handle].bIncompatible;
-			Exports[Export.Handle] = Export;
+			TArray<FNetFieldExport>& Exports = NetFieldExportGroup->NetFieldExports;
+			if (Exports.IsValidIndex(Export.Handle))
+			{
+				// preserve compatibility flag
+				Export.bIncompatible = Exports[Export.Handle].bIncompatible;
+				Exports[Export.Handle] = Export;
+			}
+			else
+			{
+				UE_LOG(LogNetPackageMap, Error, TEXT("ReceiveNetFieldExports: Invalid NetFieldExportHandle '%i', Max '%i'"), Export.Handle, Exports.Num());
+			}
 		}
 		else
 		{
-			UE_LOG(LogNetPackageMap, Error, TEXT("ReceiveNetFieldExports: Invalid NetFieldExportHandle '%i', Max '%i'"), Export.Handle, Exports.Num());
+			UE_LOG(LogNetPackageMap, Error, TEXT("ReceiveNetFieldExports: Unable to find NetFieldExportGroup for export. Export.Handle=%i, Export.Name=%s, PathNameIndex=%lu, WasExported=%d, Archive.IsError()=%d"),
+				Export.Handle, *Export.ExportName.ToString(), PathNameIndex, !!WasExported, !!Archive.IsError());
 		}
 	}
 }
@@ -1984,11 +2067,14 @@ bool UPackageMapClient::PrintExportBatch()
 
 	// Print the whole thing for reference
 #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
-	for (auto It = GuidCache->History.CreateIterator(); It; ++It)
+	if (FNetGUIDCache::IsHistoryEnabled())
 	{
-		FString Str = It.Value();
-		FNetworkGUID NetGUID = It.Key();
-		UE_LOG(LogNetPackageMap, Warning, TEXT("<%s> - %s"), *NetGUID.ToString(), *Str);
+		for (auto It = GuidCache->History.CreateIterator(); It; ++It)
+		{
+			FString Str = It.Value();
+			FNetworkGUID NetGUID = It.Key();
+			UE_LOG(LogNetPackageMap, Warning, TEXT("<%s> - %s"), *NetGUID.ToString(), *Str);
+		}
 	}
 #endif
 
@@ -2054,11 +2140,43 @@ void UPackageMapClient::SetHasQueuedBunches(const FNetworkGUID& NetGUID, bool bH
 {
 	if (bHasQueuedBunches)
 	{
-		CurrentQueuedBunchNetGUIDs.Add(NetGUID);
+		if (GPackageMapTrackQueuedActorTreshold > 0.f)
+		{
+			if (UNetDriver const * const NetDriver = ((Connection) ? Connection->GetDriver() : nullptr))
+			{
+				CurrentQueuedBunchNetGUIDs.Emplace(NetGUID, NetDriver->Time);
+			}
+		}
+
+		DelinquentQueuedActors.MaxConcurrentQueuedActors = FMath::Max<uint32>(DelinquentQueuedActors.MaxConcurrentQueuedActors, CurrentQueuedBunchNetGUIDs.Num());
 	}
 	else
 	{
-		CurrentQueuedBunchNetGUIDs.Remove(NetGUID);
+		float StartTime = 0.f;
+
+		// We try to remove the value regardless of whether or not the CVar is on.
+		// That way if it's toggled on and off, we don't end up wasting resources.
+		// If it is disabled with entries in DelinquentQueuedActors, it will be up
+		// to clients to clear out the map by calling ConsumeDelinquencyAnalytics.
+		if (CurrentQueuedBunchNetGUIDs.RemoveAndCopyValue(NetGUID, StartTime) &&
+			GPackageMapTrackQueuedActorTreshold &&
+			GuidCache)
+		{
+			if (UNetDriver const * const NetDriver = ((Connection) ? Connection->GetDriver() : nullptr))
+			{
+				const float QueuedTime = NetDriver->Time - StartTime;
+				if (QueuedTime > GPackageMapTrackQueuedActorTreshold)
+				{
+					if (FNetGuidCacheObject const * const CacheObject = GuidCache->ObjectLookup.Find(NetGUID))
+					{
+						if (UObject const * const Object = CacheObject->Object.Get())
+						{
+							DelinquentQueuedActors.DelinquentQueuedActors.Emplace(Object->GetClass()->GetFName(), QueuedTime);
+						}
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -2104,6 +2222,8 @@ void UPackageMapClient::Serialize(FArchive& Ar)
 		GRANULAR_NETWORK_MEMORY_TRACKING_TRACK("MustBeMappedGuidsInLastBunch", MustBeMappedGuidsInLastBunch.CountBytes(Ar));
 		GRANULAR_NETWORK_MEMORY_TRACKING_TRACK("NetFieldExports", NetFieldExports.CountBytes(Ar));
 
+		GRANULAR_NETWORK_MEMORY_TRACKING_TRACK("DelinquentQueuedActors", DelinquentQueuedActors.CountBytes(Ar));
+
 		// Don't count the GUID Cache here. Instead, we'll let the UNetDriver count it as
 		// that's the class that constructs it.
 	}
@@ -2113,7 +2233,12 @@ void UPackageMapClient::Serialize(FArchive& Ar)
 //	FNetGUIDCache
 //----------------------------------------------------------------------------------------
 
-FNetGUIDCache::FNetGUIDCache( UNetDriver * InDriver ) : IsExportingNetGUIDBunch( false ), Driver( InDriver ), NetworkChecksumMode( ENetworkChecksumMode::SaveAndUse ), AsyncLoadMode( EAsyncLoadMode::UseCVar )
+FNetGUIDCache::FNetGUIDCache(UNetDriver* InDriver) 
+	: Driver(InDriver)
+	, NetworkChecksumMode(ENetworkChecksumMode::SaveAndUse)
+	, AsyncLoadMode(EAsyncLoadMode::UseCVar)
+	, IsExportingNetGUIDBunch(false)
+	, DelinquentAsyncLoads(GDelinquencyNumberOfTopOffendersToTrack > 0 ? GDelinquencyNumberOfTopOffendersToTrack : 0)
 {
 	UniqueNetIDs[0] = UniqueNetIDs[1] = 0;
 	UniqueNetFieldExportGroupPathIndex = 0;
@@ -2129,16 +2254,18 @@ public:
 
 void FNetGUIDCache::CleanReferences()
 {
+	const double Time = FPlatformTime::Seconds();
+
 	// Mark all static or non valid dynamic guids to timeout after NETWORK_GUID_TIMEOUT seconds
 	// We want to leave them around for a certain amount of time to allow in-flight references to these guids to continue to resolve
-	for ( auto It = ObjectLookup.CreateIterator(); It; ++It )
+	for (auto It = ObjectLookup.CreateIterator(); It; ++It)
 	{
-		if ( It.Value().ReadOnlyTimestamp != 0 )
+		if (It.Value().ReadOnlyTimestamp != 0)
 		{
 			// If this guid was suppose to time out, check to see if it has, otherwise ignore it
 			const double NETWORK_GUID_TIMEOUT = 90;
 
-			if ( FPlatformTime::Seconds() - It.Value().ReadOnlyTimestamp > NETWORK_GUID_TIMEOUT )
+			if (Time - It.Value().ReadOnlyTimestamp > NETWORK_GUID_TIMEOUT)
 			{
 				It.RemoveCurrent();
 			}
@@ -2146,16 +2273,16 @@ void FNetGUIDCache::CleanReferences()
 			continue;
 		}
 
-		if ( !It.Value().Object.IsValid() || It.Key().IsStatic() )
+		if (!It.Value().Object.IsValid())
 		{
 			// We will leave this guid around for NETWORK_GUID_TIMEOUT seconds to make sure any in-flight guids can be resolved
-			It.Value().ReadOnlyTimestamp = FPlatformTime::Seconds();
+			It.Value().ReadOnlyTimestamp = Time;
 		}
 	}
 
-	for ( auto It = NetGUIDLookup.CreateIterator(); It; ++It )
+	for (auto It = NetGUIDLookup.CreateIterator(); It; ++It)
 	{
-		if ( !It.Key().IsValid() || !ObjectLookup.Contains( It.Value() ) )
+		if (!It.Key().IsValid() || !ObjectLookup.Contains(It.Value()))
 		{
 			It.RemoveCurrent();
 		}
@@ -2163,19 +2290,19 @@ void FNetGUIDCache::CleanReferences()
 
 	// Sanity check
 	// (make sure look-ups are reciprocal)
-	for ( auto It = ObjectLookup.CreateIterator(); It; ++It )
+	for (auto It = ObjectLookup.CreateIterator(); It; ++It)
 	{
-		check( !It.Key().IsDefault() );
-		check( It.Key().IsStatic() != It.Key().IsDynamic() );
+		check(!It.Key().IsDefault());
+		check(It.Key().IsStatic() != It.Key().IsDynamic());
 
-		checkf( !It.Value().Object.IsValid() || NetGUIDLookup.FindRef( It.Value().Object ) == It.Key() || It.Value().ReadOnlyTimestamp != 0, TEXT( "Failed to validate ObjectLookup map in UPackageMap. Object '%s' was not in the NetGUIDLookup map with with value '%s'." ), *It.Value().Object.Get()->GetPathName(), *It.Key().ToString() );
+		checkf(!It.Value().Object.IsValid() || NetGUIDLookup.FindRef(It.Value().Object) == It.Key() || It.Value().ReadOnlyTimestamp != 0, TEXT("Failed to validate ObjectLookup map in UPackageMap. Object '%s' was not in the NetGUIDLookup map with with value '%s'." ), *It.Value().Object.Get()->GetPathName(), *It.Key().ToString());
 	}
 
 #if !UE_BUILD_SHIPPING || !UE_BUILD_TEST
-	for ( auto It = NetGUIDLookup.CreateIterator(); It; ++It )
+	for (auto It = NetGUIDLookup.CreateIterator(); It; ++It)
 	{
-		check( It.Key().IsValid() );
-		checkf( ObjectLookup.FindRef( It.Value() ).Object == It.Key(), TEXT("Failed to validate NetGUIDLookup map in UPackageMap. GUID '%s' was not in the ObjectLookup map with with object '%s'."), *It.Value().ToString(), *It.Key().Get()->GetPathName());
+		check(It.Key().IsValid());
+		checkf(ObjectLookup.FindRef(It.Value() ).Object == It.Key(), TEXT("Failed to validate NetGUIDLookup map in UPackageMap. GUID '%s' was not in the ObjectLookup map with with object '%s'."), *It.Value().ToString(), *It.Key().Get()->GetPathName());
 	}
 #endif
 
@@ -2184,7 +2311,7 @@ void FNetGUIDCache::CleanReferences()
 	ObjectLookup.CountBytes( CountBytesAr );
 	NetGUIDLookup.CountBytes( CountBytesAr );
 
-	UE_LOG( LogNetPackageMap, Log, TEXT( "FNetGUIDCache::CleanReferences: ObjectLookup: %i, NetGUIDLookup: %i, Mem: %i kB" ), ObjectLookup.Num(), NetGUIDLookup.Num(), ( CountBytesAr.Mem / 1024 ) );
+	UE_LOG(LogNetPackageMap, Log, TEXT("FNetGUIDCache::CleanReferences: ObjectLookup: %i, NetGUIDLookup: %i, Mem: %i kB"), ObjectLookup.Num(), NetGUIDLookup.Num(), (CountBytesAr.Mem / 1024));
 }
 
 bool FNetGUIDCache::SupportsObject( const UObject* Object, const TWeakObjectPtr<UObject>* WeakObjectPtr ) const
@@ -2244,34 +2371,48 @@ bool FNetGUIDCache::IsNetGUIDAuthority() const
 }
 
 /** Gets or assigns a new NetGUID to this object. Returns whether the object is fully mapped or not */
-FNetworkGUID FNetGUIDCache::GetOrAssignNetGUID( UObject* Object, const TWeakObjectPtr<UObject>* WeakObjectPtr)
+FNetworkGUID FNetGUIDCache::GetOrAssignNetGUID(UObject* Object, const TWeakObjectPtr<UObject>* WeakObjectPtr)
 {
 	// Construct WeakPtr once: either use the passed in one or create a new one.
-	const TWeakObjectPtr<UObject>& WeakObject = WeakObjectPtr ? *WeakObjectPtr : MakeWeakObjectPtr( const_cast<UObject*>( Object ) );
+	const TWeakObjectPtr<UObject>& WeakObject = WeakObjectPtr ? *WeakObjectPtr : MakeWeakObjectPtr(const_cast<UObject*>(Object));
 
-	if ( !Object || !SupportsObject( Object, &WeakObject ) )
+	if (!Object || !SupportsObject(Object, &WeakObject))
 	{
 		// Null of unsupported object, leave as default NetGUID and just return mapped=true
+		UE_LOG(LogNetPackageMap, Verbose, TEXT("GetOrAssignNetGUID: Object is not supported. Object %s"), *GetPathNameSafe(Object));
 		return FNetworkGUID();
 	}
 
 	// ----------------
 	// Assign NetGUID if necessary
-	// ----------------	
-	FNetworkGUID NetGUID = NetGUIDLookup.FindRef( WeakObject );
+	// ----------------
+	
+	const bool bIsNetGUIDAuthority = IsNetGUIDAuthority();
+	FNetworkGUID NetGUID = NetGUIDLookup.FindRef(WeakObject);
 
-	if ( NetGUID.IsValid() )
+	if (NetGUID.IsValid())
 	{
-		const FNetGuidCacheObject* CacheObject = ObjectLookup.Find( NetGUID );
+		FNetGuidCacheObject* CacheObject = ObjectLookup.Find(NetGUID);
 
 		// Check to see if this guid is read only
 		// If so, we should ignore this entry, and create a new one (or send default as client)
-		const bool bReadOnly = CacheObject != NULL && CacheObject->ReadOnlyTimestamp > 0;
+		const bool bReadOnly = CacheObject != nullptr && CacheObject->ReadOnlyTimestamp > 0;
 
-		if ( bReadOnly )
+		if (bReadOnly)
 		{
 			// Reset this object's guid, we will re-assign below (or send default as a client)
-			NetGUIDLookup.Remove( WeakObject );
+			UE_LOG(LogNetPackageMap, Warning, TEXT("GetOrAssignNetGUID: Attempt to reassign read-only guid. FullNetGUIDPath: %s"), *FullNetGUIDPath(NetGUID));
+
+			const bool bAllowClientRemap = !bIsNetGUIDAuthority && GbAllowClientRemapCacheObject;
+			if (bAllowClientRemap)
+			{
+				CacheObject->ReadOnlyTimestamp = 0;
+				return NetGUID;
+			}
+			else
+			{
+				NetGUIDLookup.Remove(WeakObject);
+			}
 		}
 		else
 		{
@@ -2279,15 +2420,16 @@ FNetworkGUID FNetGUIDCache::GetOrAssignNetGUID( UObject* Object, const TWeakObje
 		}
 	}
 
-	if ( !IsNetGUIDAuthority() )
+	if (!bIsNetGUIDAuthority)
 	{
 		// We cannot make or assign new NetGUIDs
 		// Generate a default GUID, which signifies we write the full path
 		// The server should detect this, and assign a full-time guid, and send that back to us
+		UE_LOG(LogNetPackageMap, Verbose, TEXT("GetOrAssignNetGUID: NetGUIDLookup did not contain object on client, returning default. Object %s"), *Object->GetPathName());
 		return FNetworkGUID::GetDefault();
 	}
 
-	return AssignNewNetGUID_Server( Object );
+	return AssignNewNetGUID_Server(Object);
 }
 
 FNetworkGUID FNetGUIDCache::GetNetGUID(const UObject* Object) const
@@ -2360,13 +2502,19 @@ void FNetGUIDCache::RegisterNetGUID_Internal( const FNetworkGUID& NetGUID, const
 		NetGUIDLookup.Add( CacheObject.Object, NetGUID );
 
 #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
-		History.Add( NetGUID, CacheObject.Object->GetPathName() );
+		if (IsHistoryEnabled())
+		{
+			History.Add(NetGUID, CacheObject.Object->GetPathName());
+		}
 #endif
 	}
 	else
 	{
 #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
-		History.Add( NetGUID, CacheObject.PathName.ToString() );
+		if (IsHistoryEnabled())
+		{
+			History.Add(NetGUID, CacheObject.PathName.ToString());
+		}
 #endif
 	}
 }
@@ -2588,48 +2736,106 @@ void FNetGUIDCache::RegisterNetGUIDFromPath_Server( const FNetworkGUID& NetGUID,
 	RegisterNetGUID_Internal( NetGUID, CacheObject );
 }
 
+void FNetGUIDCache::ValidateAsyncLoadingPackage(FNetGuidCacheObject& CacheObject, const FNetworkGUID NetGUID)
+{
+	// With level streaming support we may end up trying to load the same package with a different
+	// NetGUID during replay fast-forwarding. This is because if a package was unloaded, and later
+	// re-loaded, it will likely be assigned a new NetGUID (since the TWeakObjectPtr to the old package
+	// in the cache object would have gone stale). During replay fast-forward, it's possible
+	// to see the new NetGUID before the previous one has finished loading, so here we fix up
+	// PendingAsyncPackages to refer to the new NewGUID.
+	FPendingAsyncLoadRequest& PendingLoadRequest = PendingAsyncLoadRequests[CacheObject.PathName];
+	if (PendingLoadRequest.NetGUID != NetGUID)
+	{
+		UE_LOG(LogNetPackageMap, Log, TEXT("ValidateAsyncLoadingPackage: Already async loading package with a different NetGUID. Path: %s, original NetGUID: %s, new NetGUID: %s"),
+			*CacheObject.PathName.ToString(), *PendingLoadRequest.NetGUID.ToString(), *NetGUID.ToString());
+
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
+		PendingAsyncPackages[CacheObject.PathName] = NetGUID;
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
+
+		PendingLoadRequest.NetGUID = NetGUID;
+	}
+	else
+	{
+		UE_LOG(LogNetPackageMap, Log, TEXT("ValidateAsyncLoadingPackage: Already async loading package. Path: %s, NetGUID: %s"), *CacheObject.PathName.ToString(), *NetGUID.ToString());
+	}
+}
+
+void FNetGUIDCache::StartAsyncLoadingPackage(FNetGuidCacheObject& CacheObject, const FNetworkGUID NetGUID, const bool bWasAlreadyAsyncLoading)
+{
+	// Something else is already async loading this package, calling load again will add our callback to the existing load request
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
+	PendingAsyncPackages.Add(CacheObject.PathName, NetGUID);
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
+
+	PendingAsyncLoadRequests.Emplace(CacheObject.PathName, FPendingAsyncLoadRequest(NetGUID, Driver->Time));
+
+	DelinquentAsyncLoads.MaxConcurrentAsyncLoads = FMath::Max<uint32>(DelinquentAsyncLoads.MaxConcurrentAsyncLoads, PendingAsyncLoadRequests.Num());
+
+	CacheObject.bIsPending = true;
+	LoadPackageAsync(CacheObject.PathName.ToString(), FLoadPackageAsyncDelegate::CreateRaw(this, &FNetGUIDCache::AsyncPackageCallback));
+}
+
 void FNetGUIDCache::AsyncPackageCallback(const FName& PackageName, UPackage * Package, EAsyncLoadingResult::Type Result)
 {
-	check( Package == NULL || Package->IsFullyLoaded() );
+	check(Package == nullptr || Package->IsFullyLoaded());
 
-	FNetworkGUID NetGUID = PendingAsyncPackages.FindRef(PackageName);
-	
-	PendingAsyncPackages.Remove(PackageName);
-
-	if ( !NetGUID.IsValid() )
+	if (FPendingAsyncLoadRequest const * const PendingLoadRequest = PendingAsyncLoadRequests.Find(PackageName))
 	{
-		UE_LOG( LogNetPackageMap, Error, TEXT( "AsyncPackageCallback: Could not find package. Path: %s" ), *PackageName.ToString() );
-		return;
-	}
+		const bool bIsBroken = (Package == nullptr);
 
-	FNetGuidCacheObject * CacheObject = ObjectLookup.Find( NetGUID );
-
-	if ( CacheObject == NULL )
-	{
-		UE_LOG( LogNetPackageMap, Error, TEXT( "AsyncPackageCallback: Could not find net guid. Path: %s, NetGUID: %s" ), *PackageName.ToString(), *NetGUID.ToString() );
-		return;
-	}
-
-	if ( !CacheObject->bIsPending )
-	{
-		UE_LOG( LogNetPackageMap, Error, TEXT( "AsyncPackageCallback: Package wasn't pending. Path: %s, NetGUID: %s" ), *PackageName.ToString(), *NetGUID.ToString() );
-	}
-
-	CacheObject->bIsPending = false;
-	
-	if ( Package == NULL )
-	{
-		CacheObject->bIsBroken = true;
-		UE_LOG( LogNetPackageMap, Error, TEXT( "AsyncPackageCallback: Package FAILED to load. Path: %s, NetGUID: %s" ), *PackageName.ToString(), *NetGUID.ToString() );
-	}
-
-	if (CacheObject->Object.IsValid() && CacheObject->Object->GetWorld())
-	{
-		AGameStateBase* GS = CacheObject->Object->GetWorld()->GetGameState();
-		if (GS)
+		if (FNetGuidCacheObject* CacheObject = ObjectLookup.Find(PendingLoadRequest->NetGUID))
 		{
-			GS->AsyncPackageLoaded(CacheObject->Object.Get());
+			if (!CacheObject->bIsPending)
+			{
+				UE_LOG(LogNetPackageMap, Error, TEXT("AsyncPackageCallback: Package wasn't pending. Path: %s, NetGUID: %s"), *PackageName.ToString(), *PendingLoadRequest->NetGUID.ToString());
+			}
+
+			CacheObject->bIsPending = false;
+
+			if (bIsBroken)
+			{
+				CacheObject->bIsBroken = true;
+				UE_LOG(LogNetPackageMap, Error, TEXT("AsyncPackageCallback: Package FAILED to load. Path: %s, NetGUID: %s"), *PackageName.ToString(), *PendingLoadRequest->NetGUID.ToString());
+			}
+
+			if (UObject* Object = CacheObject->Object.Get())
+			{
+				UpdateQueuedBunchObjectReference(PendingLoadRequest->NetGUID, Object);
+
+				if (UWorld* World = Object->GetWorld())
+				{
+					if (AGameStateBase* GS = World->GetGameState())
+					{
+						GS->AsyncPackageLoaded(Object);
+					}
+				}
+			}
 		}
+		else
+		{
+			UE_LOG(LogNetPackageMap, Error, TEXT("AsyncPackageCallback: Could not find net guid. Path: %s, NetGUID: %s"), *PackageName.ToString(), *PendingLoadRequest->NetGUID.ToString());
+		}
+
+		// This won't be the exact amount of time that we spent loading the package, but should
+		// give us a close enough estimate (within a frame time).
+		const float LoadTime = (Driver->Time - PendingLoadRequest->RequestStartTime);
+		if (GGuidCacheTrackAsyncLoadingGUIDTreshold > 0.f &&
+			LoadTime >= GGuidCacheTrackAsyncLoadingGUIDTreshold)
+		{
+			DelinquentAsyncLoads.DelinquentAsyncLoads.Emplace(PackageName, LoadTime);
+		}
+
+		PendingAsyncLoadRequests.Remove(PackageName);
+
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
+		PendingAsyncPackages.Remove(PackageName);
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
+	}
+	else
+	{
+		UE_LOG(LogNetPackageMap, Error, TEXT( "AsyncPackageCallback: Could not find package. Path: %s" ), *PackageName.ToString());
 	}
 }
 
@@ -2758,10 +2964,11 @@ UObject* FNetGUIDCache::GetObjectFromNetGUID( const FNetworkGUID& NetGUID, const
 
 	// Assume this is a package if the outer is invalid and this is a static guid
 	const bool bIsPackage = NetGUID.IsStatic() && !CacheObjectPtr->OuterGUID.IsValid();
+	const bool bIsNetGUIDAuthority = IsNetGUIDAuthority();
 
 	if ( Object == NULL && !CacheObjectPtr->bNoLoad )
 	{
-		if (IsNetGUIDAuthority())
+		if (bIsNetGUIDAuthority)
 		{
 			// Log when the server needs to re-load an object, it's probably due to a GC after initially loading as default guid
 			UE_LOG(LogNetPackageMap, Warning, TEXT("GetObjectFromNetGUID: Server re-loading object (might have been GC'd). FullNetGUIDPath: %s"), *FullNetGUIDPath(NetGUID));
@@ -2777,32 +2984,14 @@ UObject* FNetGUIDCache::GetObjectFromNetGUID( const FNetworkGUID& NetGUID, const
 
 			if ( ShouldAsyncLoad() )
 			{
-				if (!PendingAsyncPackages.Contains(CacheObjectPtr->PathName))
+				if (!PendingAsyncLoadRequests.Contains(CacheObjectPtr->PathName))
 				{
-					PendingAsyncPackages.Add(CacheObjectPtr->PathName, NetGUID);
-					CacheObjectPtr->bIsPending = true;
-					LoadPackageAsync(CacheObjectPtr->PathName.ToString(), FLoadPackageAsyncDelegate::CreateRaw(this, &FNetGUIDCache::AsyncPackageCallback));
-
+					StartAsyncLoadingPackage(*CacheObjectPtr, NetGUID, false);
 					UE_LOG(LogNetPackageMap, Log, TEXT("GetObjectFromNetGUID: Async loading package. Path: %s, NetGUID: %s"), *CacheObjectPtr->PathName.ToString(), *NetGUID.ToString());
 				}
 				else
 				{
-					// With level streaming support we may end up trying to load the same package with a different
-					// NetGUID during replay fast-forwarding. This is because if a package was unloaded, and later
-					// re-loaded, it will likely be assigned a new NetGUID (since the TWeakObjectPtr to the old package
-					// in the cache object would have gone stale). During replay fast-forward, it's possible
-					// to see the new NetGUID before the previous one has finished loading, so here we fix up
-					// PendingAsyncPackages to refer to the new NewGUID.
-					const FNetworkGUID ExistingNetGUID = PendingAsyncPackages[CacheObjectPtr->PathName];
-					if (ExistingNetGUID != NetGUID)
-					{
-						UE_LOG(LogNetPackageMap, Log, TEXT("GetObjectFromNetGUID: Already async loading package with a different NetGUID. Path: %s, original NetGUID: %s, new NetGUID: %s"), *CacheObjectPtr->PathName.ToString(), *ExistingNetGUID.ToString(), *NetGUID.ToString());
-						PendingAsyncPackages[CacheObjectPtr->PathName] = NetGUID;
-					}
-					else
-					{
-						UE_LOG(LogNetPackageMap, Log, TEXT("GetObjectFromNetGUID: Already async loading package. Path: %s, NetGUID: %s"), *CacheObjectPtr->PathName.ToString(), *NetGUID.ToString());
-					}
+					ValidateAsyncLoadingPackage(*CacheObjectPtr, NetGUID);
 				}
 
 				// There is nothing else to do except wait on the delegate to tell us this package is done loading
@@ -2858,10 +3047,7 @@ UObject* FNetGUIDCache::GetObjectFromNetGUID( const FNetworkGUID& NetGUID, const
 			if (ShouldAsyncLoad() && Package->HasAnyInternalFlags(EInternalObjectFlags::AsyncLoading))
 			{
 				// Something else is already async loading this package, calling load again will add our callback to the existing load request
-				PendingAsyncPackages.Add(CacheObjectPtr->PathName, NetGUID);
-				CacheObjectPtr->bIsPending = true;
-				LoadPackageAsync(CacheObjectPtr->PathName.ToString(), FLoadPackageAsyncDelegate::CreateRaw(this, &FNetGUIDCache::AsyncPackageCallback));
-
+				StartAsyncLoadingPackage(*CacheObjectPtr, NetGUID, true);
 				UE_LOG(LogNetPackageMap, Log, TEXT("GetObjectFromNetGUID: Listening to existing async load. Path: %s, NetGUID: %s"), *CacheObjectPtr->PathName.ToString(), *NetGUID.ToString());
 			}
 			else
@@ -2909,15 +3095,26 @@ UObject* FNetGUIDCache::GetObjectFromNetGUID( const FNetworkGUID& NetGUID, const
 	// Assign the guid to the object 
 	// We don't want to assign this guid to the object if this guid is timing out
 	// But we'll have to if there is no other guid yet
-	if ( CacheObjectPtr->ReadOnlyTimestamp == 0 || !NetGUIDLookup.Contains( Object ) )
+	const bool bAllowClientRemap = !bIsNetGUIDAuthority && GbAllowClientRemapCacheObject;
+	const bool bIsNotReadOnlyOrAllowRemap = (CacheObjectPtr->ReadOnlyTimestamp == 0 || bAllowClientRemap);
+
+	if (bIsNotReadOnlyOrAllowRemap || !NetGUIDLookup.Contains(Object))
 	{
-		if ( CacheObjectPtr->ReadOnlyTimestamp > 0 )
+		if (CacheObjectPtr->ReadOnlyTimestamp > 0)
 		{
 			UE_LOG( LogNetPackageMap, Warning, TEXT( "GetObjectFromNetGUID: Attempt to reassign read-only guid. FullNetGUIDPath: %s" ), *FullNetGUIDPath( NetGUID ) );
+
+			if (bAllowClientRemap)
+			{
+				CacheObjectPtr->ReadOnlyTimestamp = 0;
+			}
 		}
 
 		NetGUIDLookup.Add( Object, NetGUID );
 	}
+
+	// Update our QueuedObjectReference if one exists.
+	UpdateQueuedBunchObjectReference(NetGUID, Object);
 
 	return Object;
 }
@@ -2982,106 +3179,56 @@ bool FNetGUIDCache::IsGUIDRegistered( const FNetworkGUID& NetGUID ) const
 	return ObjectLookup.Contains( NetGUID );
 }
 
-bool FNetGUIDCache::IsGUIDLoaded( const FNetworkGUID& NetGUID ) const
+FNetGuidCacheObject const * const FNetGUIDCache::GetCacheObject(const FNetworkGUID& NetGUID) const
 {
-	if ( !NetGUID.IsValid() )
-	{
-		return false;
-	}
-
-	if ( NetGUID.IsDefault() )
-	{
-		return false;
-	}
-
-	const FNetGuidCacheObject* CacheObjectPtr = ObjectLookup.Find( NetGUID );
-
-	if ( CacheObjectPtr == NULL )
-	{
-		return false;
-	}
-
-	return CacheObjectPtr->Object != NULL;
+	return (!NetGUID.IsValid() || NetGUID.IsDefault()) ? nullptr : ObjectLookup.Find(NetGUID);
 }
 
-bool FNetGUIDCache::IsGUIDBroken( const FNetworkGUID& NetGUID, const bool bMustBeRegistered ) const
+bool FNetGUIDCache::IsGUIDLoaded(const FNetworkGUID& NetGUID) const
 {
-	if ( !NetGUID.IsValid() )
-	{
-		return false;
-	}
-
-	if ( NetGUID.IsDefault() )
-	{
-		return false;
-	}
-
-	const FNetGuidCacheObject* CacheObjectPtr = ObjectLookup.Find( NetGUID );
-
-	if ( CacheObjectPtr == NULL )
-	{
-		return bMustBeRegistered;
-	}
-
-	return CacheObjectPtr->bIsBroken;
+	FNetGuidCacheObject const * const CacheObjectPtr = GetCacheObject(NetGUID);
+	return CacheObjectPtr && CacheObjectPtr->Object != nullptr;
 }
 
-bool FNetGUIDCache::IsGUIDNoLoad( const FNetworkGUID& NetGUID ) const
+bool FNetGUIDCache::IsGUIDBroken(const FNetworkGUID& NetGUID, const bool bMustBeRegistered) const
 {
-	if ( !NetGUID.IsValid() )
+	if (!NetGUID.IsValid())
 	{
 		return false;
 	}
 
-	if ( NetGUID.IsDefault() )
+	if (NetGUID.IsDefault())
 	{
 		return false;
 	}
 
-	const FNetGuidCacheObject* const CacheObjectPtr = ObjectLookup.Find( NetGUID );
-
-	if ( CacheObjectPtr == nullptr )
+	if (FNetGuidCacheObject const * const CacheObjectPtr = ObjectLookup.Find(NetGUID))
 	{
-		return false;
+		return CacheObjectPtr->bIsBroken;
 	}
 
-	return CacheObjectPtr->bNoLoad;
+	return bMustBeRegistered;
 }
 
-bool FNetGUIDCache::IsGUIDPending( const FNetworkGUID& NetGUID ) const
+bool FNetGUIDCache::IsGUIDNoLoad(const FNetworkGUID& NetGUID) const
 {
-	if ( !NetGUID.IsValid() )
-	{
-		return false;
-	}
+	FNetGuidCacheObject const * const CacheObjectPtr = GetCacheObject(NetGUID);
+	return CacheObjectPtr && CacheObjectPtr->bNoLoad;
+}
 
-	if ( NetGUID.IsDefault() )
-	{
-		return false;
-	}
-
-	const FNetGuidCacheObject* const CacheObjectPtr = ObjectLookup.Find( NetGUID );
-
-	if ( CacheObjectPtr == nullptr )
-	{
-		return false;
-	}
-
-	return CacheObjectPtr->bIsPending;
+bool FNetGUIDCache::IsGUIDPending(const FNetworkGUID& NetGUID) const
+{
+	FNetGuidCacheObject const * const CacheObjectPtr = GetCacheObject(NetGUID);
+	return CacheObjectPtr && CacheObjectPtr->bIsPending;
 }
 
 FNetworkGUID FNetGUIDCache::GetOuterNetGUID( const FNetworkGUID& NetGUID ) const
 {
 	FNetworkGUID OuterGUID;
 
-	if ( NetGUID.IsValid() && !NetGUID.IsDefault() )
+	if (FNetGuidCacheObject const * const CacheObjectPtr = GetCacheObject(NetGUID))
 	{
-		const FNetGuidCacheObject* const CacheObjectPtr = ObjectLookup.Find( NetGUID );
-
-		if ( CacheObjectPtr != nullptr)
-		{
-			OuterGUID = CacheObjectPtr->OuterGUID;
-		}
+		OuterGUID = CacheObjectPtr->OuterGUID;
 	}
 
 	return OuterGUID;
@@ -3195,6 +3342,20 @@ void FNetGUIDCache::ResetCacheForDemo()
 	NetFieldExportGroupPathToIndex.Reset();
 }
 
+#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+static int32 bIsNetGuidCacheHistoryEnabled = 0;
+static FAutoConsoleVariableRef CVarIsNetGuidCacheHistoryEnabled(
+	TEXT("Net.NetGuidCacheHistoryEnabled"),
+	bIsNetGuidCacheHistoryEnabled,
+	TEXT("When enabled, allows logging of NetGUIDCache History. Warning, this can eat up a lot of memory, and won't free itself until the Cache is destroyed.")
+);
+
+const bool FNetGUIDCache::IsHistoryEnabled()
+{
+	return !!bIsNetGuidCacheHistoryEnabled;
+}
+#endif
+
 void FNetGUIDCache::CountBytes(FArchive& Ar) const
 {
 	GRANULAR_NETWORK_MEMORY_TRACKING_INIT(Ar, "FNetGuidCache::CountBytes");
@@ -3211,7 +3372,10 @@ void FNetGUIDCache::CountBytes(FArchive& Ar) const
 		}
 	);
 
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
 	GRANULAR_NETWORK_MEMORY_TRACKING_TRACK("PendingAsyncPackages", PendingAsyncPackages.CountBytes(Ar));
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
+
 	GRANULAR_NETWORK_MEMORY_TRACKING_TRACK("NetFieldExportGroupMap",
 		NetFieldExportGroupMap.CountBytes(Ar);
 
@@ -3247,6 +3411,20 @@ void FNetGUIDCache::CountBytes(FArchive& Ar) const
 		}
 	);
 #endif
+
+	GRANULAR_NETWORK_MEMORY_TRACKING_TRACK("DelinquentAsyncLoads", DelinquentAsyncLoads.CountBytes(Ar));
+
+	GRANULAR_NETWORK_MEMORY_TRACKING_TRACK("QueuedBunchObjectReferences",
+
+		QueuedBunchObjectReferences.CountBytes(Ar);
+		for (const auto& QueuedBunchObjectReferencePair : QueuedBunchObjectReferences)
+		{
+			if (QueuedBunchObjectReferencePair.Value.IsValid())
+			{
+				Ar.CountBytes(sizeof(FQueuedBunchObjectReference), sizeof(FQueuedBunchObjectReference));
+			}
+		}
+	);
 }
 
 void FNetFieldExport::CountBytes(FArchive& Ar) const
@@ -3272,6 +3450,98 @@ void FPackageMapAckState::CountBytes(FArchive& Ar) const
 	NetGUIDAckStatus.CountBytes(Ar);
 	NetFieldExportGroupPathAcked.CountBytes(Ar);
 	NetFieldExportAcked.CountBytes(Ar);
+}
+
+void FNetGUIDCache::ConsumeAsyncLoadDelinquencyAnalytics(FNetAsyncLoadDelinquencyAnalytics& Out)
+{
+	Out = MoveTemp(DelinquentAsyncLoads);
+	DelinquentAsyncLoads.MaxConcurrentAsyncLoads = PendingAsyncLoadRequests.Num();
+}
+
+const FNetAsyncLoadDelinquencyAnalytics& FNetGUIDCache::GetAsyncLoadDelinquencyAnalytics() const
+{
+	return DelinquentAsyncLoads;
+}
+
+void FNetGUIDCache::ResetAsyncLoadDelinquencyAnalytics()
+{
+	DelinquentAsyncLoads.Reset();
+}
+
+void UPackageMapClient::ConsumeQueuedActorDelinquencyAnalytics(FNetQueuedActorDelinquencyAnalytics& Out)
+{
+	Out = MoveTemp(DelinquentQueuedActors);
+	DelinquentQueuedActors.MaxConcurrentQueuedActors = CurrentQueuedBunchNetGUIDs.Num();
+}
+
+const FNetQueuedActorDelinquencyAnalytics& UPackageMapClient::GetQueuedActorDelinquencyAnalytics() const
+{
+	return DelinquentQueuedActors;
+}
+
+void UPackageMapClient::ResetQueuedActorDelinquencyAnalytics()
+{
+	DelinquentQueuedActors.Reset();
+}
+
+void FNetGUIDCache::CollectReferences(class FReferenceCollector& ReferenceCollector)
+{
+	for (auto It = QueuedBunchObjectReferences.CreateIterator(); It; ++It)
+	{
+		TSharedPtr<FQueuedBunchObjectReference> SharedQueuedObjectReference = It.Value().Pin();
+		FQueuedBunchObjectReference* ObjectRefPtr = SharedQueuedObjectReference.Get();
+		if (ObjectRefPtr)
+		{
+			// Don't bother adding the reference if we don't have an object.
+			if (ObjectRefPtr->Object)
+			{
+				// AddReferencedObject will set our reference to nullptr if the object is pending kill.
+				ReferenceCollector.AddReferencedObject(ObjectRefPtr->Object, Driver);
+
+				if (!ObjectRefPtr->Object)
+				{
+					UE_LOG(LogNetPackageMap, Warning, TEXT("FNetGUIDCache::CollectReferences: QueuedBunchObjectReference was killed by GC. NetGUID=%s"), *It.Key().ToString());
+				}
+			}
+		}
+		else
+		{
+			// If our weak pointer doesn't resolve, we're clearly the last referencer.
+			// No need to keep it around.
+			It.RemoveCurrent();
+		}
+	}
+
+	QueuedBunchObjectReferences.Compact();
+}
+
+TSharedRef<FQueuedBunchObjectReference> FNetGUIDCache::TrackQueuedBunchObjectReference(const FNetworkGUID InNetGUID, UObject* InObject)
+{
+	if (TWeakPtr<FQueuedBunchObjectReference>* ExistingRef = QueuedBunchObjectReferences.Find(InNetGUID))
+	{
+		TSharedPtr<FQueuedBunchObjectReference> ExistingRefShared = ExistingRef->Pin();
+		if (ExistingRefShared.IsValid())
+		{
+			return ExistingRefShared.ToSharedRef();
+		}
+	}
+
+	// Using MakeShareable instead of MakeShared to allow private constructor.
+	TSharedRef<FQueuedBunchObjectReference> NewRef = MakeShareable<FQueuedBunchObjectReference>(new FQueuedBunchObjectReference(InNetGUID, InObject));
+	QueuedBunchObjectReferences.Add(InNetGUID, NewRef);
+	return NewRef;
+}
+
+void FNetGUIDCache::UpdateQueuedBunchObjectReference(const FNetworkGUID NetGUID, UObject* NewObject)
+{
+	if (TWeakPtr<FQueuedBunchObjectReference>* WeakObjectReference = QueuedBunchObjectReferences.Find(NetGUID))
+	{
+		TSharedPtr<FQueuedBunchObjectReference> SharedObjectReference = WeakObjectReference->Pin();
+		if (FQueuedBunchObjectReference* ObjectReference = SharedObjectReference.Get())
+		{
+			ObjectReference->Object = NewObject;
+		}
+	}
 }
 
 //------------------------------------------------------

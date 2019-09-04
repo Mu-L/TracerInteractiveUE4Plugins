@@ -15,6 +15,13 @@ DECLARE_CYCLE_STAT_EXTERN(TEXT("StartRecording"), STAT_VideoRecordingSystem_Star
 DECLARE_CYCLE_STAT_EXTERN(TEXT("PauseRecording"), STAT_VideoRecordingSystem_PauseRecording, STATGROUP_VideoRecordingSystem, );
 DECLARE_CYCLE_STAT_EXTERN(TEXT("FinalizeRecording"), STAT_VideoRecordingSystem_FinalizeRecording, STATGROUP_VideoRecordingSystem, );
 
+#define DEFINE_VIDEOSYSTEMRECORDING_STATS \
+	DEFINE_STAT(STAT_VideoRecordingSystem_EnableRecording); \
+	DEFINE_STAT(STAT_VideoRecordingSystem_NewRecording); \
+	DEFINE_STAT(STAT_VideoRecordingSystem_StartRecording); \
+	DEFINE_STAT(STAT_VideoRecordingSystem_PauseRecording); \
+	DEFINE_STAT(STAT_VideoRecordingSystem_FinalizeRecording);
+
 class Error;
 
 /** Represents the state of the video recorder */
@@ -117,8 +124,16 @@ public:
 	/** Returns the current state of video recording. */
 	virtual EVideoRecordingState GetRecordingState() const = 0;
 
+	UE_DEPRECATED(4.23, "Use GetOnVideoRecordingFinalizedDelegate")
 	virtual FDelegateHandle RegisterVideoRecordingFinalizedDelegate(const FVideoRecordingFinalized::FDelegate& Delegate) { return OnVideoRecordingFinalized.Add(Delegate); };
+
+	UE_DEPRECATED(4.23, "Use GetOnVideoRecordingFinalizedDelegate")
 	virtual void UnregisterVideoRecordingFinalizedDelegate(FDelegateHandle Handle) { OnVideoRecordingFinalized.Remove(Handle); };
+
+	FVideoRecordingFinalized& GetOnVideoRecordingFinalizedDelegate()
+	{
+		return OnVideoRecordingFinalized;
+	}
 
 protected:
 	FVideoRecordingFinalized OnVideoRecordingFinalized;

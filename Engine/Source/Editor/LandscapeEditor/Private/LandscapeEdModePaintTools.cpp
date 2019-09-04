@@ -13,11 +13,11 @@
 #include "LandscapeEdit.h"
 #include "LandscapeDataAccess.h"
 #include "LandscapeEdModeTools.h"
-#include "Settings/EditorExperimentalSettings.h"
 #include "Landscape.h"
 #include "Logging/TokenizedMessage.h"
 #include "Logging/MessageLog.h"
 #include "Misc/MapErrors.h"
+#include "EngineModule.h"
 
 #define LOCTEXT_NAMESPACE "LandscapeTools"
 
@@ -57,62 +57,6 @@ public:
 	virtual ELandscapeToolTargetTypeMask::Type GetSupportedTargetTypes() override
 	{
 		return ELandscapeToolTargetTypeMask::FromType(TToolTarget::TargetType);
-	}
-
-	virtual void Tick(FEditorViewportClient* ViewportClient, float DeltaTime) override
-	{
-		FLandscapeToolBase<TStrokeClass>::Tick(ViewportClient, DeltaTime);
-
-		if (GetMutableDefault<UEditorExperimentalSettings>()->bProceduralLandscape && this->IsToolActive())
-		{
-			ALandscape* Landscape = this->EdMode->CurrentToolTarget.LandscapeInfo->LandscapeActor.Get();
-			if (Landscape != nullptr)
-			{
-				Landscape->RequestProceduralContentUpdate(this->EdMode->CurrentToolTarget.TargetType == ELandscapeToolTargetType::Type::Heightmap ? EProceduralContentUpdateFlag::Heightmap_Render : EProceduralContentUpdateFlag::Weightmap_Render);
-			}
-		}
-	}
-
-	virtual bool BeginTool(FEditorViewportClient* ViewportClient, const FLandscapeToolTarget& InTarget, const FVector& InHitLocation) override
-	{
-		if (GetMutableDefault<UEditorExperimentalSettings>()->bProceduralLandscape)
-		{
-			ALandscape* Landscape = this->EdMode->CurrentToolTarget.LandscapeInfo->LandscapeActor.Get();
-			if (Landscape != nullptr)
-			{
-				Landscape->RequestProceduralContentUpdate(this->EdMode->CurrentToolTarget.TargetType == ELandscapeToolTargetType::Type::Heightmap ? EProceduralContentUpdateFlag::Heightmap_Render : EProceduralContentUpdateFlag::Weightmap_Render);
-			}
-
-			this->EdMode->ChangeHeightmapsToCurrentProceduralLayerHeightmaps(false);
-		}
-
-		return FLandscapeToolBase<TStrokeClass>::BeginTool(ViewportClient, InTarget, InHitLocation);
-	}
-
-	virtual void EndTool(FEditorViewportClient* ViewportClient) override
-	{
-		if (GetMutableDefault<UEditorExperimentalSettings>()->bProceduralLandscape)
-		{
-			if (this->EdMode->CurrentToolTarget.TargetType == ELandscapeToolTargetType::Type::Heightmap)
-			{
-				this->EdMode->ChangeHeightmapsToCurrentProceduralLayerHeightmaps(true);
-
-				if (this->EdMode->CurrentToolTarget.LandscapeInfo->LandscapeActor.IsValid())
-				{
-					this->EdMode->CurrentToolTarget.LandscapeInfo->LandscapeActor->RequestProceduralContentUpdate(EProceduralContentUpdateFlag::Heightmap_All);
-				}
-			}
-			else
-			{
-				// TODO: Activate/Deactivate weightmap layers
-				if (this->EdMode->CurrentToolTarget.LandscapeInfo->LandscapeActor.IsValid())
-				{
-					this->EdMode->CurrentToolTarget.LandscapeInfo->LandscapeActor->RequestProceduralContentUpdate(EProceduralContentUpdateFlag::Weightmap_All);
-				}
-			}
-		}
-
-		FLandscapeToolBase<TStrokeClass>::EndTool(ViewportClient);
 	}
 };
 
@@ -217,9 +161,10 @@ public:
 		// Tablet pressure
 		float Pressure = ViewportClient->Viewport->IsPenActive() ? ViewportClient->Viewport->GetTabletPressure() : 1.0f;
 
-		this->Cache.CacheData(X1, Y1, X2, Y2);
+		const bool bUseWeightTargetValue = UISettings->bUseWeightTargetValue;
+		const bool bCacheOriginalData = !bUseWeightTargetValue;
 
-		bool bUseWeightTargetValue = UISettings->bUseWeightTargetValue;
+		this->Cache.CacheData(X1, Y1, X2, Y2, bCacheOriginalData);
 
 		// The data we'll be writing to
 		TArray<ToolTarget::CacheClass::DataType> Data;
@@ -311,16 +256,18 @@ public:
 			}
 		}
 
-		ALandscape* Landscape = LandscapeInfo->LandscapeActor.Get();
-
-		if (Landscape != nullptr && Landscape->HasProceduralContent && !GetMutableDefault<UEditorExperimentalSettings>()->bProceduralLandscape)
-		{
-			FMessageLog("MapCheck").Warning()->AddToken(FTextToken::Create(LOCTEXT("LandscapeProcedural_ChangingDataWithoutSettings", "This map contains landscape procedural content, modifying the landscape data will result in data loss when the map is reopened with Landscape Procedural settings on. Please enable Landscape Procedural settings before modifying the data.")));
-			FMessageLog("MapCheck").Open(EMessageSeverity::Warning);
-		}
-
 		this->Cache.SetCachedData(X1, Y1, X2, Y2, Data, UISettings->PaintingRestriction);
 		this->Cache.Flush();
+		
+		ALandscape* Landscape = LandscapeInfo->LandscapeActor.Get();
+
+		// If we render to a runtime virtual texture then we need to flush here
+		if (Landscape != nullptr && Landscape->RuntimeVirtualTextures.Num() > 0)
+		{
+			//todo[vt]: Only flush Bounds 
+			//todo[vt]: Only flush specific virtual textures
+			GetRendererModule().FlushVirtualTextureCache();
+		}
 	}
 };
 
@@ -343,6 +290,81 @@ public:
 		}
 
 		FLandscapeToolPaintBase::EnterTool();
+	}
+};
+
+class FLandscapeToolStrokeErase : public FLandscapeToolStrokePaintBase<FHeightmapToolTarget>
+{
+	typedef FHeightmapToolTarget ToolTarget;
+	const typename ToolTarget::CacheClass::DataType FlattenHeight;
+
+public:
+	// Heightmap sculpt tool will continuously sculpt in the same location, weightmap paint tool doesn't
+	enum { UseContinuousApply = true };
+
+	FLandscapeToolStrokeErase(FEdModeLandscape* InEdMode, FEditorViewportClient* InViewportClient, const FLandscapeToolTarget& InTarget)
+		: FLandscapeToolStrokePaintBase<FHeightmapToolTarget>(InEdMode, InViewportClient, InTarget)
+		, FlattenHeight(LandscapeDataAccess::GetTexHeight(0.f))
+	{
+	}
+
+	void Apply(FEditorViewportClient* ViewportClient, FLandscapeBrush* Brush, const ULandscapeEditorObject* UISettings, const TArray<FLandscapeToolInteractorPosition>& InteractorPositions)
+	{
+		if (!this->LandscapeInfo) return;
+
+		// Get list of verts to update
+		FLandscapeBrushData BrushInfo = Brush->ApplyBrush(InteractorPositions);
+		if (!BrushInfo)
+		{
+			return;
+		}
+
+		int32 X1, Y1, X2, Y2;
+		BrushInfo.GetInclusiveBounds(X1, Y1, X2, Y2);
+
+		// Tablet pressure
+		float Pressure = ViewportClient->Viewport->IsPenActive() ? ViewportClient->Viewport->GetTabletPressure() : 1.0f;
+
+		// expand the area by one vertex in each direction to ensure normals are calculated correctly
+		X1 -= 1;
+		Y1 -= 1;
+		X2 += 1;
+		Y2 += 1;
+		
+		this->Cache.CacheData(X1, Y1, X2, Y2);
+
+		TArray<typename ToolTarget::CacheClass::DataType> Data;
+		this->Cache.GetCachedData(X1, Y1, X2, Y2, Data);
+
+		// Apply the brush
+		for (int32 Y = BrushInfo.GetBounds().Min.Y; Y < BrushInfo.GetBounds().Max.Y; Y++)
+		{
+			const float* BrushScanline = BrushInfo.GetDataPtr(FIntPoint(0, Y));
+			auto* DataScanline = Data.GetData() + (Y - Y1) * (X2 - X1 + 1) + (0 - X1);
+
+			for (int32 X = BrushInfo.GetBounds().Min.X; X < BrushInfo.GetBounds().Max.X; X++)
+			{
+				const float BrushValue = BrushScanline[X];
+
+				if (BrushValue > 0.0f)
+				{
+					float Strength = FMath::Clamp<float>(BrushValue * UISettings->ToolStrength * Pressure, 0.0f, 1.0f);
+
+					int32 Delta = DataScanline[X] - FlattenHeight;
+					if (Delta > 0)
+					{
+						DataScanline[X] = FMath::FloorToInt(FMath::Lerp((float)DataScanline[X], (float)FlattenHeight, Strength));
+					}
+					else
+					{
+						DataScanline[X] = FMath::CeilToInt(FMath::Lerp((float)DataScanline[X], (float)FlattenHeight, Strength));
+					}
+				}
+			}
+		}
+
+		this->Cache.SetCachedData(X1, Y1, X2, Y2, Data, UISettings->PaintingRestriction);
+		this->Cache.Flush();
 	}
 };
 
@@ -554,14 +576,6 @@ public:
 			}
 		}
 
-		ALandscape* Landscape = LandscapeInfo->LandscapeActor.Get();
-
-		if (Landscape != nullptr && Landscape->HasProceduralContent && !GetMutableDefault<UEditorExperimentalSettings>()->bProceduralLandscape)
-		{
-			FMessageLog("MapCheck").Warning()->AddToken(FTextToken::Create(LOCTEXT("LandscapeProcedural_ChangingDataWithoutSettings", "This map contains landscape procedural content, modifying the landscape data will result in data loss when the map is reopened with Landscape Procedural settings on. Please enable Landscape Procedural settings before modifying the data.")));
-			FMessageLog("MapCheck").Open(EMessageSeverity::Warning);
-		}
-
 		this->Cache.SetCachedData(X1, Y1, X2, Y2, Data);
 		this->Cache.Flush();
 	}
@@ -579,6 +593,18 @@ public:
 	virtual FText GetDisplayName() override { return NSLOCTEXT("UnrealEd", "LandscapeMode_Sculpt", "Sculpt"); };
 };
 
+class FLandscapeToolErase : public FLandscapeToolPaintBase<FHeightmapToolTarget, FLandscapeToolStrokeErase>
+{
+public:
+	FLandscapeToolErase(FEdModeLandscape* InEdMode)
+		: FLandscapeToolPaintBase<FHeightmapToolTarget, FLandscapeToolStrokeErase>(InEdMode)
+	{
+	}
+
+	virtual const TCHAR* GetToolName() override { return TEXT("Erase"); }
+	virtual FText GetDisplayName() override { return NSLOCTEXT("UnrealEd", "LandscapeMode_Erase", "Erase"); };
+};
+
 // 
 // FLandscapeToolSmooth
 //
@@ -586,15 +612,22 @@ public:
 template<class ToolTarget>
 class FLandscapeToolStrokeSmooth : public FLandscapeToolStrokePaintBase<ToolTarget>
 {
+	bool bTargetIsHeightmap;
+	FLandscapeLayerDataCache<ToolTarget> LayerDataCache;
 public:
 	FLandscapeToolStrokeSmooth(FEdModeLandscape* InEdMode, FEditorViewportClient* InViewportClient, const FLandscapeToolTarget& InTarget)
 		: FLandscapeToolStrokePaintBase<ToolTarget>(InEdMode, InViewportClient, InTarget)
+		, bTargetIsHeightmap(InTarget.TargetType == ELandscapeToolTargetType::Heightmap)
+		, LayerDataCache(InTarget, this->Cache)
 	{
 	}
 
 	void Apply(FEditorViewportClient* ViewportClient, FLandscapeBrush* Brush, const ULandscapeEditorObject* UISettings, const TArray<FLandscapeToolInteractorPosition>& InteractorPositions)
 	{
 		if (!this->LandscapeInfo) return;
+
+		ALandscape* Landscape = this->LandscapeInfo->LandscapeActor.Get();
+		const bool bCombinedLayerOperation = bTargetIsHeightmap && UISettings->bCombinedLayersOperation && Landscape && Landscape->HasLayersContent();
 
 		// Get list of verts to update
 		FLandscapeBrushData BrushInfo = Brush->ApplyBrush(InteractorPositions);
@@ -619,11 +652,9 @@ public:
 			Y2 += 1;
 		}
 
-		this->Cache.CacheData(X1, Y1, X2, Y2);
-
 		TArray<typename ToolTarget::CacheClass::DataType> Data;
-		this->Cache.GetCachedData(X1, Y1, X2, Y2, Data);
-
+		LayerDataCache.Initialize(this->LandscapeInfo, bCombinedLayerOperation);
+		LayerDataCache.Read(X1, Y1, X2, Y2, Data);
 		const float ToolStrength = FMath::Clamp<float>(UISettings->ToolStrength * Pressure, 0.0f, 1.0f);
 
 		// Apply the brush
@@ -656,8 +687,8 @@ public:
 
 						const int32 SampleX1 = X - XRadius; checkSlow(SampleX1 >= BrushInfo.GetBounds().Min.X);
 						const int32 SampleY1 = Y - YRadius; checkSlow(SampleY1 >= BrushInfo.GetBounds().Min.Y);
-						const int32 SampleX2 = X + XRadius; checkSlow(SampleX2 <  BrushInfo.GetBounds().Max.X);
-						const int32 SampleY2 = Y + YRadius; checkSlow(SampleY2 <  BrushInfo.GetBounds().Max.Y);
+						const int32 SampleX2 = X + XRadius; checkSlow(SampleX2 < BrushInfo.GetBounds().Max.X);
+						const int32 SampleY2 = Y + YRadius; checkSlow(SampleY2 < BrushInfo.GetBounds().Max.Y);
 						for (int32 SampleY = SampleY1; SampleY <= SampleY2; SampleY++)
 						{
 							const float* SampleBrushScanline = BrushInfo.GetDataPtr(FIntPoint(0, SampleY));
@@ -669,9 +700,9 @@ public:
 								// constrain sample to within the brush, symmetrically to prevent flattening bug
 								const float SampleBrushValue =
 									FMath::Min(
-										FMath::Min<float>(SampleBrushScanline [SampleX], SampleBrushScanline [X + (X - SampleX)]),
+										FMath::Min<float>(SampleBrushScanline[SampleX], SampleBrushScanline[X + (X - SampleX)]),
 										FMath::Min<float>(SampleBrushScanline2[SampleX], SampleBrushScanline2[X + (X - SampleX)])
-										);
+									);
 								if (SampleBrushValue > 0.0f)
 								{
 									FilterValue += SampleDataScanline[SampleX];
@@ -688,16 +719,7 @@ public:
 			}
 		}
 
-		ALandscape* Landscape = this->LandscapeInfo->LandscapeActor.Get();
-
-		if (Landscape != nullptr && Landscape->HasProceduralContent && !GetMutableDefault<UEditorExperimentalSettings>()->bProceduralLandscape)
-		{
-			FMessageLog("MapCheck").Warning()->AddToken(FTextToken::Create(LOCTEXT("LandscapeProcedural_ChangingDataWithoutSettings", "This map contains landscape procedural content, modifying the landscape data will result in data loss when the map is reopened with Landscape Procedural settings on. Please enable Landscape Procedural settings before modifying the data.")));
-			FMessageLog("MapCheck").Open(EMessageSeverity::Warning);
-		}
-
-		this->Cache.SetCachedData(X1, Y1, X2, Y2, Data, UISettings->PaintingRestriction);
-		this->Cache.Flush();
+		LayerDataCache.Write(X1, Y1, X2, Y2, Data, UISettings->PaintingRestriction);
 	}
 };
 
@@ -721,51 +743,98 @@ public:
 template<class ToolTarget>
 class FLandscapeToolStrokeFlatten : public FLandscapeToolStrokePaintBase<ToolTarget>
 {
-	typename ToolTarget::CacheClass::DataType FlattenHeight;
+	typename ToolTarget::CacheClass::DataType FlattenValue;
 
 	FVector FlattenNormal;
 	float FlattenPlaneDist;
-	bool bInitializedFlattenHeight;
+	bool bInitializedFlattenValue;
 	bool bTargetIsHeightmap;
+	FLandscapeLayerDataCache<ToolTarget> LayerDataCache;
 
 public:
 	FLandscapeToolStrokeFlatten(FEdModeLandscape* InEdMode, FEditorViewportClient* InViewportClient, const FLandscapeToolTarget& InTarget)
 		: FLandscapeToolStrokePaintBase<ToolTarget>(InEdMode, InViewportClient, InTarget)
-		, bInitializedFlattenHeight(false)
+		, bInitializedFlattenValue(false)
 		, bTargetIsHeightmap(InTarget.TargetType == ELandscapeToolTargetType::Heightmap)
+		, LayerDataCache(InTarget, this->Cache)
 	{
 		if (InEdMode->UISettings->bUseFlattenTarget && bTargetIsHeightmap)
 		{
 			FTransform LocalToWorld = InTarget.LandscapeInfo->GetLandscapeProxy()->ActorToWorld();
 			float Height = (InEdMode->UISettings->FlattenTarget - LocalToWorld.GetTranslation().Z) / LocalToWorld.GetScale3D().Z;
-			FlattenHeight = LandscapeDataAccess::GetTexHeight(Height);
-			bInitializedFlattenHeight = true;
+			FlattenValue = LandscapeDataAccess::GetTexHeight(Height);
+			bInitializedFlattenValue = true;
 		}
 	}
 
 	void Apply(FEditorViewportClient* ViewportClient, FLandscapeBrush* Brush, const ULandscapeEditorObject* UISettings, const TArray<FLandscapeToolInteractorPosition>& InteractorPositions)
-	{
+ 	{
 		if (!this->LandscapeInfo) return;
 
-		if (!bInitializedFlattenHeight || (UISettings->bPickValuePerApply && bTargetIsHeightmap))
+		ALandscape* Landscape = this->LandscapeInfo->LandscapeActor.Get();
+		const bool bCombinedLayerOperation = bTargetIsHeightmap && UISettings->bCombinedLayersOperation && Landscape && Landscape->HasLayersContent();
+
+		// Can't use slope if use Flatten Target because no normal is provided
+		bool bUseSlopeFlatten = UISettings->bUseSlopeFlatten && !UISettings->bUseFlattenTarget;
+
+		if (!bInitializedFlattenValue || (UISettings->bPickValuePerApply && bTargetIsHeightmap))
 		{
-			bInitializedFlattenHeight = false;
+			bInitializedFlattenValue = false;
 			float FlattenX = InteractorPositions[0].Position.X;
 			float FlattenY = InteractorPositions[0].Position.Y;
 			int32 FlattenHeightX = FMath::FloorToInt(FlattenX);
 			int32 FlattenHeightY = FMath::FloorToInt(FlattenY);
 
-			this->Cache.CacheData(FlattenHeightX, FlattenHeightY, FlattenHeightX + 1, FlattenHeightY + 1);
-			float HeightValue = this->Cache.GetValue(FlattenX, FlattenY);
-			FlattenHeight = HeightValue;
-
-			if (UISettings->bUseSlopeFlatten && bTargetIsHeightmap)
+			float InterpolatedValue = 0.f;
+			float V00 = 0.f;
+			float V10 = 0.f;
+			float V01 = 0.f;
+			float V11 = 0.f;
+			if (bCombinedLayerOperation)
 			{
-				FlattenNormal = this->Cache.GetNormal(FlattenHeightX, FlattenHeightY);
-				FlattenPlaneDist = -(FlattenNormal | FVector(FlattenX, FlattenY, HeightValue));
+				// Can't rely on cache in this mode
+				FScopedSetLandscapeEditingLayer Scope(Landscape, FGuid());
+				typename ToolTarget::CacheClass::DataType P00, P10, P01, P11;
+				this->Cache.DataAccess.GetDataFast(FlattenHeightX,     FlattenHeightY,     FlattenHeightX,     FlattenHeightY,     &P00);
+				this->Cache.DataAccess.GetDataFast(FlattenHeightX + 1, FlattenHeightY,     FlattenHeightX + 1, FlattenHeightY,     &P10);
+				this->Cache.DataAccess.GetDataFast(FlattenHeightX,     FlattenHeightY + 1, FlattenHeightX,     FlattenHeightY + 1, &P01);
+				this->Cache.DataAccess.GetDataFast(FlattenHeightX + 1, FlattenHeightY + 1, FlattenHeightX + 1, FlattenHeightY + 1, &P11);
+                // Release Texture Mips that will be Locked by the next SynchronousUpdateComponentVisibilityForHeight (inside the LayerDataCache.Read call)
+				this->Cache.DataAccess.Flush();
+				V00 = P00;
+				V10 = P10;
+				V01 = P01;
+				V11 = P11;
+				InterpolatedValue = FMath::Lerp(FMath::Lerp(V00, V10, FlattenX - FlattenHeightX), FMath::Lerp(V01, V11, FlattenX - FlattenHeightX), FlattenY - FlattenHeightY);
+			}
+			else
+			{
+				this->Cache.CacheData(FlattenHeightX, FlattenHeightY, FlattenHeightX + 1, FlattenHeightY + 1);
+				InterpolatedValue = this->Cache.GetValue(FlattenX, FlattenY);
+			}
+			FlattenValue = InterpolatedValue;
+
+			if (bUseSlopeFlatten && bTargetIsHeightmap)
+			{
+				if (bCombinedLayerOperation)
+				{
+					// Can't rely on cache in this mode
+					FVector Vert00 = FVector(0.0f, 0.0f, V00);
+					FVector Vert01 = FVector(0.0f, 1.0f, V01);
+					FVector Vert10 = FVector(1.0f, 0.0f, V10);
+					FVector Vert11 = FVector(1.0f, 1.0f, V11);
+					FVector FaceNormal1 = ((Vert00 - Vert10) ^ (Vert10 - Vert11)).GetSafeNormal();
+					FVector FaceNormal2 = ((Vert11 - Vert01) ^ (Vert01 - Vert00)).GetSafeNormal();
+					FlattenNormal = (FaceNormal1 + FaceNormal2).GetSafeNormal();
+				}
+				else
+				{
+					FlattenNormal = this->Cache.GetNormal(FlattenHeightX, FlattenHeightY);
+				}
+				FlattenPlaneDist = -(FlattenNormal | FVector(FlattenX, FlattenY, InterpolatedValue));
 			}
 
-			bInitializedFlattenHeight = true;
+			bInitializedFlattenValue = true;
 		}
 
 
@@ -792,10 +861,9 @@ public:
 			Y2 += 1;
 		}
 
-		this->Cache.CacheData(X1, Y1, X2, Y2);
-
 		TArray<typename ToolTarget::CacheClass::DataType> Data;
-		this->Cache.GetCachedData(X1, Y1, X2, Y2, Data);
+		LayerDataCache.Initialize(this->LandscapeInfo, bCombinedLayerOperation);
+		LayerDataCache.Read(X1, Y1, X2, Y2, Data);
 
 		// Apply the brush
 		for (int32 Y = BrushInfo.GetBounds().Min.Y; Y < BrushInfo.GetBounds().Max.Y; Y++)
@@ -811,26 +879,27 @@ public:
 				{
 					float Strength = FMath::Clamp<float>(BrushValue * UISettings->ToolStrength * Pressure, 0.0f, 1.0f);
 
-					if (!(UISettings->bUseSlopeFlatten && bTargetIsHeightmap))
+					if (!(bUseSlopeFlatten && bTargetIsHeightmap))
 					{
-						int32 Delta = DataScanline[X] - FlattenHeight;
+						int32 Delta = DataScanline[X] - FlattenValue;
 						switch (UISettings->FlattenMode)
 						{
 						case ELandscapeToolFlattenMode::Terrace:
+							if (bTargetIsHeightmap)
 							{
 								const FTransform& LocalToWorld = this->Target.LandscapeInfo->GetLandscapeProxy()->ActorToWorld();
 								float ScaleZ = LocalToWorld.GetScale3D().Z;
 								float TranslateZ = LocalToWorld.GetTranslation().Z;
-								float TerraceInterval = UISettings->TerraceInterval;
-								float Smoothness = UISettings->TerraceSmooth;								
+								float TerraceInterval = FMath::Clamp(UISettings->TerraceInterval, 1.0f, 32768.f);
+								float Smoothness = UISettings->TerraceSmooth;
 								float WorldHeight = LandscapeDataAccess::GetLocalHeight(DataScanline[X]);
-								
+
 								//move into world space
 								WorldHeight = (WorldHeight * ScaleZ) + TranslateZ;
 								float CurrentHeight = WorldHeight;
 
 								//smoothing part
-								float CurrentLevel = WorldHeight / TerraceInterval;								
+								float CurrentLevel = WorldHeight / TerraceInterval;
 								Smoothness = 1.0f / FMath::Max(Smoothness, 0.0001f);
 								float CurrentPhase = FMath::Frac(CurrentLevel);
 								float Halfmask = FMath::Clamp(FMath::CeilToFloat(CurrentPhase - 0.5f), 0.0f, 1.0f);
@@ -838,35 +907,58 @@ public:
 								float SCurve = FMath::Lerp(CurrentPhase, (1.0f - CurrentPhase), Halfmask) * 2.0f;
 								SCurve = FMath::Pow(SCurve, Smoothness) * 0.5f;
 								SCurve = FMath::Lerp(SCurve, 1.0f - SCurve, Halfmask) * TerraceInterval;
-								WorldHeight = (CurrentLevel * TerraceInterval)  + SCurve;
+								WorldHeight = (CurrentLevel * TerraceInterval) + SCurve;
 								//end of smoothing part
 
-								float FinalHeight = FMath::Lerp(CurrentHeight, WorldHeight , Strength);
+								float FinalHeight = FMath::Lerp(CurrentHeight, WorldHeight, Strength);
 								FinalHeight = (FinalHeight - TranslateZ) / ScaleZ;
-								DataScanline[X] = LandscapeDataAccess::GetTexHeight(FinalHeight);	
+								DataScanline[X] = LandscapeDataAccess::GetTexHeight(FinalHeight);
+							}
+							break;
+						case ELandscapeToolFlattenMode::Interval:
+							if (bTargetIsHeightmap)
+							{
+								const FTransform& LocalToWorld = this->Target.LandscapeInfo->GetLandscapeProxy()->ActorToWorld();
+								float ScaleZ = LocalToWorld.GetScale3D().Z;
+								float TranslateZ = LocalToWorld.GetTranslation().Z;
+								float TerraceInterval = UISettings->TerraceInterval;
+								float TargetHeight = LandscapeDataAccess::GetLocalHeight(FlattenValue);
+								float CurrentHeight = LandscapeDataAccess::GetLocalHeight(DataScanline[X]);
+														
+								//move into world space
+								TargetHeight = (TargetHeight * ScaleZ) + TranslateZ;
+								CurrentHeight = (CurrentHeight * ScaleZ) + TranslateZ;
+
+								TargetHeight = (FMath::RoundToFloat(TargetHeight / TerraceInterval)) * TerraceInterval;
+								TargetHeight = FMath::Lerp(CurrentHeight, TargetHeight, BrushValue);
+							
+								//back to local space of landscape object
+								TargetHeight = (TargetHeight - TranslateZ) / ScaleZ;
+								DataScanline[X] = LandscapeDataAccess::GetTexHeight(TargetHeight);
+
 							}
 							break;
 						case ELandscapeToolFlattenMode::Raise:
 							if (Delta < 0)
 							{
-								DataScanline[X] = FMath::CeilToInt(FMath::Lerp((float)DataScanline[X], (float)FlattenHeight, Strength));
+								DataScanline[X] = FMath::CeilToInt(FMath::Lerp((float)DataScanline[X], (float)FlattenValue, Strength));
 							}
 							break;
 						case ELandscapeToolFlattenMode::Lower:
 							if (Delta > 0)
 							{
-								DataScanline[X] = FMath::FloorToInt(FMath::Lerp((float)DataScanline[X], (float)FlattenHeight, Strength));
+								DataScanline[X] = FMath::FloorToInt(FMath::Lerp((float)DataScanline[X], (float)FlattenValue, Strength));
 							}
 							break;
 						default:
 						case ELandscapeToolFlattenMode::Both:
 							if (Delta > 0)
 							{
-								DataScanline[X] = FMath::FloorToInt(FMath::Lerp((float)DataScanline[X], (float)FlattenHeight, Strength));
+								DataScanline[X] = FMath::FloorToInt(FMath::Lerp((float)DataScanline[X], (float)FlattenValue, Strength));
 							}
 							else
 							{
-								DataScanline[X] = FMath::CeilToInt(FMath::Lerp((float)DataScanline[X], (float)FlattenHeight, Strength));
+								DataScanline[X] = FMath::CeilToInt(FMath::Lerp((float)DataScanline[X], (float)FlattenValue, Strength));
 							}
 							break;
 						}
@@ -908,16 +1000,7 @@ public:
 			}
 		}
 
-		ALandscape* Landscape = this->LandscapeInfo->LandscapeActor.Get();
-
-		if (Landscape != nullptr && Landscape->HasProceduralContent && !GetMutableDefault<UEditorExperimentalSettings>()->bProceduralLandscape)
-		{
-			FMessageLog("MapCheck").Warning()->AddToken(FTextToken::Create(LOCTEXT("LandscapeProcedural_ChangingDataWithoutSettings", "This map contains landscape procedural content, modifying the landscape data will result in data loss when the map is reopened with Landscape Procedural settings on. Please enable Landscape Procedural settings before modifying the data.")));
-			FMessageLog("MapCheck").Open(EMessageSeverity::Warning);
-		}
-
-		this->Cache.SetCachedData(X1, Y1, X2, Y2, Data, UISettings->PaintingRestriction);
-		this->Cache.Flush();
+		LayerDataCache.Write(X1, Y1, X2, Y2, Data, UISettings->PaintingRestriction);
 	}
 };
 
@@ -1013,6 +1096,10 @@ public:
 	virtual void EnterTool() override
 	{
 		FLandscapeToolPaintBase<ToolTarget, FLandscapeToolStrokeFlatten<ToolTarget>>::EnterTool();
+		if (!this->EdMode->CurrentToolTarget.LandscapeInfo.Get())
+		{
+			return;
+		}
 
 		ALandscapeProxy* LandscapeProxy = this->EdMode->CurrentToolTarget.LandscapeInfo->GetLandscapeProxy();
 		MeshComponent = NewObject<UStaticMeshComponent>(LandscapeProxy, NAME_None, RF_Transient);
@@ -1034,8 +1121,11 @@ public:
 	{
 		FLandscapeToolPaintBase<ToolTarget, FLandscapeToolStrokeFlatten<ToolTarget>>::ExitTool();
 
-		MeshComponent->DetachFromComponent(FDetachmentTransformRules::KeepRelativeTransform);
-		MeshComponent->DestroyComponent();
+		if (MeshComponent)
+		{
+			MeshComponent->DetachFromComponent(FDetachmentTransformRules::KeepRelativeTransform);
+			MeshComponent->DestroyComponent();
+		}
 	}
 };
 
@@ -1138,14 +1228,6 @@ public:
 			}
 		}
 
-		ALandscape* Landscape = this->LandscapeInfo->LandscapeActor.Get();
-
-		if (Landscape != nullptr && Landscape->HasProceduralContent && !GetMutableDefault<UEditorExperimentalSettings>()->bProceduralLandscape)
-		{
-			FMessageLog("MapCheck").Warning()->AddToken(FTextToken::Create(LOCTEXT("LandscapeProcedural_ChangingDataWithoutSettings", "This map contains landscape procedural content, modifying the landscape data will result in data loss when the map is reopened with Landscape Procedural settings on. Please enable Landscape Procedural settings before modifying the data.")));
-			FMessageLog("MapCheck").Open(EMessageSeverity::Warning);
-		}
-
 		this->Cache.SetCachedData(X1, Y1, X2, Y2, Data, UISettings->PaintingRestriction);
 		this->Cache.Flush();
 	}
@@ -1176,6 +1258,10 @@ void FEdModeLandscape::InitializeTool_Paint()
 	Tool_Sculpt->ValidBrushes.Add("BrushSet_Pattern");
 	Tool_Sculpt->ValidBrushes.Add("BrushSet_Component");
 	LandscapeTools.Add(MoveTemp(Tool_Sculpt));
+
+	auto Tool_Erase = MakeUnique<FLandscapeToolErase>(this);
+	Tool_Erase->ValidBrushes.Add("BrushSet_Circle");
+	LandscapeTools.Add(MoveTemp(Tool_Erase));
 
 	auto Tool_Paint = MakeUnique<FLandscapeToolPaint>(this);
 	Tool_Paint->ValidBrushes.Add("BrushSet_Circle");

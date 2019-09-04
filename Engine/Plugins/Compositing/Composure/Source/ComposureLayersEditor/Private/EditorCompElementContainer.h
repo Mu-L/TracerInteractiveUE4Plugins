@@ -55,6 +55,6 @@ public:
 	 */
 	FORCEINLINE FCompElementList::RangedForIteratorType      begin()       { return CompElements.begin(); }
 	FORCEINLINE FCompElementList::RangedForConstIteratorType begin() const { return CompElements.begin(); }
-	FORCEINLINE FCompElementList::RangedForIteratorType      end  ()       { return CompElements.end(); }
-	FORCEINLINE FCompElementList::RangedForConstIteratorType end  () const { return CompElements.end(); }
+	FORCEINLINE FCompElementList::RangedForIteratorType      end  ()       { return CompElements.end();   }
+	FORCEINLINE FCompElementList::RangedForConstIteratorType end  () const { return CompElements.end();   }
 };

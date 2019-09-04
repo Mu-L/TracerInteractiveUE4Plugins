@@ -44,14 +44,18 @@ public:
 	/** Purge any Python references to the given UObject instances */
 	void PurgeUnrealObjectReferences(const TArrayView<const UObject*>& InObjects, const bool bIncludeInnerObjects);
 
+	/** Purge any Python references to any Unreal types generated from or for Python */
+	void PurgeUnrealGeneratedTypes();
+
 	//~ FGCObject interface
 	virtual void AddReferencedObjects(FReferenceCollector& InCollector) override;
+	virtual FString GetReferencerName() const override;
 
 	/** Utility function to ARO a delegate instance */
 	static void AddReferencedObjectsFromDelegate(FReferenceCollector& InCollector, FScriptDelegate& InDelegate);
 
 	/** Utility function to ARO a multicast delegate instance */
-	static void AddReferencedObjectsFromMulticastDelegate(FReferenceCollector& InCollector, FMulticastScriptDelegate& InDelegate);
+	static void AddReferencedObjectsFromMulticastDelegate(FReferenceCollector& InCollector, const FMulticastScriptDelegate& InDelegate);
 
 	/** Utility function to ARO all properties on a struct instance */
 	static void AddReferencedObjectsFromStruct(FReferenceCollector& InCollector, const UStruct* InStruct, void* InStructAddr, const EPyReferenceCollectorFlags InFlags = EPyReferenceCollectorFlags::IncludeAll);

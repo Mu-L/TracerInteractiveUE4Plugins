@@ -26,9 +26,9 @@ FMaterialGraphConnectionDrawingPolicy::FMaterialGraphConnectionDrawingPolicy(int
 
 bool FMaterialGraphConnectionDrawingPolicy::FindPinCenter(UEdGraphPin* Pin, FVector2D& OutCenter) const
 {
-	if (const TSharedRef<SGraphPin>* pPinWidget = PinToPinWidgetMap.Find(Pin))
+	if (const TSharedPtr<SGraphPin>* pPinWidget = PinToPinWidgetMap.Find(Pin))
 	{
-		if (FArrangedWidget* pPinEntry = PinGeometries->Find(*pPinWidget))
+		if (FArrangedWidget* pPinEntry = PinGeometries->Find((*pPinWidget).ToSharedRef()))
 		{
 			OutCenter = FGeometryHelper::CenterOf(pPinEntry->Geometry);
 			return true;
@@ -125,7 +125,7 @@ void FMaterialGraphConnectionDrawingPolicy::DetermineWiringStyle(UEdGraphPin* Ou
 				Params.StartDirection = EGPD_Input;
 			}
 		}
-		else if (!OutputNode->IsNodeEnabled() || OutputNode->IsDisplayAsDisabledForced())
+		else if (!OutputNode->IsNodeEnabled() || OutputNode->IsDisplayAsDisabledForced() || OutputNode->IsNodeUnrelated())
 		{
 			Params.WireColor = MaterialGraphSchema->InactivePinColor;
 		}
@@ -145,7 +145,7 @@ void FMaterialGraphConnectionDrawingPolicy::DetermineWiringStyle(UEdGraphPin* Ou
 				Params.EndDirection = EGPD_Output;
 			}
 		}
-		else if (!InputNode->IsNodeEnabled() || InputNode->IsDisplayAsDisabledForced())
+		else if (!InputNode->IsNodeEnabled() || InputNode->IsDisplayAsDisabledForced() || InputNode->IsNodeUnrelated())
 		{
 			Params.WireColor = MaterialGraphSchema->InactivePinColor;
 		}

@@ -57,6 +57,8 @@ struct FSkeletalMeshCustomVersion
 		DeprecateSectionDisabledFlag = 15,
 		// Add Section ignore by reduce
 		SectionIgnoreByReduceAdded = 16,
+		// Adding skin weight profile support
+		SkinWeightProfiles = 17,
 
 		// -----<new versions can be added above this line>-------------------------------------------------
 		VersionPlusOne,
@@ -241,6 +243,9 @@ public:
 	virtual bool HasDynamicIndirectShadowCasterRepresentation() const override;
 	virtual void GetShadowShapes(TArray<FCapsuleShape>& CapsuleShapes) const override;
 
+	/** Return the bounds for the pre-skinned primitive in local space */
+	virtual void GetPreSkinnedLocalBounds(FBoxSphereBounds& OutBounds) const override { OutBounds = PreSkinnedLocalBounds; }
+
 	/** Returns a pre-sorted list of shadow capsules's bone indicies */
 	const TArray<uint16>& GetSortedShadowBoneIndices() const
 	{
@@ -264,7 +269,7 @@ public:
 	 */
 	virtual void DebugDrawPhysicsAsset(int32 ViewIndex, FMeshElementCollector& Collector, const FEngineShowFlags& EngineShowFlags) const;
 
-	/** Render the bones of the skeleton for debug display */
+	/** Render the bones of the skeleton for debug display */ 
 	void DebugDrawSkeleton(int32 ViewIndex, FMeshElementCollector& Collector, const FEngineShowFlags& EngineShowFlags) const;
 
 	virtual uint32 GetMemoryFootprint( void ) const override { return( sizeof( *this ) + GetAllocatedSize() ); }
@@ -287,6 +292,13 @@ public:
 	friend class FSkeletalMeshSectionIter;
 
 	virtual void OnTransformChanged() override;
+
+	const TArray<FMatrix>& GetMeshObjectReferenceToLocalMatrices() const;
+	const TIndirectArray<FSkeletalMeshLODRenderData>& GetSkeletalMeshRenderDataLOD() const;
+
+#if RHI_RAYTRACING
+	bool bAnySegmentUsesWorldPositionOffset : 1;
+#endif
 
 protected:
 	AActor* Owner;
@@ -355,6 +367,9 @@ protected:
 	/** Set of materials used by this scene proxy, safe to access from the game thread. */
 	TSet<UMaterialInterface*> MaterialsInUse_GameThread;
 	
+	/** The primitive's pre-skinned local space bounds. */
+	FBoxSphereBounds PreSkinnedLocalBounds;
+
 #if WITH_EDITORONLY_DATA
 	/** The component streaming distance multiplier */
 	float StreamingDistanceMultiplier;

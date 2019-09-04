@@ -11,7 +11,6 @@
 
 class IAssetTools;
 class IAssetTypeActions;
-struct FNiagaraCompileResults;
 class INiagaraEditorTypeUtilities;
 class UNiagaraSettings;
 class USequencerSettings;
@@ -31,14 +30,7 @@ class FNiagaraEditorModule : public IModuleInterface,
 public:
 	DECLARE_DELEGATE_RetVal_OneParam(TSharedRef<SWidget>, FOnCreateStackWidget, UNiagaraStackViewModel*);
 	DECLARE_DELEGATE_RetVal_OneParam(UMovieSceneNiagaraParameterTrack*, FOnCreateMovieSceneTrackForParameter, FNiagaraVariable);
-
-	struct FInputMetaDataKeys
-	{
-		static const FName AdvancedDisplay;
-		static const FName EditCondition;
-		static const FName VisibleCondition;
-		static const FName InlineEditConditionToggle;
-	};
+	DECLARE_MULTICAST_DELEGATE_OneParam(FOnCheckScriptToolkitsShouldFocusGraphElement, const FNiagaraScriptIDAndGraphFocusInfo*);
 
 public:
 	FNiagaraEditorModule();
@@ -92,6 +84,8 @@ public:
 	/** Get the niagara UI commands. */
 	NIAGARAEDITOR_API const class FNiagaraEditorCommands& Commands();
 
+	FOnCheckScriptToolkitsShouldFocusGraphElement& GetOnScriptToolkitsShouldFocusGraphElement() { return OnCheckScriptToolkitsShouldFocusGraphElement; };
+
 private:
 	void RegisterAssetTypeAction(IAssetTools& AssetTools, TSharedRef<IAssetTypeActions> Action);
 	void OnNiagaraSettingsChangedEvent(const FString& PropertyName, const UNiagaraSettings* Settings);
@@ -125,7 +119,6 @@ private:
 	FDelegateHandle CreateVectorParameterTrackEditorHandle;
 	FDelegateHandle CreateColorParameterTrackEditorHandle;
 
-	FDelegateHandle MergeEmitterHandle;
 	FDelegateHandle CreateDefaultScriptSourceHandle;
 	FDelegateHandle ScriptCompilerHandle;
 	FDelegateHandle PrecompilerHandle;
@@ -139,6 +132,9 @@ private:
 
 	IConsoleCommand* TestCompileScriptCommand;
 	IConsoleCommand* DumpRapidIterationParametersForAsset;
+	IConsoleCommand* PreventSystemRecompileCommand;
+	IConsoleCommand* PreventAllSystemRecompilesCommand;
+	IConsoleCommand* DumpCompileIdDataForAssetCommand;
+
+	FOnCheckScriptToolkitsShouldFocusGraphElement OnCheckScriptToolkitsShouldFocusGraphElement;
 };
-
-

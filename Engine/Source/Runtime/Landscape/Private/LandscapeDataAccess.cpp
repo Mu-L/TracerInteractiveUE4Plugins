@@ -6,25 +6,27 @@
 #if WITH_EDITOR
 
 
-LANDSCAPE_API FLandscapeComponentDataInterface::FLandscapeComponentDataInterface(ULandscapeComponent* InComponent, int32 InMipLevel) :
+LANDSCAPE_API FLandscapeComponentDataInterface::FLandscapeComponentDataInterface(ULandscapeComponent* InComponent, int32 InMipLevel, bool InWorkOnEditingLayer) :
 	Component(InComponent),
+	bWorkOnEditingLayer(InWorkOnEditingLayer),
 	HeightMipData(NULL),
 	XYOffsetMipData(NULL),
 	MipLevel(InMipLevel)
 {
 	// Offset and stride for this component's data in heightmap texture
-	HeightmapStride = Component->GetHeightmap(true)->Source.GetSizeX() >> MipLevel;
-	HeightmapComponentOffsetX = FMath::RoundToInt((float)(Component->GetHeightmap(true)->Source.GetSizeX() >> MipLevel) * Component->HeightmapScaleBias.Z);
-	HeightmapComponentOffsetY = FMath::RoundToInt((float)(Component->GetHeightmap(true)->Source.GetSizeY() >> MipLevel) * Component->HeightmapScaleBias.W);
+	UTexture2D* HeightMapTexture = Component->GetHeightmap(bWorkOnEditingLayer);
+	HeightmapStride = HeightMapTexture->Source.GetSizeX() >> MipLevel;
+	HeightmapComponentOffsetX = FMath::RoundToInt((float)(HeightMapTexture->Source.GetSizeX() >> MipLevel) * Component->HeightmapScaleBias.Z);
+	HeightmapComponentOffsetY = FMath::RoundToInt((float)(HeightMapTexture->Source.GetSizeY() >> MipLevel) * Component->HeightmapScaleBias.W);
 	HeightmapSubsectionOffset = (Component->SubsectionSizeQuads + 1) >> MipLevel;
 
 	ComponentSizeVerts = (Component->ComponentSizeQuads + 1) >> MipLevel;
 	SubsectionSizeVerts = (Component->SubsectionSizeQuads + 1) >> MipLevel;
 	ComponentNumSubsections = Component->NumSubsections;
 
-	if (MipLevel < Component->GetHeightmap(true)->Source.GetNumMips())
+	if (MipLevel < HeightMapTexture->Source.GetNumMips())
 	{
-		HeightMipData = (FColor*)DataInterface.LockMip(Component->GetHeightmap(true), MipLevel);
+		HeightMipData = (FColor*)DataInterface.LockMip(HeightMapTexture, MipLevel);
 		if (Component->XYOffsetmapTexture)
 		{
 			XYOffsetMipData = (FColor*)DataInterface.LockMip(Component->XYOffsetmapTexture, MipLevel);
@@ -36,7 +38,8 @@ LANDSCAPE_API FLandscapeComponentDataInterface::~FLandscapeComponentDataInterfac
 {
 	if (HeightMipData)
 	{
-		DataInterface.UnlockMip(Component->GetHeightmap(true), MipLevel);
+		UTexture2D* HeightMapTexture = Component->GetHeightmap(bWorkOnEditingLayer);
+		DataInterface.UnlockMip(HeightMapTexture, MipLevel);
 		if (Component->XYOffsetmapTexture)
 		{
 			DataInterface.UnlockMip(Component->XYOffsetmapTexture, MipLevel);
@@ -71,12 +74,15 @@ LANDSCAPE_API void FLandscapeComponentDataInterface::GetHeightmapTextureData(TAr
 	}
 }
 
-LANDSCAPE_API bool FLandscapeComponentDataInterface::GetWeightmapTextureData(ULandscapeLayerInfoObject* LayerInfo, TArray<uint8>& OutData)
+LANDSCAPE_API bool FLandscapeComponentDataInterface::GetWeightmapTextureData(ULandscapeLayerInfoObject* LayerInfo, TArray<uint8>& OutData, bool InUseEditingWeightmap)
 {
 	int32 LayerIdx = INDEX_NONE;
-	for (int32 Idx = 0; Idx < Component->WeightmapLayerAllocations.Num(); Idx++)
+	TArray<FWeightmapLayerAllocationInfo>& ComponentWeightmapLayerAllocations = Component->GetWeightmapLayerAllocations(InUseEditingWeightmap);
+	TArray<UTexture2D*>& ComponentWeightmapTextures = Component->GetWeightmapTextures(InUseEditingWeightmap);
+
+	for (int32 Idx = 0; Idx < ComponentWeightmapLayerAllocations.Num(); Idx++)
 	{
-		if (Component->WeightmapLayerAllocations[Idx].LayerInfo == LayerInfo)
+		if (ComponentWeightmapLayerAllocations[Idx].LayerInfo == LayerInfo)
 		{
 			LayerIdx = Idx;
 			break;
@@ -86,11 +92,11 @@ LANDSCAPE_API bool FLandscapeComponentDataInterface::GetWeightmapTextureData(ULa
 	{
 		return false;
 	}
-	if (Component->WeightmapLayerAllocations[LayerIdx].WeightmapTextureIndex >= Component->WeightmapTextures.Num())
+	if (ComponentWeightmapLayerAllocations[LayerIdx].WeightmapTextureIndex >= ComponentWeightmapTextures.Num())
 	{
 		return false;
 	}
-	if (Component->WeightmapLayerAllocations[LayerIdx].WeightmapTextureChannel >= 4)
+	if (ComponentWeightmapLayerAllocations[LayerIdx].WeightmapTextureChannel >= 4)
 	{
 		return false;
 	}
@@ -99,19 +105,19 @@ LANDSCAPE_API bool FLandscapeComponentDataInterface::GetWeightmapTextureData(ULa
 	OutData.Empty(FMath::Square(WeightmapSize));
 	OutData.AddUninitialized(FMath::Square(WeightmapSize));
 
-	FColor* WeightMipData = (FColor*)DataInterface.LockMip(Component->WeightmapTextures[Component->WeightmapLayerAllocations[LayerIdx].WeightmapTextureIndex], MipLevel);
+	FColor* WeightMipData = (FColor*)DataInterface.LockMip(ComponentWeightmapTextures[ComponentWeightmapLayerAllocations[LayerIdx].WeightmapTextureIndex], MipLevel);
 
 	// Channel remapping
 	int32 ChannelOffsets[4] = { (int32)STRUCT_OFFSET(FColor, R), (int32)STRUCT_OFFSET(FColor, G), (int32)STRUCT_OFFSET(FColor, B), (int32)STRUCT_OFFSET(FColor, A) };
 
-	uint8* SrcTextureData = (uint8*)WeightMipData + ChannelOffsets[Component->WeightmapLayerAllocations[LayerIdx].WeightmapTextureChannel];
+	uint8* SrcTextureData = (uint8*)WeightMipData + ChannelOffsets[ComponentWeightmapLayerAllocations[LayerIdx].WeightmapTextureChannel];
 
 	for (int32 i = 0; i < FMath::Square(WeightmapSize); i++)
 	{
 		OutData[i] = SrcTextureData[i * 4];
 	}
 
-	DataInterface.UnlockMip(Component->WeightmapTextures[Component->WeightmapLayerAllocations[LayerIdx].WeightmapTextureIndex], MipLevel);
+	DataInterface.UnlockMip(ComponentWeightmapTextures[ComponentWeightmapLayerAllocations[LayerIdx].WeightmapTextureIndex], MipLevel);
 	return true;
 }
 

@@ -6,7 +6,7 @@
 
 #include "CoreMinimal.h"
 #include "Modules/ModuleManager.h"
-#include "Android/AndroidProperties.h"
+#include "Android/AndroidPlatformProperties.h"
 #include "Interfaces/ITargetPlatformModule.h"
 #include "Common/TargetPlatformBase.h"
 #include "Interfaces/IAndroidDeviceDetection.h"
@@ -45,7 +45,7 @@ public:
 
 	virtual ITargetPlatform* GetTargetPlatform() override
 	{
-		if (AndroidTargetSingleton == NULL)
+		if (AndroidTargetSingleton == NULL && FAndroid_ETC1aTargetPlatform::IsUsable())
 		{
 			AndroidTargetSingleton = new FAndroid_ETC1aTargetPlatform();
 		}

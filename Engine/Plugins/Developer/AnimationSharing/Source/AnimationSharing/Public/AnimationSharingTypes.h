@@ -22,7 +22,7 @@ public:
 	
 	/** Animation Sequence to play for this particular setup */
 	UPROPERTY(EditAnywhere, Category = AnimationSharing)
-	TSoftObjectPtr<UAnimSequence> AnimSequence;
+	UAnimSequence* AnimSequence;
 
 	/** Animation blueprint to use for playing back the Animation Sequence */
 	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = AnimationSharing)
@@ -132,11 +132,11 @@ public:
 
 	/** Skeleton compatible with the animation sharing setup */
 	UPROPERTY(EditAnywhere, Category = AnimationSharing)
-	TSoftObjectPtr<USkeleton> Skeleton;
+	USkeleton* Skeleton;
 
 	/** Skeletal mesh used to setup skeletal mesh components */
 	UPROPERTY(EditAnywhere, Category = AnimationSharing)
-	TSoftObjectPtr<USkeletalMesh> SkeletalMesh;
+	USkeletalMesh* SkeletalMesh;
 
 	/** Animation blueprint used to perform the blending between states */
 	UPROPERTY(EditAnywhere, Category = AnimationSharing, meta = (DisplayName="Animation Blueprint for Blending"))
@@ -167,15 +167,15 @@ public:
 	FPerPlatformBool UseBlendTransitions;
 
 	/** Significance value tied to whether or not a transition should be blended */
-	UPROPERTY(EditAnywhere, Category = AnimationSharing, meta = (EditCondition = "bBlendTransitions", ClampMin="0.0", UIMin="0.0"))
+	UPROPERTY(EditAnywhere, Category = AnimationSharing, meta = (ClampMin="0.0", UIMin="0.0"))
 	FPerPlatformFloat BlendSignificanceValue;
 
 	/** Maximum number of blends which can be running concurrently */
-	UPROPERTY(EditAnywhere, Category = AnimationSharing, meta = (EditCondition = "bBlendTransitions", ClampMin = "1", UIMin = "1"))
+	UPROPERTY(EditAnywhere, Category = AnimationSharing, meta = (ClampMin = "1", UIMin = "1"))
 	FPerPlatformInt MaximumNumberConcurrentBlends;
 
 	/** Significance value tied to whether or not the master pose components should be ticking */
-	UPROPERTY(EditAnywhere, Category = AnimationSharing, meta = (EditCondition = "bBlendTransitions", ClampMin = "0.0", UIMin = "0.0"))
+	UPROPERTY(EditAnywhere, Category = AnimationSharing, meta = (ClampMin = "0.0", UIMin = "0.0"))
 	FPerPlatformFloat TickSignificanceValue;
 };
 

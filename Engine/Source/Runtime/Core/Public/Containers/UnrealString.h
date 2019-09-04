@@ -22,6 +22,7 @@
 #include "Templates/IsValidVariadicFunctionArg.h"
 #include "Templates/AndOrNot.h"
 #include "Templates/IsArrayOrRefOfType.h"
+#include "Templates/TypeHash.h"
 
 struct FStringFormatArg;
 template<typename KeyType,typename ValueType,typename SetAllocator ,typename KeyFuncs > class TMap;
@@ -1167,7 +1168,8 @@ public:
 	FORCEINLINE FString Mid( int32 Start, int32 Count=MAX_int32 ) const
 	{
 		check(Count >= 0);
-		uint32 End = Start+Count;
+		uint32 End = Count;
+		End += Start;
 		Start    = FMath::Clamp( (uint32)Start, (uint32)0,     (uint32)Len() );
 		End      = FMath::Clamp( (uint32)End,   (uint32)Start, (uint32)Len() );
 		return FString( End-Start, **this + Start );
@@ -1407,8 +1409,23 @@ public:
 		return PrintfImpl(Fmt, Args...);
 	}
 
+	/**
+	 * Just like Printf, but appends the formatted text to the existing FString instead.
+	 * @return a reference to the modified string, so that it can be chained
+	 */
+	template <typename FmtType, typename... Types>
+	typename TEnableIf<TIsArrayOrRefOfType<FmtType, TCHAR>::Value, FString&>::Type Appendf(const FmtType& Fmt, Types... Args)
+	{
+		static_assert(TIsArrayOrRefOfType<FmtType, TCHAR>::Value, "Formatting string must be a TCHAR array.");
+		static_assert(TAnd<TIsValidVariadicFunctionArg<Types>...>::Value, "Invalid argument(s) passed to FString::Appendf");
+
+		AppendfImpl(*this, Fmt, Args...);
+		return *this;
+	}
+
 private:
 	static FString VARARGS PrintfImpl(const TCHAR* Fmt, ...);
+	static void VARARGS AppendfImpl(FString& AppendToMe, const TCHAR* Fmt, ...);
 public:
 
 	/**
@@ -2362,5 +2379,66 @@ CORE_API int32 FindMatchingClosingParenthesis(const FString& TargetString, const
 * @return	The slugged string
 */
 CORE_API FString SlugStringForValidName(const FString& DisplayString, const TCHAR* ReplaceWith = TEXT(""));
+
+struct CORE_API FTextRange
+{
+	FTextRange()
+		: BeginIndex(INDEX_NONE)
+		, EndIndex(INDEX_NONE)
+	{
+
+	}
+
+	FTextRange(int32 InBeginIndex, int32 InEndIndex)
+		: BeginIndex(InBeginIndex)
+		, EndIndex(InEndIndex)
+	{
+
+	}
+
+	FORCEINLINE bool operator==(const FTextRange& Other) const
+	{
+		return BeginIndex == Other.BeginIndex
+			&& EndIndex == Other.EndIndex;
+	}
+
+	FORCEINLINE bool operator!=(const FTextRange& Other) const
+	{
+		return !(*this == Other);
+	}
+
+	friend inline uint32 GetTypeHash(const FTextRange& Key)
+	{
+		uint32 KeyHash = 0;
+		KeyHash = HashCombine(KeyHash, GetTypeHash(Key.BeginIndex));
+		KeyHash = HashCombine(KeyHash, GetTypeHash(Key.EndIndex));
+		return KeyHash;
+	}
+
+	int32 Len() const { return EndIndex - BeginIndex; }
+	bool IsEmpty() const { return (EndIndex - BeginIndex) <= 0; }
+	void Offset(int32 Amount) { BeginIndex += Amount; BeginIndex = FMath::Max(0, BeginIndex);  EndIndex += Amount; EndIndex = FMath::Max(0, EndIndex); }
+	bool Contains(int32 Index) const { return Index >= BeginIndex && Index < EndIndex; }
+	bool InclusiveContains(int32 Index) const { return Index >= BeginIndex && Index <= EndIndex; }
+
+	FTextRange Intersect(const FTextRange& Other) const
+	{
+		FTextRange Intersected(FMath::Max(BeginIndex, Other.BeginIndex), FMath::Min(EndIndex, Other.EndIndex));
+		if (Intersected.EndIndex <= Intersected.BeginIndex)
+		{
+			return FTextRange(0, 0);
+		}
+
+		return Intersected;
+	}
+
+	/**
+	 * Produce an array of line ranges from the given text, breaking at any new-line characters
+	 */
+	static void CalculateLineRangesFromString(const FString& Input, TArray<FTextRange>& LineRanges);
+
+	int32 BeginIndex;
+	int32 EndIndex;
+};
 
 #include "Misc/StringFormatArg.h"

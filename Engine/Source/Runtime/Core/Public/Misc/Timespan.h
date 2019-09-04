@@ -19,34 +19,37 @@ class UObject;
 namespace ETimespan
 {
 	/** The maximum number of ticks that can be represented in FTimespan. */
-	const int64 MaxTicks = 9223372036854775807;
+	constexpr int64 MaxTicks = 9223372036854775807;
 
 	/** The minimum number of ticks that can be represented in FTimespan. */
-	const int64 MinTicks = -9223372036854775807 - 1;
+	constexpr int64 MinTicks = -9223372036854775807 - 1;
 
 	/** The number of nanoseconds per tick. */
-	const int64 NanosecondsPerTick = 100;
+	constexpr int64 NanosecondsPerTick = 100;
 
 	/** The number of timespan ticks per day. */
-	const int64 TicksPerDay = 864000000000;
+	constexpr int64 TicksPerDay = 864000000000;
 
 	/** The number of timespan ticks per hour. */
-	const int64 TicksPerHour = 36000000000;
+	constexpr int64 TicksPerHour = 36000000000;
 
 	/** The number of timespan ticks per microsecond. */
-	const int64 TicksPerMicrosecond = 10;
+	constexpr int64 TicksPerMicrosecond = 10;
 
 	/** The number of timespan ticks per millisecond. */
-	const int64 TicksPerMillisecond = 10000;
+	constexpr int64 TicksPerMillisecond = 10000;
 
 	/** The number of timespan ticks per minute. */
-	const int64 TicksPerMinute = 600000000;
+	constexpr int64 TicksPerMinute = 600000000;
 
 	/** The number of timespan ticks per second. */
-	const int64 TicksPerSecond = 10000000;
+	constexpr int64 TicksPerSecond = 10000000;
 
 	/** The number of timespan ticks per week. */
-	const int64 TicksPerWeek = 6048000000000;
+	constexpr int64 TicksPerWeek = 6048000000000;
+
+	/** The number of timespan ticks per year (365 days, not accounting for leap years). */
+	constexpr int64 TicksPerYear = 365 * TicksPerDay;
 }
 
 
@@ -606,7 +609,7 @@ public:
 	 */
 	static FTimespan FromDays(double Days)
 	{
-		return FTimespan(FMath::RoundToZero(Days * ETimespan::TicksPerDay + 0.5));
+		return FTimespan(FMath::FloorToDouble(Days * ETimespan::TicksPerDay + 0.5));
 	}
 
 	/**
@@ -618,7 +621,7 @@ public:
 	 */
 	static FTimespan FromHours(double Hours)
 	{
-		return FTimespan(FMath::RoundToZero(Hours * ETimespan::TicksPerHour + 0.5));
+		return FTimespan(FMath::FloorToDouble(Hours * ETimespan::TicksPerHour + 0.5));
 	}
 
 	/**
@@ -630,7 +633,7 @@ public:
 	 */
 	static FTimespan FromMicroseconds(double Microseconds)
 	{
-		return FTimespan(FMath::RoundToZero(Microseconds * ETimespan::TicksPerMicrosecond + 0.5));
+		return FTimespan(FMath::FloorToDouble(Microseconds * ETimespan::TicksPerMicrosecond + 0.5));
 	}
 
 	/**
@@ -642,7 +645,7 @@ public:
 	 */
 	static FTimespan FromMilliseconds(double Milliseconds)
 	{
-		return FTimespan(FMath::RoundToZero(Milliseconds * ETimespan::TicksPerMillisecond + 0.5));
+		return FTimespan(FMath::FloorToDouble(Milliseconds * ETimespan::TicksPerMillisecond + 0.5));
 	}
 
 	/**
@@ -654,7 +657,7 @@ public:
 	 */
 	static FTimespan FromMinutes(double Minutes)
 	{
-		return FTimespan(FMath::RoundToZero(Minutes * ETimespan::TicksPerMinute + 0.5));
+		return FTimespan(FMath::FloorToDouble(Minutes * ETimespan::TicksPerMinute + 0.5));
 	}
 
 	/**
@@ -666,7 +669,7 @@ public:
 	 */
 	static FTimespan FromSeconds(double Seconds)
 	{
-		return FTimespan(FMath::RoundToZero(Seconds * ETimespan::TicksPerSecond + 0.5));
+		return FTimespan(FMath::FloorToDouble(Seconds * ETimespan::TicksPerSecond + 0.5));
 	}
 
 	/**

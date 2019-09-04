@@ -196,27 +196,32 @@ FString FCurlHttpRequest::GetURLParameter(const FString& ParameterName) const
 {
 	TArray<FString> StringElements;
 
-	int32 NumElems = URL.ParseIntoArray(StringElements, TEXT("&"), true);
-	check(NumElems == StringElements.Num());
-	
-	FString ParamValDelimiter(TEXT("="));
-	for (int Idx = 0; Idx < NumElems; ++Idx )
+	//Parameters start after "?" in url
+	FString Path, Parameters;
+	if (URL.Split(TEXT("?"), &Path, &Parameters))
 	{
-		FString Param, Value;
-		if (StringElements[Idx].Split(ParamValDelimiter, &Param, &Value) && Param == ParameterName)
+		int32 NumElems = Parameters.ParseIntoArray(StringElements, TEXT("&"), true);
+		check(NumElems == StringElements.Num());
+		
+		FString ParamValDelimiter(TEXT("="));
+		for (int Idx = 0; Idx < NumElems; ++Idx )
 		{
-			// unescape
-			auto Converter = StringCast<ANSICHAR>(*Value);
-			char * EscapedAnsi = (char *)Converter.Get();
-			int32 EscapedLength = Converter.Length();
+			FString Param, Value;
+			if (StringElements[Idx].Split(ParamValDelimiter, &Param, &Value) && Param == ParameterName)
+			{
+				// unescape
+				auto Converter = StringCast<ANSICHAR>(*Value);
+				char * EscapedAnsi = (char *)Converter.Get();
+				int32 EscapedLength = Converter.Length();
 
-			int32 UnescapedLength = 0;	
-			char * UnescapedAnsi = curl_easy_unescape(EasyHandle, EscapedAnsi, EscapedLength, &UnescapedLength);
-			
-			FString UnescapedValue(ANSI_TO_TCHAR(UnescapedAnsi));
-			curl_free(UnescapedAnsi);
-			
-			return UnescapedValue;
+				int32 UnescapedLength = 0;	
+				char * UnescapedAnsi = curl_easy_unescape(EasyHandle, EscapedAnsi, EscapedLength, &UnescapedLength);
+				
+				FString UnescapedValue(ANSI_TO_TCHAR(UnescapedAnsi));
+				curl_free(UnescapedAnsi);
+				
+				return UnescapedValue;
+			}
 		}
 	}
 
@@ -266,12 +271,13 @@ FString FCurlHttpRequest::GetContentType() const
 
 int32 FCurlHttpRequest::GetContentLength() const
 {
-	return RequestPayload->GetContentLength();
+	return RequestPayload.IsValid() ? RequestPayload->GetContentLength() : 0;
 }
 
 const TArray<uint8>& FCurlHttpRequest::GetContent() const
 {
-	return RequestPayload->GetContent();
+	static const TArray<uint8> EmptyContent;
+	return RequestPayload.IsValid() ? RequestPayload->GetContent() : EmptyContent;
 }
 
 void FCurlHttpRequest::SetVerb(const FString& InVerb)
@@ -726,10 +732,15 @@ bool FCurlHttpRequest::SetupRequest()
 		curl_easy_setopt(EasyHandle, CURLOPT_POSTFIELDSIZE, RequestPayload->GetContentLength());
 		bUseReadFunction = true;
 	}
-	else if (Verb == TEXT("PUT"))
+	else if (Verb == TEXT("PUT") || Verb == TEXT("PATCH"))
 	{
 		curl_easy_setopt(EasyHandle, CURLOPT_UPLOAD, 1L);
 		curl_easy_setopt(EasyHandle, CURLOPT_INFILESIZE, RequestPayload->GetContentLength());
+		if (Verb != TEXT("PUT"))
+		{
+			curl_easy_setopt(EasyHandle, CURLOPT_CUSTOMREQUEST, TCHAR_TO_UTF8(*Verb));
+		}
+
 		bUseReadFunction = true;
 	}
 	else if (Verb == TEXT("GET"))
@@ -1036,6 +1047,13 @@ void FCurlHttpRequest::FinishedRequest()
 			{
 				Response->ContentLength = static_cast< int32 >(ContentLengthDownload);
 			}
+
+			if (Response->HttpCode <= 0)
+			{
+				UE_LOG(LogHttp, Warning, TEXT("%p: invalid HTTP response code received. URL: %s, HTTP code: %d, content length: %d, actual payload size: %d"),
+					this, *GetURL(), Response->HttpCode, Response->ContentLength, Response->Payload.Num());
+				Response->bSucceeded = false;
+			}
 		}
 	}
 	
@@ -1136,11 +1154,11 @@ void FCurlHttpRequest::FinishedRequest()
 				CompletionStatus = EHttpRequestStatus::Failed_ConnectionError;
 			}
 		}
-		// No response since connection failed
-		Response = NULL;
-
 		// Call delegate with failure
-		OnProcessRequestComplete().ExecuteIfBound(SharedThis(this),NULL,false);
+		OnProcessRequestComplete().ExecuteIfBound(SharedThis(this), Response, false);
+
+		//Delegate needs to know about the errors -- so nuke Response (since connection failed) afterwards...
+		Response = NULL;
 	}
 }
 

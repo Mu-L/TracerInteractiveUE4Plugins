@@ -12,10 +12,15 @@
 #include "LC_Event.h"
 #include "LC_CriticalSection.h"
 #include "LC_PrimitiveNames.h"
+#include "LC_Environment.h"
+#include "LC_MemoryStream.h"
 #include "LC_Logging.h"
 #include "Misc/Paths.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/App.h"
+
+// JumpToSelf is an extern function coming from assembler source
+extern void JumpToSelf(void);
 
 namespace
 {
@@ -60,7 +65,7 @@ ClientStartupThread::~ClientStartupThread(void)
 		// give the server a chance to deal with disconnected clients
 		if (m_pipeClient->IsValid())
 		{
-			m_pipeClient->SendCommandAndWaitForAck(commands::DisconnectClient{});
+			m_pipeClient->SendCommandAndWaitForAck(commands::DisconnectClient {}, nullptr, 0u);
 		}
 		m_pipeClient->Close();
 	}
@@ -108,13 +113,11 @@ ClientStartupThread::~ClientStartupThread(void)
 
 void ClientStartupThread::Start(const char* const groupName, RunMode::Enum runMode)
 {
-	// spawn a thread that does all the initialization work
-	ThreadContext* context = new ThreadContext;
-	context->thisInstance = this;
-	context->processGroupName = string::ToWideString(groupName);
-	context->runMode = runMode;
-
-	m_thread = thread::Create(128u * 1024u, &ThreadProxy, context);
+	// spawn a thread that does all the initialization work.
+	// in the context of mutexes, jobs, named shared memory, etc. object names behave similar to
+	// file names and are not allowed to contain certain characters.
+	std::wstring safeProcessGroupName = string::MakeSafeName(string::ToWideString(groupName));
+	m_thread = thread::Create("Live coding startup", 128u * 1024u, &ClientStartupThread::ThreadFunction, this, safeProcessGroupName, runMode);
 }
 
 
@@ -128,33 +131,93 @@ void ClientStartupThread::Join(void)
 }
 
 
-void* ClientStartupThread::EnableModule(const wchar_t* const nameOfExeOrDll)
+void* ClientStartupThread::EnableModule(const wchar_t* nameOfExeOrDll)
 {
-	return m_userCommandThread->EnableModule(nameOfExeOrDll);
+	// wait for the startup thread to finish initialization
+	Join();
+
+	if (m_userCommandThread)
+	{
+		return m_userCommandThread->EnableModule(nameOfExeOrDll);
+	}
+
+	return nullptr;
 }
 
 
-void* ClientStartupThread::EnableAllModules(const wchar_t* const nameOfExeOrDll)
+void* ClientStartupThread::EnableModules(const wchar_t* namesOfExeOrDll[], unsigned int count)
 {
-	return m_userCommandThread->EnableAllModules(nameOfExeOrDll);
+	// wait for the startup thread to finish initialization
+	Join();
+
+	if (m_userCommandThread)
+	{
+		return m_userCommandThread->EnableModules(namesOfExeOrDll, count);
+	}
+
+	return nullptr;
 }
 
 
-void* ClientStartupThread::DisableModule(const wchar_t* const nameOfExeOrDll)
+void* ClientStartupThread::EnableAllModules(const wchar_t* nameOfExeOrDll)
 {
-	return m_userCommandThread->DisableModule(nameOfExeOrDll);
+	// wait for the startup thread to finish initialization
+	Join();
+
+	if (m_userCommandThread)
+	{
+		return m_userCommandThread->EnableAllModules(nameOfExeOrDll);
+	}
+
+	return nullptr;
 }
 
 
-void* ClientStartupThread::DisableAllModules(const wchar_t* const nameOfExeOrDll)
+void* ClientStartupThread::DisableModule(const wchar_t* nameOfExeOrDll)
 {
-	return m_userCommandThread->DisableAllModules(nameOfExeOrDll);
+	// wait for the startup thread to finish initialization
+	Join();
+
+	if (m_userCommandThread)
+	{
+		return m_userCommandThread->DisableModule(nameOfExeOrDll);
+	}
+
+	return nullptr;
+}
+
+
+void* ClientStartupThread::DisableModules(const wchar_t* namesOfExeOrDll[], unsigned int count)
+{
+	// wait for the startup thread to finish initialization
+	Join();
+
+	if (m_userCommandThread)
+	{
+		return m_userCommandThread->DisableModules(namesOfExeOrDll, count);
+	}
+
+	return nullptr;
+}
+
+
+void* ClientStartupThread::DisableAllModules(const wchar_t* nameOfExeOrDll)
+{
+	// wait for the startup thread to finish initialization
+	Join();
+
+	if (m_userCommandThread)
+	{
+		return m_userCommandThread->DisableAllModules(nameOfExeOrDll);
+	}
+
+	return nullptr;
 }
 
 
 void ClientStartupThread::WaitForToken(void* token)
 {
-	// we cannot wait for commands in the user command thread as long as startup hasn't finished
+	// wait for the startup thread to finish initialization
 	Join();
 
 	if (m_userCommandThread)
@@ -166,7 +229,7 @@ void ClientStartupThread::WaitForToken(void* token)
 
 void ClientStartupThread::TriggerRecompile(void)
 {
-	// we cannot wait for commands in the user command thread as long as startup hasn't finished
+	// wait for the startup thread to finish initialization
 	Join();
 
 	if (m_userCommandThread)
@@ -176,9 +239,21 @@ void ClientStartupThread::TriggerRecompile(void)
 }
 
 
+void ClientStartupThread::LogMessage(const wchar_t* message)
+{
+	// wait for the startup thread to finish initialization
+	Join();
+
+	if (m_userCommandThread)
+	{
+		m_userCommandThread->LogMessage(message);
+	}
+}
+
+
 void ClientStartupThread::BuildPatch(const wchar_t* moduleNames[], const wchar_t* objPaths[], const wchar_t* amalgamatedObjPaths[], unsigned int count)
 {
-	// we cannot wait for commands in the user command thread as long as startup hasn't finished
+	// wait for the startup thread to finish initialization
 	Join();
 
 	if (m_userCommandThread)
@@ -190,7 +265,7 @@ void ClientStartupThread::BuildPatch(const wchar_t* moduleNames[], const wchar_t
 
 void ClientStartupThread::InstallExceptionHandler(void)
 {
-	// we cannot wait for commands in the user command thread as long as startup hasn't finished
+	// wait for the startup thread to finish initialization
 	Join();
 
 	if (m_userCommandThread)
@@ -256,21 +331,24 @@ void ClientStartupThread::SetBuildArguments(const wchar_t* arguments)
 // END EPIC MOD
 
 // BEGIN EPIC MOD - Support for lazy-loading modules
-void ClientStartupThread::EnableLazyLoadedModule(const wchar_t* fileName, Windows::HMODULE moduleBase)
+void* ClientStartupThread::EnableLazyLoadedModule(const wchar_t* fileName, Windows::HMODULE moduleBase)
 {
 	// we cannot wait for commands in the user command thread as long as startup hasn't finished
 	Join();
 
 	if (m_userCommandThread)
 	{
-		m_userCommandThread->EnableLazyLoadedModule(fileName, moduleBase);
+		return m_userCommandThread->EnableLazyLoadedModule(fileName, moduleBase);
 	}
+
+	return nullptr;
 }
 // END EPIC MOD
 
-void ClientStartupThread::ApplySettingBool(const char* const settingName, int value)
+
+void ClientStartupThread::ApplySettingBool(const char* settingName, int value)
 {
-	// we cannot wait for commands in the user command thread as long as startup hasn't finished
+	// wait for the startup thread to finish initialization
 	Join();
 
 	if (m_userCommandThread)
@@ -280,9 +358,9 @@ void ClientStartupThread::ApplySettingBool(const char* const settingName, int va
 }
 
 
-void ClientStartupThread::ApplySettingInt(const char* const settingName, int value)
+void ClientStartupThread::ApplySettingInt(const char* settingName, int value)
 {
-	// we cannot wait for commands in the user command thread as long as startup hasn't finished
+	// wait for the startup thread to finish initialization
 	Join();
 
 	if (m_userCommandThread)
@@ -292,32 +370,15 @@ void ClientStartupThread::ApplySettingInt(const char* const settingName, int val
 }
 
 
-void ClientStartupThread::ApplySettingString(const char* const settingName, const wchar_t* const value)
+void ClientStartupThread::ApplySettingString(const char* settingName, const wchar_t* value)
 {
-	// we cannot wait for commands in the user command thread as long as startup hasn't finished
+	// wait for the startup thread to finish initialization
 	Join();
 
 	if (m_userCommandThread)
 	{
 		m_userCommandThread->ApplySettingString(settingName, value);
 	}
-}
-
-
-unsigned int __stdcall ClientStartupThread::ThreadProxy(void* context)
-{
-	thread::SetName("Live coding startup");
-
-	ThreadContext* realContext = static_cast<ThreadContext*>(context);
-
-	// in the context of mutexes, jobs, named shared memory, etc. object names behave similar to
-	// file names and are not allowed to contain certain characters.
-	const std::wstring& safeProcessGroupName = string::MakeSafeName(realContext->processGroupName);
-	const unsigned int exitCode = realContext->thisInstance->ThreadFunction(safeProcessGroupName, realContext->runMode);
-
-	delete realContext;
-
-	return exitCode;
 }
 
 
@@ -337,7 +398,7 @@ unsigned int ClientStartupThread::ThreadFunction(const std::wstring& processGrou
 	// the first one will spawn the Live++ process, all others will connect to the same process.
 	{
 		InterprocessMutex initProcessMutex(primitiveNames::StartupMutex(processGroupName).c_str());
-		initProcessMutex.Lock();
+		InterprocessMutex::ScopedLock mutexLock(&initProcessMutex);
 
 		m_sharedMemory = new NamedSharedMemory(primitiveNames::StartupNamedSharedMemory(processGroupName).c_str());
 		if (m_sharedMemory->IsOwnedByCallingProcess())
@@ -392,8 +453,6 @@ unsigned int ClientStartupThread::ThreadFunction(const std::wstring& processGrou
 				::AssignProcessToJobObject(m_job, m_processHandle);
 			}
 		}
-
-		initProcessMutex.Unlock();
 	}
 
 	if (!m_processHandle)
@@ -445,7 +504,48 @@ unsigned int ClientStartupThread::ThreadFunction(const std::wstring& processGrou
 	m_userCommandThread->Start(processGroupName, m_startEvent, m_pipeClientCS);
 
 	// register this process with Live++
-	m_pipeClient->SendCommandAndWaitForAck(commands::RegisterProcess { process::GetBase(), process::GetId(), commandThreadId });
+	{
+		// try getting the previous process ID from the environment in case the process was restarted
+		unsigned int restartedProcessId = 0u;
+		const std::wstring& processIdStr = environment::GetVariable(L"LPP_PROCESS_RESTART_ID", nullptr);
+		if (processIdStr.length() != 0u)
+		{
+			restartedProcessId = static_cast<unsigned int>(std::stoi(processIdStr));
+			environment::RemoveVariable(L"LPP_PROCESS_RESTART_ID");
+		}
+
+		// store the current process ID in an environment variable.
+		// upon restart, the environment block is inherited by the new process and can be used to map the process IDs of
+		// restarted processes to their previous IDs.
+		{
+			const unsigned int processID = process::GetId();
+			environment::SetVariable(L"LPP_PROCESS_RESTART_ID", std::to_wstring(processID).c_str());
+		}
+
+		const std::wstring& imagePath = process::GetImagePath();
+		const std::wstring& commandLine = process::GetCommandLine();
+		const std::wstring& workingDirectory = process::GetWorkingDirectory();
+		process::Environment* environment = process::CreateEnvironment(::GetCurrentProcess());
+
+		const commands::RegisterProcess command =
+		{
+			process::GetBase(), process::GetId(), restartedProcessId, commandThreadId, &JumpToSelf,
+			(imagePath.size() + 1u) * sizeof(wchar_t), 
+			(commandLine.size() + 1u) * sizeof(wchar_t),
+			(workingDirectory.size() + 1u) * sizeof(wchar_t),
+			environment->size
+		};
+
+		memoryStream::Writer payload(command.imagePathSize + command.commandLineSize + command.workingDirectorySize + command.environmentSize);
+		payload.Write(imagePath.data(), command.imagePathSize);
+		payload.Write(commandLine.data(), command.commandLineSize);
+		payload.Write(workingDirectory.data(), command.workingDirectorySize);
+		payload.Write(environment->data, environment->size);
+
+		m_pipeClient->SendCommandAndWaitForAck(command, payload.GetData(), payload.GetSize());
+
+		process::DestroyEnvironment(environment);
+	}
 
 	// handle commands until registration is finished
 	{

@@ -8,7 +8,7 @@ D3D12Adapter.cpp:D3D12 Adapter implementation.
 
 static TAutoConsoleVariable<int32> CVarTransientUniformBufferAllocatorSizeKB(
 	TEXT("D3D12.TransientUniformBufferAllocatorSizeKB"),
-	2 * 1024,
+	10 * 1024,
 	TEXT(""),
 	ECVF_ReadOnly
 );
@@ -50,8 +50,21 @@ FD3D12Adapter::FD3D12Adapter(FD3D12AdapterDesc& DescIn)
 			MaxGPUCount = MAX_NUM_GPUS;
 		}
 	}
+	if (FParse::Param(FCommandLine::Get(), TEXT("VMGPU")))
+	{
+		GVirtualMGPU = 1;
+		UE_LOG(LogD3D12RHI, Log, TEXT("Enabling virtual multi-GPU mode"), Desc.NumDeviceNodes);
+	}
 #endif
-	Desc.NumDeviceNodes = FMath::Min3<uint32>(Desc.NumDeviceNodes, MaxGPUCount, MAX_NUM_GPUS);
+
+	if (GVirtualMGPU)
+	{
+		Desc.NumDeviceNodes = FMath::Min<uint32>(MaxGPUCount, MAX_NUM_GPUS);
+	}
+	else
+	{
+		Desc.NumDeviceNodes = FMath::Min3<uint32>(Desc.NumDeviceNodes, MaxGPUCount, MAX_NUM_GPUS);
+	}
 }
 
 void FD3D12Adapter::Initialize(FD3D12DynamicRHI* RHI)
@@ -73,7 +86,7 @@ void FD3D12Adapter::CreateRootDevice(bool bWithDebug)
 	//		Software must be NULL. 
 	D3D_DRIVER_TYPE DriverType = D3D_DRIVER_TYPE_UNKNOWN;
 
-#if PLATFORM_WINDOWS
+#if PLATFORM_WINDOWS || (PLATFORM_HOLOLENS && !UE_BUILD_SHIPPING && D3D12_PROFILING_ENABLED)
 	if (bWithDebug)
 	{
 		TRefCountPtr<ID3D12Debug> DebugController;
@@ -81,14 +94,14 @@ void FD3D12Adapter::CreateRootDevice(bool bWithDebug)
 		{
 			DebugController->EnableDebugLayer();
 
-		bool bD3d12gpuvalidation = false;
+			bool bD3d12gpuvalidation = false;
 			if (FParse::Param(FCommandLine::Get(), TEXT("d3d12gpuvalidation")) || FParse::Param(FCommandLine::Get(), TEXT("gpuvalidation")))
-		{
-			TRefCountPtr<ID3D12Debug1> DebugController1;
-			VERIFYD3D12RESULT(DebugController->QueryInterface(IID_PPV_ARGS(DebugController1.GetInitReference())));
-			DebugController1->SetEnableGPUBasedValidation(true);
-			bD3d12gpuvalidation = true;
-		}
+			{
+				TRefCountPtr<ID3D12Debug1> DebugController1;
+				VERIFYD3D12RESULT(DebugController->QueryInterface(IID_PPV_ARGS(DebugController1.GetInitReference())));
+				DebugController1->SetEnableGPUBasedValidation(true);
+				bD3d12gpuvalidation = true;
+			}
 
 			UE_LOG(LogD3D12RHI, Log, TEXT("InitD3DDevice: -D3DDebug = %s -D3D12GPUValidation = %s"), bWithDebug ? TEXT("on") : TEXT("off"), bD3d12gpuvalidation ? TEXT("on") : TEXT("off"));
 		}
@@ -98,7 +111,7 @@ void FD3D12Adapter::CreateRootDevice(bool bWithDebug)
 			UE_LOG(LogD3D12RHI, Fatal, TEXT("The debug interface requires the D3D12 SDK Layers. Please install the Graphics Tools for Windows. See: https://docs.microsoft.com/en-us/windows/uwp/gaming/use-the-directx-runtime-and-visual-studio-graphics-diagnostic-features"));
 		}
 	}
-#endif // PLATFORM_WINDOWS
+#endif // PLATFORM_WINDOWS || (PLATFORM_HOLOLENS && !UE_BUILD_SHIPPING && D3D12_PROFILING_ENABLED)
 
 #if USE_PIX
 	UE_LOG(LogD3D12RHI, Log, TEXT("Emitting draw events for PIX profiling."));
@@ -213,7 +226,7 @@ void FD3D12Adapter::CreateRootDevice(bool bWithDebug)
 #endif
 
 
-#if UE_BUILD_DEBUG	&& PLATFORM_WINDOWS
+#if UE_BUILD_DEBUG	&& (PLATFORM_WINDOWS || PLATFORM_HOLOLENS)
 	//break on debug
 	TRefCountPtr<ID3D12Debug> d3dDebug;
 	if (SUCCEEDED(RootDevice->QueryInterface(__uuidof(ID3D12Debug), (void**)d3dDebug.GetInitReference())))
@@ -228,7 +241,7 @@ void FD3D12Adapter::CreateRootDevice(bool bWithDebug)
 	}
 #endif
 
-#if !(UE_BUILD_SHIPPING && WITH_EDITOR) && PLATFORM_WINDOWS
+#if !(UE_BUILD_SHIPPING && WITH_EDITOR) && (PLATFORM_WINDOWS || PLATFORM_HOLOLENS)
 	// Add some filter outs for known debug spew messages (that we don't care about)
 	if (bWithDebug)
 	{
@@ -400,7 +413,7 @@ void FD3D12Adapter::InitializeDevices()
 				UE_LOG(LogD3D12RHI, Log, TEXT("The system supports ID3D12Device1."));
 			}
 
-	#if PLATFORM_WINDOWS
+	#if PLATFORM_WINDOWS || PLATFORM_HOLOLENS
 			if (SUCCEEDED(RootDevice->QueryInterface(IID_PPV_ARGS(RootDevice2.GetInitReference()))))
 			{
 				UE_LOG(LogD3D12RHI, Log, TEXT("The system supports ID3D12Device2."));
@@ -413,7 +426,7 @@ void FD3D12Adapter::InitializeDevices()
 		ResourceHeapTier = D3D12Caps.ResourceHeapTier;
 		ResourceBindingTier = D3D12Caps.ResourceBindingTier;
 
-#if PLATFORM_WINDOWS
+#if PLATFORM_WINDOWS || PLATFORM_HOLOLENS
 		D3D12_FEATURE_DATA_D3D12_OPTIONS2 D3D12Caps2 = {};
 		if (FAILED(RootDevice->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS2, &D3D12Caps2, sizeof(D3D12Caps2))))
 		{
@@ -491,7 +504,7 @@ void FD3D12Adapter::InitializeDevices()
 		ID3D12RootSignature* StaticGraphicsRS = (GetStaticGraphicsRootSignature()) ? GetStaticGraphicsRootSignature()->GetRootSignature() : nullptr;
 		ID3D12RootSignature* StaticComputeRS = (GetStaticComputeRootSignature()) ? GetStaticComputeRootSignature()->GetRootSignature() : nullptr;
 
-		// #dxr_todo: verify that disk cache works correctly with DXR
+		// #dxr_todo UE-68235: verify that disk cache works correctly with DXR
 		PipelineStateCache.RebuildFromDiskCache(StaticGraphicsRS, StaticComputeRS);
 	}
 }
@@ -670,18 +683,21 @@ FD3D12FastConstantAllocator& FD3D12Adapter::GetTransientUniformBufferAllocator()
 
 void FD3D12Adapter::GetLocalVideoMemoryInfo(DXGI_QUERY_VIDEO_MEMORY_INFO* LocalVideoMemoryInfo)
 {
-#if PLATFORM_WINDOWS
+#if PLATFORM_WINDOWS || PLATFORM_HOLOLENS
 	TRefCountPtr<IDXGIAdapter3> Adapter3;
 	VERIFYD3D12RESULT(GetAdapter()->QueryInterface(IID_PPV_ARGS(Adapter3.GetInitReference())));
 
 	VERIFYD3D12RESULT(Adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, LocalVideoMemoryInfo));
 
-	for (uint32 Index = 1; Index < GNumExplicitGPUsForRendering; ++Index)
+	if (!GVirtualMGPU)
 	{
-		DXGI_QUERY_VIDEO_MEMORY_INFO TempVideoMemoryInfo;
-		VERIFYD3D12RESULT(Adapter3->QueryVideoMemoryInfo(Index, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &TempVideoMemoryInfo));
-		LocalVideoMemoryInfo->Budget = FMath::Min(LocalVideoMemoryInfo->Budget, TempVideoMemoryInfo.Budget);
-		LocalVideoMemoryInfo->Budget = FMath::Min(LocalVideoMemoryInfo->CurrentUsage, TempVideoMemoryInfo.CurrentUsage);
+		for (uint32 Index = 1; Index < GNumExplicitGPUsForRendering; ++Index)
+		{
+			DXGI_QUERY_VIDEO_MEMORY_INFO TempVideoMemoryInfo;
+			VERIFYD3D12RESULT(Adapter3->QueryVideoMemoryInfo(Index, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &TempVideoMemoryInfo));
+			LocalVideoMemoryInfo->Budget = FMath::Min(LocalVideoMemoryInfo->Budget, TempVideoMemoryInfo.Budget);
+			LocalVideoMemoryInfo->Budget = FMath::Min(LocalVideoMemoryInfo->CurrentUsage, TempVideoMemoryInfo.CurrentUsage);
+		}
 	}
 #endif
 }

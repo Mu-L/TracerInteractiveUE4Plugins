@@ -13,6 +13,17 @@
 #include "GraphEditorSettings.h"
 #include "ControlRigEditorStyle.h"
 #include "Widgets/Layout/SWrapBox.h"
+#include "Engine/Engine.h"
+#include "KismetNodes/KismetNodeInfoContext.h"
+#include "Kismet2/KismetDebugUtilities.h"
+#include "PropertyPathHelpers.h"
+#include "UObject/PropertyPortFlags.h"
+#include "ControlRigBlueprint.h"
+#include "ControlRigController.h"
+
+#if WITH_EDITOR
+#include "Editor.h"
+#endif
 
 #define LOCTEXT_NAMESPACE "SControlRigGraphNode"
 
@@ -28,7 +39,10 @@ void SControlRigGraphNode::Construct( const FArguments& InArgs )
 	// Re-cache variable info here (unit structure could have changed since last reconstruction, e.g. array add/remove)
 	// and also create missing pins if it hasn't created yet
 	ControlRigGraphNode->CreateVariablePins(false);
-
+	
+	InputTree = nullptr;
+	OutputTree = nullptr;
+	InputOutputTree = nullptr;
 	this->UpdateGraphNode();
 
 	SetIsEditable(ControlRigGraphNode->IsPropertyAccessor());
@@ -36,6 +50,20 @@ void SControlRigGraphNode::Construct( const FArguments& InArgs )
 	ScrollBar = SNew(SScrollBar);
 
 	// create pin-collapse areas
+	LeftNodeBox->AddSlot()
+		.AutoHeight()
+		[
+			SAssignNew(ExecutionTree, STreeView<TSharedRef<FControlRigField>>)
+			.Visibility(this, &SControlRigGraphNode::GetExecutionTreeVisibility)
+			.TreeItemsSource(&ControlRigGraphNode->GetExecutionVariableInfo())
+			.SelectionMode(ESelectionMode::None)
+			.OnGenerateRow(this, &SControlRigGraphNode::MakeTableRowWidget)
+			.OnGetChildren(this, &SControlRigGraphNode::HandleGetChildrenForTree)
+			.OnExpansionChanged(this, &SControlRigGraphNode::HandleExpansionChanged)
+			.ExternalScrollbar(ScrollBar)
+			.ItemHeight(20.0f)
+		];
+
 	LeftNodeBox->AddSlot()
 		.AutoHeight()
 		[
@@ -84,7 +112,7 @@ void SControlRigGraphNode::Construct( const FArguments& InArgs )
 		{
 			for(const TSharedRef<FControlRigField>& Field : InItems)
 			{
-				if(InControlRigGraphNode->IsPinExpanded(Field->GetPropertyPath()))
+				if(InControlRigGraphNode->IsPinExpanded(Field->GetPinPath()))
 				{
 					TreeWidget->SetItemExpansion(Field, true);
 
@@ -94,9 +122,24 @@ void SControlRigGraphNode::Construct( const FArguments& InArgs )
 		}
 	};
 
+	Local::SetItemExpansion_Recursive(ControlRigGraphNode, ExecutionTree, ControlRigGraphNode->GetExecutionVariableInfo());
 	Local::SetItemExpansion_Recursive(ControlRigGraphNode, InputTree, ControlRigGraphNode->GetInputVariableInfo());
 	Local::SetItemExpansion_Recursive(ControlRigGraphNode, InputOutputTree, ControlRigGraphNode->GetInputOutputVariableInfo());
 	Local::SetItemExpansion_Recursive(ControlRigGraphNode, OutputTree, ControlRigGraphNode->GetOutputVariableInfo());
+
+
+	// force the regeneration of all pins.
+	// the treeview is lazy - to ensure we draw the connections properly we need
+	// to ensure that it updates it's items at least once.
+	FGeometry DummyGeometry(FVector2D(), FVector2D(), FVector2D(FLT_MAX, FLT_MAX), 1.f);
+	ExecutionTree->RequestTreeRefresh();
+	InputTree->RequestTreeRefresh();
+	InputOutputTree->RequestTreeRefresh();
+	OutputTree->RequestTreeRefresh();
+	ExecutionTree->Tick(DummyGeometry, 0.f, 0.f);
+	InputTree->Tick(DummyGeometry, 0.f, 0.f);
+	InputOutputTree->Tick(DummyGeometry, 0.f, 0.f);
+	OutputTree->Tick(DummyGeometry, 0.f, 0.f);
 }
 
 TSharedRef<SWidget> SControlRigGraphNode::CreateNodeContentArea()
@@ -144,6 +187,23 @@ TSharedPtr<SGraphPin> SControlRigGraphNode::GetHoveredPin(const FGeometry& MyGeo
 	return HoveredPin;
 }
 
+void SControlRigGraphNode::EndUserInteraction() const
+{
+#if WITH_EDITOR
+	if (GEditor)
+	{
+		GEditor->CancelTransaction(0);
+	}
+#endif
+
+	if (GraphNode)
+	{
+		UControlRigGraphNode* ControlRigGraphNode = CastChecked<UControlRigGraphNode>(GraphNode);
+		FVector2D Position(ControlRigGraphNode->NodePosX, ControlRigGraphNode->NodePosY);
+		ControlRigGraphNode->GetBlueprint()->ModelController->SetNodePosition(ControlRigGraphNode->GetPropertyName(), Position, true);
+	}
+}
+
 void SControlRigGraphNode::AddPin(const TSharedRef<SGraphPin>& PinToAdd) 
 {
 	// We show our own label
@@ -171,6 +231,11 @@ void SControlRigGraphNode::AddPin(const TSharedRef<SGraphPin>& PinToAdd)
 	}
 }
 
+const FSlateBrush * SControlRigGraphNode::GetNodeBodyBrush() const
+{
+	return FEditorStyle::GetBrush("Graph.Node.TintedBody");
+}
+
 bool SControlRigGraphNode::UseLowDetailNodeTitles() const
 {
 	return ParentUseLowDetailNodeTitles();
@@ -179,6 +244,12 @@ bool SControlRigGraphNode::UseLowDetailNodeTitles() const
 EVisibility SControlRigGraphNode::GetTitleVisibility() const
 {
 	return ParentUseLowDetailNodeTitles() ? EVisibility::Hidden : EVisibility::Visible;
+}
+
+EVisibility SControlRigGraphNode::GetExecutionTreeVisibility() const
+{
+	UControlRigGraphNode* ControlRigGraphNode = CastChecked<UControlRigGraphNode>(GraphNode);
+	return ControlRigGraphNode->GetExecutionVariableInfo().Num() > 0 ? EVisibility::Visible : EVisibility::Collapsed;
 }
 
 EVisibility SControlRigGraphNode::GetInputTreeVisibility() const
@@ -590,7 +661,17 @@ void SControlRigGraphNode::HandleExpansionChanged(TSharedRef<FControlRigField> I
 {
 	if (GraphNode)
 	{
-		CastChecked<UControlRigGraphNode>(GraphNode)->SetPinExpansion(InItem->GetPropertyPath(), bExpanded);
+		UControlRigBlueprint* ControlRigBlueprint = Cast<UControlRigBlueprint>(GraphNode->GetGraph()->GetOuter());
+		if (ControlRigBlueprint)
+		{
+			if (ControlRigBlueprint->ModelController)
+			{
+				FString PinPath = InItem->GetPinPath();
+				FString Left, Right;
+				ControlRigBlueprint->Model->SplitPinPath(PinPath, Left, Right);
+				ControlRigBlueprint->ModelController->ExpandPin(*Left, *Right, InItem->GetPin()->Direction == EGPD_Input, bExpanded);
+			}
+		}
 	}
 }
 
@@ -614,7 +695,7 @@ FSlateColor SControlRigGraphNode::GetPinTextColor(TWeakPtr<SGraphPin> GraphPin) 
 		// If there is no schema there is no owning node (or basically this is a deleted node)
 		if (GraphNode)
 		{
-			if(!GraphNode->IsNodeEnabled() || GraphNode->IsDisplayAsDisabledForced() || !GraphPin.Pin()->IsEditingEnabled())
+			if(!GraphNode->IsNodeEnabled() || GraphNode->IsDisplayAsDisabledForced() || !GraphPin.Pin()->IsEditingEnabled() || GraphNode->IsNodeUnrelated())
 			{
 				return FLinearColor(1.0f, 1.0f, 1.0f, 0.5f);
 			}
@@ -631,11 +712,66 @@ FReply SControlRigGraphNode::HandleAddArrayElement(TWeakPtr<FControlRigField> In
 	{
 		if (UControlRigGraphNode* ControlRigGraphNode = Cast<UControlRigGraphNode>(GraphNode))
 		{
-			ControlRigGraphNode->HandleAddArrayElement(Item->PropertyPath);
+			// todo ?
+			ControlRigGraphNode->HandleAddArrayElement(Item->GetPinPath());
 		}
 	}
 
 	return FReply::Handled();
+}
+
+void SControlRigGraphNode::GetNodeInfoPopups(FNodeInfoContext* Context, TArray<FGraphInformationPopupInfo>& Popups) const
+{
+	FKismetNodeInfoContext* K2Context = (FKismetNodeInfoContext*)Context;
+
+	const FLinearColor LatentBubbleColor(1.f, 0.5f, 0.25f);
+	const FLinearColor PinnedWatchColor(0.35f, 0.25f, 0.25f);
+
+	// Display any pending latent actions
+	if (UObject* ActiveObject = K2Context->ActiveObjectBeingDebugged)
+	{
+		// Display pinned watches
+		if (K2Context->WatchedNodeSet.Contains(GraphNode))
+		{
+			UBlueprint* Blueprint = K2Context->SourceBlueprint;
+			const UEdGraphSchema* Schema = GraphNode->GetSchema();
+
+			FString PinnedWatchText;
+			int32 ValidWatchCount = 0;
+			for (int32 PinIndex = 0; PinIndex < GraphNode->Pins.Num(); ++PinIndex)
+			{
+				UEdGraphPin* WatchPin = GraphNode->Pins[PinIndex];
+				if (K2Context->WatchedPinSet.Contains(WatchPin))
+				{
+					if (ValidWatchCount > 0)
+					{
+						PinnedWatchText += TEXT("\n");
+					}
+
+					FString PinName = UEdGraphSchema_K2::TypeToText(WatchPin->PinType).ToString();
+					PinName += TEXT(" ");
+					PinName += Schema->GetPinDisplayName(WatchPin).ToString();
+
+					FString WatchText;
+					if (PropertyPathHelpers::GetPropertyValueAsString(ActiveObject, WatchPin->PinName.ToString(), WatchText))
+					{
+						PinnedWatchText += FText::Format(LOCTEXT("WatchingAndValidFmt", "Watching {0}\n\t{1}"), FText::FromString(PinName), FText::FromString(WatchText)).ToString();//@TODO: Print out object being debugged name?
+					}
+					else
+					{
+						PinnedWatchText += FText::Format(LOCTEXT("InvalidPropertyFmt", "Invalid Property {0}"), FText::FromString(PinName)).ToString();//@TODO: Print out object being debugged name?
+					}
+
+					ValidWatchCount++;
+				}
+			}
+
+			if (ValidWatchCount)
+			{
+				new (Popups) FGraphInformationPopupInfo(NULL, PinnedWatchColor, PinnedWatchText);
+			}
+		}
+	}
 }
 
 #undef LOCTEXT_NAMESPACE

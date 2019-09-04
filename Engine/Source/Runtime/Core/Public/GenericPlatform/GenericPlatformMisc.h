@@ -10,6 +10,7 @@
 class Error;
 class GenericApplication;
 class IPlatformChunkInstall;
+class IPlatformInstallBundleManager;
 class IPlatformCompression;
 struct FGenericCrashContext;
 struct FGenericMemoryWarningContext;
@@ -651,6 +652,12 @@ public:
 	 */
 	static void RequestExitWithStatus( bool Force, uint8 ReturnCode );
 
+
+	/**
+	 * Requests application to restart
+	 */
+	static bool RestartApplication();
+
 	/**
 	 * Returns the last system error code in string form.  NOTE: Only one return value is valid at a time!
 	 *
@@ -846,6 +853,20 @@ public:
 	 * @return	Returns the platform specific chunk based install implementation
 	 */
 	static IPlatformChunkInstall* GetPlatformChunkInstall();
+
+	/**
+	 * Returns the platform specific Install Bundle Manager
+	 *
+	 * @return	Returns the platform specific Install Bundle Manager implementation
+	 */
+	static IPlatformInstallBundleManager* GetPlatformInstallBundleManager();
+
+	/**
+	 * Returns the platform specific compression interface
+	 *
+	 * @return Returns the platform specific compression interface
+	 */
+	static IPlatformCompression* GetPlatformCompression();
 
 	/**
 	 * Has the OS execute a command and path pair (such as launch a browser)
@@ -1263,6 +1284,12 @@ public:
 	 * For other platforms, the path is relative to the root directory.
 	*/
 	static FString LoadTextFileFromPlatformPackage(const FString& RelativePath);
+
+	static void ParseChunkIdPakchunkIndexMapping(TArray<FString> ChunkIndexRedirects, TMap<int32, int32>& OutMapping);
+
+	static void PumpMessagesOutsideMainLoop()
+	{
+	}
 
 #if !UE_BUILD_SHIPPING
 	/** 

@@ -6,14 +6,17 @@
 #include "Modules/Boilerplate/ModuleBoilerplate.h"
 #include "Misc/CallbackDevice.h"
 #include "IOS/IOSView.h"
+#include "IOS/IOSWindow.h"
 #include "Async/TaskGraphInterfaces.h"
 #include "GenericPlatform/GenericPlatformChunkInstall.h"
 #include "IOS/IOSPlatformMisc.h"
+#include "IOS/IOSBackgroundURLSessionHandler.h"
 #include "HAL/PlatformStackWalk.h"
 #include "HAL/PlatformProcess.h"
 #include "Misc/OutputDeviceError.h"
 #include "Misc/CommandLine.h"
 #include "IOS/IOSPlatformFramePacer.h"
+#include "IOS/IOSApplication.h"
 #include "IOS/IOSAsyncTask.h"
 #include "Misc/ConfigCacheIni.h"
 #include "IOS/IOSPlatformCrashContext.h"
@@ -22,6 +25,8 @@
 #include "Misc/FeedbackContext.h"
 #include "Misc/App.h"
 #include "Algo/AllOf.h"
+#include "Misc/App.h"
+#include "Misc/EmbeddedCommunication.h"
 #if USE_MUTE_SWITCH_DETECTION
 #include "SharkfoodMuteSwitchDetector.h"
 #include "SharkfoodMuteSwitchDetector.m"
@@ -30,6 +35,10 @@
 #include <AudioToolbox/AudioToolbox.h>
 #include <AVFoundation/AVAudioSession.h>
 #include "HAL/IConsoleManager.h"
+
+#if WITH_ACCESSIBILITY
+#include "IOS/Accessibility/IOSAccessibilityCache.h"
+#endif
 
 // this is the size of the game thread stack, it must be a multiple of 4k
 #if (UE_BUILD_SHIPPING || UE_BUILD_TEST)
@@ -52,12 +61,22 @@ extern bool GShowSplashScreen;
 FIOSCoreDelegates::FOnOpenURL FIOSCoreDelegates::OnOpenURL;
 TArray<FIOSCoreDelegates::FFilterDelegateAndHandle> FIOSCoreDelegates::PushNotificationFilters;
 
+static bool GEnabledAudioFeatures[(uint8)EAudioFeature::NumFeatures];
+
 /*
 	From: https://developer.apple.com/library/ios/documentation/UIKit/Reference/UIApplicationDelegate_Protocol/#//apple_ref/occ/intfm/UIApplicationDelegate/applicationDidEnterBackground:
 	"In practice, you should return from applicationDidEnterBackground: as quickly as possible. If the method does not return before time runs out your app is terminated and purged from memory."
 */
-const double cMaxThreadWaitTime = 2.0;	// Setting this to be 2 seconds since this wait has to be done twice (once for sending the enter background event to the game thread, and another for waiting on the suspend msg
+
+static float GOverrideThreadWaitTime = 0.0;
+static float GMaxThreadWaitTime = 2.0;	// Setting this to be 2 seconds since this wait has to be done twice (once for sending the enter background event to the game thread, and another for waiting on the suspend msg
 										// I could not find a reference for this but in the past I believe the timeout was 5 seconds
+FAutoConsoleVariableRef CVarThreadBlockTime(
+		TEXT("ios.lifecycleblocktime"),
+		GMaxThreadWaitTime,
+		TEXT("How long to block main IOS thread to make sure gamethread gets time.\n"),
+		ECVF_Default);
+
 
 static void SignalHandler(int32 Signal, struct __siginfo* Info, void* Context)
 {
@@ -96,28 +115,6 @@ void InstallSignalHandlers()
 	sigaction(SIGSYS, &Action, NULL);
 }
 
-void EngineCrashHandler(const FGenericCrashContext& GenericContext)
-{
-    const FIOSCrashContext& Context = static_cast<const FIOSCrashContext&>(GenericContext);
-    
-    Context.ReportCrash();
-    if (GLog)
-    {
-        GLog->SetCurrentThreadAsMasterThread();
-        GLog->Flush();
-    }
-    if (GWarn)
-    {
-        GWarn->Flush();
-    }
-    if (GError)
-    {
-        GError->Flush();
-        GError->HandleError();
-    }
-    return Context.GenerateCrashInfo();
-}
-
 FDelegateHandle FIOSCoreDelegates::AddPushNotificationFilter(const FPushNotificationFilter& FilterDel)
 {
 	FDelegateHandle NewHandle(FDelegateHandle::EGenerateNewHandleType::GenerateNewHandle);
@@ -139,6 +136,12 @@ bool FIOSCoreDelegates::PassesPushNotificationFilters(NSDictionary* Payload)
 	});
 }
 
+@interface IOSAppDelegate()
+
+// move private things from header to here
+
+@end
+
 @implementation IOSAppDelegate
 
 #if !UE_BUILD_SHIPPING && !PLATFORM_TVOS
@@ -159,13 +162,57 @@ bool FIOSCoreDelegates::PassesPushNotificationFilters(NSDictionary* Payload)
 
 @synthesize Window;
 @synthesize IOSView;
-@synthesize IOSController;
 @synthesize SlateController;
 @synthesize timer;
 @synthesize IdleTimerEnableTimer;
 @synthesize IdleTimerEnablePeriod;
-
+#if WITH_ACCESSIBILITY
+@synthesize AccessibilityCacheTimer;
+#endif
 @synthesize savedOpenUrlParameters;
+@synthesize BackgroundSessionEventCompleteDelegate;
+
+
+static IOSAppDelegate* CachedDelegate = nil;
+
++ (IOSAppDelegate*)GetDelegate
+{
+#if BUILD_EMBEDDED_APP
+	if (CachedDelegate == nil)
+	{
+		UE_LOG(LogIOS, Fatal, TEXT("Currently, a native embedding UE4 must have the AppDelegate subclass from IOSAppDelegate."));
+
+		// if we are embedded, but CachedDelegate is nil, then that means the delegate was not an IOSAppDelegate subclass,
+		// so we need to do a switcheroo - but this is unlikely to work well
+#if 0 // ALLOW_NATIVE_APP_DELEGATE
+		SCOPED_BOOT_TIMING("Delegate Switcheroo");
+
+		id<UIApplicationDelegate> ExistingDelegate = [UIApplication sharedApplication].delegate;
+		
+		CachedDelegate = [[IOSAppDelegate alloc] init];
+		CachedDelegate.Window = ExistingDelegate.window;
+		
+		// @todo critical: The IOSAppDelegate needs to save the old delegate, override EVERY UIApplication function, and call the old delegate's functions for each one
+		[UIApplication sharedApplication].delegate = CachedDelegate;
+		
+		// we will have missd the didFinishLaunchingWithOptions call, so we need to call it now, but we don't have the original launchOptions, nothing we can do now!
+		[CachedDelegate application:[UIApplication sharedApplication] didFinishLaunchingWithOptions:nil];
+#endif
+	}
+#endif
+
+	return CachedDelegate;
+}
+
+-(id)init
+{
+	self = [super init];
+	CachedDelegate = self;
+	// default to old style
+	memset(GEnabledAudioFeatures, 0, sizeof(GEnabledAudioFeatures));
+	return self;
+}
+
 
 -(void)dealloc
 {
@@ -180,60 +227,36 @@ bool FIOSCoreDelegates::PassesPushNotificationFilters(NSDictionary* Payload)
 #endif
 	[Window release];
 	[IOSView release];
-	[IOSController release];
 	[SlateController release];
 	[timer release];
-	[super dealloc];
-}
-
--(void) ParseCommandLineOverrides
-{
-	//// Check for device type override
-	//FString IOSDeviceName;
-	//if ( Parse( appCmdLine(), TEXT("-IOSDevice="), IOSDeviceName) )
-	//{
-	//	for ( int32 DeviceTypeIndex = 0; DeviceTypeIndex < IOS_Unknown; ++DeviceTypeIndex )
-	//	{
-	//		if ( IOSDeviceName == IPhoneGetDeviceTypeString( (EIOSDevice) DeviceTypeIndex) )
-	//		{
-	//			GOverrideIOSDevice = (EIOSDevice) DeviceTypeIndex;
-	//		}
-	//	}
-	//}
-
-	//// Check for iOS version override
-	//FLOAT IOSVersion = 0.0f;
-	//if ( Parse( appCmdLine(), TEXT("-IOSVersion="), IOSVersion) )
-	//{
-	//	GOverrideIOSVersion = IOSVersion;
-	//}
-
-	// check to see if we are using the network file system, if so, disable the idle timer
-	FString HostIP;
-//	if (FParse::Value(FCommandLine::Get(), TEXT("-FileHostIP="), HostIP))
+#if WITH_ACCESSIBILITY
+	if (AccessibilityCacheTimer != nil)
 	{
-		[UIApplication sharedApplication].idleTimerDisabled = YES;
+		[AccessibilityCacheTimer invalidate];
+		[AccessibilityCacheTimer release];
 	}
+#endif
+	[super dealloc];
 }
 
 -(void)MainAppThread:(NSDictionary*)launchOptions
 {
-    self.bHasStarted = true;
-	GIsGuarded = false;
-	GStartTime = FPlatformTime::Seconds();
-
-	// make sure this thread has an auto release pool setup 
+	// make sure this thread has an auto release pool setup
 	NSAutoreleasePool* AutoreleasePool = [[NSAutoreleasePool alloc] init];
 
-	while(!self.bCommandLineReady)
 	{
-		usleep(100);
+		SCOPED_BOOT_TIMING("[IOSAppDelegate MainAppThread setup]");
+
+		self.bHasStarted = true;
+		GIsGuarded = false;
+		GStartTime = FPlatformTime::Seconds();
+
+
+		while(!self.bCommandLineReady)
+		{
+			usleep(100);
+		}
 	}
-
-
-
-	// Look for overrides specified on the command-line
-	[self ParseCommandLineOverrides];
 
 	FAppEntry::Init();
 	
@@ -259,6 +282,23 @@ bool FIOSCoreDelegates::PassesPushNotificationFilters(NSDictionary* Payload)
 		FIOSCoreDelegates::OnOpenURL.Broadcast(application, url, sourceApplication, annotation);
 	}
 	self.savedOpenUrlParameters = nil; // clear after saved openurl delegate running
+
+#if BUILD_EMBEDDED_APP
+	// tell the embedded app that the while 1 loop is going
+	FEmbeddedCallParamsHelper Helper;
+	Helper.Command = TEXT("engineisrunning");
+	FEmbeddedDelegates::GetEmbeddedToNativeParamsDelegateForSubsystem(TEXT("native")).Broadcast(Helper);
+#endif
+
+#if WITH_ACCESSIBILITY
+	// Initialize accessibility code if VoiceOver is enabled. This must happen after Slate has been initialized.
+	dispatch_async(dispatch_get_main_queue(), ^{
+		if (UIAccessibilityIsVoiceOverRunning())
+		{
+			[[IOSAppDelegate GetDelegate] OnVoiceOverStatusChanged];
+		}
+	});
+#endif
 
     while( !GIsRequestingExit )
 	{
@@ -336,15 +376,21 @@ bool FIOSCoreDelegates::PassesPushNotificationFilters(NSDictionary* Payload)
 	FAppEntry::Shutdown();
     
     self.bHasStarted = false;
+    
+    if(bForceExit || FApp::IsUnattended())
+    {
+        _Exit(0);
+        //exit(0);  // As far as I can tell we run into a lot of trouble trying to run static destructors, so this is a no go :(
+    }
 }
 
 -(void)timerForSplashScreen
 {
     if (!GShowSplashScreen)
     {
-        if ([self.Window viewWithTag:2] != nil)
+        if ([self.Window viewWithTag:200] != nil)
         {
-            [[self.Window viewWithTag:2] removeFromSuperview];
+            [[self.Window viewWithTag:200] removeFromSuperview];
         }
         [timer invalidate];
     }
@@ -414,14 +460,24 @@ bool FIOSCoreDelegates::PassesPushNotificationFilters(NSDictionary* Payload)
 {
 	[[NSNotificationCenter defaultCenter] addObserverForName:AVAudioSessionInterruptionNotification object:nil queue:nil usingBlock:^(NSNotification *notification)
 	{
+		// the audio context should resume immediately after interrupt, if suspended
+		FAppEntry::ResetAudioContextResumeTime();
+
 		switch ([[[notification userInfo] objectForKey:AVAudioSessionInterruptionTypeKey] unsignedIntegerValue])
 		{
 			case AVAudioSessionInterruptionTypeBegan:
 				self.bAudioActive = false;
 				FAppEntry::Suspend(true);
 				break;
-				
+
 			case AVAudioSessionInterruptionTypeEnded:
+
+				NSNumber * interruptionOption = [[notification userInfo] objectForKey:AVAudioSessionInterruptionOptionKey];
+				if (interruptionOption != nil && interruptionOption.unsignedIntegerValue > 0)
+				{
+					FAppEntry::RestartAudio();
+				}
+
 				FAppEntry::Resume(true);
 				[self ToggleAudioSession:true force:true];
 				break;
@@ -469,7 +525,79 @@ bool FIOSCoreDelegates::PassesPushNotificationFilters(NSDictionary* Payload)
 
 - (void)ToggleAudioSession:(bool)bActive force:(bool)bForce
 {
-	if (bActive)
+	// @todo kairos: resolve old vs new before we go to main
+	if (false)
+	{
+		// we can actually override bActive based on backgrounding behavior, as that's the only time we actually deactivate the session
+		// @todo kairos: is this a valid check?
+		bool bIsBackground = GIsSuspended;
+		bActive = !bIsBackground || [self IsFeatureActive:EAudioFeature::BackgroundAudio];
+		
+		// @todo maybe check the active states, not bForce?
+		if (self.bAudioActive != bActive || bForce)
+		{
+			// enable or disable audio
+			NSError* ActiveError = nil;
+			[[AVAudioSession sharedInstance] setActive:bActive error:&ActiveError];
+			if (ActiveError)
+			{
+				UE_LOG(LogIOSAudioSession, Error, TEXT("Failed to set audio session to active = %d [Error = %s]"), bActive, *FString([ActiveError description]));
+			}
+			else
+			{
+				self.bAudioActive = bActive;
+			}
+			
+			if (self.bAudioActive)
+			{
+				// get the category and settings to use
+				/*AVAudioSessionCategory*/NSString* Category = AVAudioSessionCategorySoloAmbient;
+				/*AVAudioSessionMode*/NSString* Mode = AVAudioSessionModeDefault;
+				AVAudioSessionCategoryOptions Options = 0;
+
+				// attempt to mix with other apps if desired
+				if ([self IsFeatureActive:EAudioFeature::BackgroundAudio])
+				{
+					Options |= AVAudioSessionCategoryOptionMixWithOthers;
+				}
+
+				if ([self IsFeatureActive:EAudioFeature::VoiceChat] || ([self IsFeatureActive:EAudioFeature::Playback] && [self IsFeatureActive:EAudioFeature::Record]))
+				{
+					Category = AVAudioSessionCategoryPlayAndRecord;
+					
+					if ([self IsFeatureActive:EAudioFeature::VoiceChat])
+					{
+						Mode = self.bHighQualityVoiceChatEnabled ? AVAudioSessionModeVoiceChat : AVAudioSessionModeDefault;
+#if !PLATFORM_TVOS
+						// allow bluetooth for chatting and such
+						Options |= AVAudioSessionCategoryOptionDefaultToSpeaker | AVAudioSessionCategoryOptionAllowBluetooth | AVAudioSessionCategoryOptionAllowBluetoothA2DP;
+#endif
+					}
+				}
+				else if ([self IsFeatureActive:EAudioFeature::Playback])
+				{
+					Category = AVAudioSessionCategoryPlayback;
+				}
+				else if ([self IsFeatureActive:EAudioFeature::Record])
+				{
+					Category = AVAudioSessionCategoryRecord;
+				}
+				else if ([self IsFeatureActive:EAudioFeature::BackgroundAudio])
+				{
+					Category = AVAudioSessionCategoryRecord;
+				}
+
+				// set the category (the most important part here)
+				[[AVAudioSession sharedInstance] setCategory:Category mode:Mode options:Options error:&ActiveError];
+				if (ActiveError)
+				{
+					UE_LOG(LogIOSAudioSession, Error, TEXT("Failed to set audio session category to %s! [Error = %s]"), *FString(Category), *FString([ActiveError description]));
+				}
+			}
+		}
+	}
+	// old style below
+	else if (bActive)
 	{
         if (bForce || !self.bAudioActive)
         {
@@ -519,7 +647,8 @@ bool FIOSCoreDelegates::PassesPushNotificationFilters(NSDictionary* Payload)
 						
 						if (@available(iOS 10, *))
 						{
-							[[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayAndRecord mode:AVAudioSessionModeDefault options:opts error:&ActiveError];
+							NSString* VoiceChatMode = self.bHighQualityVoiceChatEnabled ? AVAudioSessionModeVoiceChat : AVAudioSessionModeDefault;
+							[[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayAndRecord mode:VoiceChatMode options:opts error:&ActiveError];
 						}
 						else
 						{
@@ -592,7 +721,8 @@ bool FIOSCoreDelegates::PassesPushNotificationFilters(NSDictionary* Payload)
 					
 					if (@available(iOS 10, *))
 					{
-						[[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayAndRecord mode:AVAudioSessionModeDefault options:opts error:&ActiveError];
+						NSString* VoiceChatMode = self.bHighQualityVoiceChatEnabled ? AVAudioSessionModeVoiceChat : AVAudioSessionModeDefault;
+						[[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayAndRecord mode:VoiceChatMode options:opts error:&ActiveError];
 					}
 					else
 					{
@@ -610,7 +740,32 @@ bool FIOSCoreDelegates::PassesPushNotificationFilters(NSDictionary* Payload)
 	else if ((bForce || self.bAudioActive) && !self.bUsingBackgroundMusic)
 	{
 		NSError* ActiveError = nil;
-        if (!self.bVoiceChatEnabled)
+        if (self.bVoiceChatEnabled)
+		{
+			AVAudioSessionCategoryOptions opts =
+				AVAudioSessionCategoryOptionAllowBluetoothA2DP |
+#if !PLATFORM_TVOS
+				AVAudioSessionCategoryOptionDefaultToSpeaker |
+#endif
+				AVAudioSessionCategoryOptionMixWithOthers;
+			
+			// Necessary for voice chat if audio is not active
+			if (@available(iOS 10, *))
+			{
+				NSString* VoiceChatMode = self.bHighQualityVoiceChatEnabled ? AVAudioSessionModeVoiceChat : AVAudioSessionModeDefault;
+				[[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayAndRecord mode:VoiceChatMode options:opts error:&ActiveError];
+			}
+			else
+			{
+				[[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayAndRecord withOptions:opts error:&ActiveError];
+			}
+			if (ActiveError)
+			{
+				UE_LOG(LogIOSAudioSession, Error, TEXT("Failed to set audio session category!"));
+			}
+			ActiveError = nil;
+		}
+		else
         {
     		// Necessary to prevent audio from getting killing when setup for background iPod audio playback
     		[[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryAmbient error:&ActiveError];
@@ -630,23 +785,58 @@ bool FIOSCoreDelegates::PassesPushNotificationFilters(NSDictionary* Payload)
 	return Session.otherAudioPlaying;
 }
 
+-(bool)HasRecordPermission
+{
+#if PLATFORM_TVOS
+	// TVOS does not have sound recording capabilities.
+	return false;
+#else
+	return [[AVAudioSession sharedInstance] recordPermission] == AVAudioSessionRecordPermissionGranted;
+#endif
+}
+
+-(void)EnableHighQualityVoiceChat:(bool)bEnable
+{
+	self.bHighQualityVoiceChatEnabled = bEnable;
+}
+
 - (void)EnableVoiceChat:(bool)bEnable
 {
 	self.bVoiceChatEnabled = false;
 	
-	if (FApp::IsUnattended())
+    // mobile will prompt for microphone access
+    if (FApp::IsUnattended())
 	{
 		return;
 	}
-	
 	self.bVoiceChatEnabled = bEnable;
-	[self ToggleAudioSession : self.bAudioActive force : true];
+	[self ToggleAudioSession:self.bAudioActive force:true];
+	//[self SetFeature:EAudioFeature::VoiceChat Active:bEnable];
 }
 
 - (bool)IsVoiceChatEnabled
 {
 	return self.bVoiceChatEnabled;
+	//return [self IsFeatureActive:EAudioFeature::VoiceChat];
 }
+
+
+- (void)SetFeature:(EAudioFeature)Feature Active:(bool)bIsActive
+{
+	if (GEnabledAudioFeatures[(uint8)Feature] != bIsActive)
+	{
+		GEnabledAudioFeatures[(uint8)Feature] = bIsActive;
+		
+		// actually set the session
+		[self ToggleAudioSession:self.bAudioActive force:true];
+	}
+}
+
+- (bool)IsFeatureActive:(EAudioFeature)Feature
+{
+	return GEnabledAudioFeatures[(uint8)Feature];
+}
+
 
 - (int)GetAudioVolume
 {
@@ -700,19 +890,34 @@ bool FIOSCoreDelegates::PassesPushNotificationFilters(NSDictionary* Payload)
 #endif
 }
 
+- (float)GetBackgroundingMainThreadBlockTime
+{
+	return GOverrideThreadWaitTime > 0.0f ? GOverrideThreadWaitTime : GMaxThreadWaitTime;
+}
+
+-(void)OverrideBackgroundingMainThreadBlockTime:(float)BlockTime
+{
+	GOverrideThreadWaitTime = BlockTime;
+}
+
+
 
 - (NSProcessInfoThermalState)GetThermalState
 {
     return self.ThermalState;
 }
 
-/**
- * @return the single app delegate object
- */
-+ (IOSAppDelegate*)GetDelegate
+- (UIViewController*) IOSController
 {
-	return (IOSAppDelegate*)[UIApplication sharedApplication].delegate;
+	// walk the responder chain until we get to a non-view, that's the VC
+	UIResponder *Responder = IOSView;
+	while ([Responder isKindOfClass:[UIView class]])
+	{
+		Responder = [Responder nextResponder];
+	}
+	return (UIViewController*)Responder;
 }
+
 
 bool GIsSuspended = 0;
 - (void)ToggleSuspend:(bool)bSuspend
@@ -736,13 +941,21 @@ bool GIsSuspended = 0;
 		// Don't deadlock here because a msg box may appear super early blocking the game thread and then the app may go into the background
 		double	startTime = FPlatformTime::Seconds();
 
-		// don't wait for FDefaultGameMoviePlayer::WaitForMovieToFinish(), crash with 0x8badf00d if “Wait for Movies to Complete” is checked
-		while(!self.bHasSuspended && !FAppEntry::IsStartupMoviePlaying() &&  (FPlatformTime::Seconds() - startTime) < cMaxThreadWaitTime)
+		// don't wait for FDefaultGameMoviePlayer::WaitForMovieToFinish(), crash with 0x8badf00d if "Wait for Movies to Complete" is checked
+		FEmbeddedCommunication::KeepAwake(TEXT("Background"), false);
+		while(!self.bHasSuspended && !FAppEntry::IsStartupMoviePlaying() &&  (FPlatformTime::Seconds() - startTime) < [self GetBackgroundingMainThreadBlockTime])
 		{
             FIOSPlatformRHIFramePacer::Suspend();
 			FPlatformProcess::Sleep(0.05f);
 		}
+		FEmbeddedCommunication::AllowSleep(TEXT("Background"));
 	}
+}
+
+- (void)ForceExit
+{
+    GIsRequestingExit = true;
+    bForceExit = true;
 }
 
 - (BOOL)application:(UIApplication *)application willFinishLaunchingWithOptions:(NSDictionary *)launchOptions
@@ -773,14 +986,17 @@ static FAutoConsoleVariableRef CVarGEnableThermalsReport(
 	printf("========= This app is in %s mode\n", self.bDeviceInPortraitMode ? "PORTRAIT" : "LANDSCAPE");
 #endif
 
-		// check OS version to make sure we have the API
+	// check OS version to make sure we have the API
 	OSVersion = [[[UIDevice currentDevice] systemVersion] floatValue];
 	if (!FPlatformMisc::IsDebuggerPresent() || GAlwaysReportCrash)
 	{
-//        FPlatformMisc::SetCrashHandler(EngineCrashHandler);
-        InstallSignalHandlers();
+//        InstallSignalHandlers();
 	}
 
+	self.savedOpenUrlParameters = [[NSMutableArray alloc] init];
+	self.PeakMemoryTimer = [NSTimer scheduledTimerWithTimeInterval:0.1f target:self selector:@selector(RecordPeakMemory) userInfo:nil repeats:YES];
+
+#if !BUILD_EMBEDDED_APP
 	// create the main landscape window object
 	CGRect MainFrame = [[UIScreen mainScreen] bounds];
 	self.Window = [[UIWindow alloc] initWithFrame:MainFrame];
@@ -802,7 +1018,6 @@ static FAutoConsoleVariableRef CVarGEnableThermalsReport(
 	NSMutableString* PngString = [[NSMutableString alloc] init];
     [ImageString appendString:@"Default"];
 
-	self.savedOpenUrlParameters = [[NSMutableArray alloc] init];
 
 	FPlatformMisc::EIOSDevice Device = FPlatformMisc::GetIOSDeviceType();
 
@@ -928,7 +1143,7 @@ static FAutoConsoleVariableRef CVarGEnableThermalsReport(
 		{
 			orient = UIImageOrientationRight;
 		}
-        else if (MainFrame.size.height == 568 || Device == FPlatformMisc::IOS_IPodTouch6)
+		else if (MainFrame.size.height == 568 || Device == FPlatformMisc::IOS_IPodTouch6 || Device == FPlatformMisc::IOS_IPodTouch7)
 		{
 			[ImageString appendString:@"-568h"];
 		}
@@ -968,9 +1183,17 @@ static FAutoConsoleVariableRef CVarGEnableThermalsReport(
     UIImage* imageToDisplay = [UIImage imageWithCGImage: [image CGImage] scale: 1.0 orientation: orient];
     UIImageView* imageView = [[UIImageView alloc] initWithImage: imageToDisplay];
     imageView.frame = MainFrame;
-    imageView.tag = 2;
+    imageView.tag = 200;
     [self.Window addSubview: imageView];
     GShowSplashScreen = true;
+
+	timer = [NSTimer scheduledTimerWithTimeInterval: 0.05f target:self selector:@selector(timerForSplashScreen) userInfo:nil repeats:YES];
+
+	[self StartGameThread];
+
+	self.CommandLineParseTimer = [NSTimer scheduledTimerWithTimeInterval:0.01f target:self selector:@selector(NoUrlCommandLine) userInfo:nil repeats:NO];
+
+#endif
 	
 #if !PLATFORM_TVOS
 #if __IPHONE_OS_VERSION_MIN_REQUIRED >= __IPHONE_10_0
@@ -995,19 +1218,12 @@ static FAutoConsoleVariableRef CVarGEnableThermalsReport(
 		}
 	}
 #endif
-#endif
-	
-    timer = [NSTimer scheduledTimerWithTimeInterval: 0.05f target:self selector:@selector(timerForSplashScreen) userInfo:nil repeats:YES];
-    
-    self.PeakMemoryTimer = [NSTimer scheduledTimerWithTimeInterval:0.1f target:self selector:@selector(RecordPeakMemory) userInfo:nil repeats:YES];
-    
-	// create a new thread (the pointer will be retained forever)
-	NSThread* GameThread = [[NSThread alloc] initWithTarget:self selector:@selector(MainAppThread:) object:launchOptions];
-	[GameThread setStackSize:GAME_THREAD_STACK_SIZE];
-	[GameThread start];
 
-	self.CommandLineParseTimer = [NSTimer scheduledTimerWithTimeInterval:0.01f target:self selector:@selector(NoUrlCommandLine) userInfo:nil repeats:NO];
-#if !UE_BUILD_SHIPPING && !PLATFORM_TVOS
+	// Register for device orientation changes
+	[[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
+	[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(didRotate:) name:UIApplicationDidChangeStatusBarOrientationNotification object:nil];
+
+#if !UE_BUILD_SHIPPING
 	// make a history buffer
 	self.ConsoleHistoryValues = [[NSMutableArray alloc] init];
 
@@ -1049,7 +1265,8 @@ static FAutoConsoleVariableRef CVarGEnableThermalsReport(
 	}
 
 
-#endif
+#endif // UE_BUILD_SHIPPING
+#endif // !TVOS
 
 #if !PLATFORM_TVOS
 	if (@available(iOS 11, *))
@@ -1071,26 +1288,111 @@ static FAutoConsoleVariableRef CVarGEnableThermalsReport(
 #endif
     
 	[self InitializeAudioSession];
-	
-#if !PLATFORM_TVOS
-	// Register for device orientation changes
-	[[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
-	[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(didRotate:) name:UIDeviceOrientationDidChangeNotification object:nil];
+
+#if WITH_ACCESSIBILITY
+	[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(OnVoiceOverStatusChanged) name:UIAccessibilityVoiceOverStatusDidChangeNotification object:nil];
 #endif
-	
+    
 	return YES;
 }
+
+#if WITH_ACCESSIBILITY
+-(void)OnVoiceOverStatusChanged
+{
+	if (UIAccessibilityIsVoiceOverRunning() && self.IOSApplication->GetAccessibleMessageHandler()->ApplicationIsAccessible())
+	{
+		// This must happen asynchronously because when the app activates from a suspended state,
+		// the IOS notification will emit before the game thread wakes up. This does mean that the
+		// accessibility element tree will probably not be 100% completed when the application
+		// opens for the first time. If this is a problem we can add separate branches for startup
+		// vs waking up.
+		FFunctionGraphTask::CreateAndDispatchWhenReady([]()
+		{
+			FIOSApplication* Application = [IOSAppDelegate GetDelegate].IOSApplication;
+			Application->GetAccessibleMessageHandler()->SetActive(true);
+			AccessibleWidgetId WindowId = Application->GetAccessibleMessageHandler()->GetAccessibleWindowId(Application->FindWindowByAppDelegateView());
+			dispatch_async(dispatch_get_main_queue(), ^{
+                IOSAppDelegate* Delegate = [IOSAppDelegate GetDelegate];
+				[Delegate.IOSView SetAccessibilityWindow:WindowId];
+				if (Delegate.AccessibilityCacheTimer == nil)
+				{
+					// Start caching accessibility data so that it can be returned instantly to IOS. If not cached, the data takes too long
+					// to retrieve due to cross-thread waiting and IOS will timeout.
+					Delegate.AccessibilityCacheTimer = [NSTimer scheduledTimerWithTimeInterval:0.25f target:[FIOSAccessibilityCache AccessibilityElementCache] selector:@selector(UpdateAllCachedProperties) userInfo:nil repeats:YES];
+				}
+			});
+		}, TStatId(), NULL, ENamedThreads::GameThread);
+	}
+	else if (AccessibilityCacheTimer != nil)
+	{
+		[AccessibilityCacheTimer invalidate];
+		AccessibilityCacheTimer = nil;
+		[[IOSAppDelegate GetDelegate].IOSView SetAccessibilityWindow : IAccessibleWidget::InvalidAccessibleWidgetId];
+		[[FIOSAccessibilityCache AccessibilityElementCache] Clear];
+		FFunctionGraphTask::CreateAndDispatchWhenReady([]()
+		{
+			[IOSAppDelegate GetDelegate].IOSApplication->GetAccessibleMessageHandler()->SetActive(false);
+		}, TStatId(), NULL, ENamedThreads::GameThread);
+	}
+}
+#endif
+
+- (void) StartGameThread
+{
+	// create a new thread (the pointer will be retained forever)
+	NSThread* GameThread = [[NSThread alloc] initWithTarget:self selector:@selector(MainAppThread:) object:self.launchOptions];
+	[GameThread setStackSize:GAME_THREAD_STACK_SIZE];
+	[GameThread start];
+
+	// this can be slow (1/3 of a second!), so don't make the game thread stall loading for it
+	// check to see if we are using the network file system, if so, disable the idle timer
+	FString HostIP;
+//	if (FParse::Value(FCommandLine::Get(), TEXT("-FileHostIP="), HostIP))
+	{
+		[UIApplication sharedApplication].idleTimerDisabled = YES;
+	}
+}
+
++(bool)WaitAndRunOnGameThread:(TUniqueFunction<void()>)Function
+{
+	FGraphEventRef Task = FFunctionGraphTask::CreateAndDispatchWhenReady(MoveTemp(Function), TStatId(), NULL, ENamedThreads::GameThread);
+
+	const double MaxThreadWaitTime = 2.0;
+	const double StartTime = FPlatformTime::Seconds();
+	while ((FPlatformTime::Seconds() - StartTime) < MaxThreadWaitTime)
+	{
+		FPlatformProcess::Sleep(0.05f);
+		if (Task->IsComplete())
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+#if !PLATFORM_TVOS
+extern EDeviceScreenOrientation ConvertFromUIInterfaceOrientation(UIInterfaceOrientation Orientation);
+#endif
 
 - (void) didRotate:(NSNotification *)notification
 {   
 #if !PLATFORM_TVOS
-	UIDeviceOrientation orientation = [[UIDevice currentDevice] orientation];
-
+	// get the interfaec orientation
+	NSNumber* OrientationNumber = [notification.userInfo objectForKey:UIApplicationStatusBarOrientationUserInfoKey];
+	UIInterfaceOrientation Orientation = (UIInterfaceOrientation)[OrientationNumber intValue];
+	
+	NSLog(@"didRotate orientation = %d, statusBar = %d", (int)Orientation, (int)[[UIApplication sharedApplication] statusBarOrientation]);
+	
+	Orientation = [[UIApplication sharedApplication] statusBarOrientation];
+	
+	extern UIInterfaceOrientation GInterfaceOrientation;
+	GInterfaceOrientation = Orientation;
+	
     if (bEngineInit)
     {
-		FFunctionGraphTask::CreateAndDispatchWhenReady([orientation]()
+		FFunctionGraphTask::CreateAndDispatchWhenReady([Orientation]()
 		{
-			FCoreDelegates::ApplicationReceivedScreenOrientationChangedNotificationDelegate.Broadcast((int32)orientation);
+			FCoreDelegates::ApplicationReceivedScreenOrientationChangedNotificationDelegate.Broadcast((int32)ConvertFromUIInterfaceOrientation(Orientation));
 
 			//we also want to fire off the safe frame event
 			FCoreDelegates::OnSafeFrameChangedEvent.Broadcast();
@@ -1166,14 +1468,17 @@ FCriticalSection RenderSuspend;
 	 */
     if (bEngineInit)
     {
+ 		FEmbeddedCommunication::KeepAwake(TEXT("Background"), false);
         FGraphEventRef ResignTask = FFunctionGraphTask::CreateAndDispatchWhenReady([]()
         {
             FCoreDelegates::ApplicationWillDeactivateDelegate.Broadcast();
+
+			FEmbeddedCommunication::AllowSleep(TEXT("Background"));
         }, TStatId(), NULL, ENamedThreads::GameThread);
 		
 		// Do not wait forever for this task to complete since the game thread may be stuck on waiting for user input from a modal dialog box
 		double	startTime = FPlatformTime::Seconds();
-		while((FPlatformTime::Seconds() - startTime) < cMaxThreadWaitTime)
+		while((FPlatformTime::Seconds() - startTime) < [self GetBackgroundingMainThreadBlockTime])
 		{
 			FPlatformProcess::Sleep(0.05f);
 			if(ResignTask->IsComplete())
@@ -1215,15 +1520,41 @@ FCriticalSection RenderSuspend;
 	 If your application supports background execution, this method is called
 	 instead of applicationWillTerminate: when the user quits.
 	 */
-    FCoreDelegates::ApplicationWillEnterBackgroundDelegate.Broadcast();
+
+#if BUILD_EMBEDDED_APP
+	FEmbeddedCommunication::KeepAwake(TEXT("Background"), false);
+
+	[FIOSAsyncTask CreateTaskWithBlock : ^ bool(void)
+	{
+		// the audio context should resume immediately after interrupt, if suspended
+		FAppEntry::ResetAudioContextResumeTime();
+
+		FCoreDelegates::ApplicationWillEnterBackgroundDelegate.Broadcast();
+	
+		FEmbeddedCommunication::AllowSleep(TEXT("Background"));
+		return true;
+	}];
+#else
+	FCoreDelegates::ApplicationWillEnterBackgroundDelegate.Broadcast();
+#endif //BUILD_EBMEDDED_APP
 }
 
 - (void)applicationWillEnterForeground:(UIApplication *)application
 {
+	FEmbeddedCommunication::KeepAwake(TEXT("Background"), false);
 	/*
 	 Called as part of the transition from the background to the inactive state; here you can undo many of the changes made on entering the background.
 	 */
-    FCoreDelegates::ApplicationHasEnteredForegroundDelegate.Broadcast();
+	[FIOSAsyncTask CreateTaskWithBlock : ^ bool(void)
+	{
+		// the audio context should resume immediately after interrupt, if suspended
+		FAppEntry::ResetAudioContextResumeTime();
+
+		FCoreDelegates::ApplicationHasEnteredForegroundDelegate.Broadcast();
+
+		FEmbeddedCommunication::AllowSleep(TEXT("Background"));
+		return true;
+	}];
 }
 
 extern double GCStartTime;
@@ -1235,19 +1566,23 @@ extern double GCStartTime;
 	 Restart any tasks that were paused (or not yet started) while the application was inactive. If the application was previously in the background, optionally refresh the user interface.
 	 */
 	RenderSuspend.Unlock();
-    [self ToggleAudioSession:true force:true];
 	[self ToggleSuspend : false];
+    [self ToggleAudioSession:true force:true];
 
     if (bEngineInit)
     {
-        FGraphEventRef ResignTask = FFunctionGraphTask::CreateAndDispatchWhenReady([]()
-        {
+		FEmbeddedCommunication::KeepAwake(TEXT("Background"), false);
+
+       FGraphEventRef ResignTask = FFunctionGraphTask::CreateAndDispatchWhenReady([]()
+       {
             FCoreDelegates::ApplicationHasReactivatedDelegate.Broadcast();
+		
+			FEmbeddedCommunication::AllowSleep(TEXT("Background"));
         }, TStatId(), NULL, ENamedThreads::GameThread);
 
 		// Do not wait forever for this task to complete since the game thread may be stuck on waiting for user input from a modal dialog box
 		double	startTime = FPlatformTime::Seconds();
- 		while((FPlatformTime::Seconds() - startTime) < cMaxThreadWaitTime)
+ 		while((FPlatformTime::Seconds() - startTime) < [self GetBackgroundingMainThreadBlockTime])
 		{
 			FPlatformProcess::Sleep(0.05f);
 			if(ResignTask->IsComplete())
@@ -1268,21 +1603,22 @@ extern double GCStartTime;
 	FCoreDelegates::ApplicationWillTerminateDelegate.Broadcast();
     
     // note that we are shutting down
-    GIsRequestingExit = true;
+    // TODO: fix the reason why we are hanging when asked to shutdown
+/*    GIsRequestingExit = true;
     
-    if (!bEngineInit)
+    if (!bEngineInit)*/
     {
         // we haven't yet made it to the point where the engine is initialized, so just exit the app
         _Exit(0);
     }
-    else
+/*    else
     {
         // wait for the game thread to shut down
         while (self.bHasStarted == true)
         {
             usleep(3);
         }
-    }
+    }*/
 }
 
 - (void)applicationDidReceiveMemoryWarning:(UIApplication *)application
@@ -1301,37 +1637,31 @@ extern double GCStartTime;
     completionHandler(UIBackgroundFetchResultNewData);
 }
 
-- (void)application:(UIApplication *)application handleEventsForBackgroundURLSession:(NSString *)identifier completionHandler:(void (^)(void))completionHandler
+#endif
+
+#if !PLATFORM_TVOS
+- (void)application:(UIApplication *)application handleEventsForBackgroundURLSession:(NSString *)identifier completionHandler:(void(^)(void))completionHandler
 {
-    FString Id(identifier);
-    FCoreDelegates::ApplicationBackgroundSessionEventDelegate.Broadcast(Id);
-    completionHandler();
+    //Save off completionHandler so that a future call to FCoreDelegates::ApplicationBackgroundSessionEventsAllSentDelegate can execute it
+    self.BackgroundSessionEventCompleteDelegate = completionHandler;
+    
+    //Create background session with this identifier if needed to handle these events
+	FString Id(identifier);
+	FBackgroundURLSessionHandler::InitBackgroundSession(Id);
+
+	FCoreDelegates::ApplicationBackgroundSessionEventDelegate.Broadcast(Id);
 }
 #endif
 
 #if !PLATFORM_TVOS && NOTIFICATIONS_ENABLED
 
-#if __IPHONE_OS_VERSION_MIN_REQUIRED < __IPHONE_10_0
-#ifdef __IPHONE_8_0
-- (void)application:(UIApplication *)application didRegisterUserNotificationSettings:(UIUserNotificationSettings *)notificationSettings
+- (void)application:(UIApplication *)application didRegisterForRemoteNotificationsWithDeviceToken:(NSData *)deviceToken
 {
 	if (FApp::IsUnattended())
 	{
 		return;
 	}
-	
-	[application registerForRemoteNotifications];
-	int32 types = (int32)[notificationSettings types];
-    FFunctionGraphTask::CreateAndDispatchWhenReady([types]()
-    {
-		FCoreDelegates::ApplicationRegisteredForUserNotificationsDelegate.Broadcast(types);
-    }, TStatId(), NULL, ENamedThreads::GameThread);
-}
-#endif
-#endif
 
-- (void)application:(UIApplication *)application didRegisterForRemoteNotificationsWithDeviceToken:(NSData *)deviceToken
-{
 	TArray<uint8> Token;
 	Token.AddUninitialized([deviceToken length]);
 	memcpy(Token.GetData(), [deviceToken bytes], [deviceToken length]);
@@ -1361,59 +1691,10 @@ extern double GCStartTime;
     }, TStatId(), NULL, ENamedThreads::GameThread);
 }
 
-#if __IPHONE_OS_VERSION_MIN_REQUIRED < __IPHONE_10_0
--(void)application : (UIApplication *)application didReceiveRemoteNotification:(NSDictionary *)userInfo fetchCompletionHandler:(void(^)(UIBackgroundFetchResult result))handler
-{
-	if (bEngineInit && FIOSCoreDelegates::PassesPushNotificationFilters(userInfo))
-	{
-		NSString* JsonString = @"{}";
-		NSError* JsonError;
-		NSData* JsonData = [NSJSONSerialization dataWithJSONObject : userInfo
-						options : 0
-						error : &JsonError];
-
-		if (JsonData)
-		{
-			JsonString = [[[NSString alloc] initWithData:JsonData encoding : NSUTF8StringEncoding] autorelease];
-		}
-		
-		FString	jsonFString(JsonString);
-		int AppState;
-		if (application.applicationState == UIApplicationStateInactive)
-		{
-			AppState = 1; // EApplicationState::Inactive;
-		}
-		else if (application.applicationState == UIApplicationStateBackground)
-		{
-			AppState = 2; // EApplicationState::Background;
-		}
-		else
-		{
-			AppState = 3; // EApplicationState::Active;
-		}
-
-		FFunctionGraphTask::CreateAndDispatchWhenReady([jsonFString, AppState]()
-		{
-			FCoreDelegates::ApplicationReceivedRemoteNotificationDelegate.Broadcast(jsonFString, AppState);
-		}, TStatId(), NULL, ENamedThreads::GameThread);
-	}
-	
-	// According to Apple documentation:
-	//   As soon as you finish processing the notification, you must call the
-	//   block in the handler parameter or your app will be terminated. Your app
-	//   has up to 30 seconds of wall-clock time to process the notification and
-	//   call the specified completion handler block. In practice, you should
-	//   call the handler block as soon as you are done processing the
-	//   notification.
-	handler(UIBackgroundFetchResultNoData);
-}
-#endif
-
 #endif
 
 #if !PLATFORM_TVOS
 
-#if __IPHONE_OS_VERSION_MIN_REQUIRED >= __IPHONE_10_0
 void HandleReceivedNotification(UNNotification* notification)
 {
 	bool IsLocal = false;
@@ -1515,41 +1796,6 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
 	
 	completionHandler();
 }
-#else
-- (void)application:(UIApplication *)application didReceiveLocalNotification:(UILocalNotification *)notification
-{
-	NSString*	activationEvent = (NSString*)[notification.userInfo objectForKey: @"ActivationEvent"];
-	
-	if(activationEvent != nullptr)
-	{
-		FString	activationEventFString(activationEvent);
-		int32	fireDate = [notification.fireDate timeIntervalSince1970];
-		
-		int AppState;
-		if (application.applicationState == UIApplicationStateInactive)
-		{
-			AppState = 1;// EApplicationState::Inactive;
-		}
-		else if (application.applicationState == UIApplicationStateBackground)
-		{
-			AppState = 2; // EApplicationState::Background;
-		}
-		else
-		{
-			AppState = 3; // EApplicationState::Active;
-		}
-
-		FFunctionGraphTask::CreateAndDispatchWhenReady([activationEventFString, fireDate, AppState]()
-		{
-			FCoreDelegates::ApplicationReceivedLocalNotificationDelegate.Broadcast(activationEventFString, fireDate, AppState);
-		}, TStatId(), NULL, ENamedThreads::GameThread);
-	}
-	else
-	{
-		NSLog(@"Warning: Missing local notification activation event");
-	}
-}
-#endif
 
 #endif
 
@@ -1722,15 +1968,13 @@ CORE_API bool IOSShowAchievementsUI()
 #if !PLATFORM_TVOS
 	if (@available(iOS 11, *))
 	{	
-        FIOSAsyncTask* AsyncTask = [[FIOSAsyncTask alloc] init];
-        AsyncTask.GameThreadCallback = ^ bool(void)
+		[FIOSAsyncTask CreateTaskWithBlock : ^ bool(void)
         {
             bool bInLowPowerMode = [[NSProcessInfo processInfo] isLowPowerModeEnabled];
             UE_LOG(LogIOS, Display, TEXT("Low Power Mode Changed: %d"), bInLowPowerMode);
             FCoreDelegates::OnLowPowerMode.Broadcast(bInLowPowerMode);
             return true;
-        };
-        [AsyncTask FinishedTask];
+        }];
 	}
 #endif
 }

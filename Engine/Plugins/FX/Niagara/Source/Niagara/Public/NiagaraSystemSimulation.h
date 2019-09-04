@@ -68,16 +68,16 @@ struct FNiagaraParameterStoreToDataSetBinding
 		DataSet.CheckForNaNs();
 #endif
 
-		FNiagaraDataBuffer& CurrBuffer = DataSet.CurrData();
+		FNiagaraDataBuffer* CurrBuffer = DataSet.GetCurrentData();
 
 		for (const FDataOffsets& DataOffsets : FloatOffsets)
 		{
-			float* DataSetPtr = CurrBuffer.GetInstancePtrFloat(DataOffsets.DataSetComponentOffset, DataSetInstanceIndex);
+			float* DataSetPtr = CurrBuffer->GetInstancePtrFloat(DataOffsets.DataSetComponentOffset, DataSetInstanceIndex);
 			ParameterStore.SetParameterByOffset(DataOffsets.ParameterOffset, *DataSetPtr);
 		}
 		for (const FDataOffsets& DataOffsets : Int32Offsets)
 		{
-			int32* DataSetPtr = CurrBuffer.GetInstancePtrInt32(DataOffsets.DataSetComponentOffset, DataSetInstanceIndex);
+			int32* DataSetPtr = CurrBuffer->GetInstancePtrInt32(DataOffsets.DataSetComponentOffset, DataSetInstanceIndex);
 			ParameterStore.SetParameterByOffset(DataOffsets.ParameterOffset, *DataSetPtr);
 		}
 
@@ -90,7 +90,7 @@ struct FNiagaraParameterStoreToDataSetBinding
 
 	FORCEINLINE_DEBUGGABLE void ParameterStoreToDataSet(FNiagaraParameterStore& ParameterStore, FNiagaraDataSet& DataSet, int32 DataSetInstanceIndex)
 	{
-		FNiagaraDataBuffer& CurrBuffer = DataSet.CurrData();
+		FNiagaraDataBuffer& CurrBuffer = DataSet.GetDestinationDataChecked();
 		const uint8* ParameterData = ParameterStore.GetParameterDataArray().GetData();
 
 #if NIAGARA_NAN_CHECKING
@@ -147,6 +147,8 @@ public:
 	FNiagaraScriptExecutionContext& GetSpawnExecutionContext() { return SpawnExecContext; }
 	FNiagaraScriptExecutionContext& GetUpdateExecutionContext() { return UpdateExecContext; }
 
+	void TransitionToDeferredDeletionQueue(TUniquePtr< FNiagaraSystemInstance>& InPtr);
+
 protected:
 
 	/** System of instances being simulated.  We use a weak object ptr here because once the last referencing object goes away this system may be come invalid at runtime. */
@@ -182,6 +184,9 @@ protected:
 	TArray<TArray<FNiagaraParameterStoreToDataSetBinding>> DataSetToEmitterEventParameters;
 
 	/** Direct bindings for Engine variables in System Spawn and Update scripts. */
+	FNiagaraParameterDirectBinding<float> SpawnTimeParam;
+	FNiagaraParameterDirectBinding<float> UpdateTimeParam;
+
 	FNiagaraParameterDirectBinding<float> SpawnDeltaTimeParam;
 	FNiagaraParameterDirectBinding<float> UpdateDeltaTimeParam;
 
@@ -222,4 +227,6 @@ protected:
 	bool bIsSolo;
 
 	TOptional<float> MaxDeltaTime;
+
+	TArray<TUniquePtr< FNiagaraSystemInstance> > DeferredDeletionQueue;
 };

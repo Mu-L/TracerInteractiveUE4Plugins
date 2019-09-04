@@ -294,16 +294,19 @@ namespace UnrealBuildTool
 						{
 							foreach (Action CyclicPrerequisiteAction in CyclicActions[Action])
 							{
-								if (CyclicPrerequisiteAction.ProducedItems.Count == 1)
+								if (CyclicActions.ContainsKey(CyclicPrerequisiteAction))
 								{
-									CycleDescription += string.Format("\t\t{0} (produces: {1})\n", ActionToIndex[CyclicPrerequisiteAction], CyclicPrerequisiteAction.ProducedItems[0].AbsolutePath);
-								}
-								else
-								{
-									CycleDescription += string.Format("\t\t{0}\n", ActionToIndex[CyclicPrerequisiteAction]);
-									foreach (FileItem CyclicProducedItem in CyclicPrerequisiteAction.ProducedItems)
+									if (CyclicPrerequisiteAction.ProducedItems.Count == 1)
 									{
-										CycleDescription += string.Format("\t\t\tproduces:   {0}\n", CyclicProducedItem.AbsolutePath);
+										CycleDescription += string.Format("\t\t{0} (produces: {1})\n", ActionToIndex[CyclicPrerequisiteAction], CyclicPrerequisiteAction.ProducedItems[0].AbsolutePath);
+									}
+									else
+									{
+										CycleDescription += string.Format("\t\t{0}\n", ActionToIndex[CyclicPrerequisiteAction]);
+										foreach (FileItem CyclicProducedItem in CyclicPrerequisiteAction.ProducedItems)
+										{
+											CycleDescription += string.Format("\t\t\tproduces:   {0}\n", CyclicProducedItem.AbsolutePath);
+										}
 									}
 								}
 							}
@@ -573,7 +576,6 @@ namespace UnrealBuildTool
 				Parallel.ForEach(Actions, Action => IsActionOutdated(Action, OutdatedActions, ActionHistory, CppDependencies, bIgnoreOutdatedImportLibraries));
 			}
 		}
-
 		/// <summary>
 		/// Deletes all the items produced by actions in the provided outdated action dictionary.
 		/// </summary>
@@ -613,6 +615,63 @@ namespace UnrealBuildTool
 				{
 					DirectoryReference.CreateDirectory(OutputDirectory);
 				}
+			}
+		}
+
+		/// <summary>
+		/// Imports an action graph from a JSON file
+		/// </summary>
+		/// <param name="InputFile">The file to read from</param>
+		/// <returns>List of actions</returns>
+		public static List<Action> ImportJson(FileReference InputFile)
+		{
+			JsonObject Object = JsonObject.Read(InputFile);
+
+			JsonObject EnvironmentObject = Object.GetObjectField("Environment");
+			foreach(string KeyName in EnvironmentObject.KeyNames)
+			{
+				Environment.SetEnvironmentVariable(KeyName, EnvironmentObject.GetStringField(KeyName));
+			}
+
+			List<Action> Actions = new List<Action>();
+			foreach (JsonObject ActionObject in Object.GetObjectArrayField("Actions"))
+			{
+				Actions.Add(Action.ImportJson(ActionObject));
+			}
+			return Actions;
+		}
+
+		/// <summary>
+		/// Exports an action graph to a JSON file
+		/// </summary>
+		/// <param name="Actions">The actions to write</param>
+		/// <param name="OutputFile">Output file to write the actions to</param>
+		public static void ExportJson(List<Action> Actions, FileReference OutputFile)
+		{
+			DirectoryReference.CreateDirectory(OutputFile.Directory);
+			using (JsonWriter Writer = new JsonWriter(OutputFile))
+			{
+				Writer.WriteObjectStart();
+
+				Writer.WriteObjectStart("Environment");
+				foreach (System.Collections.DictionaryEntry Pair in Environment.GetEnvironmentVariables())
+				{
+					if (!UnrealBuildTool.InitialEnvironment.Contains(Pair.Key) || (string)(UnrealBuildTool.InitialEnvironment[Pair.Key]) != (string)(Pair.Value))
+					{
+						Writer.WriteValue((string)Pair.Key, (string)Pair.Value);
+					}
+				}
+				Writer.WriteObjectEnd();
+
+				Writer.WriteArrayStart("Actions");
+				foreach (Action Action in Actions)
+				{
+					Writer.WriteObjectStart();
+					Action.ExportJson(Writer);
+					Writer.WriteObjectEnd();
+				}
+				Writer.WriteArrayEnd();
+				Writer.WriteObjectEnd();
 			}
 		}
 	}

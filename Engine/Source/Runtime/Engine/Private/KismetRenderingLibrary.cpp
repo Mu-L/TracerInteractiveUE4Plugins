@@ -60,16 +60,17 @@ void UKismetRenderingLibrary::ClearRenderTarget2D(UObject* WorldContextObject, U
 	}
 }
 
-UTextureRenderTarget2D* UKismetRenderingLibrary::CreateRenderTarget2D(UObject* WorldContextObject, int32 Width, int32 Height, ETextureRenderTargetFormat Format)
+UTextureRenderTarget2D* UKismetRenderingLibrary::CreateRenderTarget2D(UObject* WorldContextObject, int32 Width, int32 Height, ETextureRenderTargetFormat Format, FLinearColor ClearColor)
 {
 	UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
 
-	if (Width > 0 && Height > 0 && World && FApp::CanEverRender())
+	if (Width > 0 && Height > 0 && World)
 	{
 		UTextureRenderTarget2D* NewRenderTarget2D = NewObject<UTextureRenderTarget2D>(WorldContextObject);
 		check(NewRenderTarget2D);
 		NewRenderTarget2D->RenderTargetFormat = Format;
-		NewRenderTarget2D->InitAutoFormat(Width, Height); 
+		NewRenderTarget2D->ClearColor = ClearColor;
+		NewRenderTarget2D->InitAutoFormat(Width, Height);		
 		NewRenderTarget2D->UpdateResourceImmediate(true);
 
 		return NewRenderTarget2D; 
@@ -99,24 +100,26 @@ void UKismetRenderingLibrary::DrawMaterialToRenderTarget(UObject* WorldContextOb
 	}
 	else if (!Material)
 	{
-		FMessageLog("Blueprint").Warning(LOCTEXT("DrawMaterialToRenderTarget_InvalidMaterial", "DrawMaterialToRenderTarget: Material must be non-null."));
+		FMessageLog("Blueprint").Warning(FText::Format(LOCTEXT("DrawMaterialToRenderTarget_InvalidMaterial", "DrawMaterialToRenderTarget[{0}]: Material must be non-null."), FText::FromString(GetPathNameSafe(WorldContextObject))));
 	}
 	else if (!TextureRenderTarget)
 	{
-		FMessageLog("Blueprint").Warning(LOCTEXT("DrawMaterialToRenderTarget_InvalidTextureRenderTarget", "DrawMaterialToRenderTarget: TextureRenderTarget must be non-null."));
+		FMessageLog("Blueprint").Warning(FText::Format(LOCTEXT("DrawMaterialToRenderTarget_InvalidTextureRenderTarget", "DrawMaterialToRenderTarget[{0}]: TextureRenderTarget must be non-null."), FText::FromString(GetPathNameSafe(WorldContextObject))));
 	}
 	else if (!TextureRenderTarget->Resource)
 	{
-		FMessageLog("Blueprint").Warning(LOCTEXT("DrawMaterialToRenderTarget_ReleasedTextureRenderTarget", "DrawMaterialToRenderTarget: render target has been released."));
+		FMessageLog("Blueprint").Warning(FText::Format(LOCTEXT("DrawMaterialToRenderTarget_ReleasedTextureRenderTarget", "DrawMaterialToRenderTarget[{0}]: render target has been released."), FText::FromString(GetPathNameSafe(WorldContextObject))));
 	}
 	else
 	{
 		World->SendAllEndOfFrameUpdates();
 
+		FTextureRenderTargetResource* RenderTargetResource = TextureRenderTarget->GameThread_GetRenderTargetResource();
+
 		UCanvas* Canvas = World->GetCanvasForDrawMaterialToRenderTarget();
 
 		FCanvas RenderCanvas(
-			TextureRenderTarget->GameThread_GetRenderTargetResource(), 
+			RenderTargetResource, 
 			nullptr, 
 			World,
 			World->FeatureLevel);
@@ -124,14 +127,14 @@ void UKismetRenderingLibrary::DrawMaterialToRenderTarget(UObject* WorldContextOb
 		Canvas->Init(TextureRenderTarget->SizeX, TextureRenderTarget->SizeY, nullptr, &RenderCanvas);
 		Canvas->Update();
 
-
-
 		TDrawEvent<FRHICommandList>* DrawMaterialToTargetEvent = new TDrawEvent<FRHICommandList>();
 
 		FName RTName = TextureRenderTarget->GetFName();
 		ENQUEUE_RENDER_COMMAND(BeginDrawEventCommand)(
-			[RTName, DrawMaterialToTargetEvent](FRHICommandList& RHICmdList)
+			[RTName, DrawMaterialToTargetEvent, RenderTargetResource](FRHICommandListImmediate& RHICmdList)
 			{
+				RenderTargetResource->FlushDeferredResourceUpdate(RHICmdList);
+
 				BEGIN_DRAW_EVENTF(
 					RHICmdList, 
 					DrawCanvasToTarget, 
@@ -144,11 +147,11 @@ void UKismetRenderingLibrary::DrawMaterialToRenderTarget(UObject* WorldContextOb
 		RenderCanvas.Flush_GameThread();
 		Canvas->Canvas = NULL;
 
-		FTextureRenderTargetResource* RenderTargetResource = TextureRenderTarget->GameThread_GetRenderTargetResource();
+		//UpdateResourceImmediate must be called here to ensure mips are generated.
+		TextureRenderTarget->UpdateResourceImmediate(false);
 		ENQUEUE_RENDER_COMMAND(CanvasRenderTargetResolveCommand)(
-			[RenderTargetResource, DrawMaterialToTargetEvent](FRHICommandList& RHICmdList)
+			[DrawMaterialToTargetEvent](FRHICommandList& RHICmdList)
 			{
-				RHICmdList.CopyToResolveTarget(RenderTargetResource->GetRenderTargetTexture(), RenderTargetResource->TextureRHI, FResolveParams());
 				STOP_DRAW_EVENT((*DrawMaterialToTargetEvent));
 				delete DrawMaterialToTargetEvent;
 			}

@@ -18,6 +18,7 @@
 #include "Serialization/AsyncLoadingPrivate.h"
 #include "Async/MappedFileHandle.h"
 #include "HAL/PlatformFilemanager.h"
+#include "UObject/UObjectThreadContext.h"
 
 /*-----------------------------------------------------------------------------
 	Constructors and operators
@@ -94,6 +95,28 @@ uint32 GetTypeHash( const FUntypedBulkData* BulkData )
 #endif
 
 
+FOwnedBulkDataPtr::~FOwnedBulkDataPtr()
+{
+	if (AllocatedData)
+	{
+		FMemory::Free(AllocatedData);
+	}
+	else
+	{
+		if (MappedRegion || MappedHandle)
+		{
+			delete MappedRegion;
+			delete MappedHandle;
+		}
+	}
+}
+
+const void* FOwnedBulkDataPtr::GetPointer()
+{
+	// return the pointer that the caller can use
+	return AllocatedData ? AllocatedData : (MappedRegion ? MappedRegion->GetMappedPtr() : nullptr);
+}
+
 bool FUntypedBulkData::FAllocatedPtr::MapFile(const TCHAR *InFilename, int64 Offset, int64 Size)
 {
 	check(!MappedHandle && !MappedRegion); // It doesn't make sense to do this twice, but if need be, not hard to do
@@ -114,6 +137,7 @@ bool FUntypedBulkData::FAllocatedPtr::MapFile(const TCHAR *InFilename, int64 Off
 
 	check(Size == MappedRegion->GetMappedSize());
 	Ptr = (void*)(MappedRegion->GetMappedPtr()); //@todo mapped files should probably be const-correct
+	check(IsAligned(Ptr, FPlatformProperties::GetMemoryMappingAlignment()));
 	bAllocated = true;
 	return true;
 }
@@ -408,7 +432,7 @@ bool FUntypedBulkData::IsBulkDataLoaded() const
 	return !!BulkData;
 }
 
-bool FUntypedBulkData::IsAsyncLoadingComplete()
+bool FUntypedBulkData::IsAsyncLoadingComplete() const 
 {
 	return SerializeFuture.IsValid() == false || SerializeFuture.WaitFor(FTimespan::Zero());
 }
@@ -780,7 +804,7 @@ void FUntypedBulkData::StartSerializingBulkData(FArchive& Ar, UObject* Owner, in
 	DECLARE_SCOPE_CYCLE_COUNTER(TEXT("FUntypedBulkData::StartSerializingBulkData"), STAT_UBD_StartSerializingBulkData, STATGROUP_Memory);
 	check(SerializeFuture.IsValid() == false);	
 
-	SerializeFuture = Async<bool>(EAsyncExecution::ThreadPool, [=]() 
+	SerializeFuture = Async(EAsyncExecution::ThreadPool, [=]() 
 	{ 
 		AsyncLoadBulkData(); 
 		return true;
@@ -832,6 +856,8 @@ void FUntypedBulkData::Serialize( FArchive& Ar, UObject* Owner, int32 Idx, bool 
 	DECLARE_SCOPE_CYCLE_COUNTER(TEXT("FUntypedBulkData::Serialize"), STAT_UBD_Serialize, STATGROUP_Memory);
 
 	check( LockStatus == LOCKSTATUS_Unlocked );
+
+	check(!bAttemptFileMapping || Ar.IsLoading()); // makes no sense to map unless we are loading
 
 	if(Ar.IsTransacting())
 	{
@@ -983,6 +1009,8 @@ void FUntypedBulkData::Serialize( FArchive& Ar, UObject* Owner, int32 Idx, bool 
 						bool bWasMapped = false;
 						if (bAttemptFileMapping)
 						{
+							UE_LOG(LogSerialization, Error, TEXT("Attempt to file map inline bulk data. This is not desireable. File %s"), *Filename);
+
 							if (GEventDrivenLoaderEnabled && (Filename.EndsWith(TEXT(".uasset")) || Filename.EndsWith(TEXT(".umap"))))
 							{
 								BulkDataOffsetInFile -= IFileManager::Get().FileSize(*Filename);
@@ -1012,9 +1040,27 @@ void FUntypedBulkData::Serialize( FArchive& Ar, UObject* Owner, int32 Idx, bool 
 				}
 				else if (BulkDataFlags & BULKDATA_PayloadInSeperateFile)
 				{
-					Filename = FPaths::ChangeExtension(Filename, TEXT(".ubulk"));
+					if (BulkDataFlags & BULKDATA_MemoryMappedPayload)
+					{
+						Filename = FPaths::ChangeExtension(Filename, TEXT(".m.ubulk"));
+					}
+					else
+					{
+						Filename = FPaths::ChangeExtension(Filename, TEXT(".ubulk"));
+					}
+
+
+					if (bAttemptFileMapping)
+					{
+						check(!FPlatformProperties::GetMemoryMappingAlignment() || IsAligned(BulkDataOffsetInFile, FPlatformProperties::GetMemoryMappingAlignment()));
+						bool bWasMapped = BulkData.MapFile(*Filename, BulkDataOffsetInFile, GetBulkDataSize());
+						if (!bWasMapped)
+						{
+							// we failed to map when requested, so they will be looking for the memory, do a sync load now.
+							ForceBulkDataResident();
+						}
+					}
 				}
-				
 			}
 			// Serialize the bulk data right away.
 			else
@@ -1492,11 +1538,19 @@ void FUntypedBulkData::LoadDataIntoMemory( void* Dest )
 	checkf( AttachedAr, TEXT( "Attempted to load bulk data without an attached archive. Most likely the bulk data was loaded twice on console, which is not supported" ) );
 
 	FArchive* BulkDataArchive = nullptr;
-	if (Linker && Linker->GetFArchiveAsync2Loader() && Linker->GetFArchiveAsync2Loader()->IsCookedForEDLInEditor() &&
+	if (Linker && Linker->GetAsyncLoader() && Linker->GetAsyncLoader()->IsCookedForEDLInEditor() &&
 		(BulkDataFlags & BULKDATA_PayloadInSeperateFile))
 	{
 		// The attached archive is a package cooked for EDL loaded in the editor so the actual bulk data sits in a separate ubulk file.
-		const FString BulkDataFilename = FPaths::ChangeExtension(Filename, TEXT(".ubulk"));
+		FString BulkDataFilename;
+		if (BulkDataFlags & BULKDATA_MemoryMappedPayload)
+		{
+			BulkDataFilename = FPaths::ChangeExtension(Filename, TEXT(".m.ubulk"));
+		}
+		else
+		{
+			BulkDataFilename = FPaths::ChangeExtension(Filename, TEXT(".ubulk"));
+		}
 		BulkDataArchive = IFileManager::Get().CreateFileReader(*BulkDataFilename, FILEREAD_Silent);
 	}
 
@@ -1565,7 +1619,8 @@ void FUntypedBulkData::LoadDataIntoMemory( void* Dest )
 		// is it possible for streaming mips to be loaded in non streaming ways.
 		if (CVarTextureStreamingEnabled->GetValueOnAnyThread() != 0)
 		{
-			UE_CLOG(GEventDrivenLoaderEnabled && (IsInGameThread() || IsInAsyncLoadingThread()), LogSerialization, Error, TEXT("Attempt to sync load bulk data with EDL enabled (LoadDataIntoMemory). This is not desireable. File %s"), *Filename);
+			bool bIsBulkFile = Filename.EndsWith(TEXT(".ubulk"));
+			UE_CLOG(GEventDrivenLoaderEnabled && bIsBulkFile && (IsInGameThread() || IsInAsyncLoadingThread()), LogSerialization, Error, TEXT("Attempt to sync load bulk data with EDL enabled (LoadDataIntoMemory). This is not desireable. File %s"), *Filename);
 		}
 #endif
 
@@ -1697,7 +1752,7 @@ void FFloatBulkData::SerializeElement( FArchive& Ar, void* Data, int64 ElementIn
 	Ar << FloatData;
 }
 
-void FFormatContainer::Serialize(FArchive& Ar, UObject* Owner, const TArray<FName>* FormatsToSave, bool bSingleUse, uint32 InAlignment)
+void FFormatContainer::Serialize(FArchive& Ar, UObject* Owner, const TArray<FName>* FormatsToSave, bool bSingleUse, uint32 InAlignment, bool bInline, bool bMapped)
 {
 	if (Ar.IsLoading())
 	{
@@ -1738,7 +1793,25 @@ void FFormatContainer::Serialize(FArchive& Ar, UObject* Owner, const TArray<FNam
 				Ar << Name;
 				// Force this kind of bulk data (physics, etc) to be stored inline for streaming
 				const uint32 OldBulkDataFlags = Bulk->GetBulkDataFlags();
-				Bulk->SetBulkDataFlags(bSingleUse ? (BULKDATA_ForceInlinePayload | BULKDATA_SingleUse) : BULKDATA_ForceInlinePayload);				
+				if (bInline)
+				{
+					Bulk->SetBulkDataFlags(BULKDATA_ForceInlinePayload);
+					Bulk->ClearBulkDataFlags(BULKDATA_PayloadAtEndOfFile | BULKDATA_PayloadInSeperateFile | BULKDATA_Force_NOT_InlinePayload | BULKDATA_MemoryMappedPayload);
+				}
+				else
+				{
+					Bulk->SetBulkDataFlags(BULKDATA_PayloadAtEndOfFile | BULKDATA_PayloadInSeperateFile | BULKDATA_Force_NOT_InlinePayload);
+					if (bMapped)
+					{
+						Bulk->SetBulkDataFlags(BULKDATA_MemoryMappedPayload);
+					}
+					Bulk->ClearBulkDataFlags(BULKDATA_ForceInlinePayload);
+
+				}
+				if (bSingleUse)
+				{
+					Bulk->SetBulkDataFlags(BULKDATA_SingleUse);
+				}
 				Bulk->Serialize(Ar, Owner);
 				Bulk->ClearBulkDataFlags(0xFFFFFFFF);
 				Bulk->SetBulkDataFlags(OldBulkDataFlags);

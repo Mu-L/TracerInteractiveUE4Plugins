@@ -14,6 +14,7 @@
 #include "IContentBrowserSingleton.h"
 #include "ContentBrowserModule.h"
 #include "NiagaraEditorUtilities.h"
+#include "ViewModels/Stack/NiagaraStackGraphUtilities.h"
 #include "Modules/ModuleManager.h"
 
 #define LOCTEXT_NAMESPACE "AssetTypeActions"
@@ -101,23 +102,13 @@ void FAssetTypeActions_NiagaraEmitter::ExecuteNewNiagaraSystem(TArray<TWeakObjec
 
 			// Create the factory used to generate the asset
 			UNiagaraSystemFactoryNew* Factory = NewObject<UNiagaraSystemFactoryNew>();
+			Factory->EmittersToAddToNewSystem.Add(Emitter);
 			FAssetToolsModule& AssetToolsModule = FModuleManager::GetModuleChecked<FAssetToolsModule>("AssetTools");
 			UObject* NewAsset = AssetToolsModule.Get().CreateAsset(Name, FPackageName::GetLongPackagePath(PackageName), UNiagaraSystem::StaticClass(), Factory);
 			
 			UNiagaraSystem* System = Cast<UNiagaraSystem>(NewAsset);
 			if (System != nullptr)
 			{
-				System->AddEmitterHandle(*Emitter, FName(*Emitter->GetName()));
-
-				FNiagaraSystemViewModel SystemViewModel = FNiagaraSystemViewModel(*System, SystemOptions);
-				SystemViewModel.GetSystemScriptViewModel()->RebuildEmitterNodes();
-
-				// Ensure the new System is compiled
-				if (!Emitter->AreAllScriptAndSourcesSynchronized())
-				{
-					System->RequestCompile(true);
-				}
-
 				ObjectsToSync.Add(NewAsset);
 			}
 		}

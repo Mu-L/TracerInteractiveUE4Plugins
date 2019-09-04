@@ -1,6 +1,5 @@
 // Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
 
-#include "OnlineSubsystemIOSPrivatePCH.h"
 #include "OnlineTurnBasedInterfaceIOS.h"
 #include "TurnBasedEventListener.h"
 #include "Interfaces/OnlineIdentityInterface.h"
@@ -580,10 +579,9 @@ void FOnlineTurnBasedIOS::OnMatchReceivedTurnEvent(FString MatchID, bool BecameA
 						TArray<uint8> MatchData;
 						if (GetMatchWithID(MatchID)->GetMatchData(MatchData))
 						{
-							FRepLayout RepLayout;
-							RepLayout.InitFromObjectClass(TurnBasedMatchInterfaceObject->GetClass());
+							// TODO: We should cache off the RepLayout by class, just like we do in NetDriver.
 							FBitReader Reader(MatchData.GetData(), MATCH_DATA_SIZE);
-							RepLayout.SerializeObjectReplicatedProperties(TurnBasedMatchInterfaceObject, Reader);
+							FRepLayout::CreateFromClass(TurnBasedMatchInterfaceObject->GetClass())->SerializeObjectReplicatedProperties(TurnBasedMatchInterfaceObject, Reader);
 						}
 						ITurnBasedMatchInterface::Execute_OnMatchReceivedTurn(TurnBasedMatchInterfaceObject, MatchID, BecameActive);
 					}

@@ -55,15 +55,15 @@ public:
 	/**
 	 * Enable Multithreading (Experimental)
 	 */
-	UPROPERTY(GlobalConfig, EditAnywhere, Category=Emscripten, Meta = (DisplayName = "Multithreading support"))
+	UPROPERTY(GlobalConfig, EditAnywhere, Category=Emscripten, Meta = (DisplayName = "Multithreading support [experimental]"))
 	bool EnableMultithreading;
 
 	/**
 	 * Use OffscreenCanvas Support (else use Offscreen Framebuffer)
 	 * Note: Multithreading rendering option (WORK IN PROGRESS)
 	 */
-//	UPROPERTY(GlobalConfig, EditAnywhere, Category=Emscripten, Meta = (DisplayName = "Offscreen Canvas [experimental]"))
-//	bool OffscreenCanvas;
+	UPROPERTY(GlobalConfig, EditAnywhere, Category=Emscripten, Meta = (DisplayName = "Offscreen Canvas [experimental]"))
+	bool OffscreenCanvas;
 
 	/**
 	 * Use LLVM WASM Backend (WORK IN PROGRESS)

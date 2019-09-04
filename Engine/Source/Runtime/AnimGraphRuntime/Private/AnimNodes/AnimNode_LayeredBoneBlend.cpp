@@ -41,8 +41,7 @@ void FAnimNode_LayeredBoneBlend::PostCompile(const class USkeleton* InSkeleton)
 
 void FAnimNode_LayeredBoneBlend::RebuildCacheData(const USkeleton* InSkeleton)
 {
-	// make sure it's Finished post load yet, this might cause more things to cache in initialize instead of during cooking
-	if (InSkeleton && !(InSkeleton->GetFlags() & RF_NeedPostLoad))
+	if (InSkeleton)
 	{
 		FAnimationRuntime::CreateMaskWeights(PerBoneBlendWeights, LayerSetup, InSkeleton);
 		SkeletonGuid = InSkeleton->GetGuid();
@@ -266,7 +265,16 @@ void FAnimNode_LayeredBoneBlend::Evaluate_AnyThread(FPoseContext& Output)
 			}
 		}
 
-		FAnimationRuntime::BlendPosesPerBoneFilter(BasePoseContext.Pose, TargetBlendPoses, BasePoseContext.Curve, TargetBlendCurves, Output.Pose, Output.Curve, CurrentBoneBlendWeights, bMeshSpaceRotationBlend, CurveBlendOption);
+		FAnimationRuntime::EBlendPosesPerBoneFilterFlags BlendFlags = FAnimationRuntime::EBlendPosesPerBoneFilterFlags::None;
+		if (bMeshSpaceRotationBlend)
+		{
+			BlendFlags |= FAnimationRuntime::EBlendPosesPerBoneFilterFlags::MeshSpaceRotation;
+		}
+		if (bMeshSpaceScaleBlend)
+		{
+			BlendFlags |= FAnimationRuntime::EBlendPosesPerBoneFilterFlags::MeshSpaceScale;
+		}
+		FAnimationRuntime::BlendPosesPerBoneFilter(BasePoseContext.Pose, TargetBlendPoses, BasePoseContext.Curve, TargetBlendCurves, Output.Pose, Output.Curve, CurrentBoneBlendWeights, BlendFlags, CurveBlendOption);
 	}
 }
 

@@ -19,6 +19,7 @@
 #include "ViewModels/Stack/NiagaraStackGraphUtilities.h"
 #include "NiagaraParameterCollection.h"
 #include "NiagaraConstants.h"
+#include "NiagaraNodeStaticSwitch.h"
 
 #define LOCTEXT_NAMESPACE "NiagaraEditor"
 
@@ -124,7 +125,7 @@ int32 FNiagaraParameterMapHistory::RegisterParameterMapPin(const UEdGraphPin* Pi
 	return RetIdx;
 }
 
-uint32 FNiagaraParameterMapHistory::BeginNodeVisitation(UNiagaraNode* Node)
+uint32 FNiagaraParameterMapHistory::BeginNodeVisitation(const UNiagaraNode* Node)
 {
 	uint32 AddedIndex = MapNodeVisitations.Add(Node);
 	MapNodeVariableMetaData.Add(TTuple<uint32, uint32>(Variables.Num(), 0));
@@ -479,48 +480,6 @@ FNiagaraVariable FNiagaraParameterMapHistory::GetSourceForInitialValue(const FNi
 	return Var;
 }
 
-const FNiagaraVariableMetaData* FNiagaraParameterMapHistory::GetMetaData(int32 VarIdx) const
-{
-	if (PerVariableWriteHistory[VarIdx].Num() > 0)
-	{
-		const UEdGraphPin* Pin = PerVariableWriteHistory[VarIdx][0];
-		if (Pin != nullptr)
-		{
-			return CastChecked<UNiagaraNode>(Pin->GetOwningNode())->GetNiagaraGraph()->GetMetaData(Variables[VarIdx]);
-		}
-	}
-	else if (PerVariableReadHistory[VarIdx].Num() > 0)
-	{
-		const UEdGraphPin* Pin = PerVariableReadHistory[VarIdx][0].Key;
-		if (Pin != nullptr)
-		{
-			return CastChecked<UNiagaraNode>(Pin->GetOwningNode())->GetNiagaraGraph()->GetMetaData(Variables[VarIdx]);
-		}
-	}
-	return nullptr;
-}
-
-FNiagaraVariableMetaData* FNiagaraParameterMapHistory::GetMetaData(int32 VarIdx)
-{
-	if (PerVariableWriteHistory[VarIdx].Num() > 0)
-	{
-		const UEdGraphPin* Pin = PerVariableWriteHistory[VarIdx][0];
-		if (Pin != nullptr)
-		{
-			return CastChecked<UNiagaraNode>(Pin->GetOwningNode())->GetNiagaraGraph()->GetMetaData(Variables[VarIdx]);
-		}
-	}
-	else if (PerVariableReadHistory[VarIdx].Num() > 0)
-	{
-		const UEdGraphPin* Pin = PerVariableReadHistory[VarIdx][0].Key;
-		if (Pin != nullptr)
-		{
-			return CastChecked<UNiagaraNode>(Pin->GetOwningNode())->GetNiagaraGraph()->GetMetaData(Variables[VarIdx]);
-		}
-	}
-	return nullptr;
-}
-
 bool FNiagaraParameterMapHistory::IsPrimaryDataSetOutput(const FNiagaraVariable& InVar, const UNiagaraScript* InScript, bool bAllowDataInterfaces) const
 {
 	return IsPrimaryDataSetOutput(InVar, InScript->GetUsage(), bAllowDataInterfaces);
@@ -690,7 +649,7 @@ FNiagaraParameterMapHistoryBuilder::FNiagaraParameterMapHistoryBuilder()
 	FilterScriptType = ENiagaraScriptUsage::Function;
 }
 
-void FNiagaraParameterMapHistoryBuilder::BuildParameterMaps(UNiagaraNodeOutput* OutputNode, bool bRecursive)
+void FNiagaraParameterMapHistoryBuilder::BuildParameterMaps(const UNiagaraNodeOutput* OutputNode, bool bRecursive)
 {
 	RelevantScriptUsageContext.Emplace(OutputNode->GetUsage());
 	OutputNode->BuildParameterMapHistory(*this, bRecursive);
@@ -737,7 +696,7 @@ int32 FNiagaraParameterMapHistoryBuilder::CreateParameterMap()
 	return RetValue;
 }
 
-uint32 FNiagaraParameterMapHistoryBuilder::BeginNodeVisitation(int32 WhichParameterMap, class UNiagaraNode* Node)
+uint32 FNiagaraParameterMapHistoryBuilder::BeginNodeVisitation(int32 WhichParameterMap, const class UNiagaraNode* Node)
 {
 	if (WhichParameterMap != INDEX_NONE)
 	{
@@ -812,8 +771,8 @@ int32 FNiagaraParameterMapHistoryBuilder::FindMatchingParameterMapFromContextInp
 	{
 		return INDEX_NONE;
 	}
-	UNiagaraNode* Node = CallingContext.Last();
-	TArray<UEdGraphPin*> Inputs;
+	const UNiagaraNode* Node = CallingContext.Last();
+	TArray<const UEdGraphPin*> Inputs;
 	Node->GetInputPins(Inputs);
 	const UEdGraphSchema_Niagara* Schema = CastChecked<UEdGraphSchema_Niagara>(Node->GetSchema());
 
@@ -833,7 +792,7 @@ int32 FNiagaraParameterMapHistoryBuilder::FindMatchingParameterMapFromContextInp
 				else
 				{
 					FString ScriptUsageDisplayName;
-					UNiagaraNodeOutput* ContextOutputNode = FNiagaraStackGraphUtilities::GetEmitterOutputNodeForStackNode(*Node);
+					const UNiagaraNodeOutput* ContextOutputNode = FNiagaraStackGraphUtilities::GetEmitterOutputNodeForStackNode(*Node);
 					if (ContextOutputNode != nullptr)
 					{
 						UEnum* NiagaraScriptUsageEnum = FindObjectChecked<UEnum>(ANY_PACKAGE, TEXT("ENiagaraScriptUsage"), true);
@@ -917,7 +876,7 @@ void FNiagaraParameterMapHistoryBuilder::EndTranslation(const FString& EmitterUn
 	EmitterNameContextStack.Reset();
 }
 
-UNiagaraNode* FNiagaraParameterMapHistoryBuilder::GetCallingContext() const
+const UNiagaraNode* FNiagaraParameterMapHistoryBuilder::GetCallingContext() const
 {
 	if (CallingContext.Num() == 0)
 	{
@@ -955,7 +914,7 @@ bool FNiagaraParameterMapHistoryBuilder::InTopLevelFunctionCall(ENiagaraScriptUs
 }
 
 
-void FNiagaraParameterMapHistoryBuilder::EnterFunction(const FString& InNodeName, const UNiagaraScript* InScript, UNiagaraNode* Node)
+void FNiagaraParameterMapHistoryBuilder::EnterFunction(const FString& InNodeName, const UNiagaraScript* InScript, const UNiagaraNode* Node)
 {
 	if (InScript != nullptr )
 	{
@@ -972,7 +931,7 @@ void FNiagaraParameterMapHistoryBuilder::EnterFunction(const FString& InNodeName
 	}
 }
 
-void FNiagaraParameterMapHistoryBuilder::ExitFunction(const FString& InNodeName, const UNiagaraScript* InScript, UNiagaraNode* Node)
+void FNiagaraParameterMapHistoryBuilder::ExitFunction(const FString& InNodeName, const UNiagaraScript* InScript, const UNiagaraNode* Node)
 {
 	if (InScript != nullptr)
 	{
@@ -984,7 +943,7 @@ void FNiagaraParameterMapHistoryBuilder::ExitFunction(const FString& InNodeName,
 	}
 }
 
-void FNiagaraParameterMapHistoryBuilder::EnterEmitter(const FString& InEmitterName, UNiagaraNode* Node)
+void FNiagaraParameterMapHistoryBuilder::EnterEmitter(const FString& InEmitterName, const UNiagaraNode* Node)
 {
 	RegisterNodeVisitation(Node);
 	CallingContext.Push(Node);
@@ -994,7 +953,7 @@ void FNiagaraParameterMapHistoryBuilder::EnterEmitter(const FString& InEmitterNa
 	// Emitters must record their namespaces to their histories as well as
 	// make sure to record their current usage type is so that we can filter variables
 	// for relevance downstream.
-	UNiagaraNodeEmitter* EmitterNode = Cast<UNiagaraNodeEmitter>(Node);
+	const UNiagaraNodeEmitter* EmitterNode = Cast<UNiagaraNodeEmitter>(Node);
 	if (EmitterNode != nullptr)
 	{
 		RelevantScriptUsageContext.Emplace(EmitterNode->GetUsage());
@@ -1014,7 +973,7 @@ void FNiagaraParameterMapHistoryBuilder::EnterEmitter(const FString& InEmitterNa
 	ContextuallyVisitedNodes.Emplace();
 }
 
-void FNiagaraParameterMapHistoryBuilder::ExitEmitter(const FString& InEmitterName, UNiagaraNode* Node)
+void FNiagaraParameterMapHistoryBuilder::ExitEmitter(const FString& InEmitterName, const UNiagaraNode* Node)
 {
 	CallingContext.Pop();
 	EmitterNameContextStack.Pop();
@@ -1075,7 +1034,7 @@ const FString* FNiagaraParameterMapHistoryBuilder::GetEmitterAlias() const
 	return AliasMap.Find(TEXT("Emitter"));
 }
 
-void FNiagaraParameterMapHistoryBuilder::VisitInputPin(const UEdGraphPin* Pin, class UNiagaraNode* InNode)
+void FNiagaraParameterMapHistoryBuilder::VisitInputPin(const UEdGraphPin* Pin, const class UNiagaraNode* InNode, bool bFilterForCompilation)
 {
 	const UEdGraphSchema_Niagara* Schema = GetDefault<UEdGraphSchema_Niagara>();
 
@@ -1083,14 +1042,30 @@ void FNiagaraParameterMapHistoryBuilder::VisitInputPin(const UEdGraphPin* Pin, c
 	{
 		for (int32 j = 0; j < Pin->LinkedTo.Num(); j++)
 		{
-			const UEdGraphPin* OutputPin = UNiagaraNode::TraceOutputPin(Pin->LinkedTo[j]);
+			UEdGraphPin* LinkedPin = Pin->LinkedTo[j];
+			const UEdGraphPin* OutputPin;
+			if (!bFilterForCompilation && LinkedPin && Cast<UNiagaraNodeStaticSwitch>(LinkedPin->GetOwningNode()))
+			{
+				// if we do not filter the parameter maps we want all nodes connected to the static switch, regardless of the switch value
+				OutputPin = LinkedPin;
+			}
+			else
+			{
+				OutputPin = UNiagaraNode::TraceOutputPin(LinkedPin, bFilterForCompilation);
+				if (bFilterForCompilation && OutputPin && Cast<UNiagaraNodeStaticSwitch>(OutputPin->GetOwningNode()))
+				{
+					// this means there is no further node connected to this pin of the static switch, so it is not relevant
+					continue;
+				}
+			}
+
 			if (OutputPin)
 			{
 				UNiagaraNode* Node = CastChecked<UNiagaraNode>(OutputPin->GetOwningNode());
 
 				if (!GetNodePreviouslyVisited(Node))
 				{
-					Node->BuildParameterMapHistory(*this, true);
+					Node->BuildParameterMapHistory(*this, true, bFilterForCompilation);
 					RegisterNodeVisitation(Node);
 				}
 
@@ -1104,14 +1079,14 @@ void FNiagaraParameterMapHistoryBuilder::VisitInputPin(const UEdGraphPin* Pin, c
 	}
 }
 
-void FNiagaraParameterMapHistoryBuilder::VisitInputPins(class UNiagaraNode* InNode)
+void FNiagaraParameterMapHistoryBuilder::VisitInputPins(const class UNiagaraNode* InNode, bool bFilterForCompilation)
 {
 	TArray<UEdGraphPin*> InputPins;
 	InNode->GetInputPins(InputPins);
 
 	for (int32 i = 0; i < InputPins.Num(); i++)
 	{
-		VisitInputPin(InputPins[i], InNode);
+		VisitInputPin(InputPins[i], InNode, bFilterForCompilation);
 	}
 }
 
@@ -1161,7 +1136,7 @@ int32 FNiagaraParameterMapHistoryBuilder::HandleVariableWrite(int32 ParameterMap
 	return Histories[ParameterMapIndex].AddVariable(ResolvedVar, Var, nullptr);
 }
 
-int32 FNiagaraParameterMapHistoryBuilder::HandleVariableRead(int32 ParamMapIdx, const UEdGraphPin* InPin, bool RegisterReadsAsVariables, const UEdGraphPin* InDefaultPin, bool& OutUsedDefault)
+int32 FNiagaraParameterMapHistoryBuilder::HandleVariableRead(int32 ParamMapIdx, const UEdGraphPin* InPin, bool RegisterReadsAsVariables, const UEdGraphPin* InDefaultPin, bool bFilterForCompilation, bool& OutUsedDefault)
 {
 	OutUsedDefault = false;
 	const UEdGraphSchema_Niagara* Schema = GetDefault<UEdGraphSchema_Niagara>();
@@ -1195,7 +1170,7 @@ int32 FNiagaraParameterMapHistoryBuilder::HandleVariableRead(int32 ParamMapIdx, 
 			if (InDefaultPin)
 			{
 				OutUsedDefault = true;
-				VisitInputPin(InDefaultPin, Cast<UNiagaraNode>(InDefaultPin->GetOwningNode()));
+				VisitInputPin(InDefaultPin, Cast<UNiagaraNode>(InDefaultPin->GetOwningNode()), bFilterForCompilation);
 				FoundIdx = Histories[ParamMapIdx].FindVariable(Var.GetName(), Var.GetType());
 			}
 
@@ -1398,6 +1373,33 @@ void FNiagaraParameterMapHistoryBuilder::BuildCurrentAliases()
 	{
 		AliasMap.Add(TEXT("Emitter"), Callstack);
 	}
+}
+
+bool FCompileConstantResolver::ResolveConstant(FNiagaraVariable& OutConstant) const
+{
+	if (Translator)
+	{
+		return Translator->GetLiteralConstantVariable(OutConstant);
+	}
+
+	if (Emitter && OutConstant == FNiagaraVariable(FNiagaraTypeDefinition::GetBoolDef(), TEXT("Emitter.Localspace")))
+	{
+		OutConstant.SetValue(Emitter->bLocalSpace ? FNiagaraBool(true) : FNiagaraBool(false));
+		return true;
+	}
+	if (Emitter && OutConstant == FNiagaraVariable(FNiagaraTypeDefinition::GetBoolDef(), TEXT("Emitter.Determinism")))
+	{
+		OutConstant.SetValue(Emitter->bDeterminism ? FNiagaraBool(true) : FNiagaraBool(false));
+		return true;
+	}
+	if (Emitter && OutConstant == FNiagaraVariable(FNiagaraTypeDefinition::GetSimulationTargetEnum(), TEXT("Emitter.SimulationTarget")))
+	{
+		FNiagaraInt32 EnumValue;
+		EnumValue.Value = (uint8)Emitter->SimTarget;
+		OutConstant.SetValue(EnumValue);
+		return true;
+	}
+	return false;
 }
 
 #undef LOCTEXT_NAMESPACE

@@ -35,6 +35,8 @@
 #include "HierarchicalLOD.h"
 #include "IMeshMergeUtilities.h"
 #include "MeshMergeModule.h"
+#include "Settings/EditorExperimentalSettings.h"
+#include "Landscape.h"
 #endif 
 
 #define LOCTEXT_NAMESPACE "ErrorChecking"
@@ -266,7 +268,7 @@ void AWorldSettings::GetLifetimeReplicatedProps( TArray< FLifetimeProperty > & O
 {
 	Super::GetLifetimeReplicatedProps( OutLifetimeProps );
 
-	DOREPLIFETIME( AWorldSettings, Pauser );
+	DOREPLIFETIME( AWorldSettings, PauserPlayerState );
 	DOREPLIFETIME( AWorldSettings, TimeDilation );
 	DOREPLIFETIME( AWorldSettings, MatineeTimeDilation );
 	DOREPLIFETIME( AWorldSettings, WorldGravityZ );
@@ -568,29 +570,72 @@ bool AWorldSettings::CanEditChange(const UProperty* InProperty) const
 	return Super::CanEditChange(InProperty);
 }
 
-void AWorldSettings::PostEditChangeChainProperty(FPropertyChangedChainEvent& PropertyChangedEvent)
-{
-	Super::PostEditChangeChainProperty(PropertyChangedEvent);
-
-	const FName MemberPropertyName = PropertyChangedEvent.PropertyChain.GetActiveMemberNode()->GetValue()->GetFName();
-
-	if (MemberPropertyName == GET_MEMBER_NAME_CHECKED(AWorldSettings, DefaultReverbSettings) || MemberPropertyName == GET_MEMBER_NAME_CHECKED(AWorldSettings, DefaultAmbientZoneSettings))
-	{
-		UWorld* World = GetWorld();
-		if (FAudioDevice* AudioDevice = World->GetAudioDevice())
-		{
-			AudioDevice->SetDefaultAudioSettings(World, DefaultReverbSettings, DefaultAmbientZoneSettings);
-		}
-	}
-}
-
 void AWorldSettings::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
 	UProperty* PropertyThatChanged = PropertyChangedEvent.Property;
 	if (PropertyThatChanged)
+{
+		InternalPostPropertyChanged(PropertyThatChanged->GetFName());
+	}
+
+	LightmassSettings.NumIndirectLightingBounces = FMath::Clamp(LightmassSettings.NumIndirectLightingBounces, 0, 100);
+	LightmassSettings.NumSkyLightingBounces = FMath::Clamp(LightmassSettings.NumSkyLightingBounces, 0, 100);
+	LightmassSettings.IndirectLightingSmoothness = FMath::Clamp(LightmassSettings.IndirectLightingSmoothness, .25f, 10.0f);
+	LightmassSettings.VolumeLightSamplePlacementScale = FMath::Clamp(LightmassSettings.VolumeLightSamplePlacementScale, .1f, 100.0f);
+	LightmassSettings.VolumetricLightmapDetailCellSize = FMath::Clamp(LightmassSettings.VolumetricLightmapDetailCellSize, 1.0f, 10000.0f);
+	LightmassSettings.IndirectLightingQuality = FMath::Clamp(LightmassSettings.IndirectLightingQuality, .1f, 100.0f);
+	LightmassSettings.StaticLightingLevelScale = FMath::Clamp(LightmassSettings.StaticLightingLevelScale, .001f, 1000.0f);
+	LightmassSettings.EmissiveBoost = FMath::Max(LightmassSettings.EmissiveBoost, 0.0f);
+	LightmassSettings.DiffuseBoost = FMath::Max(LightmassSettings.DiffuseBoost, 0.0f);
+	LightmassSettings.DirectIlluminationOcclusionFraction = FMath::Clamp(LightmassSettings.DirectIlluminationOcclusionFraction, 0.0f, 1.0f);
+	LightmassSettings.IndirectIlluminationOcclusionFraction = FMath::Clamp(LightmassSettings.IndirectIlluminationOcclusionFraction, 0.0f, 1.0f);
+	LightmassSettings.OcclusionExponent = FMath::Max(LightmassSettings.OcclusionExponent, 0.0f);
+	LightmassSettings.FullyOccludedSamplesFraction = FMath::Clamp(LightmassSettings.FullyOccludedSamplesFraction, 0.0f, 1.0f);
+	LightmassSettings.MaxOcclusionDistance = FMath::Max(LightmassSettings.MaxOcclusionDistance, 0.0f);
+	LightmassSettings.EnvironmentIntensity = FMath::Max(LightmassSettings.EnvironmentIntensity, 0.0f);
+
+	// Ensure texture size is power of two between 512 and 4096.
+	PackedLightAndShadowMapTextureSize = FMath::Clamp<uint32>( FMath::RoundUpToPowerOfTwo( PackedLightAndShadowMapTextureSize ), 512, 4096 );
+
+	if (PropertyThatChanged != nullptr && GetWorld() != nullptr && GetWorld()->Scene)
 	{
-		const FName PropertyName = PropertyThatChanged->GetFName();
-		if (PropertyName == GET_MEMBER_NAME_CHECKED(AWorldSettings,bForceNoPrecomputedLighting) && bForceNoPrecomputedLighting)
+		GetWorld()->Scene->UpdateSceneSettings(this);
+	}
+
+	for (UAssetUserData* Datum : AssetUserData)
+	{
+		if (Datum != nullptr)
+		{
+			Datum->PostEditChangeOwner();
+		}
+	}
+
+	Super::PostEditChangeProperty(PropertyChangedEvent);
+}
+
+void AWorldSettings::PostTransacted(const FTransactionObjectEvent& TransactionEvent)
+{
+	Super::PostTransacted(TransactionEvent);
+	if (TransactionEvent.GetEventType() == ETransactionObjectEventType::UndoRedo)
+	{
+		for (const FName& PropertyName : TransactionEvent.GetChangedProperties())
+		{
+			InternalPostPropertyChanged(PropertyName);
+		}
+	}
+}
+
+void AWorldSettings::InternalPostPropertyChanged(FName PropertyName)
+{
+	if (PropertyName == GET_MEMBER_NAME_CHECKED(AWorldSettings, DefaultReverbSettings) || PropertyName == GET_MEMBER_NAME_CHECKED(AWorldSettings, DefaultAmbientZoneSettings))
+{
+		UWorld* World = GetWorld();
+		if (FAudioDevice* AudioDevice = World->GetAudioDevice())
+	{
+			AudioDevice->SetDefaultAudioSettings(World, DefaultReverbSettings, DefaultAmbientZoneSettings);
+		}
+	}
+	else if (PropertyName == GET_MEMBER_NAME_CHECKED(AWorldSettings, bForceNoPrecomputedLighting) && bForceNoPrecomputedLighting)
 		{
 			FMessageDialog::Open( EAppMsgType::Ok, LOCTEXT("bForceNoPrecomputedLightingIsEnabled", "bForceNoPrecomputedLighting is now enabled, build lighting once to propagate the change (will remove existing precomputed lighting data)."));
 		}
@@ -625,40 +670,19 @@ void AWorldSettings::PostEditChangeProperty(FPropertyChangedEvent& PropertyChang
 		{
 			UpdateBookmarkClass();
 		}
-	}
 
-	LightmassSettings.NumIndirectLightingBounces = FMath::Clamp(LightmassSettings.NumIndirectLightingBounces, 0, 100);
-	LightmassSettings.NumSkyLightingBounces = FMath::Clamp(LightmassSettings.NumSkyLightingBounces, 0, 100);
-	LightmassSettings.IndirectLightingSmoothness = FMath::Clamp(LightmassSettings.IndirectLightingSmoothness, .25f, 10.0f);
-	LightmassSettings.VolumeLightSamplePlacementScale = FMath::Clamp(LightmassSettings.VolumeLightSamplePlacementScale, .1f, 100.0f);
-	LightmassSettings.VolumetricLightmapDetailCellSize = FMath::Clamp(LightmassSettings.VolumetricLightmapDetailCellSize, 1.0f, 10000.0f);
-	LightmassSettings.IndirectLightingQuality = FMath::Clamp(LightmassSettings.IndirectLightingQuality, .1f, 100.0f);
-	LightmassSettings.StaticLightingLevelScale = FMath::Clamp(LightmassSettings.StaticLightingLevelScale, .001f, 1000.0f);
-	LightmassSettings.EmissiveBoost = FMath::Max(LightmassSettings.EmissiveBoost, 0.0f);
-	LightmassSettings.DiffuseBoost = FMath::Max(LightmassSettings.DiffuseBoost, 0.0f);
-	LightmassSettings.DirectIlluminationOcclusionFraction = FMath::Clamp(LightmassSettings.DirectIlluminationOcclusionFraction, 0.0f, 1.0f);
-	LightmassSettings.IndirectIlluminationOcclusionFraction = FMath::Clamp(LightmassSettings.IndirectIlluminationOcclusionFraction, 0.0f, 1.0f);
-	LightmassSettings.OcclusionExponent = FMath::Max(LightmassSettings.OcclusionExponent, 0.0f);
-	LightmassSettings.FullyOccludedSamplesFraction = FMath::Clamp(LightmassSettings.FullyOccludedSamplesFraction, 0.0f, 1.0f);
-	LightmassSettings.MaxOcclusionDistance = FMath::Max(LightmassSettings.MaxOcclusionDistance, 0.0f);
-	LightmassSettings.EnvironmentIntensity = FMath::Max(LightmassSettings.EnvironmentIntensity, 0.0f);
-
-	// Ensure texture size is power of two between 512 and 4096.
-	PackedLightAndShadowMapTextureSize = FMath::Clamp<uint32>( FMath::RoundUpToPowerOfTwo( PackedLightAndShadowMapTextureSize ), 512, 4096 );
-
-	if (PropertyThatChanged != nullptr && GetWorld() != nullptr && GetWorld()->PersistentLevel->GetWorldSettings() == this)
+	if (GetWorld() != nullptr && GetWorld()->PersistentLevel->GetWorldSettings() == this)
 	{
-		if (PropertyThatChanged->GetFName() == GET_MEMBER_NAME_CHECKED(FHierarchicalSimplification,TransitionScreenSize))
+		if (PropertyName == GET_MEMBER_NAME_CHECKED(FHierarchicalSimplification, TransitionScreenSize))
 		{
 			GEditor->BroadcastHLODTransitionScreenSizeChanged();
 		}
-
-		else if (PropertyThatChanged->GetFName() == GET_MEMBER_NAME_CHECKED(AWorldSettings,HierarchicalLODSetup))
+		else if (PropertyName == GET_MEMBER_NAME_CHECKED(AWorldSettings, HierarchicalLODSetup))
 		{
 			GEditor->BroadcastHLODLevelsArrayChanged();
 			NumHLODLevels = HierarchicalLODSetup.Num();			
 		}
-		else if (PropertyThatChanged->GetFName() == GET_MEMBER_NAME_CHECKED(AWorldSettings, OverrideBaseMaterial))
+		else if (PropertyName == GET_MEMBER_NAME_CHECKED(AWorldSettings, OverrideBaseMaterial))
 		{
 			if (!OverrideBaseMaterial.IsNull())
 			{
@@ -670,23 +694,7 @@ void AWorldSettings::PostEditChangeProperty(FPropertyChangedEvent& PropertyChang
 			}
 		}
 	}
-
-	if (PropertyThatChanged != nullptr && GetWorld() != nullptr && GetWorld()->Scene)
-	{
-		GetWorld()->Scene->UpdateSceneSettings(this);
-	}
-
-	for (UAssetUserData* Datum : AssetUserData)
-	{
-		if (Datum != nullptr)
-		{
-			Datum->PostEditChangeOwner();
-		}
-	}
-
-	Super::PostEditChangeProperty(PropertyChangedEvent);
 }
-
 
 void UHierarchicalLODSetup::PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent)
 {
@@ -877,6 +885,17 @@ void AWorldSettings::UpdateBookmarkClass()
 FSoftClassPath AWorldSettings::GetAISystemClassName() const
 {
 	return bEnableAISystem ? UAISystemBase::GetAISystemClassName() : FSoftClassPath();
+}
+
+void AWorldSettings::RewindForReplay()
+{
+	Super::RewindForReplay();
+
+	PauserPlayerState = nullptr;
+	TimeDilation = 1.0;
+	MatineeTimeDilation = 1.0;
+	bWorldGravitySet = false;
+	bHighPriorityLoading = false;
 }
 
 #undef LOCTEXT_NAMESPACE

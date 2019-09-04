@@ -321,6 +321,7 @@ void FStartupMessages::AddThreadMetadata( const FName InThreadName, uint32 InThr
 
 void FStartupMessages::AddMetadata( FName InStatName, const TCHAR* InStatDesc, const char* InGroupName, const char* InGroupCategory, const TCHAR* InGroupDesc, bool bShouldClearEveryFrame, EStatDataType::Type InStatType, bool bCycleStat, bool bSortByName, FPlatformMemory::EMemoryCounterRegion InMemoryRegion /*= FPlatformMemory::MCR_Invalid*/ )
 {
+	LLM_SCOPE(ELLMTag::Stats);
 	FScopeLock Lock( &CriticalSection );
 
 	new (DelayedMessages)FStatMessage( InGroupName, EStatDataType::ST_None, "Groups", InGroupCategory, InGroupDesc, false, false, bSortByName );
@@ -333,6 +334,7 @@ FStartupMessages& FStartupMessages::Get()
 	static FStartupMessages* Messages = NULL;
 	if( !Messages )
 	{
+		LLM_SCOPE(ELLMTag::Stats);
 		check( IsInGameThread() );
 		Messages = new FStartupMessages;
 	}
@@ -600,6 +602,21 @@ public:
 		{
 			Found->AlwaysEnabledNamesInThisGroup.Add( Stat, Result );
 		}
+
+#if CPUPROFILERTRACE_ENABLED
+		if (bCycleStat)
+		{
+			Result->TraceCpuProfilerSpecId = FCpuProfilerTrace::OutputEventType(*StatDescription, CpuProfilerGroup_Stats);
+		}
+#endif
+#if STATSTRACE_ENABLED
+		if (!bCycleStat && (InStatType == EStatDataType::ST_int64 || InStatType == EStatDataType::ST_double))
+		{
+			ANSICHAR NameBuffer[1024];
+			StatShortName.GetPlainANSIString(NameBuffer);
+			FStatsTrace::DeclareStat(Stat, NameBuffer, *StatDescription, InStatType == EStatDataType::ST_double, MemoryRegion != FPlatformMemory::MCR_Invalid, bShouldClearEveryFrame);
+		}
+#endif
 		return TStatId(Result);
 	}
 
@@ -1056,6 +1073,7 @@ public:
 
 FThreadStatsPool::FThreadStatsPool()
 {
+	LLM_SCOPE(ELLMTag::Stats);
 	for( int32 Index = 0; Index < NUM_ELEMENTS_IN_POOL; ++Index )
 	{
 		Pool.Push( new FThreadStats(EConstructor::FOR_POOL) );
@@ -1064,6 +1082,7 @@ FThreadStatsPool::FThreadStatsPool()
 
 FThreadStats* FThreadStatsPool::GetFromPool()
 {
+	LLM_SCOPE(ELLMTag::Stats);
 	FPlatformMisc::MemoryBarrier();
 	FThreadStats* Address = Pool.Pop();
 	while (!Address)
@@ -1221,6 +1240,8 @@ void FThreadStats::FlushRegularStats( bool bHasBrokenCallstacks, bool bForceFlus
 
 void FThreadStats::FlushRawStats( bool bHasBrokenCallstacks /*= false*/, bool bForceFlush /*= false*/ )
 {
+	LLM_SCOPE(ELLMTag::Stats);
+
 	if (bReentranceGuard)
 	{
 		return;
@@ -1443,7 +1464,5 @@ void FThreadStats::WaitForStats()
 #endif // !UE_BUILD_SHIPPING
 	}
 }
-
-bool FStatPacket::bDumpStatPacket = false;
 
 #endif

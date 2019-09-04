@@ -546,7 +546,8 @@ void FSkeletalMeshEditor::OnRemoveSectionFromLodAndBelowMenuItemClicked(int32 Lo
 		const FSkeletalMeshLODInfo* CurrentSkeletalMeshLODInfo = SkeletalMesh->GetLODInfo(GenerateLodIndex);
 		if (CurrentSkeletalMeshLODInfo != nullptr && CurrentSkeletalMeshLODInfo->bHasBeenSimplified && BaseLodIndexes.Contains(CurrentSkeletalMeshLODInfo->ReductionSettings.BaseLOD))
 		{
-			FLODUtilities::SimplifySkeletalMeshLOD(UpdateContext, GenerateLodIndex);
+			bool bRestoreClothing = true;
+			FLODUtilities::SimplifySkeletalMeshLOD(UpdateContext, GenerateLodIndex, true, bRestoreClothing);
 			BaseLodIndexes.Add(GenerateLodIndex);
 		}
 	}
@@ -882,8 +883,27 @@ UObject* FSkeletalMeshEditor::HandleGetAsset()
 
 bool FSkeletalMeshEditor::HandleReimportMeshInternal(int32 SourceFileIndex /*= INDEX_NONE*/, bool bWithNewFile /*= false*/)
 {
+	// Make sure we clear any skin weight profile currently being previewed
+	UDebugSkelMeshComponent* MeshComponent = GetPersonaToolkit()->GetPreviewScene()->GetPreviewMeshComponent();
+	const FName ProfileName = MeshComponent ? MeshComponent->GetCurrentSkinWeightProfileName() : NAME_None;
+	if (MeshComponent)
+	{
+		MeshComponent->ClearSkinWeightProfile();
+	}
+
 	// Reimport the asset
-	return FReimportManager::Instance()->Reimport(SkeletalMesh, true, true, TEXT(""), nullptr, SourceFileIndex, bWithNewFile);
+	const bool bResult = FReimportManager::Instance()->Reimport(SkeletalMesh, true, true, TEXT(""), nullptr, SourceFileIndex, bWithNewFile);
+
+	// Refresh skeleton tree
+	SkeletonTree->Refresh();
+
+	// Re-set skin weigh profile
+	if (MeshComponent && (ProfileName != NAME_None))
+	{
+		MeshComponent->SetSkinWeightProfile(ProfileName);
+	}
+
+	return bResult;
 }
 
 void FSkeletalMeshEditor::HandleReimportMesh(int32 SourceFileIndex /*= INDEX_NONE*/)
@@ -937,7 +957,8 @@ void ReimportAllCustomLODs(USkeletalMesh* SkeletalMesh, UDebugSkelMeshComponent*
 			FSkeletalMeshUpdateContext UpdateContext;
 			UpdateContext.SkeletalMesh = SkeletalMesh;
 			UpdateContext.AssociatedComponents.Push(PreviewMeshComponent);
-			FLODUtilities::SimplifySkeletalMeshLOD(UpdateContext, LodIndex);
+			bool bRestoreClothing = true;
+			FLODUtilities::SimplifySkeletalMeshLOD(UpdateContext, LodIndex, true, bRestoreClothing);
 			Dependencies[LodIndex] = true;
 		}
 	}

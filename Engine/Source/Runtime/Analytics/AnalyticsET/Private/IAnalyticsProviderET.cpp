@@ -188,6 +188,8 @@ public:
 
 	virtual void SetAppID(FString&& AppID) override;
 	virtual const FString& GetAppID() const override;
+	virtual void SetAppVersion(FString&& AppVersion) override;
+	virtual const FString& GetAppVersion() const override;
 	virtual void SetUserID(const FString& InUserID) override;
 	virtual FString GetUserID() const override;
 
@@ -766,9 +768,30 @@ void FAnalyticsProviderET::SetAppID(FString&& InAppID)
 	}
 }
 
+void FAnalyticsProviderET::SetAppVersion(FString&& InAppVersion)
+{
+	// make sure to do the version replacement if the given string is parameterized.
+	InAppVersion = InAppVersion.IsEmpty()
+		? FString(FApp::GetBuildVersion())
+		: InAppVersion.Replace(TEXT("%VERSION%"), FApp::GetBuildVersion(), ESearchCase::CaseSensitive);
+
+	if (AppVersion != InAppVersion)
+	{
+		UE_LOG(LogAnalytics, Log, TEXT("[%s] Updating AppVersion to %s from old value of %s"), *APIKey, *InAppVersion, *AppVersion);
+		// Flush any cached events that would be using the old AppVersion.
+		FlushEvents();
+		AppVersion = MoveTemp(InAppVersion);
+	}
+}
+
 const FString& FAnalyticsProviderET::GetAppID() const
 {
 	return APIKey;
+}
+
+const FString& FAnalyticsProviderET::GetAppVersion() const
+{
+	return AppVersion;
 }
 
 void FAnalyticsProviderET::SetUserID(const FString& InUserID)

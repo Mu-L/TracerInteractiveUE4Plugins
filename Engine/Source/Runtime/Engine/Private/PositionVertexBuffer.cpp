@@ -151,7 +151,7 @@ void FPositionVertexBuffer::Serialize( FArchive& Ar, bool bInNeedsCPUAccess )
 {
 	bNeedsCPUAccess = bInNeedsCPUAccess;
 
-	Ar << Stride << NumVertices;
+	SerializeMetaData(Ar);
 
 	if(Ar.IsLoading())
 	{
@@ -169,6 +169,16 @@ void FPositionVertexBuffer::Serialize( FArchive& Ar, bool bInNeedsCPUAccess )
 	}
 }
 
+void FPositionVertexBuffer::SerializeMetaData(FArchive& Ar)
+{
+	Ar << Stride << NumVertices;
+}
+
+void FPositionVertexBuffer::ClearMetaData()
+{
+	Stride = NumVertices = 0;
+}
+
 /**
 * Specialized assignment operator, only used when importing LOD's.  
 */
@@ -178,18 +188,52 @@ void FPositionVertexBuffer::operator=(const FPositionVertexBuffer &Other)
 	VertexData = NULL;
 }
 
+template <bool bRenderThread>
+FVertexBufferRHIRef FPositionVertexBuffer::CreateRHIBuffer_Internal()
+{
+	if (NumVertices)
+	{
+		FResourceArrayInterface* RESTRICT ResourceArray = VertexData ? VertexData->GetResourceArray() : nullptr;
+		const uint32 SizeInBytes = ResourceArray ? ResourceArray->GetResourceDataSize() : 0;
+		FRHIResourceCreateInfo CreateInfo(ResourceArray);
+		CreateInfo.bWithoutNativeResource = !VertexData;
+		if (bRenderThread)
+		{
+			return RHICreateVertexBuffer(SizeInBytes, BUF_Static | BUF_ShaderResource, CreateInfo);
+		}
+		else
+		{
+			return RHIAsyncCreateVertexBuffer(SizeInBytes, BUF_Static | BUF_ShaderResource, CreateInfo);
+		}
+	}
+	return nullptr;
+}
+
+FVertexBufferRHIRef FPositionVertexBuffer::CreateRHIBuffer_RenderThread()
+{
+	return CreateRHIBuffer_Internal<true>();
+}
+
+FVertexBufferRHIRef FPositionVertexBuffer::CreateRHIBuffer_Async()
+{
+	return CreateRHIBuffer_Internal<false>();
+}
+
 void FPositionVertexBuffer::InitRHI()
 {
-	check(VertexData);
-	FResourceArrayInterface* ResourceArray = VertexData->GetResourceArray();
-	if (ResourceArray->GetResourceDataSize())
+	VertexBufferRHI = CreateRHIBuffer_RenderThread();
+	// we have decide to create the SRV based on GMaxRHIShaderPlatform because this is created once and shared between feature levels for editor preview.
+	// Also check to see whether cpu access has been activated on the vertex data
+	if (VertexBufferRHI)
 	{
-		// Create the vertex buffer.
-		FRHIResourceCreateInfo CreateInfo(ResourceArray);
-		VertexBufferRHI = RHICreateVertexBuffer(ResourceArray->GetResourceDataSize(), BUF_Static | BUF_ShaderResource, CreateInfo);
-
 		// we have decide to create the SRV based on GMaxRHIShaderPlatform because this is created once and shared between feature levels for editor preview.
-		if (RHISupportsManualVertexFetch(GMaxRHIShaderPlatform) || IsGPUSkinCacheAvailable())
+		bool bSRV = RHISupportsManualVertexFetch(GMaxRHIShaderPlatform) || IsGPUSkinCacheAvailable(GMaxRHIShaderPlatform);
+
+		// When bAllowCPUAccess is true, the meshes is likely going to be used for Niagara to spawn particles on mesh surface.
+		// And it can be the case for CPU *and* GPU access: no differenciation today. That is why we create a SRV in this case.
+		// This also avoid setting lots of states on all the members of all the different buffers used by meshes. Follow up: https://jira.it.epicgames.net/browse/UE-69376.
+		bSRV |= VertexData->GetAllowCPUAccess();
+		if(bSRV)
 		{
 			PositionComponentSRV = RHICreateShaderResourceView(VertexBufferRHI, 4, PF_R32_FLOAT);
 		}
@@ -199,7 +243,6 @@ void FPositionVertexBuffer::InitRHI()
 void FPositionVertexBuffer::ReleaseRHI()
 {
 	PositionComponentSRV.SafeRelease();
-
 	FVertexBuffer::ReleaseRHI();
 }
 

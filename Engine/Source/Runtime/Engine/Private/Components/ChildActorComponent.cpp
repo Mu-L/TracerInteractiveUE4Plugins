@@ -22,7 +22,17 @@ void UChildActorComponent::OnRegister()
 
 	if (ChildActor)
 	{
-		if (bNeedsRecreate || ChildActor->GetClass() != ChildActorClass)
+		if (ChildActor->GetClass() != ChildActorClass)
+		{
+			bNeedsRecreate = true;
+			ChildActorName = NAME_None;
+		}
+		else
+		{
+			ChildActorName = ChildActor->GetFName();
+		}
+
+		if (bNeedsRecreate)
 		{
 			bNeedsRecreate = false;
 			DestroyChildActor();
@@ -30,8 +40,6 @@ void UChildActorComponent::OnRegister()
 		}
 		else
 		{
-			ChildActorName = ChildActor->GetFName();
-			
 			USceneComponent* ChildRoot = ChildActor->GetRootComponent();
 			if (ChildRoot && ChildRoot->GetAttachParent() != this)
 			{
@@ -466,11 +474,20 @@ void UChildActorComponent::SetChildActorClass(TSubclassOf<AActor> Class)
 			ChildActorTemplate = nullptr;
 		}
 	}
-	else if (IsRegistered())
+	else
 	{
-		ChildActorName = NAME_None;
-		DestroyChildActor();
-		CreateChildActor();
+		// Clear actor template if it no longer matches the set class
+		if (ChildActorTemplate && ChildActorTemplate->GetClass() != ChildActorClass)
+		{
+			ChildActorTemplate = nullptr;
+		}
+
+		if (IsRegistered())
+		{
+			ChildActorName = NAME_None;
+			DestroyChildActor();
+			CreateChildActor();
+		}
 	}
 }
 

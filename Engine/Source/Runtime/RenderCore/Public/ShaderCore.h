@@ -64,7 +64,7 @@ DECLARE_MEMORY_STAT_EXTERN(TEXT("Shader MapMemory"),STAT_Shaders_ShaderMapMemory
 
 inline TStatId GetMemoryStatType(EShaderFrequency ShaderFrequency)
 {
-	static_assert(9 == SF_NumFrequencies, "EShaderFrequency has a bad size.");
+	static_assert(10 == SF_NumFrequencies, "EShaderFrequency has a bad size.");
 
 	switch(ShaderFrequency)
 	{
@@ -73,6 +73,7 @@ inline TStatId GetMemoryStatType(EShaderFrequency ShaderFrequency)
 		case SF_RayGen:				return GET_STATID(STAT_PixelShaderMemory);
 		case SF_RayMiss:			return GET_STATID(STAT_PixelShaderMemory);
 		case SF_RayHitGroup:		return GET_STATID(STAT_PixelShaderMemory);
+		case SF_RayCallable:		return GET_STATID(STAT_PixelShaderMemory);
 	}
 	return GET_STATID(STAT_VertexShaderMemory);
 }
@@ -94,6 +95,12 @@ extern RENDERCORE_API bool AllowDebugViewmodes();
 
 /** Returns true if debug viewmodes are allowed for the given platform. */
 extern RENDERCORE_API bool AllowDebugViewmodes(EShaderPlatform Platform);
+
+/** Returns true if debug information should be kept for a given platform. */
+extern RENDERCORE_API bool ShouldKeepShaderDebugInfo(EShaderPlatform Platform);
+
+/** Returns true if debug information should be exported to separate files for a given platform . */
+extern RENDERCORE_API bool ShouldExportShaderDebugInfo(EShaderPlatform Platform);
 
 struct FShaderTarget
 {
@@ -179,6 +186,8 @@ enum ECompilerFlags
 	// Check GRHISupportsWaveOperations before using shaders compiled with this flag at runtime.
 	// https://github.com/Microsoft/DirectXShaderCompiler/wiki/Wave-Intrinsics
 	CFLAG_WaveOperations,
+	// Use DirectX Shader Compiler (DXC) to compile all shaders, intended for compatibility testing.
+	CFLAG_ForceDXC,
 };
 
 enum class EShaderParameterType : uint8
@@ -439,6 +448,8 @@ struct FShaderCompilerEnvironment : public FRefCountedObject
 	TMap<FString, FString> RemoteServerData;
 	TMap<FString, FString> ShaderFormatCVars;
 
+	const ITargetPlatform* TargetPlatform = nullptr;
+
 	/** Default constructor. */
 	FShaderCompilerEnvironment()
 	{
@@ -551,6 +562,9 @@ struct FShaderCompilerInput
 	FString DumpDebugInfoPath;
 	// materialname or "Global" "for debugging and better error messages
 	FString DebugGroupName;
+
+	// Description of the configuration used when compiling. 
+	FString DebugDescription;
 
 	// Compilation Environment
 	FShaderCompilerEnvironment Environment;
@@ -693,6 +707,7 @@ struct FShaderCompilerInput
 		Ar << Input.DumpDebugInfoRootPath;
 		Ar << Input.DumpDebugInfoPath;
 		Ar << Input.DebugGroupName;
+		Ar << Input.DebugDescription;
 		Ar << Input.Environment;
 		Ar << Input.ExtraSettings;
 		Ar << Input.RootParameterBindings;
@@ -849,7 +864,7 @@ public:
 		return 0;
 	}
 
-	// Returns nullptr and Size -1 if not key was not found
+	// Returns nullptr and Size -1 if key was not found
 	const uint8* FindOptionalDataAndSize(uint8 InKey, int32& OutSize) const
 	{
 		check(ShaderCode.Num() >= 4);
@@ -1074,10 +1089,10 @@ extern RENDERCORE_API FString ParseVirtualShaderFilename(const FString& InFilena
 /**
  * Loads the shader file with the given name.
  * @param VirtualFilePath - The virtual path of shader file to load.
- * @param OutFileContents - If true is returned, will contain the contents of the shader file.
+ * @param OutFileContents - If true is returned, will contain the contents of the shader file. Can be null.
  * @return True if the file was successfully loaded.
  */
-extern RENDERCORE_API bool LoadShaderSourceFile(const TCHAR* VirtualFilePath, FString& OutFileContents, TArray<FShaderCompilerError>* OutCompileErrors);
+extern RENDERCORE_API bool LoadShaderSourceFile(const TCHAR* VirtualFilePath, FString* OutFileContents, TArray<FShaderCompilerError>* OutCompileErrors);
 
 /** Loads the shader file with the given name.  If the shader file couldn't be loaded, throws a fatal error. */
 extern RENDERCORE_API void LoadShaderSourceFileChecked(const TCHAR* VirtualFilePath, FString& OutFileContents);

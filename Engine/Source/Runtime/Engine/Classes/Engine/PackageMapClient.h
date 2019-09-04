@@ -27,6 +27,7 @@
 #include "Misc/NetworkVersion.h"
 #include "UObject/CoreNet.h"
 #include "Net/DataBunch.h"
+#include "Net/NetAnalyticsTypes.h"
 #include "PackageMapClient.generated.h"
 
 class UNetConnection;
@@ -36,27 +37,29 @@ PRAGMA_DISABLE_DEPRECATION_WARNINGS	// 4.22, Name, Type
 class ENGINE_API FNetFieldExport
 {
 public:
-	FNetFieldExport() : bExported( false ), Handle( 0 ), CompatibleChecksum( 0 ), bIncompatible( false )
+	FNetFieldExport() : Handle( 0 ), CompatibleChecksum( 0 ), bExported( false ), bDirtyForReplay( true ), bIncompatible( false )
 	{
 	}
 
 	UE_DEPRECATED(4.22, "Type is no longer required, please use other constructor.")
 	FNetFieldExport( const uint32 InHandle, const uint32 InCompatibleChecksum, const FString InName, FString InType ) :
-		bExported( false ),
 		Handle( InHandle ),
 		CompatibleChecksum( InCompatibleChecksum ),
 		ExportName( *InName ),
 		Name( InName ),
 		Type( InType ),
+		bExported( false ),
+		bDirtyForReplay( true ),
 		bIncompatible( false )
 	{
 	}
 
 	FNetFieldExport( const uint32 InHandle, const uint32 InCompatibleChecksum, const FName& InName ) :
-		bExported( false ),
 		Handle( InHandle ),
 		CompatibleChecksum( InCompatibleChecksum ),
 		ExportName( InName ),
+		bExported( false ),
+		bDirtyForReplay( true ),
 		bIncompatible( false )
 	{
 	}
@@ -107,7 +110,6 @@ public:
 
 	void CountBytes(FArchive& Ar) const;
 
-	bool			bExported;
 	uint32			Handle;
 	uint32			CompatibleChecksum;
 	FName			ExportName;
@@ -115,6 +117,8 @@ public:
 	FString			Name;
 	UE_DEPRECATED(4.22, "Type is deprecated.")
 	FString			Type;
+	bool			bExported;
+	bool			bDirtyForReplay;
 
 	// Transient properties
 	mutable bool	bIncompatible;		// If true, we've already determined that this property isn't compatible. We use this to curb warning spam.
@@ -124,11 +128,12 @@ PRAGMA_ENABLE_DEPRECATION_WARNINGS
 class ENGINE_API FNetFieldExportGroup
 {
 public:
-	FNetFieldExportGroup() : PathNameIndex( 0 ) { }
+	FNetFieldExportGroup() : PathNameIndex( 0 ), bDirtyForReplay( true ) { }
 
 	FString						PathName;
 	uint32						PathNameIndex;
 	TArray< FNetFieldExport >	NetFieldExports;
+	bool						bDirtyForReplay;
 
 	friend FArchive& operator<<( FArchive& Ar, FNetFieldExportGroup& C )
 	{
@@ -172,7 +177,7 @@ public:
 class FNetGuidCacheObject
 {
 public:
-	FNetGuidCacheObject() : NetworkChecksum( 0 ), ReadOnlyTimestamp( 0 ), bNoLoad( 0 ), bIgnoreWhenMissing( 0 ), bIsPending( 0 ), bIsBroken( 0 )
+	FNetGuidCacheObject() : NetworkChecksum( 0 ), ReadOnlyTimestamp( 0 ), bNoLoad( 0 ), bIgnoreWhenMissing( 0 ), bIsPending( 0 ), bIsBroken( 0 ), bDirtyForReplay( 1 )
 	{
 	}
 
@@ -189,6 +194,33 @@ public:
 	uint8						bIgnoreWhenMissing	: 1;	// Don't warn when this asset can't be found or loaded
 	uint8						bIsPending			: 1;	// This object is waiting to be fully loaded
 	uint8						bIsBroken			: 1;	// If this object failed to load, then we set this to signify that we should stop trying
+	uint8						bDirtyForReplay		: 1;	// If this object has been modified, used by replay checkpoints
+};
+
+enum class EAppendNetExportFlags : uint32
+{
+	None = 0,
+	ForceExportDirtyGroups = (1 << 0),
+};
+
+ENUM_CLASS_FLAGS(EAppendNetExportFlags);
+
+
+/** Convenience type for holding onto references to objects while we have queued bunches referring to those objects. */
+struct FQueuedBunchObjectReference
+{
+private:
+
+	friend class FNetGUIDCache;
+
+	FQueuedBunchObjectReference(const FNetworkGUID InNetGUID, UObject* InObject) :
+		NetGUID(InNetGUID),
+		Object(InObject)
+	{
+	}
+
+	FNetworkGUID NetGUID;
+	UObject* Object;
 };
 
 class ENGINE_API FNetGUIDCache
@@ -196,14 +228,14 @@ class ENGINE_API FNetGUIDCache
 public:
 	FNetGUIDCache( UNetDriver * InDriver );
 
-	enum class ENetworkChecksumMode
+	enum class ENetworkChecksumMode : uint8
 	{
 		None			= 0,		// Don't use checksums
 		SaveAndUse		= 1,		// Save checksums in stream, and use to validate while loading packages
 		SaveButIgnore	= 2,		// Save checksums in stream, but ignore when loading packages
 	};
 
-	enum class EAsyncLoadMode
+	enum class EAsyncLoadMode : uint8
 	{
 		UseCVar			= 0,		// Use CVar (net.AllowAsyncLoading) to determine if we should async load
 		ForceDisable	= 1,		// Disable async loading
@@ -226,6 +258,7 @@ public:
 	void			RegisterNetGUIDFromPath_Server( const FNetworkGUID& NetGUID, const FString& PathName, const FNetworkGUID& OuterGUID, const uint32 NetworkChecksum, const bool bNoLoad, const bool bIgnoreWhenMissing );
 	UObject *		GetObjectFromNetGUID( const FNetworkGUID& NetGUID, const bool bIgnoreMustBeMapped );
 	bool			ShouldIgnoreWhenMissing( const FNetworkGUID& NetGUID ) const;
+	FNetGuidCacheObject const * const GetCacheObject(const FNetworkGUID& NetGUID) const;
 	bool			IsGUIDRegistered( const FNetworkGUID& NetGUID ) const;
 	bool			IsGUIDLoaded( const FNetworkGUID& NetGUID ) const;
 	bool			IsGUIDBroken( const FNetworkGUID& NetGUID, const bool bMustBeRegistered ) const;
@@ -246,6 +279,13 @@ public:
 
 	void			CountBytes(FArchive& Ar) const;
 
+	void ConsumeAsyncLoadDelinquencyAnalytics(FNetAsyncLoadDelinquencyAnalytics& Out);
+	const FNetAsyncLoadDelinquencyAnalytics& GetAsyncLoadDelinquencyAnalytics() const;
+	void ResetAsyncLoadDelinquencyAnalytics();
+
+	void CollectReferences(class FReferenceCollector& ReferenceCollector);
+	TSharedRef<FQueuedBunchObjectReference> TrackQueuedBunchObjectReference(const FNetworkGUID InNetGUID, UObject* InObject);
+
 	TMap< FNetworkGUID, FNetGuidCacheObject >		ObjectLookup;
 	TMap< TWeakObjectPtr< UObject >, FNetworkGUID >	NetGUIDLookup;
 	int32											UniqueNetIDs[2];
@@ -253,14 +293,15 @@ public:
 	TSet< FNetworkGUID >							ImportedNetGuids;
 	TMap< FNetworkGUID, TSet< FNetworkGUID > >		PendingOuterNetGuids;
 
-	bool											IsExportingNetGUIDBunch;
-
 	UNetDriver *									Driver;
 
+	UE_DEPRECATED(4.23, "This member will be made private in future versions")
 	TMap< FName, FNetworkGUID >						PendingAsyncPackages;
 
 	ENetworkChecksumMode							NetworkChecksumMode;
 	EAsyncLoadMode									AsyncLoadMode;
+
+	bool											IsExportingNetGUIDBunch;
 
 private:
 
@@ -280,10 +321,43 @@ private:
 
 #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
 public:
+
+	static const bool IsHistoryEnabled();
+
 	// History for debugging entries in the guid cache
 	TMap<FNetworkGUID, FString>						History;
 private:
 #endif
+
+	struct FPendingAsyncLoadRequest
+	{
+		FPendingAsyncLoadRequest(const FNetworkGUID InNetGUID, const float InRequestStartTime):
+			NetGUID(InNetGUID),
+			RequestStartTime(InRequestStartTime)
+		{
+		}
+
+		FNetworkGUID NetGUID;
+		float RequestStartTime;
+	};
+
+	/** Set of packages that are currently pending Async loads, referenced by package name. */
+	TMap<FName, FPendingAsyncLoadRequest> PendingAsyncLoadRequests;
+
+	FNetAsyncLoadDelinquencyAnalytics DelinquentAsyncLoads;
+
+	void StartAsyncLoadingPackage(FNetGuidCacheObject& Object, const FNetworkGUID ObjectGUID, const bool bWasAlreadyAsyncLoading);
+	void ValidateAsyncLoadingPackage(FNetGuidCacheObject& Object, const FNetworkGUID ObjectGUID);
+
+	void UpdateQueuedBunchObjectReference(const FNetworkGUID NetGUID, UObject* NewObject);
+
+	/**
+	 * Set of all current Objects that we've been requested to be referenced while channels
+	 * resolve their queued bunches. This is used to prevent objects (especially async load objects,
+	 * which may have no other references) from being GC'd while a channel is waiting for more
+	 * pending guids. 
+	 */
+	TMap<FNetworkGUID, TWeakPtr<FQueuedBunchObjectReference>> QueuedBunchObjectReferences;
 };
 
 class ENGINE_API FPackageMapAckState
@@ -387,6 +461,7 @@ public:
 	void								TrackNetFieldExport( FNetFieldExportGroup* NetFieldExportGroup, const int32 NetFieldExportHandle );
 	TSharedPtr< FNetFieldExportGroup >	GetNetFieldExportGroupChecked( const FString& PathName ) const;
 	void								SerializeNetFieldExportGroupMap( FArchive& Ar, bool bClearPendingExports=true );
+	void								SerializeNetFieldExportDelta(FArchive& Ar);
 
 	TUniquePtr<TGuardValue<bool>> ScopedIgnoreReceivedExportGUIDs()
 	{
@@ -400,6 +475,8 @@ protected:
 	/** Functions to help with exporting/importing net field export info */
 	void AppendNetFieldExports( FArchive& Archive );
 	void ReceiveNetFieldExports( FArchive& Archive );
+
+	void AppendNetFieldExportsInternal( FArchive& Archive, const TSet<uint64>& InNetFieldExports, EAppendNetExportFlags Flags );
 
 	void AppendNetExportGUIDs( FArchive& Archive );
 	void ReceiveNetExportGUIDs( FArchive& Archive );
@@ -423,7 +500,9 @@ protected:
 
 	TArray<TArray<uint8>>				ExportGUIDArchives;
 	TSet< FNetworkGUID >				CurrentExportNetGUIDs;				// Current list of NetGUIDs being written to the Export Bunch.
-	TSet< FNetworkGUID >				CurrentQueuedBunchNetGUIDs;			// List of NetGuids with currently queued bunches
+
+	/** Set of Actor NetGUIDs with currently queued bunches and the time they were first queued. */
+	TMap<FNetworkGUID, float> CurrentQueuedBunchNetGUIDs;
 
 	TArray< FNetworkGUID >				PendingAckGUIDs;					// Quick access to all GUID's that haven't been acked
 
@@ -447,4 +526,14 @@ private:
 	void ReceiveNetFieldExportsCompat(FInBunch& InBunch);
 
 	bool bIgnoreReceivedExportGUIDs;
+
+public:
+
+	void ConsumeQueuedActorDelinquencyAnalytics(FNetQueuedActorDelinquencyAnalytics& Out);
+	const FNetQueuedActorDelinquencyAnalytics& GetQueuedActorDelinquencyAnalytics() const;
+	void ResetQueuedActorDelinquencyAnalytics();
+
+private:
+
+	FNetQueuedActorDelinquencyAnalytics DelinquentQueuedActors;
 };

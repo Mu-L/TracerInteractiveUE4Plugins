@@ -45,11 +45,6 @@ static TAutoConsoleVariable<int32> CVarRHICmdFlushRenderThreadTasksBasePass(
 	0,
 	TEXT("Wait for completion of parallel render thread tasks at the end of the base pass. A more granular version of r.RHICmdFlushRenderThreadTasks. If either r.RHICmdFlushRenderThreadTasks or r.RHICmdFlushRenderThreadTasksBasePass is > 0 we will flush."));
 
-bool UseSelectiveBasePassOutputs()
-{
-	return CVarSelectiveBasePassOutputs.GetValueOnAnyThread() == 1;
-}
-
 static TAutoConsoleVariable<int32> CVarSupportStationarySkylight(
 	TEXT("r.SupportStationarySkylight"),
 	1,
@@ -193,6 +188,10 @@ void SetTranslucentRenderState(FMeshPassProcessorRenderState& DrawRenderState, c
 		// Blend with existing scene color. New color is already pre-multiplied by alpha.
 		DrawRenderState.SetBlendState(TStaticBlendState<CW_RGBA, BO_Add, BF_One, BF_InverseSourceAlpha, BO_Add, BF_Zero, BF_InverseSourceAlpha>::GetRHI());
 		break;
+	case BLEND_AlphaHoldout:
+		// Blend by holding out the matte shape of the source alpha
+		DrawRenderState.SetBlendState(TStaticBlendState<CW_RGBA, BO_Add, BF_Zero, BF_InverseSourceAlpha, BO_Add, BF_One, BF_InverseSourceAlpha>::GetRHI());
+		break;
 	};
 
 	const bool bDisableDepthTest = Material.ShouldDisableDepthTest();
@@ -262,7 +261,7 @@ FMeshDrawCommandSortKey CalculateBasePassMeshStaticSortKey(EDepthDrawingMode Ear
 	return SortKey;
 }
 
-void SetDepthStencilStateForBasePass(FMeshPassProcessorRenderState& DrawRenderState, ERHIFeatureLevel::Type FeatureLevel, const FMeshBatch& Mesh, const FPrimitiveSceneProxy* PrimitiveSceneProxy, bool bEnableReceiveDecalOutput, bool bUseDebugViewPS, FDepthStencilStateRHIParamRef LodFadeOverrideDepthStencilState)
+void SetDepthStencilStateForBasePass(FMeshPassProcessorRenderState& DrawRenderState, ERHIFeatureLevel::Type FeatureLevel, const FMeshBatch& Mesh, const FPrimitiveSceneProxy* PrimitiveSceneProxy, bool bEnableReceiveDecalOutput, bool bUseDebugViewPS, FRHIDepthStencilState* LodFadeOverrideDepthStencilState)
 {
 	static IConsoleVariable* EarlyZPassOnlyMaterialMaskingCVar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.EarlyZPassOnlyMaterialMasking"));
 	bool bMaskInEarlyPass = (EarlyZPassOnlyMaterialMaskingCVar && Mesh.MaterialRenderProxy->GetMaterial(FeatureLevel)->IsMasked() && EarlyZPassOnlyMaterialMaskingCVar->GetInt());
@@ -552,7 +551,7 @@ void CreateOpaqueBasePassUniformBuffer(
 
 		BasePassParameters.IndirectOcclusionTexture = IndirectOcclusion->GetRenderTargetItem().ShaderResourceTexture;
 
-		FTextureRHIParamRef ResolvedSceneDepthTextureValue = GSystemTextures.WhiteDummy->GetRenderTargetItem().ShaderResourceTexture;
+		FRHITexture* ResolvedSceneDepthTextureValue = GSystemTextures.WhiteDummy->GetRenderTargetItem().ShaderResourceTexture;
 
 		if (SceneRenderTargets.GetMSAACount() > 1)
 		{
@@ -608,6 +607,7 @@ void CreateOpaqueBasePassUniformBuffer(
  */
 bool FDeferredShadingSceneRenderer::RenderBasePass(FRHICommandListImmediate& RHICmdList, FExclusiveDepthStencil::Type BasePassDepthStencilAccess, IPooledRenderTarget* ForwardScreenSpaceShadowMask, bool bParallelBasePass, bool bRenderLightmapDensity)
 {
+	CSV_SCOPED_TIMING_STAT_EXCLUSIVE(RenderBasePass);
 	SCOPED_NAMED_EVENT(FDeferredShadingSceneRenderer_RenderBasePass, FColor::Emerald);
 
 	bool bDirty = false;
@@ -911,7 +911,7 @@ void FBasePassMeshProcessor::Process(
 	const FMaterialRenderProxy& RESTRICT MaterialRenderProxy,
 	const FMaterial& RESTRICT MaterialResource,
 	EBlendMode BlendMode,
-	EMaterialShadingModel ShadingModel,
+	FMaterialShadingModelField ShadingModels,
 	const LightMapPolicyType& RESTRICT LightMapPolicy,
 	const typename LightMapPolicyType::ElementDataType& RESTRICT LightMapElementData,
 	ERasterizerFillMode MeshFillMode,
@@ -919,7 +919,7 @@ void FBasePassMeshProcessor::Process(
 {
 	const FVertexFactory* VertexFactory = MeshBatch.VertexFactory;
 
-	const bool bRenderSkylight = Scene && Scene->ShouldRenderSkylightInBasePass(BlendMode) && ShadingModel != MSM_Unlit;
+	const bool bRenderSkylight = Scene && Scene->ShouldRenderSkylightInBasePass(BlendMode) && ShadingModels.IsLit();
 	const bool bRenderAtmosphericFog = IsTranslucentBlendMode(BlendMode) && (Scene && Scene->HasAtmosphericFog() && Scene->ReadOnlyCVARCache.bEnableAtmosphericFog);
 
 	TMeshProcessorShaders<
@@ -998,12 +998,12 @@ void FBasePassMeshProcessor::AddMeshBatchForSimpleForwardShading(
 	ERasterizerCullMode MeshCullMode)
 {
 	const EBlendMode BlendMode = Material.GetBlendMode();
-	const EMaterialShadingModel ShadingModel = Material.GetShadingModel();
+	const FMaterialShadingModelField ShadingModels = Material.GetShadingModels();
 
 	if (bAllowStaticLighting && LightMapInteraction.GetType() == LMIT_Texture)
 	{
 		const FShadowMapInteraction ShadowMapInteraction = (MeshBatch.LCI && bIsLitMaterial)
-			? MeshBatch.LCI->GetShadowMapInteraction()
+			? MeshBatch.LCI->GetShadowMapInteraction(FeatureLevel)
 			: FShadowMapInteraction();
 
 		if (ShadowMapInteraction.GetType() == SMIT_Texture)
@@ -1016,7 +1016,7 @@ void FBasePassMeshProcessor::AddMeshBatchForSimpleForwardShading(
 				MaterialRenderProxy,
 				Material,
 				BlendMode,
-				ShadingModel,
+				ShadingModels,
 				FUniformLightMapPolicy(LMP_SIMPLE_STATIONARY_PRECOMPUTED_SHADOW_LIGHTING),
 				MeshBatch.LCI,
 				MeshFillMode,
@@ -1032,7 +1032,7 @@ void FBasePassMeshProcessor::AddMeshBatchForSimpleForwardShading(
 				MaterialRenderProxy,
 				Material,
 				BlendMode,
-				ShadingModel,
+				ShadingModels,
 				FUniformLightMapPolicy(LMP_SIMPLE_LIGHTMAP_ONLY_LIGHTING),
 				MeshBatch.LCI,
 				MeshFillMode,
@@ -1052,7 +1052,7 @@ void FBasePassMeshProcessor::AddMeshBatchForSimpleForwardShading(
 			MaterialRenderProxy,
 			Material,
 			BlendMode,
-			ShadingModel,
+			ShadingModels,
 			FUniformLightMapPolicy(LMP_SIMPLE_STATIONARY_VOLUMETRICLIGHTMAP_SHADOW_LIGHTING),
 			MeshBatch.LCI,
 			MeshFillMode,
@@ -1084,7 +1084,7 @@ void FBasePassMeshProcessor::AddMeshBatchForSimpleForwardShading(
 				MaterialRenderProxy,
 				Material,
 				BlendMode,
-				ShadingModel,
+				ShadingModels,
 				FUniformLightMapPolicy(LMP_SIMPLE_STATIONARY_SINGLESAMPLE_SHADOW_LIGHTING),
 				MeshBatch.LCI,
 				MeshFillMode,
@@ -1100,7 +1100,7 @@ void FBasePassMeshProcessor::AddMeshBatchForSimpleForwardShading(
 				MaterialRenderProxy,
 				Material,
 				BlendMode,
-				ShadingModel,
+				ShadingModels,
 				FUniformLightMapPolicy(LMP_SIMPLE_NO_LIGHTMAP),
 				MeshBatch.LCI,
 				MeshFillMode,
@@ -1118,7 +1118,7 @@ void FBasePassMeshProcessor::AddMeshBatchForSimpleForwardShading(
 			MaterialRenderProxy,
 			Material,
 			BlendMode,
-			ShadingModel,
+			ShadingModels,
 			FUniformLightMapPolicy(LMP_SIMPLE_DIRECTIONAL_LIGHT_LIGHTING),
 			MeshBatch.LCI,
 			MeshFillMode,
@@ -1134,7 +1134,7 @@ void FBasePassMeshProcessor::AddMeshBatchForSimpleForwardShading(
 			MaterialRenderProxy,
 			Material,
 			BlendMode,
-			ShadingModel,
+			ShadingModels,
 			FUniformLightMapPolicy(LMP_SIMPLE_NO_LIGHTMAP),
 			MeshBatch.LCI,
 			MeshFillMode,
@@ -1153,7 +1153,7 @@ void FBasePassMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshBatch, 
 		const FMaterialRenderProxy& MaterialRenderProxy = FallbackMaterialRenderProxyPtr ? *FallbackMaterialRenderProxyPtr : *MeshBatch.MaterialRenderProxy;
 
 		const EBlendMode BlendMode = Material.GetBlendMode();
-		const EMaterialShadingModel ShadingModel = Material.GetShadingModel();
+		const FMaterialShadingModelField ShadingModels = Material.GetShadingModels();
 		const bool bIsTranslucent = IsTranslucentBlendMode(BlendMode);
 		const ERasterizerFillMode MeshFillMode = ComputeMeshFillMode(MeshBatch, Material);
 		const ERasterizerCullMode MeshCullMode = ComputeMeshCullMode(MeshBatch, Material);
@@ -1193,7 +1193,7 @@ void FBasePassMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshBatch, 
 			&& ShouldIncludeDomainInMeshPass(Material.GetMaterialDomain()))
 		{
 			// Check for a cached light-map.
-			const bool bIsLitMaterial = (ShadingModel != MSM_Unlit);
+			const bool bIsLitMaterial = ShadingModels.IsLit();
 			static const auto AllowStaticLightingVar = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.AllowStaticLighting"));
 			const bool bAllowStaticLighting = (!AllowStaticLightingVar || AllowStaticLightingVar->GetValueOnRenderThread() != 0);
 
@@ -1260,7 +1260,7 @@ void FBasePassMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshBatch, 
 						MaterialRenderProxy,
 						Material,
 						BlendMode,
-						ShadingModel,
+						ShadingModels,
 						FSelfShadowedVolumetricLightmapPolicy(),
 						ElementData,
 						MeshFillMode,
@@ -1279,7 +1279,7 @@ void FBasePassMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshBatch, 
 						MaterialRenderProxy,
 						Material,
 						BlendMode,
-						ShadingModel,
+						ShadingModels,
 						FSelfShadowedCachedPointIndirectLightingPolicy(),
 						ElementData,
 						MeshFillMode,
@@ -1295,7 +1295,7 @@ void FBasePassMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshBatch, 
 						MaterialRenderProxy,
 						Material,
 						BlendMode,
-						ShadingModel,
+						ShadingModels,
 						FSelfShadowedTranslucencyPolicy(),
 						ElementData.SelfShadowTranslucencyUniformBuffer,
 						MeshFillMode,
@@ -1313,7 +1313,7 @@ void FBasePassMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshBatch, 
 					if (bAllowHighQualityLightMaps)
 					{
 						const FShadowMapInteraction ShadowMapInteraction = (bAllowStaticLighting && MeshBatch.LCI && bIsLitMaterial)
-							? MeshBatch.LCI->GetShadowMapInteraction()
+							? MeshBatch.LCI->GetShadowMapInteraction(FeatureLevel)
 							: FShadowMapInteraction();
 
 						if (ShadowMapInteraction.GetType() == SMIT_Texture)
@@ -1326,7 +1326,7 @@ void FBasePassMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshBatch, 
 								MaterialRenderProxy,
 								Material,
 								BlendMode,
-								ShadingModel,
+								ShadingModels,
 								FUniformLightMapPolicy(LMP_DISTANCE_FIELD_SHADOWS_AND_HQ_LIGHTMAP),
 								MeshBatch.LCI,
 								MeshFillMode,
@@ -1342,7 +1342,7 @@ void FBasePassMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshBatch, 
 								MaterialRenderProxy,
 								Material,
 								BlendMode,
-								ShadingModel,
+								ShadingModels,
 								FUniformLightMapPolicy(LMP_HQ_LIGHTMAP),
 								MeshBatch.LCI,
 								MeshFillMode,
@@ -1359,7 +1359,7 @@ void FBasePassMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshBatch, 
 							MaterialRenderProxy,
 							Material,
 							BlendMode,
-							ShadingModel,
+							ShadingModels,
 							FUniformLightMapPolicy(LMP_LQ_LIGHTMAP),
 							MeshBatch.LCI,
 							MeshFillMode,
@@ -1375,7 +1375,7 @@ void FBasePassMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshBatch, 
 							MaterialRenderProxy,
 							Material,
 							BlendMode,
-							ShadingModel,
+							ShadingModels,
 							FUniformLightMapPolicy(LMP_NO_LIGHTMAP),
 							MeshBatch.LCI,
 							MeshFillMode,
@@ -1400,7 +1400,7 @@ void FBasePassMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshBatch, 
 							MaterialRenderProxy,
 							Material,
 							BlendMode,
-							ShadingModel,
+							ShadingModels,
 							FUniformLightMapPolicy(LMP_PRECOMPUTED_IRRADIANCE_VOLUME_INDIRECT_LIGHTING),
 							MeshBatch.LCI,
 							MeshFillMode,
@@ -1439,7 +1439,7 @@ void FBasePassMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshBatch, 
 									MaterialRenderProxy,
 									Material,
 									BlendMode,
-									ShadingModel,
+									ShadingModels,
 									FUniformLightMapPolicy(LMP_CACHED_VOLUME_INDIRECT_LIGHTING),
 									MeshBatch.LCI,
 									MeshFillMode,
@@ -1456,7 +1456,7 @@ void FBasePassMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshBatch, 
 									MaterialRenderProxy,
 									Material,
 									BlendMode,
-									ShadingModel,
+									ShadingModels,
 									FUniformLightMapPolicy(LMP_CACHED_POINT_INDIRECT_LIGHTING),
 									MeshBatch.LCI,
 									MeshFillMode,
@@ -1473,7 +1473,7 @@ void FBasePassMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshBatch, 
 								MaterialRenderProxy,
 								Material,
 								BlendMode,
-								ShadingModel,
+								ShadingModels,
 								FUniformLightMapPolicy(LMP_NO_LIGHTMAP),
 								MeshBatch.LCI,
 								MeshFillMode,
@@ -1490,7 +1490,7 @@ void FBasePassMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshBatch, 
 							MaterialRenderProxy,
 							Material,
 							BlendMode,
-							ShadingModel,
+							ShadingModels,
 							FUniformLightMapPolicy(LMP_NO_LIGHTMAP),
 							MeshBatch.LCI,
 							MeshFillMode,
@@ -1565,6 +1565,6 @@ FMeshPassProcessor* CreateTranslucencyAllPassProcessor(const FScene* Scene, cons
 }
 
 FRegisterPassProcessorCreateFunction RegisterBasePass(&CreateBasePassProcessor, EShadingPath::Deferred, EMeshPass::BasePass, EMeshPassFlags::CachedMeshCommands | EMeshPassFlags::MainView);
-FRegisterPassProcessorCreateFunction RegisterTranslucencyStandardPass(&CreateTranslucencyStandardPassProcessor, EShadingPath::Deferred, EMeshPass::TranslucencyStandard, EMeshPassFlags::CachedMeshCommands | EMeshPassFlags::MainView);
-FRegisterPassProcessorCreateFunction RegisterTranslucencyAfterDOFPass(&CreateTranslucencyAfterDOFProcessor, EShadingPath::Deferred, EMeshPass::TranslucencyAfterDOF, EMeshPassFlags::CachedMeshCommands | EMeshPassFlags::MainView);
-FRegisterPassProcessorCreateFunction RegisterTranslucencyAllPass(&CreateTranslucencyAllPassProcessor, EShadingPath::Deferred, EMeshPass::TranslucencyAll, EMeshPassFlags::CachedMeshCommands | EMeshPassFlags::MainView);
+FRegisterPassProcessorCreateFunction RegisterTranslucencyStandardPass(&CreateTranslucencyStandardPassProcessor, EShadingPath::Deferred, EMeshPass::TranslucencyStandard, EMeshPassFlags::MainView);
+FRegisterPassProcessorCreateFunction RegisterTranslucencyAfterDOFPass(&CreateTranslucencyAfterDOFProcessor, EShadingPath::Deferred, EMeshPass::TranslucencyAfterDOF, EMeshPassFlags::MainView);
+FRegisterPassProcessorCreateFunction RegisterTranslucencyAllPass(&CreateTranslucencyAllPassProcessor, EShadingPath::Deferred, EMeshPass::TranslucencyAll, EMeshPassFlags::MainView);

@@ -1,10 +1,12 @@
 // Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
 
+#pragma once
 #include "GenericPlatform/IInputInterface.h"
 #include "XRMotionControllerBase.h"
 #include "IOpenXRInputPlugin.h"
 #include "IInputDevice.h"
 #include "IHapticDevice.h"
+#include "XRInputSettings.h"
 
 #include <openxr/openxr.h>
 
@@ -20,32 +22,30 @@ public:
 		XrActionSet		Set;
 		XrActionType	Type;
 		FName			Name;
-		FName			ActionKey;
+		TArray<FKey>	Keys;
 		XrAction		Handle;
 
-		FOpenXRAction(XrActionSet InSet, XrActionType InType, const FName& InName);
+		FOpenXRAction(XrActionSet InActionSet, XrActionType InActionType, const FName& InName);
 
-		FOpenXRAction(XrActionSet InSet, const FName& InName, const FName& InActionKey)
-			: FOpenXRAction(InSet, XR_INPUT_ACTION_TYPE_BOOLEAN, InName)
-		{
-			ActionKey = InActionKey;
-		}
-
-		FOpenXRAction(XrActionSet InSet, const FInputActionKeyMapping& InActionKey);
-		FOpenXRAction(XrActionSet InSet, const FInputAxisKeyMapping& InAxisKey);
+		FOpenXRAction(XrActionSet InSet, const TArray<FInputActionKeyMapping>& InActionKeys);
+		FOpenXRAction(XrActionSet InSet, const TArray<FInputAxisKeyMapping>& InAxisKeys);
 	};
 
 	struct FOpenXRController
 	{
-		XrActionSet		Set;
-		XrAction		Pose;
-		XrAction		Vibration;
+		XrActionSet		ActionSet;
+		XrAction		Action;
+		XrAction		VibrationAction;
 		int32			DeviceId;
 
-		FOpenXRController(FOpenXRHMD* HMD, XrActionSet InSet, const char* InName);
+		FOpenXRController(FOpenXRHMD* HMD, XrActionSet InActionSet, const char* InName);
 	};
 
-	class FOpenXRInput : public IInputDevice, public FXRMotionControllerBase, public IHapticDevice
+	class FOpenXRInput :
+		public IInputDevice,
+		public FXRMotionControllerBase,
+		public IHapticDevice,
+		public TSharedFromThis<FOpenXRInput>
 	{
 	public:
 		FOpenXRInput(FOpenXRHMD* HMD);
@@ -79,10 +79,12 @@ public:
 		TArray<XrActiveActionSet> ActionSets;
 		TArray<FOpenXRAction> Actions;
 		TMap<EControllerHand, FOpenXRController> Controllers;
-		TMap<FName, XrPath> InteractionMappings;
 
-		template<typename T>
-		void AddAction(XrActionSet ActionSet, const TArray<T>& Mappings, TArray<XrActionSuggestedBinding>& OutSuggestedBindings);
+		bool bActionsBound;
+
+		void InitActions();
+		void DestroyActions();
+		void SuggestedBindings(XrInstance Instance, const char* Profile, const FXRInteractionProfileSettings& Settings, const TArray<FXRSuggestedBinding>& SuggestedBindings);
 
 		/** handler to send all messages to */
 		TSharedRef<FGenericApplicationMessageHandler> MessageHandler;
@@ -94,6 +96,7 @@ public:
 	FOpenXRHMD* GetOpenXRHMD() const;
 
 	virtual void StartupModule() override;
+	virtual void ShutdownModule() override;
 	virtual TSharedPtr< class IInputDevice > CreateInputDevice(const TSharedRef< FGenericApplicationMessageHandler >& InMessageHandler) override;
 
 private:

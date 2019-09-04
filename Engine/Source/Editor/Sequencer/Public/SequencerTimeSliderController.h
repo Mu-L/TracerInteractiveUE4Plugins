@@ -15,41 +15,6 @@ struct FSlateBrush;
 class FSequencer;
 class IPropertyTypeCustomization;
 
-struct FPaintPlaybackRangeArgs
-{
-	FPaintPlaybackRangeArgs()
-		: StartBrush(nullptr), EndBrush(nullptr), BrushWidth(0.f), SolidFillOpacity(0.f)
-	{}
-
-	FPaintPlaybackRangeArgs(const FSlateBrush* InStartBrush, const FSlateBrush* InEndBrush, float InBrushWidth)
-		: StartBrush(InStartBrush), EndBrush(InEndBrush), BrushWidth(InBrushWidth)
-	{}
-	/** Brush to use for the start bound */
-	const FSlateBrush* StartBrush;
-	/** Brush to use for the end bound */
-	const FSlateBrush* EndBrush;
-	/** The width of the above brushes, in slate units */
-	float BrushWidth;
-	/** level of opacity for the fill color between the range markers */
-	float SolidFillOpacity;
-};
-
-struct FPaintSectionAreaViewArgs
-{
-	FPaintSectionAreaViewArgs()
-		: bDisplayTickLines(false), bDisplayScrubPosition(false), bDisplayMarkedFrames(false)
-	{}
-
-	/** Whether to display tick lines */
-	bool bDisplayTickLines;
-	/** Whether to display the scrub position */
-	bool bDisplayScrubPosition;
-	/** Whether to display the marked frames */
-	bool bDisplayMarkedFrames;
-	/** Optional Paint args for the playback range*/
-	TOptional<FPaintPlaybackRangeArgs> PlaybackRangeArgs;
-};
-
 /**
  * A time slider controller for sequencer
  * Draws and manages time data for a Sequencer
@@ -94,13 +59,19 @@ public:
 	/** Get the current play range for this controller */
 	virtual TRange<FFrameNumber> GetPlayRange() const override { return TimeSliderArgs.PlaybackRange.Get(TRange<FFrameNumber>()); }
 
+	/** Get the current time for the Scrub handle which indicates what range is being evaluated. */
+	virtual FFrameTime GetScrubPosition() const override { return TimeSliderArgs.ScrubPosition.Get(FFrameTime()); }
+
+	/** Get the current time for the Scrub handle which indicates what range is being evaluated. */
+	virtual void SetScrubPosition(FFrameTime InTime) override { CommitScrubPosition(InTime, false); } 
+
 	/**
 	 * Clamp the given range to the clamp range 
 	 *
 	 * @param NewRangeMin		The new lower bound of the range
 	 * @param NewRangeMax		The new upper bound of the range
 	 */	
-	void ClampViewRange(double& NewRangeMin, double& NewRangeMax);
+	virtual void ClampViewRange(double& NewRangeMin, double& NewRangeMax);
 
 	/**
 	 * Set a new range based on a min, max and an interpolation mode
@@ -145,7 +116,9 @@ public:
 	/**
 	 * Draws major tick lines in the section view                                                              
 	 */
-	int32 OnPaintSectionView( const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, bool bEnabled, const FPaintSectionAreaViewArgs& Args ) const;
+	int32 OnPaintViewArea( const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, bool bEnabled, const FPaintViewAreaArgs& Args ) const;
+
+
 
 public:
 
@@ -257,6 +230,13 @@ private:
 	 */
 	bool HitTestRangeEnd(const FScrubRangeToScreen& RangeToScreen, const TRange<double>& Range, float HitPixel) const;
 
+	/**
+	 * Hit test marks
+	 *
+	 * @return The mark index hit
+	 */
+	bool HitTestMark(const FScrubRangeToScreen& RangeToScreen, float HitPixel, int32& OutMarkIndex) const;
+
 	FFrameTime SnapTimeToNearestKey(const FScrubRangeToScreen& RangeToScreen, float CursorPos, FFrameTime InTime) const;
 
 	void SetPlaybackRangeStart(FFrameNumber NewStart);
@@ -265,7 +245,9 @@ private:
 	void SetSelectionRangeStart(FFrameNumber NewStart);
 	void SetSelectionRangeEnd(FFrameNumber NewEnd);
 
-	TSharedRef<SWidget> OpenSetPlaybackRangeMenu(FFrameNumber FrameNumber);
+	void SetMark(int32 InMarkIndex, FFrameNumber NewFrame);
+
+	TSharedRef<SWidget> OpenSetPlaybackRangeMenu(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent);
 	FFrameTime ComputeScrubTimeFromMouse(const FGeometry& Geometry, FVector2D ScreenSpacePosition, FScrubRangeToScreen RangeToScreen) const;
 	FFrameTime ComputeFrameTimeFromMouse(const FGeometry& Geometry, FVector2D ScreenSpacePosition, FScrubRangeToScreen RangeToScreen, bool CheckSnapping = true) const;
 
@@ -316,11 +298,15 @@ private:
 		DRAG_PLAYBACK_END,
 		DRAG_SELECTION_START,
 		DRAG_SELECTION_END,
+		DRAG_MARK,
 		DRAG_NONE
 	};
 	
 	DragType MouseDragType;
 	
+	/** If mouse down was in time scrubbing region, only allow setting time when mouse is pressed down in the region */
+	bool bMouseDownInRegion;
+
 	/** If we are currently panning the panel */
 	bool bPanning;
 
@@ -332,6 +318,9 @@ private:
 
 	/** Range stack */
 	TArray<TRange<double>> ViewRangeStack;
+
+	/** Index of mark being edited */
+	int32 DragMarkIndex;
 
 	/** When > 0, we should not show context menus */
 	int32 ContextMenuSuppression;

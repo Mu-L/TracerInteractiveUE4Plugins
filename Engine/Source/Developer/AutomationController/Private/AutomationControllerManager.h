@@ -15,6 +15,8 @@
 #include "Async/Future.h"
 #include "ImageComparer.h"
 #include "Interfaces/IScreenShotManager.h"
+#include "Misc/EngineVersion.h"
+#include "HAL/PlatformProperties.h"
 #include "AutomationControllerManager.generated.h"
 
 USTRUCT()
@@ -81,7 +83,8 @@ struct FAutomatedTestPassResults
 
 public:
 	FAutomatedTestPassResults()
-		: ReportCreatedOn(0)
+		: ClientDescriptor()
+		, ReportCreatedOn(0)
 		, Succeeded(0)
 		, SucceededWithWarnings(0)
 		, Failed(0)
@@ -89,7 +92,24 @@ public:
 		, TotalDuration(0)
 		, ComparisonExported(false)
 	{
+		if (FEngineVersion::Current().HasChangelist())
+		{
+			ClientDescriptor = FEngineVersion::Current().GetBranch()
+				+ TEXT(" - ")
+				+ FString::FromInt(FEngineVersion::Current().GetChangelist())
+				+ TEXT(" - ");
+		}
+
+		if (FPlatformProperties::RequiresCookedData())
+		{
+			ClientDescriptor += TEXT("Cooked ");
+		}
+
+		ClientDescriptor += FPlatformProperties::IniPlatformName();
 	}
+
+	UPROPERTY()
+	FString ClientDescriptor;
 
 	UPROPERTY()
 	FDateTime ReportCreatedOn;
@@ -429,6 +449,8 @@ private:
 	/** Handles FAutomationWorkerWorkerOffline messages. */
 	void HandleWorkerOfflineMessage( const FAutomationWorkerWorkerOffline& Message, const TSharedRef<IMessageContext, ESPMode::ThreadSafe>& Context );
 
+	/** Writes out this automation result to the log */
+	void ReportAutomationResult(const TSharedPtr<IAutomationReport> InReport, int32 ClusterIndex, int32 PassIndex);
 private:
 
 	/** Session this controller is currently communicating with */

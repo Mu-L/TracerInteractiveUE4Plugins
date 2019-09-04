@@ -19,6 +19,19 @@ typedef TRefCountPtr<FLightMap> FLightMapRef;
 /** A reference to a shadow-map. */
 typedef TRefCountPtr<FShadowMap> FShadowMapRef;
 
+/** Custom primitive data payload. */
+USTRUCT()
+struct FCustomPrimitiveData
+{
+	GENERATED_USTRUCT_BODY()
+
+	static constexpr int32 NumCustomPrimitiveDataFloat4s = 8; // Must match NUM_CUSTOM_PRIMITIVE_DATA in SceneData.ush
+	static constexpr int32 NumCustomPrimitiveDataFloats = NumCustomPrimitiveDataFloat4s * 4;
+
+	UPROPERTY(EditAnywhere, Category=Rendering)
+	TArray<float> Data;
+};
+
 /** 
  * Class used to identify UPrimitiveComponents on the rendering thread without having to pass the pointer around, 
  * Which would make it easy for people to access game thread variables from the rendering thread.
@@ -52,7 +65,7 @@ public:
  * Class used to reference an FSceneViewStateInterface that allows destruction and recreation of all FSceneViewStateInterface's when needed. 
  * This is used to support reloading the renderer module on the fly.
  */
-class FSceneViewStateReference
+class ENGINE_VTABLE FSceneViewStateReference
 {
 public:
 	FSceneViewStateReference() :
@@ -162,6 +175,7 @@ enum EMaterialProperty
 	MP_CustomizedUVs6 UMETA(Hidden),
 	MP_CustomizedUVs7 UMETA(Hidden),
 	MP_PixelDepthOffset UMETA(Hidden),
+	MP_ShadingModel UMETA(Hidden),
 
 	//^^^ New material properties go above here ^^^^
 	MP_MaterialAttributes UMETA(Hidden),
@@ -182,6 +196,7 @@ enum ESimpleElementBlendMode
 	SE_BLEND_TranslucentDistanceField,
 	SE_BLEND_TranslucentDistanceFieldShadowed,
 	SE_BLEND_AlphaComposite,
+	SE_BLEND_AlphaHoldout,
 	// Like SE_BLEND_Translucent, but modifies destination alpha
 	SE_BLEND_AlphaBlend,
 	// Like SE_BLEND_Translucent, but reads from an alpha-only texture

@@ -30,6 +30,7 @@
 #include "CommonRenderResources.h"
 #include "RenderTargetPool.h"
 #include "RendererUtils.h"
+#include "HAL/LowLevelMemTracker.h"
 
 DECLARE_CYCLE_STAT(TEXT("Slate RT: Rendering"), STAT_SlateRenderingRTTime, STATGROUP_Slate);
 DECLARE_CYCLE_STAT(TEXT("Slate RT: Create Batches"), STAT_SlateRTCreateBatches, STATGROUP_Slate);
@@ -84,6 +85,9 @@ struct FSlateDrawWindowCommandParams
 	FSlateRHIRenderer* Renderer;
 	FSlateWindowElementList* WindowElementList;
 	SWindow* Window;
+#if WANTS_DRAW_MESH_EVENTS
+	FString WindowTitle;
+#endif
 	float WorldTimeSeconds;
 	float DeltaTimeSeconds;
 	float RealTimeSeconds;
@@ -102,6 +106,14 @@ void FViewportInfo::ReleaseRHI()
 {
 	DepthStencil.SafeRelease();
 	ViewportRHI.SafeRelease();
+}
+
+void FViewportInfo::ReleaseResource()
+{
+	FRenderResource::ReleaseResource();
+	UITargetRT.SafeRelease();
+	UITargetRTMask.SafeRelease();
+	HDRSourceRT.SafeRelease();
 }
 
 void FViewportInfo::ConditionallyUpdateDepthBuffer(bool bInRequiresStencilTest, uint32 InWidth, uint32 InHeight)
@@ -581,7 +593,7 @@ public:
 	}
 	FCompositePS() {}
 
-	void SetParameters(FRHICommandList& RHICmdList, FTextureRHIParamRef UITextureRHI, FTextureRHIParamRef UITextureWriteMaskRHI, FTextureRHIParamRef SceneTextureRHI, FTextureRHIParamRef ColorSpaceLUTRHI)
+	void SetParameters(FRHICommandList& RHICmdList, FRHITexture* UITextureRHI, FRHITexture* UITextureWriteMaskRHI, FRHITexture* SceneTextureRHI, FRHITexture* ColorSpaceLUTRHI)
 	{
 		static const auto CVarOutputDevice = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.HDR.Display.OutputDevice"));
 
@@ -647,10 +659,13 @@ static FAutoConsoleVariableRef CVarSlateWireframe(TEXT("Slate.ShowWireFrame"), S
 /** Draws windows from a FSlateDrawBuffer on the render thread */
 void FSlateRHIRenderer::DrawWindow_RenderThread(FRHICommandListImmediate& RHICmdList, FViewportInfo& ViewportInfo, FSlateWindowElementList& WindowElementList, const struct FSlateDrawWindowCommandParams& DrawCommandParams)
 {
+	LLM_SCOPE(ELLMTag::SceneRender);
+
 	static uint32 LastTimestamp = FPlatformTime::Cycles();
 	{
-		SCOPED_DRAW_EVENT(RHICmdList, SlateUI);
+		SCOPED_DRAW_EVENTF(RHICmdList, SlateUI, TEXT("SlateUI Title = %s"), DrawCommandParams.WindowTitle.IsEmpty() ? TEXT("<none>") : *DrawCommandParams.WindowTitle);
 		SCOPED_GPU_STAT(RHICmdList, SlateUI);
+		SCOPED_NAMED_EVENT_TEXT("Slate::DrawWindow_RenderThread", FColor::Magenta);
 
 		// Should only be called by the rendering thread
 		check(IsInRenderingThread());
@@ -807,10 +822,10 @@ void FSlateRHIRenderer::DrawWindow_RenderThread(FRHICommandListImmediate& RHICmd
 					}
 				}
 	#endif
-				RHICmdList.BeginRenderPass(RPInfo, TEXT("SlateBatches"));
 				{
 					if (BatchData.GetRenderBatches().Num() > 0)
 					{
+						RHICmdList.BeginRenderPass(RPInfo, TEXT("SlateBatches"));
 						SCOPE_CYCLE_COUNTER(STAT_SlateRTDrawBatches);
 
 						FSlateBackBuffer BackBufferTarget(BackBuffer, FIntPoint(ViewportWidth, ViewportHeight));
@@ -818,12 +833,14 @@ void FSlateRHIRenderer::DrawWindow_RenderThread(FRHICommandListImmediate& RHICmd
 						FSlateRenderingParams RenderParams(ViewMatrix * ViewportInfo.ProjectionMatrix, DrawCommandParams.WorldTimeSeconds, DrawCommandParams.DeltaTimeSeconds, DrawCommandParams.RealTimeSeconds);
 						RenderParams.bWireFrame = !!SlateWireFrame;
 
+						FTexture2DRHIRef EmptyTarget;
+
 						RenderingPolicy->DrawElements
 						(
 							RHICmdList,
 							BackBufferTarget,
 							BackBuffer,
-							ViewportInfo.DepthStencil,
+							ViewportInfo.bRequiresStencilTest ? ViewportInfo.DepthStencil : EmptyTarget,
 							BatchData.GetRenderBatches(),
 							RenderParams
 						);
@@ -870,16 +887,20 @@ void FSlateRHIRenderer::DrawWindow_RenderThread(FRHICommandListImmediate& RHICmd
 
 						GraphicsPSOInit.BoundShaderState.VertexDeclarationRHI = GScreenVertexDeclaration.VertexDeclarationRHI;
 						GraphicsPSOInit.BoundShaderState.VertexShaderRHI = GETSAFERHISHADER_VERTEX(*VertexShader);
+#if PLATFORM_SUPPORTS_GEOMETRY_SHADERS
 						GraphicsPSOInit.BoundShaderState.GeometryShaderRHI = GETSAFERHISHADER_GEOMETRY(*GeometryShader);
+#endif
 						GraphicsPSOInit.BoundShaderState.PixelShaderRHI = GETSAFERHISHADER_PIXEL(*PixelShader);
 						GraphicsPSOInit.PrimitiveType = PT_TriangleStrip;
 						SetGraphicsPipelineState(RHICmdList, GraphicsPSOInit);
 
 						VertexShader->SetParameters(RHICmdList, VolumeBounds, FIntVector(VolumeBounds.MaxX - VolumeBounds.MinX));
+#if PLATFORM_SUPPORTS_GEOMETRY_SHADERS
 						if (GeometryShader.IsValid())
 						{
 							GeometryShader->SetParameters(RHICmdList, VolumeBounds.MinZ);
 						}
+#endif
 						PixelShader->SetParameters(RHICmdList);
 
 						RasterizeToVolumeTexture(RHICmdList, VolumeBounds);
@@ -910,7 +931,7 @@ void FSlateRHIRenderer::DrawWindow_RenderThread(FRHICommandListImmediate& RHICmd
 
 						TShaderMapRef<FScreenVS> VertexShader(ShaderMap);
 
-						FTextureRHIParamRef UITargetRTMaskTexture = GSupportsRenderTargetWriteMask ? ViewportInfo.UITargetRTMask->GetRenderTargetItem().TargetableTexture : nullptr;
+						FRHITexture* UITargetRTMaskTexture = GSupportsRenderTargetWriteMask ? ViewportInfo.UITargetRTMask->GetRenderTargetItem().TargetableTexture : nullptr;
 						if (HDROutputDevice == 5 || HDROutputDevice == 6)
 						{
 							// ScRGB encoding
@@ -1137,6 +1158,9 @@ void FSlateRHIRenderer::DrawWindows_Private(FSlateDrawBuffer& WindowDrawBuffer)
 					Params.Renderer = this;
 					Params.WindowElementList = &ElementList;
 					Params.Window = Window;
+#if WANTS_DRAW_MESH_EVENTS
+					Params.WindowTitle = Window->GetTitle().ToString();
+#endif
 					Params.bLockToVsync = bLockToVsync;
 #if ALPHA_BLENDED_WINDOWS
 					Params.bClear = Window->GetTransparencySupport() == EWindowTransparency::PerPixel;
@@ -1191,7 +1215,7 @@ void FSlateRHIRenderer::DrawWindows_Private(FSlateDrawBuffer& WindowDrawBuffer)
 			{
 				for (const FRenderThreadUpdateContext& Context : Contexts)
 				{
-					static_cast<ISlate3DRenderer*>(Context.Renderer)->DrawWindowToTarget_RenderThread(RHICmdList, Context);
+					Context.Renderer->DrawWindowToTarget_RenderThread(RHICmdList, Context);
 				}
 			}
 		);
@@ -1554,7 +1578,7 @@ void FSlateRHIRenderer::AddWidgetRendererUpdate(const struct FRenderThreadUpdate
 		ENQUEUE_RENDER_COMMAND(DrawWidgetRendererImmediate)(
 			[InContext](FRHICommandListImmediate& RHICmdList)
 			{
-				static_cast<ISlate3DRenderer*>(InContext.Renderer)->DrawWindowToTarget_RenderThread(RHICmdList, InContext);
+				InContext.Renderer->DrawWindowToTarget_RenderThread(RHICmdList, InContext);
 			});
 	}
 }

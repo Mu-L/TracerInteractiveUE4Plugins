@@ -37,6 +37,7 @@
 #include "Logging/TokenizedMessage.h"
 #include "Logging/MessageLog.h"
 #include "Misc/UObjectToken.h"
+#include "Landscape.h"
 #endif
 
 IMPLEMENT_HIT_PROXY(HLandscapeSplineProxy, HHitProxy);
@@ -878,7 +879,8 @@ ULandscapeSplinesComponent* ULandscapeSplinesComponent::GetStreamingSplinesCompo
 	if (OuterLandscape &&
 		// when copy/pasting this can get called with a null guid on the parent landscape
 		// this is fine, we won't have any cross-level meshes in this case anyway
-		OuterLandscape->GetLandscapeGuid().IsValid())
+		OuterLandscape->GetLandscapeGuid().IsValid() &&
+		OuterLandscape->GetLandscapeInfo())
 	{
 		FVector LandscapeLocalLocation = GetComponentTransform().GetRelativeTransform(OuterLandscape->LandscapeActorToWorld()).TransformPosition(LocalLocation);
 		const int32 ComponentIndexX = (LandscapeLocalLocation.X >= 0.0f) ? FMath::FloorToInt(LandscapeLocalLocation.X / OuterLandscape->ComponentSizeQuads) : FMath::CeilToInt(LandscapeLocalLocation.X / OuterLandscape->ComponentSizeQuads);
@@ -1876,6 +1878,16 @@ void ULandscapeSplineControlPoint::PostEditChangeProperty(FPropertyChangedEvent&
 		const bool bUpdateCollision = PropertyChangedEvent.ChangeType != EPropertyChangeType::Interactive;
 		UpdateSplinePoints(bUpdateCollision);
 	}
+
+	if (PropertyChangedEvent.ChangeType == EPropertyChangeType::ValueSet)
+	{
+		ALandscapeProxy* OuterLandscape = Cast<ALandscapeProxy>(GetOuterULandscapeSplinesComponent()->GetOwner());
+		ALandscape* Landscape = OuterLandscape ? OuterLandscape->GetLandscapeActor() : nullptr;
+		if (Landscape && Landscape->HasLayersContent() && Landscape->GetLandscapeSplinesReservedLayer())
+		{
+			Landscape->UpdateLandscapeSplines();
+		}
+	}
 }
 #endif // WITH_EDITOR
 
@@ -2599,6 +2611,11 @@ void ULandscapeSplineSegment::UpdateSplinePoints(bool bUpdateCollision)
 			}
 			MeshComponent->TranslucencySortPriority = TranslucencySortPriority;
 
+			MeshComponent->RuntimeVirtualTextures = RuntimeVirtualTextures;
+			MeshComponent->VirtualTextureLodBias = VirtualTextureLodBias;
+			MeshComponent->VirtualTextureCullMips = VirtualTextureCullMips;
+			MeshComponent->VirtualTextureRenderPassType = VirtualTextureRenderPassType;
+
 			MeshComponent->SetCastShadow(bCastShadow);
 			MeshComponent->InvalidateLightingCache();
 
@@ -2818,6 +2835,16 @@ void ULandscapeSplineSegment::PostEditChangeProperty(FPropertyChangedEvent& Prop
 	{
 		const bool bUpdateCollision = PropertyChangedEvent.ChangeType != EPropertyChangeType::Interactive;
 		UpdateSplinePoints(bUpdateCollision);
+	}
+
+	if (PropertyChangedEvent.ChangeType == EPropertyChangeType::ValueSet)
+	{
+		ALandscapeProxy* OuterLandscape = Cast<ALandscapeProxy>(GetOuterULandscapeSplinesComponent()->GetOwner());
+		ALandscape* Landscape = OuterLandscape ? OuterLandscape->GetLandscapeActor() : nullptr;
+		if (Landscape && Landscape->HasLayersContent() && Landscape->GetLandscapeSplinesReservedLayer())
+		{
+			Landscape->UpdateLandscapeSplines();
+		}
 	}
 }
 #endif // WITH_EDITOR

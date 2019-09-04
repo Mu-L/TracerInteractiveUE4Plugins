@@ -70,7 +70,7 @@ void (* GMemoryWarningHandler)(const FGenericMemoryWarningContext& Context) = NU
 
 /** global for showing the splash screen */
 bool GShowSplashScreen = true;
-float GOriginalBrightness = 1.0f;
+float GOriginalBrightness = -1.0f;
 
 static int32 GetFreeMemoryMB()
 {
@@ -262,7 +262,10 @@ void FIOSPlatformMisc::SetBrightness(float Brightness)
 
 void FIOSPlatformMisc::ResetBrightness()
 {
-    SetBrightness(GOriginalBrightness);
+	if (GOriginalBrightness >= 0.f)
+	{
+		SetBrightness(GOriginalBrightness);
+	}
 }
 
 bool FIOSPlatformMisc::IsRunningOnBattery()
@@ -301,26 +304,33 @@ bool FIOSPlatformMisc::IsInLowPowerMode()
 
 
 #if !PLATFORM_TVOS
-EDeviceScreenOrientation ConvertFromUIDeviceOrientation(UIDeviceOrientation Orientation)
+EDeviceScreenOrientation ConvertFromUIInterfaceOrientation(UIInterfaceOrientation Orientation)
 {
 	switch(Orientation)
 	{
 		default:
-		case UIDeviceOrientationUnknown : return EDeviceScreenOrientation::Unknown; break;
-		case UIDeviceOrientationPortrait : return EDeviceScreenOrientation::Portrait; break;
-		case UIDeviceOrientationPortraitUpsideDown : return EDeviceScreenOrientation::PortraitUpsideDown; break;
-		case UIDeviceOrientationLandscapeLeft : return EDeviceScreenOrientation::LandscapeLeft; break;
-		case UIDeviceOrientationLandscapeRight : return EDeviceScreenOrientation::LandscapeRight; break;
-		case UIDeviceOrientationFaceUp : return EDeviceScreenOrientation::FaceUp; break;
-		case UIDeviceOrientationFaceDown : return EDeviceScreenOrientation::FaceDown; break;
+		case UIInterfaceOrientationUnknown : return EDeviceScreenOrientation::Unknown; break;
+		case UIInterfaceOrientationPortrait : return EDeviceScreenOrientation::Portrait; break;
+		case UIInterfaceOrientationPortraitUpsideDown : return EDeviceScreenOrientation::PortraitUpsideDown; break;
+		case UIInterfaceOrientationLandscapeLeft : return EDeviceScreenOrientation::LandscapeLeft; break;
+		case UIInterfaceOrientationLandscapeRight : return EDeviceScreenOrientation::LandscapeRight; break;
 	}
 }
+#endif
+
+#if !PLATFORM_TVOS
+UIInterfaceOrientation GInterfaceOrientation = UIInterfaceOrientationUnknown;
 #endif
 
 EDeviceScreenOrientation FIOSPlatformMisc::GetDeviceOrientation()
 {
 #if !PLATFORM_TVOS
-	return ConvertFromUIDeviceOrientation([[UIDevice currentDevice] orientation]);
+	if (GInterfaceOrientation == UIInterfaceOrientationUnknown)
+	{
+		GInterfaceOrientation = [[UIApplication sharedApplication] statusBarOrientation];
+	}
+
+	return ConvertFromUIInterfaceOrientation(GInterfaceOrientation);
 #else
 	return EDeviceScreenOrientation::Unknown;
 #endif
@@ -386,9 +396,13 @@ FIOSPlatformMisc::EIOSDevice FIOSPlatformMisc::GetIOSDeviceType()
 		{
 			DeviceType = IOS_IPodTouch5;
 		}
-		else if (Major >= 7)
+		else if (Major == 7)
 		{
 			DeviceType = IOS_IPodTouch6;
+		}
+		else if (Major >= 9)
+		{
+			DeviceType = IOS_IPodTouch7;
 		}
 	}
 	// iPads
@@ -490,7 +504,17 @@ FIOSPlatformMisc::EIOSDevice FIOSPlatformMisc::GetIOSDeviceType()
 				DeviceType = IOS_IPadPro3_129;
 			}
 		}
-
+        else if (Major == 11)
+        {
+            if (Minor <= 2)
+            {
+                DeviceType = IOS_IPadMini5;
+            }
+            else
+            {
+                DeviceType = IOS_IPadAir3;
+            }
+        }
 		// Default to highest settings currently available for any future device
 		else if (Major >= 9)
 		{
@@ -662,7 +686,7 @@ FIOSPlatformMisc::EIOSDevice FIOSPlatformMisc::GetIOSDeviceType()
 
 int FIOSPlatformMisc::GetDefaultStackSize()
 {
-	return 4 * 1024 * 1024;
+	return 512 * 1024;
 }
 
 void FIOSPlatformMisc::SetMemoryWarningHandler(void (* InHandler)(const FGenericMemoryWarningContext& Context))
@@ -1255,6 +1279,13 @@ int32 FIOSPlatformMisc::IOSVersionCompare(uint8 Major, uint8 Minor, uint8 Revisi
 	return 0;
 }
 
+FString FIOSPlatformMisc::GetProjectVersion()
+{
+	NSDictionary* infoDictionary = [[NSBundle mainBundle] infoDictionary];
+	FString localVersionString = FString(infoDictionary[@"CFBundleShortVersionString"]);
+	return localVersionString;
+}
+
 bool FIOSPlatformMisc::RequestDeviceCheckToken(TFunction<void(const TArray<uint8>&)> QuerySucceededFunc, TFunction<void(const FString&, const FString&)> QueryFailedFunc)
 {
 	DCDevice* DeviceCheckDevice = [DCDevice currentDevice];
@@ -1592,8 +1623,12 @@ bool FIOSPlatformMisc::GetStoredValue(const FString& InStoreId, const FString& I
 
 bool FIOSPlatformMisc::DeleteStoredValue(const FString& InStoreId, const FString& InSectionName, const FString& InKeyName)
 {
-	// No Implementation (currently only used by editor code so not needed on iOS)
-	return false;
+	NSUserDefaults* UserSettings = [NSUserDefaults standardUserDefaults];
+	
+	// store it
+	[UserSettings removeObjectForKey:MakeStoredValueKeyName(InSectionName, InKeyName)];
+
+	return true;
 }
 
 void FIOSPlatformMisc::SetGracefulTerminationHandler()
@@ -1657,6 +1692,31 @@ void FIOSPlatformMisc::SetCrashHandler(void (* CrashHandler)(const FGenericCrash
         }
     }
 #endif
+}
+
+bool FIOSPlatformMisc::HasSeparateChannelForDebugOutput()
+{
+#if UE_BUILD_SHIPPING
+    return false;
+#else
+    // We should not just check if we are being debugged because you can use the Xcode log even for
+    // apps launched outside the debugger.
+    return true;
+#endif
+}
+
+void FIOSPlatformMisc::GPUAssert()
+{
+    // make this a fatal error that ends here not in the log
+    // changed to 3 from NULL because clang noticed writing to NULL and warned about it
+    *(int32 *)13 = 123;
+}
+
+void FIOSPlatformMisc::MetalAssert()
+{
+    // make this a fatal error that ends here not in the log
+    // changed to 3 from NULL because clang noticed writing to NULL and warned about it
+    *(int32 *)7 = 123;
 }
 
 FIOSCrashContext::FIOSCrashContext(ECrashContextType InType, const TCHAR* InErrorMessage)
@@ -1926,3 +1986,37 @@ void ReportEnsure( const TCHAR* ErrorMessage, int NumStackFramesToIgnore )
     bReentranceGuard = false;
     EnsureLock.Unlock();
 }
+
+
+class FIOSExec : public FSelfRegisteringExec
+{
+public:
+	FIOSExec()
+		: FSelfRegisteringExec()
+	{
+		
+	}
+	
+	virtual bool Exec(UWorld* Inworld, const TCHAR* Cmd, FOutputDevice& Ar) override
+	{
+		if (FParse::Command(&Cmd, TEXT("IOS")))
+		{
+			// commands to override and append commandline options for next boot (see FIOSCommandLineHelper)
+			if (FParse::Command(&Cmd, TEXT("OverrideCL")))
+			{
+				return FPlatformMisc::SetStoredValue(TEXT(""), TEXT("IOSCommandLine"), TEXT("ReplacementCL"), Cmd);
+			}
+			else if (FParse::Command(&Cmd, TEXT("AppendCL")))
+			{
+				return FPlatformMisc::SetStoredValue(TEXT(""), TEXT("IOSCommandLine"), TEXT("AppendCL"), Cmd);
+			}
+			else if (FParse::Command(&Cmd, TEXT("ClearAllCL")))
+			{
+				return FPlatformMisc::DeleteStoredValue(TEXT(""), TEXT("IOSCommandLine"), TEXT("ReplacementCL")) &&
+						FPlatformMisc::DeleteStoredValue(TEXT(""), TEXT("IOSCommandLine"), TEXT("AppendCL"));
+			}
+		}
+		
+		return false;
+	}
+} GIOSExec;

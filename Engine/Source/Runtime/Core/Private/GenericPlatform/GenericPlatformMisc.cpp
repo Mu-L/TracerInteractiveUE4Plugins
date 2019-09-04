@@ -26,9 +26,11 @@
 #include "HAL/ExceptionHandling.h"
 #include "GenericPlatform/GenericPlatformCrashContext.h"
 #include "GenericPlatform/GenericPlatformDriver.h"
+#include "GenericPlatform/GenericPlatformInstallBundleManager.h"
 #include "ProfilingDebugging/ExternalProfiler.h"
 #include "HAL/LowLevelMemTracker.h"
 #include "Templates/Function.h"
+#include "Modules/ModuleManager.h"
 
 #include "Misc/UProjectInfo.h"
 #include "Internationalization/Culture.h"
@@ -571,6 +573,12 @@ void FGenericPlatformMisc::RequestExit( bool Force )
 	}
 }
 
+bool FGenericPlatformMisc::RestartApplication()
+{
+	UE_LOG(LogInit, Display, TEXT("Restart application is not supported or implemented in current platform"));
+	return false;
+}
+
 void FGenericPlatformMisc::RequestExitWithStatus(bool Force, uint8 ReturnCode)
 {
 	// Generic implementation will ignore the return code - this may be important, so warn.
@@ -817,6 +825,36 @@ IPlatformChunkInstall* FGenericPlatformMisc::GetPlatformChunkInstall()
 	return &Singleton;
 }
 
+IPlatformInstallBundleManager* FGenericPlatformMisc::GetPlatformInstallBundleManager()
+{
+	static IPlatformInstallBundleManager* Manager = nullptr;
+	static bool bCheckedIni = false;
+
+	if (Manager)
+		return Manager;
+
+	if (!bCheckedIni && !GEngineIni.IsEmpty())
+	{
+		FString ModuleName;
+		IPlatformInstallBundleManagerModule* Module = nullptr;
+		GConfig->GetString(TEXT("InstallBundleManager"), TEXT("ModuleName"), ModuleName, GEngineIni);
+
+		if (FModuleManager::Get().ModuleExists(*ModuleName))
+		{
+			FModuleStatus Status;
+			Module = FModuleManager::LoadModulePtr<IPlatformInstallBundleManagerModule>(*ModuleName);
+			if (Module)
+			{
+				Manager = Module->GetInstallBundleManager();
+			}
+		}
+
+		bCheckedIni = true;
+	}
+
+	return Manager;
+}
+
 void GenericPlatformMisc_GetProjectFilePathProjectDir(FString& OutGameDir)
 {
 	// Here we derive the game path from the project file location.
@@ -959,12 +997,12 @@ const TCHAR* FGenericPlatformMisc::GamePersistentDownloadDir()
 
 const TCHAR* FGenericPlatformMisc::GetUBTPlatform()
 {
-	return TEXT( PREPROCESSOR_TO_STRING(UBT_COMPILED_PLATFORM) );
+	return TEXT(PREPROCESSOR_TO_STRING(UBT_COMPILED_PLATFORM));
 }
 
 const TCHAR* FGenericPlatformMisc::GetUBTTarget()
 {
-    return TEXT(PREPROCESSOR_TO_STRING(UBT_COMPILED_TARGET));
+	return TEXT(PREPROCESSOR_TO_STRING(UBT_COMPILED_TARGET));
 }
 
 const TCHAR* FGenericPlatformMisc::GetDefaultDeviceProfileName()
@@ -1293,4 +1331,29 @@ FString FGenericPlatformMisc::LoadTextFileFromPlatformPackage(const FString& Rel
 	FString Result;
 	FFileHelper::LoadFileToString(Result, *Path);
 	return Result;
+}
+
+void FGenericPlatformMisc::ParseChunkIdPakchunkIndexMapping(TArray<FString> ChunkIndexMappingData, TMap<int32, int32>& OutMapping)
+{
+	OutMapping.Empty();
+
+	const TCHAR* PropertyOldChunkIndex = TEXT("Old=");
+	const TCHAR* PropertyNewChunkIndex = TEXT("New=");
+	for (FString& Entry : ChunkIndexMappingData)
+	{
+		// Remove parentheses
+		Entry.TrimStartAndEndInline();
+		Entry.ReplaceInline(TEXT("("), TEXT(""));
+		Entry.ReplaceInline(TEXT(")"), TEXT(""));
+
+		int32 ChunkId = -1;
+		int32 PakchunkIndex = -1;
+		FParse::Value(*Entry, PropertyOldChunkIndex, ChunkId);
+		FParse::Value(*Entry, PropertyNewChunkIndex, PakchunkIndex);
+
+		if (ChunkId != -1 && PakchunkIndex != -1 && ChunkId != PakchunkIndex && !OutMapping.Contains(ChunkId))
+		{
+			OutMapping.Add(ChunkId, PakchunkIndex);
+		}
+	}
 }

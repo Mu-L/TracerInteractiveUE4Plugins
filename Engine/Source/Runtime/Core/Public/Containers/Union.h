@@ -110,18 +110,7 @@ public:
 	TUnion(const TUnion& Other)
 	:	CurrentSubtypeIndex(-1)
 	{
-		// Copy the value of the appropriate subtype from the other union
-		switch(Other.CurrentSubtypeIndex)
-		{
-		case (uint8)-1: break;
-		case 0: SetSubtype<TypeA>(Other.GetSubtype<TypeA>()); break;
-		case 1: SetSubtype<TypeB>(Other.GetSubtype<TypeB>()); break;
-		case 2: SetSubtype<TypeC>(Other.GetSubtype<TypeC>()); break;
-		case 3: SetSubtype<TypeD>(Other.GetSubtype<TypeD>()); break;
-		case 4: SetSubtype<TypeE>(Other.GetSubtype<TypeE>()); break;
-		case 5: SetSubtype<TypeF>(Other.GetSubtype<TypeF>()); break;
-		default: FatalErrorUndefinedSubtype(); break;
-		};
+		*this = Other;
 	}
 
 	/** Destructor. */
@@ -208,6 +197,12 @@ public:
 		return SubtypeValuePointer;
 	}
 
+	/** @return The index corresponding to the type currently stored in this union; useful for writing switches and indexing into tables. */
+	uint8 GetCurrentSubtypeIndex() const
+	{
+		return CurrentSubtypeIndex;
+	}
+
 	/** Sets the union's value to NULL. */
 	void Reset()
 	{
@@ -239,6 +234,24 @@ public:
 		};
 
 		return Result;
+	}
+
+	TUnion& operator=(const TUnion& Other)
+	{
+		// Copy the value of the appropriate subtype from the other union
+		switch (Other.CurrentSubtypeIndex)
+		{
+		case (uint8)-1: break;
+		case 0: SetSubtype<TypeA>(Other.GetSubtype<TypeA>()); break;
+		case 1: SetSubtype<TypeB>(Other.GetSubtype<TypeB>()); break;
+		case 2: SetSubtype<TypeC>(Other.GetSubtype<TypeC>()); break;
+		case 3: SetSubtype<TypeD>(Other.GetSubtype<TypeD>()); break;
+		case 4: SetSubtype<TypeE>(Other.GetSubtype<TypeE>()); break;
+		case 5: SetSubtype<TypeF>(Other.GetSubtype<TypeF>()); break;
+		default: FatalErrorUndefinedSubtype(); break;
+		};
+
+		return *this;
 	}
 
 	/** Equality comparison. */

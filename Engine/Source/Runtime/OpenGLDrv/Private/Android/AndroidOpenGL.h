@@ -43,6 +43,23 @@ typedef khronos_uint64_t GLuint64;
 #define GL_HALF_FLOAT	GL_HALF_FLOAT_OES
 #endif
 
+#ifndef GL_TEXTURE_1D
+#define GL_TEXTURE_1D			0x0DE0
+#endif
+
+#ifndef GL_TEXTURE_1D_ARRAY
+#define GL_TEXTURE_1D_ARRAY		0x8C18
+#endif
+
+#ifndef GL_TEXTURE_2D_ARRAY
+#define GL_TEXTURE_2D_ARRAY		0x8C1A
+#endif
+
+#ifndef GL_TEXTURE_RECTANGLE
+#define GL_TEXTURE_RECTANGLE	0x84F5
+#endif
+
+
 #define GL_COMPRESSED_RGB8_ETC2           0x9274
 #define GL_COMPRESSED_SRGB8_ETC2          0x9275
 #define GL_COMPRESSED_RGBA8_ETC2_EAC      0x9278
@@ -156,6 +173,12 @@ extern PFNGLSAMPLERPARAMETERIPROC		glSamplerParameteri;
 extern PFNGLBINDSAMPLERPROC				glBindSampler;
 
 extern PFNGLPROGRAMPARAMETERIPROC		glProgramParameteri;
+
+extern PFNGLMEMORYBARRIERPROC			glMemoryBarrier;
+extern PFNGLDISPATCHCOMPUTEPROC			glDispatchCompute;
+extern PFNGLDISPATCHCOMPUTEINDIRECTPROC	glDispatchComputeIndirect;
+extern PFNGLBINDIMAGETEXTUREPROC		glBindImageTexture;
+
 
 #include "OpenGLES2.h"
 
@@ -416,6 +439,15 @@ struct FAndroidOpenGL : public FOpenGLES2
 		glTexSubImage3D(Target, Level, XOffset, YOffset, ZOffset, Width, Height, Depth, Format, Type, PixelData);
 	}
 
+	static FORCEINLINE void	CopyTexSubImage1D(GLenum Target, GLint Level, GLint XOffset, GLint X, GLint Y, GLsizei Width)
+	{
+	}
+
+	static FORCEINLINE void	CopyTexSubImage2D(GLenum Target, GLint Level, GLint XOffset, GLint YOffset, GLint X, GLint Y, GLsizei Width, GLsizei Height)
+	{
+		glCopyTexSubImage2D(Target, Level, XOffset, YOffset, X, Y, Width, Height);
+	}
+
 	static FORCEINLINE void	CopyTexSubImage3D(GLenum Target, GLint Level, GLint XOffset, GLint YOffset, GLint ZOffset, GLint X, GLint Y, GLsizei Width, GLsizei Height)
 	{
 		glCopyTexSubImage3D(Target, Level, XOffset, YOffset, ZOffset, X, Y, Width, Height);
@@ -551,6 +583,26 @@ struct FAndroidOpenGL : public FOpenGLES2
 		glBindSampler(Unit, Sampler);
 	}
 
+	static FORCEINLINE void MemoryBarrier(GLbitfield Barriers)
+	{
+		glMemoryBarrier(Barriers);
+	}
+	
+	static FORCEINLINE void DispatchCompute(GLuint NumGroupsX, GLuint NumGroupsY, GLuint NumGroupsZ)
+	{
+		glDispatchCompute(NumGroupsX, NumGroupsY, NumGroupsZ);
+	}
+
+	static FORCEINLINE void DispatchComputeIndirect(GLintptr Offset)
+	{
+		glDispatchComputeIndirect(Offset);
+	}
+
+	static FORCEINLINE void BindImageTexture(GLuint Unit, GLuint Texture, GLint Level, GLboolean Layered, GLint Layer, GLenum Access, GLenum Format)
+	{
+		glBindImageTexture(Unit, Texture, Level, Layered, Layer, Access, Format);
+	}
+	
 	// Adreno doesn't support HALF_FLOAT
 	static FORCEINLINE int32 GetReadHalfFloatPixelsEnum()				{ return GL_FLOAT; }
 
@@ -591,7 +643,8 @@ struct FAndroidOpenGL : public FOpenGLES2
 	
 	static FORCEINLINE bool SupportsBlitFramebuffer() { return FOpenGLES2::SupportsBlitFramebuffer() || IsES31Usable(); }
 
-	static FORCEINLINE bool SupportsComputeShaders() { return bES31Support && RHISupportsComputeShaders(GetShaderPlatform()); }
+	static FORCEINLINE bool SupportsComputeShaders() { return bES31Support; }
+	static FORCEINLINE bool SupportsStructuredBuffers()	{ return bES31Support; }
 
 	enum class EImageExternalType : uint8
 	{
@@ -611,6 +664,9 @@ struct FAndroidOpenGL : public FOpenGLES2
 
 	static FORCEINLINE GLint GetMaxMSAASamplesTileMem() { return MaxMSAASamplesTileMem; }
 
+	static FORCEINLINE GLint GetMaxComputeTextureImageUnits() { check(MaxComputeTextureImageUnits != -1); return MaxComputeTextureImageUnits; }
+	static FORCEINLINE GLint GetMaxComputeUniformComponents() { check(MaxComputeUniformComponents != -1); return MaxComputeUniformComponents; }
+	
 	static void ProcessExtensions(const FString& ExtensionsString);
 
 	// whether to use ES 3.0 function glTexStorage2D to allocate storage for GL_HALF_FLOAT_OES render target textures
@@ -660,6 +716,9 @@ struct FAndroidOpenGL : public FOpenGLES2
 	/** supported OpenGL ES version queried from the system */
 	static int32 GLMajorVerion;
 	static int32 GLMinorVersion;
+
+	static GLint MaxComputeTextureImageUnits;
+	static GLint MaxComputeUniformComponents;
 };
 
 typedef FAndroidOpenGL FOpenGL;

@@ -104,6 +104,8 @@ int32 GuardedMain( const TCHAR* CmdLine )
 	}
 #endif
 
+	BootTimingPoint("DefaultMain");
+
 	// Super early init code. DO NOT MOVE THIS ANYWHERE ELSE!
 	FCoreDelegates::GetPreMainInitDelegate().Broadcast();
 
@@ -165,10 +167,15 @@ int32 GuardedMain( const TCHAR* CmdLine )
 
 	ACCUM_LOADTIME(TEXT("EngineInitialization"), EngineInitializationTime);
 
+	BootTimingPoint("Tick loop starting");
+	DumpBootTiming();
+
 	while( !GIsRequestingExit )
 	{
 		EngineTick();
 	}
+
+	TRACE_BOOKMARK(TEXT("Tick loop end"));
 
 #if WITH_EDITOR
 	if( GIsEditor )

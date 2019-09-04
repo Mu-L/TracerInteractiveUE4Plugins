@@ -15,9 +15,11 @@
 #include "AudioEffect.h"
 #include "OpusAudioInfo.h"
 #include "VorbisAudioInfo.h"
+#include "ADPCMAudioInfo.h"
 #include "XAudio2Effects.h"
 #include "Interfaces/IAudioFormat.h"
 #include "HAL/PlatformAffinity.h"
+#if PLATFORM_WINDOWS || PLATFORM_HOLOLENS || PLATFORM_XBOXONE
 #include "Windows/WindowsHWrapper.h"
 #include "Windows/AllowWindowsPlatformTypes.h"
 #include "Windows/AllowWindowsPlatformAtomics.h"
@@ -28,6 +30,7 @@ THIRD_PARTY_INCLUDES_START
 THIRD_PARTY_INCLUDES_END
 #include "Windows/HideWindowsPlatformAtomics.h"
 #include "Windows/HideWindowsPlatformTypes.h"
+#endif
 #include "XAudio2Support.h"
 #include "Runtime/HeadMountedDisplay/Public/IHeadMountedDisplayModule.h"
 
@@ -61,6 +64,10 @@ const float* FXAudioDeviceProperties::OutputMixMatrix = NULL;
 #if XAUDIO_SUPPORTS_DEVICE_DETAILS
 XAUDIO2_DEVICE_DETAILS FXAudioDeviceProperties::DeviceDetails;
 #endif	//XAUDIO_SUPPORTS_DEVICE_DETAILS
+
+#if PLATFORM_WINDOWS
+HMODULE FXAudioDeviceProperties::XAudio2Dll = nullptr;
+#endif
 
 /*------------------------------------------------------------------------------------
 	FAudioDevice Interface.
@@ -102,25 +109,34 @@ bool FXAudio2Device::InitializeHardware()
 
 	SampleRate = UE4_XAUDIO2_SAMPLERATE;
 
-#if PLATFORM_WINDOWS
-	bComInitialized = FWindowsPlatformMisc::CoInitialize();
-#if PLATFORM_64BITS
+#if PLATFORM_WINDOWS || PLATFORM_HOLOLENS
+	bComInitialized = FPlatformMisc::CoInitialize();
+#if PLATFORM_64BITS && !PLATFORM_HOLOLENS
 	// Work around the fact the x64 version of XAudio2_7.dll does not properly ref count
 	// by forcing it to be always loaded
 
 	// Load the xaudio2 library and keep a handle so we can free it on teardown
 	// Note: windows internally ref-counts the library per call to load library so 
 	// when we call FreeLibrary, it will only free it once the refcount is zero
-	DeviceProperties->XAudio2Dll = LoadLibraryA("XAudio2_7.dll");
+	// It's important that this dll stay around for the duration of the application's lifetime;
+	// attempting to free the library and losing our final ref when we change devices still exhibits the bad behavior.
 
-	// returning null means we failed to load XAudio2, which means everything will fail
-	if (DeviceProperties->XAudio2Dll == nullptr)
+	// Work around a known XAudio 2.7 issue: https://blogs.msdn.microsoft.com/chuckw/2015/10/09/known-issues-xaudio-2-7/
+	if (FXAudioDeviceProperties::XAudio2Dll == nullptr)
 	{
-		UE_LOG(LogInit, Warning, TEXT("Failed to load XAudio2 dll"));
-		return false;
+		UE_LOG(LogInit, Verbose, TEXT("Loading XAudio2 dll"));
+
+		FXAudioDeviceProperties::XAudio2Dll = LoadLibraryA("XAudio2_7.dll");
+
+		// returning null means we failed to load XAudio2, which means everything will fail
+		if (FXAudioDeviceProperties::XAudio2Dll == nullptr)
+		{
+			UE_LOG(LogInit, Error, TEXT("Failed to load XAudio2 dll"));
+			return false;
+		}
 	}
-#endif	//PLATFORM_64BITS
-#endif	//PLATFORM_WINDOWS
+#endif	//PLATFORM_64BITS && !PLATFORM_HOLOLENS
+#endif	//PLATFORM_WINDOWS || PLATFORM_HOLOLENS
 
 #if DEBUG_XAUDIO2
 	uint32 Flags = XAUDIO2_DEBUG_ENGINE;
@@ -286,7 +302,8 @@ void FXAudio2Device::TeardownHardware()
 #if PLATFORM_WINDOWS
 	if (bComInitialized)
 	{
-		FWindowsPlatformMisc::CoUninitialize();
+		FPlatformMisc::CoUninitialize();
+		bComInitialized = false;
 	}
 #endif
 }
@@ -294,7 +311,7 @@ void FXAudio2Device::TeardownHardware()
 void FXAudio2Device::UpdateHardware()
 {
 	// If the audio device changed, we need to tear down and restart the audio engine state
-	if (DeviceProperties->DidAudioDeviceChange())
+	if (DeviceProperties && DeviceProperties->DidAudioDeviceChange())
 	{
 		//Cache the current audio clock.
 		CachedAudioClockStartTime = GetAudioClock();
@@ -353,6 +370,24 @@ class ICompressedAudioInfo* FXAudio2Device::CreateCompressedAudioInfo(USoundWave
 
 	if (SoundWave->IsStreaming())
 	{
+		if (SoundWave->IsSeekableStreaming())
+		{
+			return new FADPCMAudioInfo();
+		}
+
+#if WITH_XMA2 && USE_XMA2_FOR_STREAMING
+		if (SoundWave->NumChannels <= 2 )
+		{
+			ICompressedAudioInfo* CompressedInfo = new FXMAAudioInfo();
+			if (!CompressedInfo)
+			{
+				UE_LOG(LogAudio, Error, TEXT("Failed to create new FXMAAudioInfo for streaming SoundWave %s: out of memory."), *SoundWave->GetName());
+				return nullptr;
+			}
+			return CompressedInfo;
+		}
+#endif
+
 #if USE_VORBIS_FOR_STREAMING
 		return new FVorbisAudioInfo();
 #else
@@ -705,4 +740,9 @@ void* FXAudio2Device::AllocatePermanentMemory( int32 Size, bool& AllocatedInPool
 	CommonAudioPoolFreeBytes -= Size;
 	
 	return( Allocation );
+}
+
+FAudioPlatformSettings FXAudio2Device::GetPlatformSettings() const
+{
+	return FAudioPlatformSettings::GetPlatformSettings(TEXT("/Script/WindowsTargetPlatform.WindowsTargetSettings"));
 }

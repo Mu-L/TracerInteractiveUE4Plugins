@@ -10,7 +10,8 @@
 class USocialUser;
 class FOnlinePartyMember;
 class FOnlinePartyData;
-enum class EMemberExitedReason;
+enum class EMemberExitedReason : uint8;
+enum class EMemberConnectionStatus : uint8;
 
 /** Base struct used to replicate data about the state of a single party member to all members. */
 USTRUCT()
@@ -26,6 +27,7 @@ protected:
 	virtual bool CanEditData() const override;
 	virtual void CompareAgainst(const FOnlinePartyRepDataBase& OldData) const override;
 	virtual const USocialParty* GetOwnerParty() const override;
+	virtual const UPartyMember* GetOwningMember() const;
 
 private:
 	TWeakObjectPtr<const UPartyMember> OwnerMember;
@@ -80,6 +82,7 @@ public:
 	FUniqueNetIdRepl GetPrimaryNetId() const;
 	const FPartyMemberRepData& GetRepData() const { return *MemberDataReplicator; }
 	USocialUser& GetSocialUser() const;
+	EMemberConnectionStatus GetMemberConnectionStatus() const;
 
 	FString GetDisplayName() const;
 	FName GetPlatformOssName() const;
@@ -88,6 +91,7 @@ public:
 	FOnPartyMemberStateChanged& OnInitializationComplete() const { return OnMemberInitializedEvent; }
 	FOnPartyMemberStateChanged& OnPromotedToLeader() const { return OnPromotedToLeaderEvent; }
 	FOnPartyMemberStateChanged& OnDemoted() const { return OnDemotedEvent; }
+	FOnPartyMemberStateChanged& OnMemberConnectionStatusChanged() const { return OnMemberConnectionStatusChangedEvent; }
 
 	DECLARE_EVENT_OneParam(UPartyMember, FOnPartyMemberLeft, EMemberExitedReason)
 	FOnPartyMemberLeft& OnLeftParty() const { return OnLeftPartyEvent; }
@@ -95,10 +99,10 @@ public:
 	FString ToDebugString(bool bIncludePartyId = true) const;
 
 PARTY_SCOPE:
-	void InitializePartyMember(const TSharedRef<FOnlinePartyMember>& OssMember, const FSimpleDelegate& OnInitComplete);
+	void InitializePartyMember(const FOnlinePartyMemberConstRef& OssMember, const FSimpleDelegate& OnInitComplete);
 
 	FPartyMemberRepData& GetMutableRepData() { return *MemberDataReplicator; }
-	void NotifyMemberDataReceived(const TSharedRef<FOnlinePartyData>& MemberData);
+	void NotifyMemberDataReceived(const FOnlinePartyData& MemberData);
 	void NotifyMemberPromoted();
 	void NotifyMemberDemoted();
 	void NotifyRemovedFromParty(EMemberExitedReason ExitReason);
@@ -113,16 +117,21 @@ protected:
 	virtual void Shutdown();
 
 	FPartyMemberDataReplicator MemberDataReplicator;
+	void SetMemberConnectionStatus(EMemberConnectionStatus InMemberConnectionStatus);
+
+	TSharedPtr<const FOnlinePartyMember> GetOSSPartyMember() const { return OssPartyMember; }
 
 private:
 	void HandleSocialUserInitialized(USocialUser& InitializedUser);
+	void HandleMemberConnectionStatusChanged(const FUniqueNetId& ChangedUserId, const EMemberConnectionStatus NewMemberConnectionStatus, const EMemberConnectionStatus PreviousMemberConnectionStatus);
 
-	TSharedPtr<FOnlinePartyMember> OssPartyMember;
+	FOnlinePartyMemberConstPtr OssPartyMember;
 
 	UPROPERTY()
 	USocialUser* SocialUser = nullptr;
 
 	bool bHasReceivedInitialData = false;
+	mutable FOnPartyMemberStateChanged OnMemberConnectionStatusChangedEvent;
 	mutable FOnPartyMemberStateChanged OnMemberInitializedEvent;
 	mutable FOnPartyMemberStateChanged OnPromotedToLeaderEvent;
 	mutable FOnPartyMemberStateChanged OnDemotedEvent;

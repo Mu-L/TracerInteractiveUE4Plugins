@@ -37,6 +37,13 @@ static FAutoConsoleVariableRef CVarMetalDeferRenderPasses(
 	GMetalDeferRenderPasses,
 	TEXT("Whether to defer creating render command encoders. (Default: 1)"));
 
+// Deliberately not static!
+int32 GMetalDebugOpsCount = PLATFORM_MAC ? 1 : 10;
+static FAutoConsoleVariableRef CVarMetalDebugOpsCount(
+	TEXT("rhi.Metal.DebugOpsCount"),
+	GMetalDebugOpsCount,
+	TEXT("The number of operations to allow between GPU debug markers for the r.GPUCrashDebugging reports. (Default: Mac = 1 : iOS/tvOS = 10)"));
+
 #pragma mark - Public C++ Boilerplate -
 
 FMetalRenderPass::FMetalRenderPass(FMetalCommandList& InCmdList, FMetalStateCache& Cache)
@@ -289,7 +296,8 @@ void FMetalRenderPass::RestartRenderPass(mtlpp::RenderPassDescriptor RenderPass)
 	}
 	else
 	{
-		UE_LOG(LogMetal, Fatal, TEXT("Failed to restart render pass with descriptor: %s"), *FString([RenderPassDesc.GetPtr() description]));
+		
+		METAL_FATAL_ERROR(TEXT("Failed to restart render pass with descriptor: %s"), *FString([RenderPassDesc.GetPtr() description]));
 	}
 	check(StartDesc);
 	
@@ -389,7 +397,9 @@ void FMetalRenderPass::DrawPrimitive(uint32 PrimitiveType, uint32 BaseVertexInde
 {
 	NumInstances = FMath::Max(NumInstances,1u);
 	
+#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
 	if(!State.GetUsingTessellation())
+#endif
 	{
 		ConditionalSwitchToRender();
 		check(CurrentEncoder.GetCommandBuffer());
@@ -404,11 +414,25 @@ void FMetalRenderPass::DrawPrimitive(uint32 PrimitiveType, uint32 BaseVertexInde
 		METAL_GPUPROFILE(FMetalProfiler::GetProfiler()->EncodeDraw(CurrentEncoder.GetCommandBufferStats(), __FUNCTION__, NumPrimitives, NumVertices, NumInstances));
 		CurrentEncoder.GetRenderCommandEncoder().Draw(TranslatePrimitiveType(PrimitiveType), BaseVertexIndex, NumVertices, NumInstances);
 		METAL_DEBUG_LAYER(EMetalDebugLevelFastValidation, CurrentEncoder.GetRenderCommandEncoderDebugging().Draw(TranslatePrimitiveType(PrimitiveType), BaseVertexIndex, NumVertices, NumInstances));
+
+		if (GMetalCommandBufferDebuggingEnabled)
+		{
+			FMetalCommandData Data;
+			Data.CommandType = FMetalCommandData::Type::DrawPrimitive;
+			Data.Draw.BaseInstance = 0;
+			Data.Draw.InstanceCount = NumInstances;
+			Data.Draw.VertexCount = NumVertices;
+			Data.Draw.VertexStart = BaseVertexIndex;
+			
+			InsertDebugDraw(Data);
+		}
 	}
+#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
 	else
 	{
 		DrawPatches(PrimitiveType, nullptr, 0, BaseVertexIndex, 0, 0, NumPrimitives, NumInstances);
 	}
+#endif
 	
 	ConditionalSubmit();	
 }
@@ -420,12 +444,23 @@ void FMetalRenderPass::DrawPrimitiveIndirect(uint32 PrimitiveType, FMetalVertexB
 		ConditionalSwitchToRender();
 		check(CurrentEncoder.GetCommandBuffer());
 		check(CurrentEncoder.IsRenderCommandEncoderActive());
+		check(VertexBuffer->Buffer);
 		
 		PrepareToRender(PrimitiveType);
+		
+		FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), VertexBuffer->Buffer.GetPtr());
 		
 		METAL_GPUPROFILE(FMetalProfiler::GetProfiler()->EncodeDraw(CurrentEncoder.GetCommandBufferStats(), __FUNCTION__, 1, 1, 1));
 		CurrentEncoder.GetRenderCommandEncoder().Draw(TranslatePrimitiveType(PrimitiveType), VertexBuffer->Buffer, ArgumentOffset);
 		METAL_DEBUG_LAYER(EMetalDebugLevelFastValidation, CurrentEncoder.GetRenderCommandEncoderDebugging().Draw(TranslatePrimitiveType(PrimitiveType), VertexBuffer->Buffer, ArgumentOffset));
+
+		if (GMetalCommandBufferDebuggingEnabled)
+		{
+			FMetalCommandData Data;
+			Data.CommandType = FMetalCommandData::Type::DrawPrimitiveIndirect;
+
+			InsertDebugDraw(Data);
+		}
 
 		ConditionalSubmit();
 	}
@@ -485,7 +520,9 @@ void FMetalRenderPass::DrawIndexedPrimitive(FMetalBuffer const& IndexBuffer, uin
 	}
 #endif
 	
+#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
 	if (!State.GetUsingTessellation())
+#endif
 	{
 		ConditionalSwitchToRender();
 		check(CurrentEncoder.GetCommandBuffer());
@@ -494,6 +531,8 @@ void FMetalRenderPass::DrawIndexedPrimitive(FMetalBuffer const& IndexBuffer, uin
 		PrepareToRender(PrimitiveType);
 		
 		uint32 NumIndices = GetVertexCountForPrimitiveCount(NumPrimitives, PrimitiveType);
+		
+		FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), IndexBuffer.GetPtr());
 		
 		METAL_GPUPROFILE(FMetalProfiler::GetProfiler()->EncodeDraw(CurrentEncoder.GetCommandBufferStats(), __FUNCTION__, NumPrimitives, NumVertices, NumInstances));
 		if (GRHISupportsBaseVertexIndex && GRHISupportsFirstInstance)
@@ -506,11 +545,26 @@ void FMetalRenderPass::DrawIndexedPrimitive(FMetalBuffer const& IndexBuffer, uin
 			CurrentEncoder.GetRenderCommandEncoder().DrawIndexed(TranslatePrimitiveType(PrimitiveType), NumIndices, ((IndexStride == 2) ? mtlpp::IndexType::UInt16 : mtlpp::IndexType::UInt32), IndexBuffer, StartIndex * IndexStride, NumInstances);
 			METAL_DEBUG_LAYER(EMetalDebugLevelFastValidation, CurrentEncoder.GetRenderCommandEncoderDebugging().DrawIndexed(TranslatePrimitiveType(PrimitiveType), NumIndices, ((IndexStride == 2) ? mtlpp::IndexType::UInt16 : mtlpp::IndexType::UInt32), IndexBuffer, StartIndex * IndexStride, NumInstances));
 		}
+		
+		if (GMetalCommandBufferDebuggingEnabled)
+		{
+			FMetalCommandData Data;
+			Data.CommandType = FMetalCommandData::Type::DrawPrimitiveIndexed;
+			Data.DrawIndexed.BaseInstance = FirstInstance;
+			Data.DrawIndexed.BaseVertex = BaseVertexIndex;
+			Data.DrawIndexed.IndexCount = NumIndices;
+			Data.DrawIndexed.IndexStart = StartIndex;
+			Data.DrawIndexed.InstanceCount = NumInstances;
+			
+			InsertDebugDraw(Data);
+		}
 	}
+#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
 	else
 	{
 		DrawPatches(PrimitiveType, IndexBuffer, IndexStride, BaseVertexIndex, FirstInstance, StartIndex, NumPrimitives, NumInstances);
 	}
+#endif
 	
 	ConditionalSubmit();
 }
@@ -524,14 +578,26 @@ void FMetalRenderPass::DrawIndexedIndirect(FMetalIndexBuffer* IndexBuffer, uint3
 		ConditionalSwitchToRender();
 		check(CurrentEncoder.GetCommandBuffer());
 		check(CurrentEncoder.IsRenderCommandEncoderActive());
+		check(IndexBuffer->Buffer);
+		check(VertexBuffer->Buffer);
 		
 		// finalize any pending state
 		PrepareToRender(PrimitiveType);
+		
+		FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), IndexBuffer->Buffer.GetPtr());
+		FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), VertexBuffer->Buffer.GetPtr());
 		
 		METAL_GPUPROFILE(FMetalProfiler::GetProfiler()->EncodeDraw(CurrentEncoder.GetCommandBufferStats(), __FUNCTION__, 1, 1, 1));
 		CurrentEncoder.GetRenderCommandEncoder().DrawIndexed(TranslatePrimitiveType(PrimitiveType), (mtlpp::IndexType)IndexBuffer->IndexType, IndexBuffer->Buffer, 0, VertexBuffer->Buffer, (DrawArgumentsIndex * 5 * sizeof(uint32)));
 		METAL_DEBUG_LAYER(EMetalDebugLevelFastValidation, CurrentEncoder.GetRenderCommandEncoderDebugging().DrawIndexed(TranslatePrimitiveType(PrimitiveType), (mtlpp::IndexType)IndexBuffer->IndexType, IndexBuffer->Buffer, 0, VertexBuffer->Buffer, (DrawArgumentsIndex * 5 * sizeof(uint32))));
 
+		if (GMetalCommandBufferDebuggingEnabled)
+		{
+			FMetalCommandData Data;
+			Data.CommandType = FMetalCommandData::Type::DrawPrimitiveIndexedIndirect;
+			
+			InsertDebugDraw(Data);
+		}
 		ConditionalSubmit();
 	}
 	else
@@ -547,13 +613,26 @@ void FMetalRenderPass::DrawIndexedPrimitiveIndirect(uint32 PrimitiveType,FMetalI
 		ConditionalSwitchToRender();
 		check(CurrentEncoder.GetCommandBuffer());
 		check(CurrentEncoder.IsRenderCommandEncoderActive());
+		check(IndexBuffer->Buffer);
+		check(VertexBuffer->Buffer);
 		
 		PrepareToRender(PrimitiveType);
+		
+		FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), IndexBuffer->Buffer.GetPtr());
+		FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), VertexBuffer->Buffer.GetPtr());
 		
 		METAL_GPUPROFILE(FMetalProfiler::GetProfiler()->EncodeDraw(CurrentEncoder.GetCommandBufferStats(), __FUNCTION__, 1, 1, 1));
 		CurrentEncoder.GetRenderCommandEncoder().DrawIndexed(TranslatePrimitiveType(PrimitiveType), (mtlpp::IndexType)IndexBuffer->IndexType, IndexBuffer->Buffer, 0, VertexBuffer->Buffer, ArgumentOffset);
 		METAL_DEBUG_LAYER(EMetalDebugLevelFastValidation, CurrentEncoder.GetRenderCommandEncoderDebugging().DrawIndexed(TranslatePrimitiveType(PrimitiveType), (mtlpp::IndexType)IndexBuffer->IndexType, IndexBuffer->Buffer, 0, VertexBuffer->Buffer, ArgumentOffset));
 
+		if (GMetalCommandBufferDebuggingEnabled)
+		{
+			FMetalCommandData Data;
+			Data.CommandType = FMetalCommandData::Type::DrawPrimitiveIndirect;
+			
+			InsertDebugDraw(Data);
+		}
+		
 		ConditionalSubmit();
 	}
 	else
@@ -562,6 +641,7 @@ void FMetalRenderPass::DrawIndexedPrimitiveIndirect(uint32 PrimitiveType,FMetalI
 	}
 }
 
+#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
 void FMetalRenderPass::DrawPatches(uint32 PrimitiveType,FMetalBuffer const& IndexBuffer, uint32 IndexBufferStride, int32 BaseVertexIndex, uint32 FirstInstance, uint32 StartIndex,
 									uint32 NumPrimitives, uint32 NumInstances)
 {
@@ -591,19 +671,22 @@ void FMetalRenderPass::DrawPatches(uint32 PrimitiveType,FMetalBuffer const& Inde
 		FMetalBuffer hullShaderOutputBuffer = nil;
 		if(hullShaderOutputBufferSize)
 		{
-			hullShaderOutputBuffer = deviceContext.CreatePooledBuffer(FMetalPooledBufferArgs(device, hullShaderOutputBufferSize, mtlpp::StorageMode::Private));
+            hullShaderOutputBuffer = deviceContext.CreatePooledBuffer(FMetalPooledBufferArgs(device, hullShaderOutputBufferSize, BUF_Dynamic, mtlpp::StorageMode::Private));
+			FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), hullShaderOutputBuffer.GetPtr());
 		}
 		
 		FMetalBuffer hullConstShaderOutputBuffer = nil;
 		if(hullConstShaderOutputBufferSize)
 		{
-			hullConstShaderOutputBuffer = deviceContext.CreatePooledBuffer(FMetalPooledBufferArgs(device, hullConstShaderOutputBufferSize, mtlpp::StorageMode::Private));
+            hullConstShaderOutputBuffer = deviceContext.CreatePooledBuffer(FMetalPooledBufferArgs(device, hullConstShaderOutputBufferSize, BUF_Dynamic, mtlpp::StorageMode::Private));
+			FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), hullConstShaderOutputBuffer.GetPtr());
 		}
 		
 		FMetalBuffer tessellationFactorBuffer = nil;
 		if(tessellationFactorBufferSize)
 		{
-			tessellationFactorBuffer = deviceContext.CreatePooledBuffer(FMetalPooledBufferArgs(device, tessellationFactorBufferSize, mtlpp::StorageMode::Private));
+            tessellationFactorBuffer = deviceContext.CreatePooledBuffer(FMetalPooledBufferArgs(device, tessellationFactorBufferSize, BUF_Dynamic, mtlpp::StorageMode::Private));
+			FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), tessellationFactorBuffer.GetPtr());
 		}
 	
 		auto& computeEncoder = PrologueEncoder.GetComputeCommandEncoder();
@@ -616,72 +699,73 @@ void FMetalRenderPass::DrawPatches(uint32 PrimitiveType,FMetalBuffer const& Inde
 		{
 			PrologueEncoder.SetShaderBuffer(mtlpp::FunctionType::Kernel, IndexBuffer, StartIndex * IndexBufferStride, IndexBuffer.GetLength() - (StartIndex * IndexBufferStride), Pipeline->TessellationPipelineDesc.TessellationControlPointIndexBufferIndex, mtlpp::ResourceUsage::Read);
 			
-			State.SetShaderBuffer(SF_Vertex, nil, nil, 0, 0, Pipeline->TessellationPipelineDesc.TessellationControlPointIndexBufferIndex, mtlpp::ResourceUsage(0));
+			State.SetShaderBuffer(EMetalShaderStages::Vertex, nil, nil, 0, 0, Pipeline->TessellationPipelineDesc.TessellationControlPointIndexBufferIndex, mtlpp::ResourceUsage(0));
 		}
 		
 		if (Pipeline->TessellationPipelineDesc.TessellationIndexBufferIndex != UINT_MAX)
 		{
 			if (IndexBuffer)
 			{
+                FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), IndexBuffer.GetPtr());
 				PrologueEncoder.SetShaderBuffer(mtlpp::FunctionType::Kernel, IndexBuffer, StartIndex * IndexBufferStride, IndexBuffer.GetLength() - (StartIndex * IndexBufferStride), Pipeline->TessellationPipelineDesc.TessellationIndexBufferIndex, mtlpp::ResourceUsage::Read, IndexBufferStride == 2 ? PF_R16_UINT : PF_R32_UINT);
-			}
+		}
 			else
 			{
 				PrologueEncoder.SetShaderBuffer(mtlpp::FunctionType::Kernel, nil, 0, 0, Pipeline->TessellationPipelineDesc.TessellationIndexBufferIndex, mtlpp::ResourceUsage::Read, (EPixelFormat)0);
 			}
-			State.SetShaderBuffer(SF_Vertex, nil, nil, 0, 0, Pipeline->TessellationPipelineDesc.TessellationControlPointIndexBufferIndex, mtlpp::ResourceUsage(0));
+			State.SetShaderBuffer(EMetalShaderStages::Vertex, nil, nil, 0, 0, Pipeline->TessellationPipelineDesc.TessellationControlPointIndexBufferIndex, mtlpp::ResourceUsage(0));
 		}
 		
 		if(Pipeline->TessellationPipelineDesc.TessellationOutputControlPointBufferIndex != UINT_MAX) //TessellationOutputControlPointBufferIndex -> hullShaderOutputBuffer
 		{
 			PrologueEncoder.SetShaderBuffer(mtlpp::FunctionType::Kernel, hullShaderOutputBuffer, hullShaderOutputOffset, hullShaderOutputBuffer.GetLength() - hullShaderOutputOffset, Pipeline->TessellationPipelineDesc.TessellationOutputControlPointBufferIndex, mtlpp::ResourceUsage(0));
-			State.SetShaderBuffer(SF_Vertex, nil, nil, 0, 0, Pipeline->TessellationPipelineDesc.TessellationOutputControlPointBufferIndex, mtlpp::ResourceUsage(0));
+			State.SetShaderBuffer(EMetalShaderStages::Vertex, nil, nil, 0, 0, Pipeline->TessellationPipelineDesc.TessellationOutputControlPointBufferIndex, mtlpp::ResourceUsage(0));
 		}
 		
 		if(Pipeline->TessellationPipelineDesc.TessellationPatchConstBufferIndex != UINT_MAX) //TessellationPatchConstBufferIndex -> hullConstShaderOutputBuffer
 		{
 			PrologueEncoder.SetShaderBuffer(mtlpp::FunctionType::Kernel, hullConstShaderOutputBuffer, hullConstShaderOutputOffset, hullConstShaderOutputBuffer.GetLength() - hullConstShaderOutputOffset, Pipeline->TessellationPipelineDesc.TessellationPatchConstBufferIndex, mtlpp::ResourceUsage(0));
-			State.SetShaderBuffer(SF_Vertex, nil, nil, 0, 0, Pipeline->TessellationPipelineDesc.TessellationPatchConstBufferIndex, mtlpp::ResourceUsage(0));
+			State.SetShaderBuffer(EMetalShaderStages::Vertex, nil, nil, 0, 0, Pipeline->TessellationPipelineDesc.TessellationPatchConstBufferIndex, mtlpp::ResourceUsage(0));
 		}
 		
 		if(Pipeline->TessellationPipelineDesc.TessellationFactorBufferIndex != UINT_MAX) // TessellationFactorBufferIndex->tessellationFactorBuffer
 		{
 			PrologueEncoder.SetShaderBuffer(mtlpp::FunctionType::Kernel, tessellationFactorBuffer, tessellationFactorsOffset, tessellationFactorBuffer.GetLength() - tessellationFactorsOffset, Pipeline->TessellationPipelineDesc.TessellationFactorBufferIndex, mtlpp::ResourceUsage(0));
-			State.SetShaderBuffer(SF_Vertex, nil, nil, 0, 0, Pipeline->TessellationPipelineDesc.TessellationFactorBufferIndex, mtlpp::ResourceUsage(0));
+			State.SetShaderBuffer(EMetalShaderStages::Vertex, nil, nil, 0, 0, Pipeline->TessellationPipelineDesc.TessellationFactorBufferIndex, mtlpp::ResourceUsage(0));
 		}
 		
 		if(Pipeline->TessellationPipelineDesc.TessellationInputControlPointBufferIndex != UINT_MAX) //TessellationInputControlPointBufferIndex->hullShaderOutputBuffer
 		{
 			CurrentEncoder.SetShaderBuffer(mtlpp::FunctionType::Vertex, hullShaderOutputBuffer, hullShaderOutputOffset, hullShaderOutputBuffer.GetLength() - hullShaderOutputOffset, Pipeline->TessellationPipelineDesc.TessellationInputControlPointBufferIndex, mtlpp::ResourceUsage(0));
-			State.SetShaderBuffer(SF_Domain, nil, nil, 0, 0, Pipeline->TessellationPipelineDesc.TessellationInputControlPointBufferIndex, mtlpp::ResourceUsage(0));
+			State.SetShaderBuffer(EMetalShaderStages::Domain, nil, nil, 0, 0, Pipeline->TessellationPipelineDesc.TessellationInputControlPointBufferIndex, mtlpp::ResourceUsage(0));
 		}
 		if(Pipeline->TessellationPipelineDesc.TessellationInputPatchConstBufferIndex != UINT_MAX) //TessellationInputPatchConstBufferIndex->hullConstShaderOutputBuffer
 		{
 			CurrentEncoder.SetShaderBuffer(mtlpp::FunctionType::Vertex, hullConstShaderOutputBuffer, hullConstShaderOutputOffset, hullConstShaderOutputBuffer.GetLength() - hullConstShaderOutputOffset, Pipeline->TessellationPipelineDesc.TessellationInputPatchConstBufferIndex, mtlpp::ResourceUsage(0));
-			State.SetShaderBuffer(SF_Domain, nil, nil, 0, 0, Pipeline->TessellationPipelineDesc.TessellationInputPatchConstBufferIndex, mtlpp::ResourceUsage(0));
+			State.SetShaderBuffer(EMetalShaderStages::Domain, nil, nil, 0, 0, Pipeline->TessellationPipelineDesc.TessellationInputPatchConstBufferIndex, mtlpp::ResourceUsage(0));
 		}
 		
 		// set the patchCount
 		uint32 patchCountData[] = { NumPrimitives, StartIndex };
 		PrologueEncoder.SetShaderBytes(mtlpp::FunctionType::Kernel, (const uint8*)&patchCountData[0], sizeof(patchCountData), Pipeline->TessellationPipelineDesc.TessellationPatchCountBufferIndex);
-		State.SetShaderBuffer(SF_Vertex, nil, nil, 0, 0, Pipeline->TessellationPipelineDesc.TessellationPatchCountBufferIndex, mtlpp::ResourceUsage(0));
+		State.SetShaderBuffer(EMetalShaderStages::Vertex, nil, nil, 0, 0, Pipeline->TessellationPipelineDesc.TessellationPatchCountBufferIndex, mtlpp::ResourceUsage(0));
 		
 		if (boundShaderState->VertexShader->SideTableBinding >= 0)
 		{
 			PrologueEncoder.SetShaderSideTable(mtlpp::FunctionType::Kernel, boundShaderState->VertexShader->SideTableBinding);
-			State.SetShaderBuffer(SF_Vertex, nil, nil, 0, 0, boundShaderState->VertexShader->SideTableBinding, mtlpp::ResourceUsage(0));
+			State.SetShaderBuffer(EMetalShaderStages::Vertex, nil, nil, 0, 0, boundShaderState->VertexShader->SideTableBinding, mtlpp::ResourceUsage(0));
 		}
 		
 		if (boundShaderState->DomainShader->SideTableBinding >= 0)
 		{
 			CurrentEncoder.SetShaderSideTable(mtlpp::FunctionType::Vertex, boundShaderState->DomainShader->SideTableBinding);
-			State.SetShaderBuffer(SF_Domain, nil, nil, 0, 0, boundShaderState->DomainShader->SideTableBinding, mtlpp::ResourceUsage(0));
+			State.SetShaderBuffer(EMetalShaderStages::Domain, nil, nil, 0, 0, boundShaderState->DomainShader->SideTableBinding, mtlpp::ResourceUsage(0));
 		}
 		
 		if (IsValidRef(boundShaderState->PixelShader) && boundShaderState->PixelShader->SideTableBinding >= 0)
 		{
 			CurrentEncoder.SetShaderSideTable(mtlpp::FunctionType::Fragment, boundShaderState->PixelShader->SideTableBinding);
-			State.SetShaderBuffer(SF_Pixel, nil, nil, 0, 0, boundShaderState->PixelShader->SideTableBinding, mtlpp::ResourceUsage(0));
+			State.SetShaderBuffer(EMetalShaderStages::Pixel, nil, nil, 0, 0, boundShaderState->PixelShader->SideTableBinding, mtlpp::ResourceUsage(0));
 		}
 		
 		auto patchesPerThreadGroup = boundShaderState->VertexShader->TessellationPatchesPerThreadGroup;
@@ -711,6 +795,18 @@ void FMetalRenderPass::DrawPatches(uint32 PrimitiveType,FMetalBuffer const& Inde
 			METAL_DEBUG_LAYER(EMetalDebugLevelFastValidation, CurrentEncoder.GetRenderCommandEncoderDebugging().DrawPatches(boundShaderState->VertexShader->TessellationOutputControlPoints, 0, NumPrimitives * NumInstances, nil, 0, 1, 0));
 		}
 		
+		if (GMetalCommandBufferDebuggingEnabled)
+		{
+			FMetalCommandData Data;
+			Data.CommandType = FMetalCommandData::Type::DrawPrimitivePatch;
+			Data.DrawPatch.BaseInstance = FirstInstance;
+			Data.DrawPatch.InstanceCount = NumInstances;
+			Data.DrawPatch.PatchCount = NumPrimitives * NumInstances;
+			Data.DrawPatch.PatchStart = 0;
+			
+			InsertDebugDraw(Data);
+		}
+		
 		if(hullShaderOutputBufferSize)
 		{
 			deviceContext.ReleaseBuffer(hullShaderOutputBuffer);
@@ -729,6 +825,7 @@ void FMetalRenderPass::DrawPatches(uint32 PrimitiveType,FMetalBuffer const& Inde
 		NOT_SUPPORTED("DrawPatches");
 	}
 }
+#endif
 
 void FMetalRenderPass::Dispatch(uint32 ThreadGroupCountX, uint32 ThreadGroupCountY, uint32 ThreadGroupCountZ)
 {
@@ -772,6 +869,17 @@ void FMetalRenderPass::Dispatch(uint32 ThreadGroupCountX, uint32 ThreadGroupCoun
 		CurrentEncoder.GetComputeCommandEncoder().DispatchThreadgroups(Threadgroups, ThreadgroupCounts);
 		METAL_DEBUG_LAYER(EMetalDebugLevelFastValidation, CurrentEncoder.GetComputeCommandEncoderDebugging().DispatchThreadgroups(Threadgroups, ThreadgroupCounts));
 		
+	if (GMetalCommandBufferDebuggingEnabled)
+	{
+		FMetalCommandData Data;
+		Data.CommandType = FMetalCommandData::Type::Dispatch;
+		Data.Dispatch.threadgroupsPerGrid[0] = ThreadGroupCountX;
+		Data.Dispatch.threadgroupsPerGrid[1] = ThreadGroupCountY;
+		Data.Dispatch.threadgroupsPerGrid[2] = ThreadGroupCountZ;
+		
+		InsertDebugDispatch(Data);
+	}
+	
 		ConditionalSubmit();
 	}
 }
@@ -785,6 +893,7 @@ void FMetalRenderPass::DispatchIndirect(FMetalVertexBuffer* ArgumentBuffer, uint
 		ConditionalSwitchToAsyncCompute();
 		check(PrologueEncoder.GetCommandBuffer());
 		check(PrologueEncoder.IsComputeCommandEncoderActive());
+		check(ArgumentBuffer->Buffer);
 		
 		PrepareToAsyncDispatch();
 		
@@ -815,9 +924,21 @@ void FMetalRenderPass::DispatchIndirect(FMetalVertexBuffer* ArgumentBuffer, uint
 		mtlpp::Size ThreadgroupCounts = mtlpp::Size(ComputeShader->NumThreadsX, ComputeShader->NumThreadsY, ComputeShader->NumThreadsZ);
 		check(ComputeShader->NumThreadsX > 0 && ComputeShader->NumThreadsY > 0 && ComputeShader->NumThreadsZ > 0);
 		
+	FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), ArgumentBuffer->Buffer.GetPtr());
+	
 		CurrentEncoder.GetComputeCommandEncoder().DispatchThreadgroupsWithIndirectBuffer(ArgumentBuffer->Buffer, ArgumentOffset, ThreadgroupCounts);
 		METAL_DEBUG_LAYER(EMetalDebugLevelFastValidation, CurrentEncoder.GetComputeCommandEncoderDebugging().DispatchThreadgroupsWithIndirectBuffer(ArgumentBuffer->Buffer, ArgumentOffset, ThreadgroupCounts));
 
+	if (GMetalCommandBufferDebuggingEnabled)
+	{
+		FMetalCommandData Data;
+		Data.CommandType = FMetalCommandData::Type::DispatchIndirect;
+		Data.DispatchIndirect.ArgumentBuffer = ArgumentBuffer->Buffer;
+		Data.DispatchIndirect.ArgumentOffset = ArgumentOffset;
+		
+		InsertDebugDispatch(Data);
+	}
+	
 		ConditionalSubmit();
 	}
 }
@@ -841,17 +962,13 @@ void FMetalRenderPass::CopyFromTextureToBuffer(FMetalTexture const& Texture, uin
 	mtlpp::BlitCommandEncoder& Encoder = CurrentEncoder.GetBlitCommandEncoder();
 	check(Encoder.GetPtr());
 	
+	FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), Texture.GetPtr());
+	FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), toBuffer.GetPtr());
+	
 	METAL_GPUPROFILE(FMetalProfiler::GetProfiler()->EncodeBlit(CurrentEncoder.GetCommandBufferStats(), __FUNCTION__));
-	if (CmdList.GetCommandQueue().SupportsFeature(EMetalFeaturesDepthStencilBlitOptions))
 	{
 		MTLPP_VALIDATE(mtlpp::BlitCommandEncoder, Encoder, SafeGetRuntimeDebuggingLevel() >= EMetalDebugLevelValidation, Copy(Texture, sourceSlice, sourceLevel, sourceOrigin, sourceSize, toBuffer, destinationOffset, destinationBytesPerRow, destinationBytesPerImage, options));
 		METAL_DEBUG_LAYER(EMetalDebugLevelFastValidation, CurrentEncoder.GetBlitCommandEncoderDebugging().Copy(Texture, sourceSlice, sourceLevel, sourceOrigin, sourceSize, toBuffer, destinationOffset, destinationBytesPerRow, destinationBytesPerImage, options));
-	}
-	else
-	{
-		check(options == mtlpp::BlitOption::None);
-		MTLPP_VALIDATE(mtlpp::BlitCommandEncoder, Encoder, SafeGetRuntimeDebuggingLevel() >= EMetalDebugLevelValidation, Copy(Texture, sourceSlice, sourceLevel, sourceOrigin, sourceSize, toBuffer, destinationOffset, destinationBytesPerRow, destinationBytesPerImage));
-		METAL_DEBUG_LAYER(EMetalDebugLevelFastValidation, CurrentEncoder.GetBlitCommandEncoderDebugging().Copy(Texture, sourceSlice, sourceLevel, sourceOrigin, sourceSize, toBuffer, destinationOffset, destinationBytesPerRow, destinationBytesPerImage));
 	}
 	ConditionalSubmit();
 }
@@ -861,6 +978,10 @@ void FMetalRenderPass::CopyFromBufferToTexture(FMetalBuffer const& Buffer, uint3
 	ConditionalSwitchToBlit();
 	mtlpp::BlitCommandEncoder& Encoder = CurrentEncoder.GetBlitCommandEncoder();
 	check(Encoder.GetPtr());
+	
+	
+	FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), Buffer.GetPtr());
+	FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), toTexture.GetPtr());
 	
 	METAL_GPUPROFILE(FMetalProfiler::GetProfiler()->EncodeBlit(CurrentEncoder.GetCommandBufferStats(), __FUNCTION__));
 	if (options == mtlpp::BlitOption::None)
@@ -882,6 +1003,9 @@ void FMetalRenderPass::CopyFromTextureToTexture(FMetalTexture const& Texture, ui
 	mtlpp::BlitCommandEncoder& Encoder = CurrentEncoder.GetBlitCommandEncoder();
 	check(Encoder.GetPtr());
 	
+	FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), Texture.GetPtr());
+	FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), toTexture.GetPtr());
+	
 	METAL_GPUPROFILE(FMetalProfiler::GetProfiler()->EncodeBlit(CurrentEncoder.GetCommandBufferStats(), __FUNCTION__));
 	MTLPP_VALIDATE(mtlpp::BlitCommandEncoder, Encoder, SafeGetRuntimeDebuggingLevel() >= EMetalDebugLevelValidation, Copy(Texture, sourceSlice, sourceLevel, sourceOrigin, sourceSize, toTexture, destinationSlice, destinationLevel, destinationOrigin));
 	METAL_DEBUG_LAYER(EMetalDebugLevelFastValidation, CurrentEncoder.GetBlitCommandEncoderDebugging().Copy(Texture, sourceSlice, sourceLevel, sourceOrigin, sourceSize, toTexture, destinationSlice, destinationLevel, destinationOrigin));
@@ -893,6 +1017,9 @@ void FMetalRenderPass::CopyFromBufferToBuffer(FMetalBuffer const& SourceBuffer, 
 	ConditionalSwitchToBlit();
 	mtlpp::BlitCommandEncoder& Encoder = CurrentEncoder.GetBlitCommandEncoder();
 	check(Encoder.GetPtr());
+	
+	FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), SourceBuffer.GetPtr());
+	FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), DestinationBuffer.GetPtr());
 	
 	METAL_GPUPROFILE(FMetalProfiler::GetProfiler()->EncodeBlit(CurrentEncoder.GetCommandBufferStats(), __FUNCTION__));
 	MTLPP_VALIDATE(mtlpp::BlitCommandEncoder, Encoder, SafeGetRuntimeDebuggingLevel() >= EMetalDebugLevelValidation, Copy(SourceBuffer, SourceOffset, DestinationBuffer, DestinationOffset, Size));
@@ -906,6 +1033,9 @@ void FMetalRenderPass::PresentTexture(FMetalTexture const& Texture, uint32 sourc
 	mtlpp::BlitCommandEncoder& Encoder = CurrentEncoder.GetBlitCommandEncoder();
 	check(Encoder.GetPtr());
 	
+	FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), Texture.GetPtr());
+	FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), toTexture.GetPtr());
+	
 	METAL_GPUPROFILE(FMetalProfiler::GetProfiler()->EncodeBlit(CurrentEncoder.GetCommandBufferStats(), __FUNCTION__));
 	MTLPP_VALIDATE(mtlpp::BlitCommandEncoder, Encoder, SafeGetRuntimeDebuggingLevel() >= EMetalDebugLevelValidation, Copy(Texture, sourceSlice, sourceLevel, sourceOrigin, sourceSize, toTexture, destinationSlice, destinationLevel, destinationOrigin));
 	METAL_DEBUG_LAYER(EMetalDebugLevelFastValidation, CurrentEncoder.GetBlitCommandEncoderDebugging().Copy(Texture, sourceSlice, sourceLevel, sourceOrigin, sourceSize, toTexture, destinationSlice, destinationLevel, destinationOrigin));
@@ -918,6 +1048,8 @@ void FMetalRenderPass::SynchronizeTexture(FMetalTexture const& Texture, uint32 S
 	ConditionalSwitchToBlit();
 	mtlpp::BlitCommandEncoder& Encoder = CurrentEncoder.GetBlitCommandEncoder();
 	check(Encoder.GetPtr());
+	
+	FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), Texture.GetPtr());
 	
 	// METAL_GPUPROFILE(FMetalProfiler::GetProfiler()->EncodeBlit(CurrentEncoder.GetCommandBufferStats(), __FUNCTION__));
 	MTLPP_VALIDATE(mtlpp::BlitCommandEncoder, Encoder, SafeGetRuntimeDebuggingLevel() >= EMetalDebugLevelValidation, Synchronize(Texture, Slice, Level));
@@ -934,6 +1066,8 @@ void FMetalRenderPass::SynchroniseResource(mtlpp::Resource const& Resource)
 	mtlpp::BlitCommandEncoder& Encoder = CurrentEncoder.GetBlitCommandEncoder();
 	check(Encoder.GetPtr());
 	
+	FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), Resource.GetPtr());
+	
 	// METAL_GPUPROFILE(FMetalProfiler::GetProfiler()->EncodeBlit(CurrentEncoder.GetCommandBufferStats(), __FUNCTION__));
 	MTLPP_VALIDATE(mtlpp::BlitCommandEncoder, Encoder, SafeGetRuntimeDebuggingLevel() >= EMetalDebugLevelValidation, Synchronize(Resource));
 	METAL_DEBUG_LAYER(EMetalDebugLevelFastValidation, CurrentEncoder.GetBlitCommandEncoderDebugging().Synchronize(Resource));
@@ -945,6 +1079,8 @@ void FMetalRenderPass::FillBuffer(FMetalBuffer const& Buffer, ns::Range Range, u
 {
 	check(Buffer);
 	
+	FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), Buffer.GetPtr());
+	
 	mtlpp::BlitCommandEncoder TargetEncoder;
 	METAL_DEBUG_ONLY(FMetalBlitCommandEncoderDebugging Debugging);
 	bool bAsync = !CurrentEncoder.HasBufferBindingHistory(Buffer);
@@ -954,6 +1090,8 @@ void FMetalRenderPass::FillBuffer(FMetalBuffer const& Buffer, ns::Range Range, u
 		TargetEncoder = PrologueEncoder.GetBlitCommandEncoder();
 		METAL_GPUPROFILE(FMetalProfiler::GetProfiler()->EncodeBlit(PrologueEncoder.GetCommandBufferStats(), FString::Printf(TEXT("FillBuffer: %p %llu %llu"), Buffer.GetPtr(), Buffer.GetOffset() + Range.Location, Range.Length)));
 		METAL_DEBUG_LAYER(EMetalDebugLevelFastValidation, Debugging = PrologueEncoder.GetBlitCommandEncoderDebugging());
+		
+		FMetalCommandBufferDebugHelpers::TrackResource(PrologueEncoder.GetCommandBuffer().GetPtr(), Buffer.GetPtr());
 	}
 	else
 	{
@@ -961,6 +1099,8 @@ void FMetalRenderPass::FillBuffer(FMetalBuffer const& Buffer, ns::Range Range, u
 		TargetEncoder = CurrentEncoder.GetBlitCommandEncoder();
 		METAL_GPUPROFILE(FMetalProfiler::GetProfiler()->EncodeBlit(CurrentEncoder.GetCommandBufferStats(), FString::Printf(TEXT("FillBuffer: %p %llu %llu"), Buffer.GetPtr(), Buffer.GetOffset() + Range.Location, Range.Length)));
 		METAL_DEBUG_LAYER(EMetalDebugLevelFastValidation, Debugging = CurrentEncoder.GetBlitCommandEncoderDebugging());
+		
+		FMetalCommandBufferDebugHelpers::TrackResource(PrologueEncoder.GetCommandBuffer().GetPtr(), Buffer.GetPtr());
 	}
 	
 	check(TargetEncoder.GetPtr());
@@ -976,6 +1116,9 @@ void FMetalRenderPass::FillBuffer(FMetalBuffer const& Buffer, ns::Range Range, u
 
 bool FMetalRenderPass::AsyncCopyFromBufferToTexture(FMetalBuffer const& Buffer, uint32 sourceOffset, uint32 sourceBytesPerRow, uint32 sourceBytesPerImage, mtlpp::Size sourceSize, FMetalTexture const& toTexture, uint32 destinationSlice, uint32 destinationLevel, mtlpp::Origin destinationOrigin, mtlpp::BlitOption options)
 {
+	FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), Buffer.GetPtr());
+	FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), toTexture.GetPtr());
+	
 	mtlpp::BlitCommandEncoder TargetEncoder;
 	METAL_DEBUG_ONLY(FMetalBlitCommandEncoderDebugging Debugging);
 	bool bAsync = !CurrentEncoder.HasTextureBindingHistory(toTexture);
@@ -985,6 +1128,9 @@ bool FMetalRenderPass::AsyncCopyFromBufferToTexture(FMetalBuffer const& Buffer, 
 		TargetEncoder = PrologueEncoder.GetBlitCommandEncoder();
 		METAL_GPUPROFILE(FMetalProfiler::GetProfiler()->EncodeBlit(PrologueEncoder.GetCommandBufferStats(), __FUNCTION__));
 		METAL_DEBUG_LAYER(EMetalDebugLevelFastValidation, Debugging = PrologueEncoder.GetBlitCommandEncoderDebugging());
+		
+		FMetalCommandBufferDebugHelpers::TrackResource(PrologueEncoder.GetCommandBuffer().GetPtr(), Buffer.GetPtr());
+		FMetalCommandBufferDebugHelpers::TrackResource(PrologueEncoder.GetCommandBuffer().GetPtr(), toTexture.GetPtr());
 	}
 	else
 	{
@@ -992,6 +1138,9 @@ bool FMetalRenderPass::AsyncCopyFromBufferToTexture(FMetalBuffer const& Buffer, 
 		TargetEncoder = CurrentEncoder.GetBlitCommandEncoder();
 		METAL_GPUPROFILE(FMetalProfiler::GetProfiler()->EncodeBlit(CurrentEncoder.GetCommandBufferStats(), __FUNCTION__));
 		METAL_DEBUG_LAYER(EMetalDebugLevelFastValidation, Debugging = CurrentEncoder.GetBlitCommandEncoderDebugging());
+		
+		FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), Buffer.GetPtr());
+		FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), toTexture.GetPtr());
 	}
 	
 	check(TargetEncoder.GetPtr());
@@ -1021,6 +1170,9 @@ bool FMetalRenderPass::AsyncCopyFromTextureToTexture(FMetalTexture const& Textur
 		TargetEncoder = PrologueEncoder.GetBlitCommandEncoder();
 		METAL_GPUPROFILE(FMetalProfiler::GetProfiler()->EncodeBlit(PrologueEncoder.GetCommandBufferStats(), __FUNCTION__));
 		METAL_DEBUG_LAYER(EMetalDebugLevelFastValidation, Debugging = PrologueEncoder.GetBlitCommandEncoderDebugging());
+		
+		FMetalCommandBufferDebugHelpers::TrackResource(PrologueEncoder.GetCommandBuffer().GetPtr(), Texture.GetPtr());
+		FMetalCommandBufferDebugHelpers::TrackResource(PrologueEncoder.GetCommandBuffer().GetPtr(), toTexture.GetPtr());
 	}
 	else
 	{
@@ -1028,6 +1180,9 @@ bool FMetalRenderPass::AsyncCopyFromTextureToTexture(FMetalTexture const& Textur
 		TargetEncoder = CurrentEncoder.GetBlitCommandEncoder();
 		METAL_GPUPROFILE(FMetalProfiler::GetProfiler()->EncodeBlit(CurrentEncoder.GetCommandBufferStats(), __FUNCTION__));
 		METAL_DEBUG_LAYER(EMetalDebugLevelFastValidation, Debugging = CurrentEncoder.GetBlitCommandEncoderDebugging());
+		
+		FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), Texture.GetPtr());
+		FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), toTexture.GetPtr());
 	}
 	
 	check(TargetEncoder.GetPtr());
@@ -1049,6 +1204,9 @@ void FMetalRenderPass::AsyncCopyFromBufferToBuffer(FMetalBuffer const& SourceBuf
 		TargetEncoder = PrologueEncoder.GetBlitCommandEncoder();
 		METAL_GPUPROFILE(FMetalProfiler::GetProfiler()->EncodeBlit(PrologueEncoder.GetCommandBufferStats(), FString::Printf(TEXT("AsyncCopyFromBufferToBuffer: %p %llu %llu"), DestinationBuffer.GetPtr(), DestinationBuffer.GetOffset() + DestinationOffset, Size)));
 		METAL_DEBUG_LAYER(EMetalDebugLevelFastValidation, Debugging = PrologueEncoder.GetBlitCommandEncoderDebugging());
+		
+		FMetalCommandBufferDebugHelpers::TrackResource(PrologueEncoder.GetCommandBuffer().GetPtr(), SourceBuffer.GetPtr());
+		FMetalCommandBufferDebugHelpers::TrackResource(PrologueEncoder.GetCommandBuffer().GetPtr(), DestinationBuffer.GetPtr());
 	}
 	else
 	{
@@ -1056,6 +1214,9 @@ void FMetalRenderPass::AsyncCopyFromBufferToBuffer(FMetalBuffer const& SourceBuf
 		TargetEncoder = CurrentEncoder.GetBlitCommandEncoder();
 		METAL_GPUPROFILE(FMetalProfiler::GetProfiler()->EncodeBlit(CurrentEncoder.GetCommandBufferStats(), FString::Printf(TEXT("AsyncCopyFromBufferToBuffer: %p %llu %llu"), DestinationBuffer.GetPtr(), DestinationBuffer.GetOffset() + DestinationOffset, Size)));
 		METAL_DEBUG_LAYER(EMetalDebugLevelFastValidation, Debugging = CurrentEncoder.GetBlitCommandEncoderDebugging());
+		
+		FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), SourceBuffer.GetPtr());
+		FMetalCommandBufferDebugHelpers::TrackResource(CurrentEncoder.GetCommandBuffer().GetPtr(), DestinationBuffer.GetPtr());
 	}
 	
 	check(TargetEncoder.GetPtr());
@@ -1071,6 +1232,8 @@ void FMetalRenderPass::AsyncGenerateMipmapsForTexture(FMetalTexture const& Textu
 	ConditionalSwitchToAsyncBlit();
 	mtlpp::BlitCommandEncoder Encoder = PrologueEncoder.GetBlitCommandEncoder();
 	check(Encoder.GetPtr());
+	
+	FMetalCommandBufferDebugHelpers::TrackResource(PrologueEncoder.GetCommandBuffer().GetPtr(), Texture.GetPtr());
 	
 	METAL_GPUPROFILE(FMetalProfiler::GetProfiler()->EncodeBlit(CurrentEncoder.GetCommandBufferStats(), __FUNCTION__));
 	MTLPP_VALIDATE(mtlpp::BlitCommandEncoder, Encoder, SafeGetRuntimeDebuggingLevel() >= EMetalDebugLevelValidation, GenerateMipmaps(Texture));
@@ -1541,6 +1704,18 @@ void FMetalRenderPass::ConditionalSwitchToAsyncCompute(void)
 			}
 			PrologueEncoderFence = nullptr;
 		}
+		if (PassStartFence)
+		{
+			if(PassStartFence->NeedsWait(mtlpp::RenderStages::Vertex))
+			{
+				PrologueEncoder.WaitForFence(PassStartFence);
+			}
+			else
+			{
+				PrologueEncoder.WaitAndUpdateFence(PassStartFence);
+			}
+			PassStartFence = nullptr;
+		}
 #if METAL_DEBUG_OPTIONS
 //		if (GetEmitDrawEvents() && PrologueEncoder.GetEncoderFence())
 //		{
@@ -1573,55 +1748,57 @@ void FMetalRenderPass::CommitRenderResourceTables(void)
 	
 	State.CommitRenderResources(&CurrentEncoder);
 	
-	State.CommitResourceTable(SF_Vertex, mtlpp::FunctionType::Vertex, CurrentEncoder);
+	State.CommitResourceTable(EMetalShaderStages::Vertex, mtlpp::FunctionType::Vertex, CurrentEncoder);
 	
 	FMetalGraphicsPipelineState const* BoundShaderState = State.GetGraphicsPSO();
 	
 	if (BoundShaderState->VertexShader->SideTableBinding >= 0)
 	{
 		CurrentEncoder.SetShaderSideTable(mtlpp::FunctionType::Vertex, BoundShaderState->VertexShader->SideTableBinding);
-		State.SetShaderBuffer(SF_Vertex, nil, nil, 0, 0, BoundShaderState->VertexShader->SideTableBinding, mtlpp::ResourceUsage(0));
+		State.SetShaderBuffer(EMetalShaderStages::Vertex, nil, nil, 0, 0, BoundShaderState->VertexShader->SideTableBinding, mtlpp::ResourceUsage(0));
 	}
 	
 	if (IsValidRef(BoundShaderState->PixelShader))
 	{
-		State.CommitResourceTable(SF_Pixel, mtlpp::FunctionType::Fragment, CurrentEncoder);
+		State.CommitResourceTable(EMetalShaderStages::Pixel, mtlpp::FunctionType::Fragment, CurrentEncoder);
 		if (BoundShaderState->PixelShader->SideTableBinding >= 0)
 		{
 			CurrentEncoder.SetShaderSideTable(mtlpp::FunctionType::Fragment, BoundShaderState->PixelShader->SideTableBinding);
-			State.SetShaderBuffer(SF_Pixel, nil, nil, 0, 0, BoundShaderState->PixelShader->SideTableBinding, mtlpp::ResourceUsage(0));
+			State.SetShaderBuffer(EMetalShaderStages::Pixel, nil, nil, 0, 0, BoundShaderState->PixelShader->SideTableBinding, mtlpp::ResourceUsage(0));
 		}
 	}
 }
 
+#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
 void FMetalRenderPass::CommitTessellationResourceTables(void)
 {
 	State.CommitTessellationResources(&CurrentEncoder, &PrologueEncoder);
 	
-	State.CommitResourceTable(SF_Vertex, mtlpp::FunctionType::Kernel, PrologueEncoder);
+	State.CommitResourceTable(EMetalShaderStages::Vertex, mtlpp::FunctionType::Kernel, PrologueEncoder);
 	
-	State.CommitResourceTable(SF_Hull, mtlpp::FunctionType::Kernel, PrologueEncoder);
+	State.CommitResourceTable(EMetalShaderStages::Hull, mtlpp::FunctionType::Kernel, PrologueEncoder);
 	
-	State.CommitResourceTable(SF_Domain, mtlpp::FunctionType::Vertex, CurrentEncoder);
+	State.CommitResourceTable(EMetalShaderStages::Domain, mtlpp::FunctionType::Vertex, CurrentEncoder);
 	
 	TRefCountPtr<FMetalGraphicsPipelineState> CurrentBoundShaderState = State.GetGraphicsPSO();
 	if (IsValidRef(CurrentBoundShaderState->PixelShader))
 	{
-		State.CommitResourceTable(SF_Pixel, mtlpp::FunctionType::Fragment, CurrentEncoder);
+		State.CommitResourceTable(EMetalShaderStages::Pixel, mtlpp::FunctionType::Fragment, CurrentEncoder);
 	}
 }
+#endif
 
 void FMetalRenderPass::CommitDispatchResourceTables(void)
 {
 	State.CommitComputeResources(&CurrentEncoder);
 	
-	State.CommitResourceTable(SF_Compute, mtlpp::FunctionType::Kernel, CurrentEncoder);
+	State.CommitResourceTable(EMetalShaderStages::Compute, mtlpp::FunctionType::Kernel, CurrentEncoder);
 	
 	FMetalComputeShader const* ComputeShader = State.GetComputeShader();
 	if (ComputeShader->SideTableBinding >= 0)
 	{
 		CurrentEncoder.SetShaderSideTable(mtlpp::FunctionType::Kernel, ComputeShader->SideTableBinding);
-		State.SetShaderBuffer(SF_Compute, nil, nil, 0, 0, ComputeShader->SideTableBinding, mtlpp::ResourceUsage(0));
+		State.SetShaderBuffer(EMetalShaderStages::Compute, nil, nil, 0, 0, ComputeShader->SideTableBinding, mtlpp::ResourceUsage(0));
 	}
 }
 
@@ -1629,13 +1806,13 @@ void FMetalRenderPass::CommitAsyncDispatchResourceTables(void)
 {
 	State.CommitComputeResources(&PrologueEncoder);
 	
-	State.CommitResourceTable(SF_Compute, mtlpp::FunctionType::Kernel, PrologueEncoder);
+	State.CommitResourceTable(EMetalShaderStages::Compute, mtlpp::FunctionType::Kernel, PrologueEncoder);
 	
 	FMetalComputeShader const* ComputeShader = State.GetComputeShader();
 	if (ComputeShader->SideTableBinding >= 0)
 	{
 		PrologueEncoder.SetShaderSideTable(mtlpp::FunctionType::Kernel, ComputeShader->SideTableBinding);
-		State.SetShaderBuffer(SF_Compute, nil, nil, 0, 0, ComputeShader->SideTableBinding, mtlpp::ResourceUsage(0));
+		State.SetShaderBuffer(EMetalShaderStages::Compute, nil, nil, 0, 0, ComputeShader->SideTableBinding, mtlpp::ResourceUsage(0));
 	}
 }
 
@@ -1655,6 +1832,7 @@ void FMetalRenderPass::PrepareToRender(uint32 PrimitiveType)
     State.SetRenderPipelineState(CurrentEncoder, nullptr);
 }
 
+#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
 void FMetalRenderPass::PrepareToTessellate(uint32 PrimitiveType)
 {
 	SCOPE_CYCLE_COUNTER(STAT_MetalPrepareToTessellateTime);
@@ -1672,6 +1850,7 @@ void FMetalRenderPass::PrepareToTessellate(uint32 PrimitiveType)
     
     State.SetRenderPipelineState(CurrentEncoder, &PrologueEncoder);
 }
+#endif
 
 void FMetalRenderPass::PrepareToDispatch(void)
 {
@@ -1705,8 +1884,7 @@ void FMetalRenderPass::ConditionalSubmit()
 	
 	bool bCanForceSubmit = State.CanRestartRenderPass();
 
-#if METAL_DEBUG_OPTIONS
-	FRHISetRenderTargetsInfo CurrentRenderTargets = State.GetRenderTargetsInfo();
+	FRHIRenderPassInfo CurrentRenderTargets = State.GetRenderPassInfo();
 	
 	// Force a command-encoder when GMetalRuntimeDebugLevel is enabled to help track down intermittent command-buffer failures.
 	if (GMetalCommandBufferCommitThreshold > 0 && NumOutstandingOps >= GMetalCommandBufferCommitThreshold && CmdList.GetCommandQueue().GetRuntimeDebuggingLevel() >= EMetalDebugLevelConditionalSubmit)
@@ -1718,14 +1896,13 @@ void FMetalRenderPass::ConditionalSubmit()
 			const bool bIsMSAAActive = State.GetHasValidRenderTarget() && State.GetSampleCount() != 1;
 			bCanChangeRT = !bIsMSAAActive;
 			
-			for (int32 RenderTargetIndex = 0; bCanChangeRT && RenderTargetIndex < CurrentRenderTargets.NumColorRenderTargets; RenderTargetIndex++)
+			for (int32 RenderTargetIndex = 0; bCanChangeRT && RenderTargetIndex < CurrentRenderTargets.GetNumColorRenderTargets(); RenderTargetIndex++)
 			{
-				FRHIRenderTargetView& RenderTargetView = CurrentRenderTargets.ColorRenderTarget[RenderTargetIndex];
+				FRHIRenderPassInfo::FColorEntry& RenderTargetView = CurrentRenderTargets.ColorRenderTargets[RenderTargetIndex];
 				
-				if (RenderTargetView.StoreAction != ERenderTargetStoreAction::EMultisampleResolve)
+				if (GetStoreAction(RenderTargetView.Action) != ERenderTargetStoreAction::EMultisampleResolve)
 				{
-					RenderTargetView.LoadAction = ERenderTargetLoadAction::ELoad;
-					RenderTargetView.StoreAction = ERenderTargetStoreAction::EStore;
+					RenderTargetView.Action = MakeRenderTargetActions(ERenderTargetLoadAction::ELoad, ERenderTargetStoreAction::EStore);
 				}
 				else
 				{
@@ -1733,11 +1910,12 @@ void FMetalRenderPass::ConditionalSubmit()
 				}
 			}
 			
-			if (bCanChangeRT && CurrentRenderTargets.DepthStencilRenderTarget.Texture)
+			if (bCanChangeRT && CurrentRenderTargets.DepthStencilRenderTarget.DepthStencilTarget)
 			{
-				if (CurrentRenderTargets.DepthStencilRenderTarget.DepthStoreAction != ERenderTargetStoreAction::EMultisampleResolve && CurrentRenderTargets.DepthStencilRenderTarget.GetStencilStoreAction() != ERenderTargetStoreAction::EMultisampleResolve)
+				if (GetStoreAction(GetDepthActions(CurrentRenderTargets.DepthStencilRenderTarget.Action)) != ERenderTargetStoreAction::EMultisampleResolve && GetStoreAction(GetStencilActions(CurrentRenderTargets.DepthStencilRenderTarget.Action)) != ERenderTargetStoreAction::EMultisampleResolve)
 				{
-					CurrentRenderTargets.DepthStencilRenderTarget = FRHIDepthRenderTargetView(CurrentRenderTargets.DepthStencilRenderTarget.Texture, ERenderTargetLoadAction::ELoad, ERenderTargetStoreAction::EStore);
+					ERenderTargetActions Actions = MakeRenderTargetActions(ERenderTargetLoadAction::ELoad, ERenderTargetStoreAction::EStore);
+					CurrentRenderTargets.DepthStencilRenderTarget.Action = MakeDepthStencilTargetActions(Actions, Actions);
 				}
 				else
 				{
@@ -1748,7 +1926,6 @@ void FMetalRenderPass::ConditionalSubmit()
 		
 		bCanForceSubmit = bCanChangeRT;
 	}
-#endif
 	
 	if (GMetalCommandBufferCommitThreshold > 0 && NumOutstandingOps > 0 && NumOutstandingOps >= GMetalCommandBufferCommitThreshold && bCanForceSubmit && !CurrentEncoder.IsParallel())
 	{
@@ -1758,7 +1935,6 @@ void FMetalRenderPass::ConditionalSubmit()
 			NumOutstandingOps = 0;
 		}
 		
-#if METAL_DEBUG_OPTIONS
 		// Force a command-encoder when GMetalRuntimeDebugLevel is enabled to help track down intermittent command-buffer failures.
 		if (bWithinRenderPass && CmdList.GetCommandQueue().GetRuntimeDebuggingLevel() >= EMetalDebugLevelConditionalSubmit && State.GetHasValidRenderTarget())
 		{
@@ -1766,11 +1942,11 @@ void FMetalRenderPass::ConditionalSubmit()
 			State.InvalidateRenderTargets();
 			if (IsFeatureLevelSupported( GMaxRHIShaderPlatform, ERHIFeatureLevel::SM4 ))
 			{
-				bSet = State.SetRenderTargetsInfo(CurrentRenderTargets, State.GetVisibilityResultsBuffer(), false);
+				bSet = State.SetRenderPassInfo(CurrentRenderTargets, State.GetVisibilityResultsBuffer(), false);
 			}
 			else
 			{
-				bSet = State.SetRenderTargetsInfo(CurrentRenderTargets, NULL, false);
+				bSet = State.SetRenderPassInfo(CurrentRenderTargets, NULL, false);
 			}
 			
 			if (bSet)
@@ -1778,6 +1954,155 @@ void FMetalRenderPass::ConditionalSubmit()
 				RestartRenderPass(State.GetRenderPassDescriptor());
 			}
 		}
-#endif
 	}
+}
+
+uint32 FMetalRenderPass::GetEncoderIndex(void) const
+{
+	if (!CmdList.IsParallel())
+	{
+		return PrologueEncoder.NumEncodedPasses() + CurrentEncoder.NumEncodedPasses();
+	}
+	else
+	{
+		return GetMetalDeviceContext().GetCurrentRenderPass().GetEncoderIndex();
+	}
+}
+
+uint32 FMetalRenderPass::GetCommandBufferIndex(void) const
+{
+	if (!CmdList.IsParallel())
+	{
+		return CurrentEncoder.GetCommandBufferIndex();
+	}
+	else
+	{
+		return GetMetalDeviceContext().GetCurrentRenderPass().GetCommandBufferIndex();
+	}
+}
+
+#if PLATFORM_MAC
+@protocol IMTLRenderCommandEncoder
+- (void)memoryBarrierWithResources:(const id<MTLResource>[])resources count:(NSUInteger)count afterStages:(MTLRenderStages)after beforeStages:(MTLRenderStages)before;
+@end
+#endif
+@protocol IMTLComputeCommandEncoder
+- (void)memoryBarrierWithResources:(const id<MTLResource>[])resources count:(NSUInteger)count;
+@end
+
+void FMetalRenderPass::InsertDebugDraw(FMetalCommandData& Data)
+{
+#if !PLATFORM_TVOS
+	if (GMetalCommandBufferDebuggingEnabled && (!FMetalCommandQueue::SupportsFeature(EMetalFeaturesValidation) || State.GetVisibilityResultMode() == mtlpp::VisibilityResultMode::Disabled))
+	{
+		FMetalGraphicsPipelineState* BoundShaderState = State.GetGraphicsPSO();
+		
+		uint32 NumCommands = CurrentEncoder.GetMarkers().AddCommand(GetCommandBufferIndex(), GetEncoderIndex(), CmdList.GetParallelIndex(), State.GetDebugBuffer(), BoundShaderState, nullptr, Data);
+		
+		if ((NumCommands % GMetalDebugOpsCount) == 0)
+		{
+			FMetalDebugInfo DebugInfo;
+			DebugInfo.EncoderIndex = GetEncoderIndex();
+			DebugInfo.ContextIndex = CmdList.GetParallelIndex();
+			DebugInfo.CommandIndex = NumCommands;
+			DebugInfo.CmdBuffIndex = GetCommandBufferIndex();
+			DebugInfo.CommandBuffer = reinterpret_cast<uintptr_t>(CurrentEncoder.GetCommandBuffer().GetPtr());
+			DebugInfo.PSOSignature[0] = BoundShaderState->VertexShader->SourceLen;
+			DebugInfo.PSOSignature[1] = BoundShaderState->VertexShader->SourceCRC;
+			if (IsValidRef(BoundShaderState->PixelShader))
+			{
+				DebugInfo.PSOSignature[2] = BoundShaderState->PixelShader->SourceLen;
+				DebugInfo.PSOSignature[3] = BoundShaderState->PixelShader->SourceCRC;
+			}
+			else
+			{
+				DebugInfo.PSOSignature[2] = 0;
+				DebugInfo.PSOSignature[3] = 0;
+			}
+			
+			FMetalShaderPipeline* PSO = State.GetPipelineState();
+			
+			CurrentEncoder.GetRenderCommandEncoder().SetRenderPipelineState(PSO->DebugPipelineState);
+
+			mtlpp::VisibilityResultMode VisMode = State.GetVisibilityResultMode();
+			uint32 VisibilityOffset = State.GetVisibilityResultOffset();
+			if (VisMode != mtlpp::VisibilityResultMode::Disabled)
+			{
+				CurrentEncoder.GetRenderCommandEncoder().SetVisibilityResultMode(mtlpp::VisibilityResultMode::Disabled, 0);
+			}
+
+		#if PLATFORM_MAC
+			id<MTLBuffer> DebugBufferPtr = State.GetDebugBuffer().GetPtr();
+			[(id<IMTLRenderCommandEncoder>)CurrentEncoder.GetRenderCommandEncoder().GetPtr() memoryBarrierWithResources:&DebugBufferPtr count:1 afterStages:MTLRenderStageFragment beforeStages:MTLRenderStageVertex];
+			
+			CurrentEncoder.SetShaderBytes(mtlpp::FunctionType::Vertex, (uint8 const*)&DebugInfo, sizeof(DebugInfo), 0);
+			State.SetShaderBufferDirty(EMetalShaderStages::Vertex, 0);
+
+			CurrentEncoder.SetShaderBuffer(mtlpp::FunctionType::Vertex, State.GetDebugBuffer(), 0, State.GetDebugBuffer().GetLength(), 1, mtlpp::ResourceUsage::Write);
+			State.SetShaderBufferDirty(EMetalShaderStages::Vertex, 1);
+
+			CurrentEncoder.GetRenderCommandEncoder().Draw(mtlpp::PrimitiveType::Point, 0, 1);
+			
+			[(id<IMTLRenderCommandEncoder>)CurrentEncoder.GetRenderCommandEncoder().GetPtr() memoryBarrierWithResources:&DebugBufferPtr count:1 afterStages:MTLRenderStageVertex beforeStages:MTLRenderStageVertex];
+		#else
+			CurrentEncoder.GetRenderCommandEncoder().SetTileData((uint8 const*)&DebugInfo, sizeof(DebugInfo), 0);
+			CurrentEncoder.GetRenderCommandEncoder().SetTileBuffer(State.GetDebugBuffer(), 0, 1);
+			mtlpp::Size ThreadsPerTile(1, 1, 1);
+			CurrentEncoder.GetRenderCommandEncoder().DispatchThreadsPerTile(ThreadsPerTile);
+		#endif
+
+			CurrentEncoder.GetRenderCommandEncoder().SetRenderPipelineState(PSO->RenderPipelineState);
+
+			if (VisMode != mtlpp::VisibilityResultMode::Disabled)
+			{
+				CurrentEncoder.GetRenderCommandEncoder().SetVisibilityResultMode(VisMode, VisibilityOffset);
+			}
+		}
+	}
+#endif
+}
+
+void FMetalRenderPass::InsertDebugDispatch(FMetalCommandData& Data)
+{
+#if !PLATFORM_TVOS
+	if (GMetalCommandBufferDebuggingEnabled)
+	{
+		FMetalComputeShader* BoundShaderState = State.GetComputeShader();
+		
+		uint32 NumCommands = CurrentEncoder.GetMarkers().AddCommand(GetCommandBufferIndex(), GetEncoderIndex(), CmdList.GetParallelIndex(), State.GetDebugBuffer(), nullptr, BoundShaderState, Data);
+		
+		if ((NumCommands % GMetalDebugOpsCount) == 0)
+		{
+			FMetalDebugInfo DebugInfo;
+			DebugInfo.EncoderIndex = GetEncoderIndex();
+			DebugInfo.ContextIndex = CmdList.GetParallelIndex();
+			DebugInfo.CommandIndex = NumCommands;
+			DebugInfo.CmdBuffIndex = GetCommandBufferIndex();
+			DebugInfo.CommandBuffer = reinterpret_cast<uintptr_t>(CurrentEncoder.GetCommandBuffer().GetPtr());
+			DebugInfo.PSOSignature[0] = BoundShaderState->SourceLen;
+			DebugInfo.PSOSignature[1] = BoundShaderState->SourceCRC;
+			DebugInfo.PSOSignature[2] = 0;
+			DebugInfo.PSOSignature[3] = 0;
+			
+			CurrentEncoder.GetComputeCommandEncoder().SetComputePipelineState(GetMetalDebugComputeState());
+			
+			id<MTLBuffer> DebugBufferPtr = State.GetDebugBuffer().GetPtr();
+			[(id<IMTLComputeCommandEncoder>)CurrentEncoder.GetComputeCommandEncoder().GetPtr() memoryBarrierWithResources:&DebugBufferPtr count:1];
+			
+			CurrentEncoder.SetShaderBytes(mtlpp::FunctionType::Kernel, (uint8 const*)&DebugInfo, sizeof(DebugInfo), 0);
+			State.SetShaderBufferDirty(EMetalShaderStages::Compute, 0);
+			
+			CurrentEncoder.SetShaderBuffer(mtlpp::FunctionType::Kernel, State.GetDebugBuffer(), 0, State.GetDebugBuffer().GetLength(), 1, mtlpp::ResourceUsage::Write);
+			State.SetShaderBufferDirty(EMetalShaderStages::Compute, 1);
+			
+			mtlpp::Size ThreadsPerTile(1, 1, 1);
+			CurrentEncoder.GetComputeCommandEncoder().DispatchThreads(ThreadsPerTile, ThreadsPerTile);
+			
+			[(id<IMTLComputeCommandEncoder>)CurrentEncoder.GetComputeCommandEncoder().GetPtr() memoryBarrierWithResources:&DebugBufferPtr count:1];
+			
+			FMetalShaderPipeline* Pipeline = BoundShaderState->GetPipeline();
+			CurrentEncoder.GetComputeCommandEncoder().SetComputePipelineState(Pipeline->ComputePipelineState);
+		}
+	}
+#endif
 }

@@ -655,15 +655,15 @@ public:
 	 * @param	OutCamLoc	Returned camera location
 	 * @param	OutCamRot	Returned camera rotation
 	 */
-	void GetCameraViewPoint(FVector& OutCamLoc, FRotator& OutCamRot) const;
+	virtual void GetCameraViewPoint(FVector& OutCamLoc, FRotator& OutCamRot) const;
 	
 	/** Returns camera's current rotation. */
 	UFUNCTION(BlueprintCallable, Category = "Camera", meta=(Keywords="View Direction"))
-	FRotator GetCameraRotation() const;
+	virtual FRotator GetCameraRotation() const;
 
 	/** Returns camera's current location. */
 	UFUNCTION(BlueprintCallable, Category = "Camera", meta=(Keywords="View Position"))
-	FVector GetCameraLocation() const;
+	virtual FVector GetCameraLocation() const;
 	
 	/** 
 	 * Sets the new desired color scale, enables color scaling, and enables color scale interpolation. 
@@ -858,6 +858,10 @@ public:
 
 	/** Returns first existing instance of the specified camera anim, or NULL if none exists. */
 	class UCameraAnimInst* FindInstanceOfCameraAnim(class UCameraAnim const* Anim) const;
+
+	/** Sets the bGameCameraCutThisFrame flag to true (indicating we did a camera cut this frame; useful for game code to call, e.g., when performing a teleport that should be seamless) */
+	UFUNCTION(BlueprintCallable, Category = "Camera")
+	void SetGameCameraCutThisFrame() { bGameCameraCutThisFrame = true; }
 
 protected:
 	/** Gets specified temporary CameraActor ready to update the specified Anim. */

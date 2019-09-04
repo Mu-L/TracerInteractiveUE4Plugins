@@ -822,12 +822,12 @@ bool FWindowsPlatformMisc::IsDebuggerPresent()
 #if STATS || ENABLE_STATNAMEDEVENTS
 void FWindowsPlatformMisc::CustomNamedStat(const TCHAR* Text, float Value, const TCHAR* Graph, const TCHAR* Unit)
 {
-	FRAMEPRO_DYNAMIC_CUSTOM_STAT(TCHAR_TO_WCHAR(Text), Value, TCHAR_TO_WCHAR(Graph), TCHAR_TO_WCHAR(Unit));
+	FRAMEPRO_DYNAMIC_CUSTOM_STAT(TCHAR_TO_WCHAR(Text), Value, TCHAR_TO_WCHAR(Graph), TCHAR_TO_WCHAR(Unit), FRAMEPRO_COLOUR(255,255,255));
 }
 
 void FWindowsPlatformMisc::CustomNamedStat(const ANSICHAR* Text, float Value, const ANSICHAR* Graph, const ANSICHAR* Unit)
 {
-	FRAMEPRO_DYNAMIC_CUSTOM_STAT(Text, Value, Graph, Unit);
+	FRAMEPRO_DYNAMIC_CUSTOM_STAT(Text, Value, Graph, Unit, FRAMEPRO_COLOUR(255,255,255));
 }
 
 void FWindowsPlatformMisc::BeginNamedEventFrame()
@@ -1674,6 +1674,22 @@ int32 FWindowsPlatformMisc::NumberOfCoresIncludingHyperthreads()
 		CoreCount = (int32)SI.dwNumberOfProcessors;
 	}
 	return CoreCount;
+}
+
+const TCHAR* FWindowsPlatformMisc::GetPlatformFeaturesModuleName()
+{
+	bool bModuleExists = FModuleManager::Get().ModuleExists(TEXT("WindowsPlatformFeatures"));
+	// If running a dedicated server then we use the default PlatformFeatures
+	if (bModuleExists && !IsRunningDedicatedServer())
+	{
+		UE_LOG(LogWindows, Log, TEXT("WindowsPlatformFeatures enabled"));
+		return TEXT("WindowsPlatformFeatures");
+	}
+	else
+	{
+		UE_LOG(LogWindows, Log, TEXT("WindowsPlatformFeatures disabled or dedicated server build"));
+		return nullptr;
+	}
 }
 
 int32 FWindowsPlatformMisc::NumberOfWorkerThreadsToSpawn()
@@ -2679,4 +2695,14 @@ IPlatformChunkInstall* FWindowsPlatformMisc::GetPlatformChunkInstall()
 	}
 
 	return ChunkInstall;
+}
+
+void FWindowsPlatformMisc::PumpMessagesOutsideMainLoop()
+{
+	TGuardValue<bool> PumpMessageGuard(GPumpingMessagesOutsideOfMainLoop, true);
+	// Process pending windows messages, which is necessary to the rendering thread in some cases where D3D
+	// sends window messages (from IDXGISwapChain::Present) to the main thread owned viewport window.
+	MSG Msg;
+	PeekMessage(&Msg, NULL, 0, 0, PM_NOREMOVE | PM_QS_SENDMESSAGE);
+	return;
 }

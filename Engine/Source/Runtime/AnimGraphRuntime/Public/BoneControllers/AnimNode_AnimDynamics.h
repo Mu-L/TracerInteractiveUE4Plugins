@@ -10,6 +10,7 @@
 #include "BonePose.h"
 #include "BoneControllers/AnimNode_SkeletalControlBase.h"
 #include "Animation/AnimInstanceProxy.h"
+#include "KismetAnimationTypes.h"
 #include "AnimNode_AnimDynamics.generated.h"
 
 class UAnimInstance;
@@ -139,7 +140,11 @@ struct FAnimPhysConstraintSetup
 	UPROPERTY(EditAnywhere, Category = Angular)
 	AnimPhysTwistAxis TwistAxis;
 
-	/** Axis on body1 to match to the angular target direction. */
+	/**
+	 * The axis in the simulation pose to align to the Angular Target.
+	 * This is typically the axis pointing along the bone.
+	 * Note: This is affected by the Angular Spring Constant.
+	 */
 	UPROPERTY(EditAnywhere, Category = Angular, meta=(DisplayAfter=AngularLimitsMax))
 	AnimPhysTwistAxis AngularTargetAxis;
 
@@ -167,7 +172,12 @@ struct FAnimPhysConstraintSetup
 	UPROPERTY(EditAnywhere, Category = Angular, meta = (UIMin = "-180", UIMax = "180", ClampMin = "-180", ClampMax = "180"))
 	FVector AngularLimitsMax;
 
-	/** Target direction to face for body1 (in body0 local space) */
+	/**
+	 * The axis to align the angular spring constraint to in the animation pose.
+	 * This typically points down the bone - so values of (1.0, 0.0, 0.0) are common,
+	 * but you can pick other values to align the spring to a different direction.
+	 * Note: This is affected by the Angular Spring Constant.
+	 */
 	UPROPERTY(EditAnywhere, Category = Angular)
 	FVector AngularTarget;
 };
@@ -231,11 +241,15 @@ struct ANIMGRAPHRUNTIME_API FAnimNode_AnimDynamics : public FAnimNode_SkeletalCo
 
 	FAnimNode_AnimDynamics();
 
-	/** Overridden linear damping value */
+	/** 
+	 * Overridden linear damping value. The default is 0.7. Values below 0.7 won't have an effect.
+	 */
 	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadWrite, Category = Setup, meta = (PinHiddenByDefault, DisplayAfter="bOverrideLinearDamping"))
 	float LinearDampingOverride;
 
-	/** Overridden angular damping value */
+	/** 
+	 * Overridden angular damping value. The default is 0.7. Values below 0.7 won't have an effect.
+	 */
 	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadWrite, Category = Setup, meta = (PinHiddenByDefault, DisplayAfter="bOverrideAngularDamping"))
 	float AngularDampingOverride;
 
@@ -271,12 +285,19 @@ struct ANIMGRAPHRUNTIME_API FAnimNode_AnimDynamics : public FAnimNode_SkeletalCo
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Setup, meta = (PinHiddenByDefault, EditCondition = "bUseGravityOverride"))
 	FVector GravityOverride;
 
-	/** Spring constant to use when calculating linear springs, higher values mean a stronger spring.*/
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Setup, meta = (PinHiddenByDefault, DisplayAfter="bAngularSpring"))
+	/** 
+	 * Spring constant to use when calculating linear springs, higher values mean a stronger spring.
+	 * You need to enable the Linear Spring checkbox for this to have an effect.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Setup, meta = (PinHiddenByDefault, DisplayAfter="bAngularSpring", EditCondition = "bLinearSpring"))
 	float LinearSpringConstant;
 
-	/** Spring constant to use when calculating angular springs, higher values mean a stronger spring */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Setup, meta = (PinHiddenByDefault))
+	/** 
+	 * Spring constant to use when calculating angular springs, higher values mean a stronger spring.
+	 * You need to enable the Angular Spring checkbox for this to have an effect.
+	 * Note: Make sure to also set the Angular Target Axis and Angular Target in the Constraint Setup for this to have an effect.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Setup, meta = (PinHiddenByDefault, EditCondition = "bAngularSpring"))
 	float AngularSpringConstant;
 
 	/** Scale to apply to calculated wind velocities in the solver */
@@ -400,6 +421,10 @@ struct ANIMGRAPHRUNTIME_API FAnimNode_AnimDynamics : public FAnimNode_SkeletalCo
 	UPROPERTY(EditAnywhere, Category = Setup, meta=(DisplayAfter="RelativeSpaceBone"))
 	uint8 bChain:1;
 
+	/** The settings for rotation retargeting */
+	UPROPERTY(EditAnywhere, Category = Retargeting)
+	FRotationRetargetingInfo RetargetingSettings;
+
 	// FAnimNode_SkeletalControlBase interface
 	virtual void Initialize_AnyThread(const FAnimationInitializeContext& Context) override;
 	virtual void UpdateInternal(const FAnimationUpdateContext& Context) override;
@@ -466,6 +491,7 @@ private:
 	float TimeDebt;
 
 	// Cached physics settings. We cache these on initialise to avoid the cost of accessing UPhysicsSettings a lot each frame
+	float AnimPhysicsMinDeltaTime;
 	float MaxPhysicsDeltaTime;
 	float MaxSubstepDeltaTime;
 	int32 MaxSubsteps;

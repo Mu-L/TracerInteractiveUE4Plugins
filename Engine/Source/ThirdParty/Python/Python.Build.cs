@@ -54,7 +54,7 @@ public class Python : ModuleRules
 					}
 				);
 			}
-			else if (Target.Platform == UnrealTargetPlatform.Linux)
+			else if (Target.IsInPlatformGroup(UnrealPlatformGroup.Unix))
 			{
 				if (Target.Architecture.StartsWith("x86_64"))
 				{
@@ -70,6 +70,7 @@ public class Python : ModuleRules
 								},
 								Path.Combine(PythonSourceTPSDir, PlatformDir, "lib"), "libpython2.7.a"),
 					});
+					PublicAdditionalLibraries.Add("util");	// part of libc
 				}
 			}
 
@@ -211,26 +212,20 @@ public class Python : ModuleRules
 		{
 			string LibFolder = null;
 			string LibNamePattern = null;
-			switch (Target.Platform)
+			if (Target.Platform == UnrealTargetPlatform.Win32 || Target.Platform == UnrealTargetPlatform.Win64)
 			{
-				case UnrealTargetPlatform.Win32:
-				case UnrealTargetPlatform.Win64:
-					LibFolder = "libs";
-					LibNamePattern = "python*.lib";
-					break;
-
-				case UnrealTargetPlatform.Mac:
-					LibFolder = "lib";
-					LibNamePattern = "libpython*.dylib";
-					break;
-
-				case UnrealTargetPlatform.Linux:
-					LibFolder = "lib";
-					LibNamePattern = "libpython*.so";
-					break;
-
-				default:
-					break;
+				LibFolder = "libs";
+				LibNamePattern = "python*.lib";
+			}
+			else if (Target.Platform == UnrealTargetPlatform.Mac)
+			{
+				LibFolder = "lib";
+				LibNamePattern = "libpython*.dylib";
+			}
+			else if (Target.Platform == UnrealTargetPlatform.Linux)
+			{
+				LibFolder = "lib";
+				LibNamePattern = "libpython*.so";
 			}
 
 			if (LibFolder != null && LibNamePattern != null)

@@ -38,20 +38,23 @@ public:
 	//////////////////////////////////////////////////////////////////////////
 	// Automatically implemented via IMPLEMENT_TYPED_UMG_LIST()
 	//////////////////////////////////////////////////////////////////////////
-	DECLARE_EVENT_OneParam(UListView, FSimpleListItemEvent, ItemType);
+	DECLARE_MULTICAST_DELEGATE_OneParam(FSimpleListItemEvent, ItemType);
 	virtual FSimpleListItemEvent& OnItemClicked() const = 0;
 	virtual FSimpleListItemEvent& OnItemDoubleClicked() const = 0;
 
-	DECLARE_EVENT_TwoParams(UListView, FOnItemIsHoveredChanged, ItemType, bool);
+	DECLARE_MULTICAST_DELEGATE_TwoParams(FOnItemIsHoveredChanged, ItemType, bool);
 	virtual FOnItemIsHoveredChanged& OnItemIsHoveredChanged() const = 0;
 
-	DECLARE_EVENT_OneParam(UListView, FOnItemSelectionChanged, NullableItemType);
+	DECLARE_MULTICAST_DELEGATE_OneParam(FOnItemSelectionChanged, NullableItemType);
 	virtual FOnItemSelectionChanged& OnItemSelectionChanged() const = 0;
 
-	DECLARE_EVENT_TwoParams(UListView, FOnItemScrolledIntoView, ItemType, UUserWidget&);
+	DECLARE_MULTICAST_DELEGATE_TwoParams(FOnListViewScrolled, float, float);
+	virtual FOnListViewScrolled& OnListViewScrolled() const = 0;
+
+	DECLARE_MULTICAST_DELEGATE_TwoParams(FOnItemScrolledIntoView, ItemType, UUserWidget&);
 	virtual FOnItemScrolledIntoView& OnItemScrolledIntoView() const = 0;
 
-	DECLARE_EVENT_TwoParams(UTreeView, FOnItemExpansionChanged, ItemType, bool);
+	DECLARE_MULTICAST_DELEGATE_TwoParams(FOnItemExpansionChanged, ItemType, bool);
 	virtual FOnItemExpansionChanged& OnItemExpansionChanged() const = 0;
 
 	DECLARE_DELEGATE_RetVal_OneParam(TSubclassOf<UUserWidget>, FOnGetEntryClassForItem, ItemType);
@@ -228,6 +231,7 @@ protected:
 			.OnSelectionChanged_UObject(Implementer, &UListViewBaseT::HandleSelectionChanged)
 			.OnRowReleased_UObject(Implementer, &UListViewBaseT::HandleRowReleased)
 			.OnItemScrolledIntoView_UObject(Implementer, &UListViewBaseT::HandleItemScrolledIntoView)
+			.OnListViewScrolled_UObject(Implementer, &UListViewBaseT::HandleListViewScrolled)
 			.OnMouseButtonClick_UObject(Implementer, &UListViewBaseT::HandleItemClicked)
 			.OnMouseButtonDoubleClick_UObject(Implementer, &UListViewBaseT::HandleItemDoubleClicked);
 	}
@@ -258,6 +262,7 @@ protected:
 			.OnTileReleased_UObject(Implementer, &UListViewBaseT::HandleRowReleased)
 			.OnSelectionChanged_UObject(Implementer, &UListViewBaseT::HandleSelectionChanged)
 			.OnItemScrolledIntoView_UObject(Implementer, &UListViewBaseT::HandleItemScrolledIntoView)
+			.OnTileViewScrolled_UObject(Implementer, &UListViewBaseT::HandleListViewScrolled)
 			.OnMouseButtonClick_UObject(Implementer, &UListViewBaseT::HandleItemClicked)
 			.OnMouseButtonDoubleClick_UObject(Implementer, &UListViewBaseT::HandleItemDoubleClicked);
 	}
@@ -280,6 +285,7 @@ protected:
 			.OnSelectionChanged_UObject(Implementer, &UListViewBaseT::HandleSelectionChanged)
 			.OnRowReleased_UObject(Implementer, &UListViewBaseT::HandleRowReleased)
 			.OnItemScrolledIntoView_UObject(Implementer, &UListViewBaseT::HandleItemScrolledIntoView)
+			.OnTreeViewScrolled_UObject(Implementer, &UListViewBaseT::HandleListViewScrolled)
 			.OnMouseButtonClick_UObject(Implementer, &UListViewBaseT::HandleItemClicked)
 			.OnMouseButtonDoubleClick_UObject(Implementer, &UListViewBaseT::HandleItemDoubleClicked)
 			.OnGetChildren_UObject(Implementer, &UListViewBaseT::HandleGetChildren)
@@ -317,6 +323,7 @@ protected:
 	virtual void OnItemDoubleClickedInternal(ItemType Item) {}
 	virtual void OnSelectionChangedInternal(NullableItemType FirstSelectedItem) {}
 	virtual void OnItemScrolledIntoViewInternal(ItemType Item, UUserWidget& EntryWidget) {}
+	virtual void OnListViewScrolledInternal(float ItemOffset, float DistanceRemaining) {}
 	virtual void OnItemExpansionChangedInternal(ItemType Item, bool bIsExpanded) {}
 
 private:
@@ -349,6 +356,16 @@ private:
 		//		It only works for single selection lists, and even then only broadcasts at the end - you don't get anything for de-selection
 		OnSelectionChangedInternal(Item);
 		OnItemSelectionChanged().Broadcast(Item);
+	}
+
+	void HandleListViewScrolled(double OffsetInItems)
+	{
+		if (SListView<ItemType>* MyListView = GetMyListView())
+		{
+			const FVector2D DistanceRemaining = MyListView->GetScrollDistanceRemaining();
+			OnListViewScrolledInternal(OffsetInItems, DistanceRemaining.Y);
+			OnListViewScrolled().Broadcast(OffsetInItems, DistanceRemaining.Y);
+		}
 	}
 
 	void HandleItemScrolledIntoView(ItemType Item, const TSharedPtr<ITableRow>& InWidget)
@@ -436,6 +453,18 @@ public:
 	UFUNCTION(BlueprintCallable, Category = ListViewBase)
 	void ScrollToBottom();
 
+	/**
+	 * Sets the list to refresh on the next tick.
+	 *
+	 * Note that refreshing, from a list perspective, is limited to accounting for discrepancies between items and entries.
+	 * In other words, it will only release entries that no longer have items and generate entries for new items (or newly visible items).
+	 *
+	 * It does NOT account for changes within existing items - that is up to the item to announce and an entry to listen to as needed.
+	 * This can be onerous to set up for simple cases, so it's also reasonable (though not ideal) to call RegenerateAllEntries when changes within N list items need to be reflected.
+	 */
+	UFUNCTION(BlueprintCallable, Category = ListViewBase)
+	void RequestRefresh();
+
 	DECLARE_EVENT_OneParam(UListView, FOnListEntryGenerated, UUserWidget&);
 	FOnListEntryGenerated& OnEntryWidgetGenerated() { return OnListEntryGeneratedEvent; }
 
@@ -455,17 +484,6 @@ protected:
 	//@todo DanH: Should probably have the events for native & BP built in up here - need to update existing binds to UListView's version
 	virtual void HandleListEntryHovered(UUserWidget& EntryWidget) {}
 	virtual void HandleListEntryUnhovered(UUserWidget& EntryWidget) {}
-
-	/**
-	 * Sets the list to refresh on the next tick.
-	 *
-	 * Note that refreshing, from a list perspective, is limited to accounting for discrepancies between items and entries.
-	 * In other words, it will only release entries that no longer have items and generate entries for new items (or newly visible items).
-	 *
-	 * It does NOT account for changes within existing items - that is up to the item to announce and an entry to listen to as needed.
-	 * This can be onerous to set up for simple cases, so it's also reasonable (though not ideal) to call RegenerateAllEntries when changes within N list items need to be reflected.
-	 */
-	void RequestRefresh();
 
 	template <typename WidgetEntryT = UUserWidget, typename ObjectTableRowT = SObjectTableRow<UObject*>>
 	WidgetEntryT& GenerateTypedEntry(TSubclassOf<WidgetEntryT> WidgetClass, const TSharedRef<STableViewBase>& OwnerTable)
@@ -509,7 +527,7 @@ protected:
 	{
 		bNeedsToCallRefreshDesignerItems = false;
 		bool bRefresh = false;
-		if (EntryWidgetClass && NumDesignerPreviewEntries > 0)
+		if (EntryWidgetClass && NumDesignerPreviewEntries > 0 && EntryWidgetClass->ImplementsInterface(UUserListEntry::StaticClass()))
 		{
 			if (ListItems.Num() < NumDesignerPreviewEntries)
 			{
@@ -544,7 +562,7 @@ protected:
 
 	// Note: Options for this property can be configured via class and property metadata. See class declaration comment above.
 	/** The type of widget to create for each entry displayed in the list. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = ListEntries, meta = (DesignerRebuild, AllowPrivateAccess = true))
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = ListEntries, meta = (DesignerRebuild, AllowPrivateAccess = true, MustImplement = UserListEntry))
 	TSubclassOf<UUserWidget> EntryWidgetClass;
 
 private:
@@ -568,7 +586,9 @@ private:
 	int32 NumDesignerPreviewEntries = 5;
 #endif
 
+	UPROPERTY(Transient)
 	FUserWidgetPool EntryWidgetPool;
+
 	FTimerHandle EntryGenAnnouncementTimerHandle;
 	TArray<TWeakObjectPtr<UUserWidget>> GeneratedEntriesToAnnounce;
 
@@ -597,6 +617,7 @@ private:	\
 	mutable FOnItemSelectionChanged OnItemSelectionChangedEvent;	\
 	mutable FOnItemIsHoveredChanged OnItemIsHoveredChangedEvent;	\
 	mutable FOnItemScrolledIntoView OnItemScrolledIntoViewEvent;	\
+	mutable FOnListViewScrolled OnListViewScrolledEvent;	\
 	mutable FOnItemExpansionChanged OnItemExpansionChangedEvent;	\
 	mutable FOnGetEntryClassForItem OnGetEntryClassForItemDelegate;	\
 public:	\
@@ -606,5 +627,6 @@ public:	\
 	virtual FOnItemIsHoveredChanged& OnItemIsHoveredChanged() const override { return OnItemIsHoveredChangedEvent; }	\
 	virtual FOnItemSelectionChanged& OnItemSelectionChanged() const override { return OnItemSelectionChangedEvent; }	\
 	virtual FOnItemScrolledIntoView& OnItemScrolledIntoView() const override { return OnItemScrolledIntoViewEvent; }	\
+	virtual FOnListViewScrolled& OnListViewScrolled() const override { return OnListViewScrolledEvent; }	\
 	virtual FOnItemExpansionChanged& OnItemExpansionChanged() const override { return OnItemExpansionChangedEvent; }	\
 	virtual FOnGetEntryClassForItem& OnGetEntryClassForItem() const override { return OnGetEntryClassForItemDelegate; }

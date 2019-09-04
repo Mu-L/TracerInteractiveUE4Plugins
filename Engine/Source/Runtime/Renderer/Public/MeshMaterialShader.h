@@ -23,8 +23,8 @@ template<typename TBufferStruct> class TUniformBufferRef;
 class FMeshMaterialShaderElementData
 {
 public:
-	FUniformBufferRHIParamRef FadeUniformBuffer = nullptr;
-	FUniformBufferRHIParamRef DitherUniformBuffer = nullptr;
+	FRHIUniformBuffer* FadeUniformBuffer = nullptr;
+	FRHIUniformBuffer* DitherUniformBuffer = nullptr;
 
 	RENDERER_API void InitializeMeshMaterialData(const FSceneView* SceneView, const FPrimitiveSceneProxy* RESTRICT PrimitiveSceneProxy, const FMeshBatch& RESTRICT MeshBatch, int32 StaticMeshId, bool bAllowStencilDither);
 };
@@ -32,6 +32,7 @@ public:
 /** Base class of all shaders that need material and vertex factory parameters. */
 class RENDERER_API FMeshMaterialShader : public FMaterialShader
 {
+	DECLARE_SHADER_TYPE(FMeshMaterialShader, MeshMaterial);
 public:
 	FMeshMaterialShader() {}
 
@@ -46,15 +47,11 @@ public:
 		return true;
 	}
 
-	// Clang treats FORCEINLINE as adivsory, and will not inline it on debug builds. Since Engine does not depend on the Renderer module, it fails to link against it.
-#if PLATFORM_WINDOWS && defined(__clang__)
-	void ValidateAfterBind();
-#else
-	FORCEINLINE void ValidateAfterBind()
+	// Declared as a friend, so that it can be called from other modules via static linkage, even if the compiler doesn't inline it.
+	FORCEINLINE friend void ValidateAfterBind(FMeshMaterialShader* Shader)
 	{
-		checkfSlow(PassUniformBuffer.IsInitialized(), TEXT("FMeshMaterialShader must bind a pass uniform buffer, even if it is just FSceneTexturesUniformParameters: %s"), GetType()->GetName());
+		checkfSlow(Shader->PassUniformBuffer.IsInitialized(), TEXT("FMeshMaterialShader must bind a pass uniform buffer, even if it is just FSceneTexturesUniformParameters: %s"), Shader->GetType()->GetName());
 	}
-#endif
 
 	void GetShaderBindings(
 		const FScene* Scene,
@@ -70,7 +67,7 @@ public:
 		const FScene* Scene, 
 		const FSceneView* ViewIfDynamicMeshCommand, 
 		const FVertexFactory* VertexFactory,
-		bool bShaderRequiresPositionOnlyStream,
+		const EVertexInputStreamType InputStreamType,
 		ERHIFeatureLevel::Type FeatureLevel,
 		const FPrimitiveSceneProxy* PrimitiveSceneProxy,
 		const FMeshBatch& MeshBatch,

@@ -57,7 +57,7 @@ public:
 	virtual void Release() override { delete this; }
 	virtual FPooledRenderTargetDesc ComputeOutputDesc(EPassOutputId InPassOutputId) const override;
 
-	virtual FComputeFenceRHIParamRef GetComputePassEndFence() const override { return AsyncEndFence; }
+	virtual FRHIComputeFence* GetComputePassEndFence() const override { return AsyncEndFence; }
 
 	bool bDoGammaOnly;
 	bool bDoScreenPercentageInTonemapper;
@@ -98,19 +98,31 @@ private:
 
 
 /** Encapsulates the post processing tone map vertex shader. */
-template< bool bUseAutoExposure>
-class TPostProcessTonemapVS : public FGlobalShader
+class FPostProcessTonemapVS : public FGlobalShader
 {
 	// This class is in the header so that Temporal AA can share this vertex shader.
-	DECLARE_SHADER_TYPE(TPostProcessTonemapVS,Global);
+	DECLARE_GLOBAL_SHADER(FPostProcessTonemapVS);
+
+	class FTonemapperVSSwitchAxis : SHADER_PERMUTATION_BOOL("NEEDTOSWITCHVERTICLEAXIS");
+	class FTonemapperVSUseAutoExposure : SHADER_PERMUTATION_BOOL("EYEADAPTATION_EXPOSURE_FIX");
+	using FPermutationDomain = TShaderPermutationDomain<
+		FTonemapperVSSwitchAxis,
+		FTonemapperVSUseAutoExposure
+	>;
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
 	{
+		FPermutationDomain PermutationVector(Parameters.PermutationId);
+		// Prevent switch axis permutation on platforms that dont require it.
+		if (PermutationVector.Get<FTonemapperVSSwitchAxis>() && !RHINeedsToSwitchVerticalAxis(Parameters.Platform))
+		{
+			return false;
+		}
 		return true;
 	}
 
 	/** Default constructor. */
-	TPostProcessTonemapVS(){}
+	FPostProcessTonemapVS(){}
 
 public:
 	FPostProcessPassParameters PostprocessParameter;
@@ -120,7 +132,7 @@ public:
 	FShaderParameter ScreenPosToScenePixel;
 
 	/** Initialization constructor. */
-	TPostProcessTonemapVS(const ShaderMetaType::CompiledShaderInitializerType& Initializer)
+	FPostProcessTonemapVS(const ShaderMetaType::CompiledShaderInitializerType& Initializer)
 		: FGlobalShader(Initializer)
 	{
 		PostprocessParameter.Bind(Initializer.ParameterMap);
@@ -132,8 +144,15 @@ public:
 
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
-		// Compile time template-based conditional
-		OutEnvironment.SetDefine(TEXT("EYEADAPTATION_EXPOSURE_FIX"), (uint32)bUseAutoExposure);
+	}
+
+	static FPermutationDomain BuildPermutationVector(bool bDoEyeAdaptation, bool bNeedsToSwitchVerticalAxis)
+	{
+		FPermutationDomain PermutationVector;
+		PermutationVector.Set<FTonemapperVSSwitchAxis>(bNeedsToSwitchVerticalAxis);
+		PermutationVector.Set<FTonemapperVSUseAutoExposure>(bDoEyeAdaptation);
+
+		return PermutationVector;
 	}
 
 	void TransitionResources(const FRenderingCompositePassContext& Context)
@@ -141,7 +160,7 @@ public:
 		if (Context.View.HasValidEyeAdaptation())
 		{
 			IPooledRenderTarget* EyeAdaptationRT = Context.View.GetEyeAdaptation(Context.RHICmdList);
-			FTextureRHIParamRef EyeAdaptationRTRef = EyeAdaptationRT->GetRenderTargetItem().TargetableTexture;
+			FRHITexture* EyeAdaptationRTRef = EyeAdaptationRT->GetRenderTargetItem().TargetableTexture;
 			if (EyeAdaptationRTRef)
 			{
 				Context.RHICmdList.TransitionResources(EResourceTransitionAccess::EReadable, &EyeAdaptationRTRef, 1);
@@ -149,9 +168,9 @@ public:
 		}
 	}
 
-	void SetVS(const FRenderingCompositePassContext& Context)
+	void SetVS(const FRenderingCompositePassContext& Context, const FPermutationDomain& PermutationVector )
 	{
-		const FVertexShaderRHIParamRef ShaderRHI = GetVertexShader();
+		FRHIVertexShader* ShaderRHI = GetVertexShader();
 
 		FGlobalShader::SetParameters<FViewUniformShaderParameters>(Context.RHICmdList, ShaderRHI, Context.View.ViewUniformBuffer);
 
@@ -173,7 +192,7 @@ public:
 		if (Context.View.HasValidEyeAdaptation())
 		{
 			IPooledRenderTarget* EyeAdaptationRT = Context.View.GetEyeAdaptation(Context.RHICmdList);
-			FTextureRHIParamRef EyeAdaptationRTRef = EyeAdaptationRT->GetRenderTargetItem().TargetableTexture;
+			FRHITexture* EyeAdaptationRTRef = EyeAdaptationRT->GetRenderTargetItem().TargetableTexture;
 			if (EyeAdaptationRTRef)
 			{
 				//Context.RHICmdList.TransitionResources(EResourceTransitionAccess::EReadable, &EyeAdaptationRTRef, 1);
@@ -187,7 +206,7 @@ public:
 		}
 
 		// Compile time template-based conditional
-		if (!bUseAutoExposure)
+		if (!PermutationVector.Get<FTonemapperVSUseAutoExposure>())
 		{
 			// Compute a CPU-based default.  NB: reverts to "1" if SM5 feature level is not supported
 			float FixedExposure = FRCPassPostProcessEyeAdaptation::GetFixedExposure(Context.View);
@@ -216,6 +235,3 @@ public:
 		return bShaderHasOutdatedParameters;
 	}
 };
-
-// Default uses eye adaptation
-typedef TPostProcessTonemapVS<true/*bUseEyeAdaptation*/> FPostProcessTonemapVS;

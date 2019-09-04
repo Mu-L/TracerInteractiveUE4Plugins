@@ -11,16 +11,26 @@
 /////////////////////////////////////////////////////
 // UCircularThrobber
 
-UCircularThrobber::UCircularThrobber(const FObjectInitializer& ObjectInitializer)
-	: Super(ObjectInitializer),
-	  bEnableRadius(true)
-{
-	SCircularThrobber::FArguments DefaultArgs;
-	Image = *DefaultArgs._PieceImage;
+static FSlateBrush* DefaultCircularThrobberBrushStyle = nullptr;
 
-	NumberOfPieces = DefaultArgs._NumPieces;
-	Period = DefaultArgs._Period;
-	Radius = DefaultArgs._Radius;
+UCircularThrobber::UCircularThrobber(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer)
+	, bEnableRadius(true)
+{
+	if (DefaultCircularThrobberBrushStyle == nullptr)
+	{
+		// HACK: THIS SHOULD NOT COME FROM CORESTYLE AND SHOULD INSTEAD BE DEFINED BY ENGINE TEXTURES/PROJECT SETTINGS
+		DefaultCircularThrobberBrushStyle = new FSlateBrush(*FCoreStyle::Get().GetBrush("Throbber.CircleChunk"));
+
+		// Unlink UMG default colors from the editor settings colors.
+		DefaultCircularThrobberBrushStyle->UnlinkColors();
+	}
+
+	Image = *DefaultCircularThrobberBrushStyle;
+
+	NumberOfPieces = 6;
+	Period = 0.75f;
+	Radius = 16.f;
 }
 
 void UCircularThrobber::ReleaseSlateResources(bool bReleaseChildren)
@@ -32,8 +42,6 @@ void UCircularThrobber::ReleaseSlateResources(bool bReleaseChildren)
 
 TSharedRef<SWidget> UCircularThrobber::RebuildWidget()
 {
-	SCircularThrobber::FArguments DefaultArgs;
-
 	MyCircularThrobber = SNew(SCircularThrobber)
 		.PieceImage(&Image)
 		.NumPieces(FMath::Clamp(NumberOfPieces, 1, 25))

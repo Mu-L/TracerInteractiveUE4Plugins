@@ -96,7 +96,7 @@ namespace AutomationTool
 			FileReference Value = ParseOptionalFileReferenceParam(Param);
 			if(Value == null)
 			{
-				throw new AutomationException("Missing -{0}=... parameter");
+				throw new AutomationException("Missing -{0}=... parameter", Param);
 			}
 			return Value;
 		}
@@ -223,6 +223,27 @@ namespace AutomationTool
 			else
 			{
 				return int.Parse(Value);
+			}
+		}
+
+		/// <summary>
+		/// Checks that all of the required params are present, throws an exception if not
+		/// </summary>
+		/// <param name="Args"></param>
+		public void CheckParamsArePresent(params string[] Args)
+		{
+			List<string> MissingParams = new List<string>();
+			foreach (string Arg in Args)
+			{
+				if (ParseParamValue(Arg, null) == null)
+				{
+					MissingParams.Add(Arg);
+				}
+			}
+
+			if (MissingParams.Count > 0)
+			{
+				throw new AutomationException("Params {0} are missing but required. Required params are {1}", string.Join(",", MissingParams), string.Join(",", Args));
 			}
 		}
 

@@ -19,9 +19,7 @@ UWindowTitleBarArea::UWindowTitleBarArea(const FObjectInitializer& ObjectInitial
 	: Super(ObjectInitializer)
 {
 	bIsVariable = false;
-
-	SWindowTitleBarArea::FArguments Defaults;
-	Visibility = UWidget::ConvertRuntimeToSerializedVisibility(Defaults._Visibility.Get());
+	Visibility = ESlateVisibility::Visible;
 
 	bDoubleClickTogglesFullscreen = false;
 }
@@ -138,6 +136,13 @@ void UWindowTitleBarArea::PostLoad()
 		}
 	}
 }
+
+#if WITH_EDITOR
+const FText UWindowTitleBarArea::GetPaletteCategory()
+{
+	return LOCTEXT("Advanced", "Advanced");
+}
+#endif
 
 bool UWindowTitleBarArea::HandleWindowAction(const TSharedRef<FGenericWindow>& PlatformWindow, EWindowAction::Type WindowAction)
 {

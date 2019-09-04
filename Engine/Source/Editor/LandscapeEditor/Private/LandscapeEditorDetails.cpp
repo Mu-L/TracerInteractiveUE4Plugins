@@ -6,6 +6,7 @@
 #include "Widgets/Text/STextBlock.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "Widgets/Input/SComboButton.h"
+#include "Widgets/Input/SMultiLineEditableTextBox.h"
 #include "LandscapeEdMode.h"
 #include "LandscapeEditorDetailCustomization_NewLandscape.h"
 #include "LandscapeEditorDetailCustomization_ResizeLandscape.h"
@@ -19,8 +20,8 @@
 
 #include "LandscapeEditorCommands.h"
 #include "LandscapeEditorDetailWidgets.h"
-#include "LandscapeEditorDetailCustomization_ProceduralBrushStack.h"
-#include "Settings/EditorExperimentalSettings.h"
+#include "LandscapeEditorDetailCustomization_LayersBrushStack.h"
+#include "Landscape.h"
 
 #define LOCTEXT_NAMESPACE "LandscapeEditor"
 
@@ -51,6 +52,30 @@ void FLandscapeEditorDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuild
 			.Text_Static(&FLandscapeEditorDetails::GetTargetLandscapeName)
 		]
 	];
+		
+	FText Reason;
+	bool bDisabledEditing = LandscapeEdMode->CurrentToolTarget.LandscapeInfo.IsValid() && !LandscapeEdMode->CanEditCurrentTarget(&Reason);
+
+	if (bDisabledEditing)
+	{
+		LandscapeEditorCategory.AddCustomRow(FText::GetEmpty())
+			[
+				SNew(SMultiLineEditableTextBox)
+				.IsReadOnly(true)
+				.AutoWrapText(true)
+				.Font(FCoreStyle::GetDefaultFontStyle("Bold", 10))
+				.Justification(ETextJustify::Center)
+				.BackgroundColor(FCoreStyle::Get().GetColor("ErrorReporting.BackgroundColor"))
+				.ForegroundColor(FCoreStyle::Get().GetColor("ErrorReporting.ForegroundColor"))
+				.Text(Reason)
+			];
+	}
+		
+	// Only continue cuztomization if we are in NewLandscape mode or if editing is not disabled
+	if (bDisabledEditing && LandscapeEdMode->CurrentTool->GetToolName() != FName("NewLandscape"))
+	{
+		return;
+	}
 
 	FToolSelectorBuilder ToolBrushSelectorButtons(CommandList, FMultiBoxCustomization::None);
 	{
@@ -108,20 +133,20 @@ void FLandscapeEditorDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuild
 	Customization_AlphaBrush = MakeShareable(new FLandscapeEditorDetailCustomization_AlphaBrush);
 	Customization_AlphaBrush->CustomizeDetails(DetailBuilder);
 
+	if (LandscapeEdMode->CanHaveLandscapeLayersContent())
+	{
+		// Layers
+		Customization_Layers = MakeShareable(new FLandscapeEditorDetailCustomization_Layers);
+		Customization_Layers->CustomizeDetails(DetailBuilder);
+
+		// Brush Stack
+		Customization_LayersBrushStack = MakeShareable(new FLandscapeEditorDetailCustomization_LayersBrushStack);
+		Customization_LayersBrushStack->CustomizeDetails(DetailBuilder);
+	}
+
 	// Target Layers:
 	Customization_TargetLayers = MakeShareable(new FLandscapeEditorDetailCustomization_TargetLayers);
 	Customization_TargetLayers->CustomizeDetails(DetailBuilder);
-
-	if (GetMutableDefault<UEditorExperimentalSettings>()->bProceduralLandscape)
-	{
-		// Brush Stack
-		Customization_ProceduralBrushStack = MakeShareable(new FLandscapeEditorDetailCustomization_ProceduralBrushStack);
-		Customization_ProceduralBrushStack->CustomizeDetails(DetailBuilder);
-
-		// Procedural Layers
-		Customization_ProceduralLayers = MakeShareable(new FLandscapeEditorDetailCustomization_ProceduralLayers);
-		Customization_ProceduralLayers->CustomizeDetails(DetailBuilder);
-	}
 }
 
 FText FLandscapeEditorDetails::GetLocalizedName(FString Name)
@@ -129,10 +154,13 @@ FText FLandscapeEditorDetails::GetLocalizedName(FString Name)
 	static bool bInitialized = false;
 	if (!bInitialized)
 	{
+		FEdModeLandscape* LandscapeEdMode = GetEditorMode();
+
 		bInitialized = true;
 		LOCTEXT("ToolSet_NewLandscape", "New Landscape");
 		LOCTEXT("ToolSet_ResizeLandscape", "Change Component Size");
 		LOCTEXT("ToolSet_Sculpt", "Sculpt");
+		LOCTEXT("ToolSet_Erase", "Erase");
 		LOCTEXT("ToolSet_Paint", "Paint");
 		LOCTEXT("ToolSet_Smooth", "Smooth");
 		LOCTEXT("ToolSet_Flatten", "Flatten");
@@ -142,12 +170,8 @@ FText FLandscapeEditorDetails::GetLocalizedName(FString Name)
 		LOCTEXT("ToolSet_Noise", "Noise");
 		LOCTEXT("ToolSet_Retopologize", "Retopologize");
 		LOCTEXT("ToolSet_Visibility", "Visibility");
-
-		if (GetMutableDefault<UEditorExperimentalSettings>()->bProceduralLandscape)
-		{
-			LOCTEXT("ToolSet_BPCustom", "Blueprint Custom");
-		}
-
+		LOCTEXT("ToolSet_BlueprintBrush", "Blueprint Brushes");
+		
 		LOCTEXT("ToolSet_Select", "Selection");
 		LOCTEXT("ToolSet_AddComponent", "Add");
 		LOCTEXT("ToolSet_DeleteComponent", "Delete");
@@ -231,31 +255,7 @@ void FLandscapeEditorDetails::OnChangeTargetLandscape(TWeakObjectPtr<ULandscapeI
 	FEdModeLandscape* LandscapeEdMode = GetEditorMode();
 	if (LandscapeEdMode)
 	{
-		// Unregister from old one
-		if (LandscapeEdMode->CurrentToolTarget.LandscapeInfo.IsValid())
-		{
-			ALandscapeProxy* LandscapeProxy = LandscapeEdMode->CurrentToolTarget.LandscapeInfo->GetLandscapeProxy();
-			LandscapeProxy->OnMaterialChangedDelegate().RemoveAll(LandscapeEdMode);
-		}
-
-		LandscapeEdMode->CurrentToolTarget.LandscapeInfo = LandscapeInfo.Get();
-		LandscapeEdMode->UpdateTargetList();
-		// force a Leave and Enter the current tool, in case it has something about the current landscape cached
-		LandscapeEdMode->SetCurrentTool(LandscapeEdMode->CurrentToolIndex);
-		if (LandscapeEdMode->CurrentGizmoActor.IsValid())
-		{
-			LandscapeEdMode->CurrentGizmoActor->SetTargetLandscape(LandscapeEdMode->CurrentToolTarget.LandscapeInfo.Get());
-		}
-
-		// register to new one
-		if (LandscapeEdMode->CurrentToolTarget.LandscapeInfo.IsValid())
-		{
-			ALandscapeProxy* LandscapeProxy = LandscapeEdMode->CurrentToolTarget.LandscapeInfo->GetLandscapeProxy();
-			LandscapeProxy->OnMaterialChangedDelegate().AddRaw(LandscapeEdMode, &FEdModeLandscape::OnLandscapeMaterialChangedDelegate);
-		}
-
-		LandscapeEdMode->UpdateTargetList();
-		LandscapeEdMode->UpdateShownLayerList();
+		LandscapeEdMode->SetTargetLandscape(LandscapeInfo);
 	}
 }
 
@@ -315,6 +315,12 @@ TSharedRef<SWidget> FLandscapeEditorDetails::GetToolSelector()
 		{
 			MenuBuilder.BeginSection(NAME_None, LOCTEXT("SculptToolsTitle", "Sculpting Tools"));
 			MenuBuilder.AddToolButton(NameToCommandMap.FindChecked("Tool_Sculpt"), NAME_None, LOCTEXT("Tool.Sculpt", "Sculpt"), LOCTEXT("Tool.Sculpt.Tooltip", "Sculpt height data.\nCtrl+Click to Raise, Ctrl+Shift+Click to lower"));
+			
+			if (LandscapeEdMode->CanHaveLandscapeLayersContent())
+			{
+				MenuBuilder.AddToolButton(NameToCommandMap.FindChecked("Tool_Erase"), NAME_None, LOCTEXT("Tool.Erase", "Erase"), LOCTEXT("Tool.Erase.Tooltip", "Erase height data."));
+			}
+			
 			MenuBuilder.AddToolButton(NameToCommandMap.FindChecked("Tool_Smooth"), NAME_None, LOCTEXT("Tool.Smooth", "Smooth"), LOCTEXT("Tool.Smooth.Tooltip", "Smooths heightmaps or blend layers"));
 			MenuBuilder.AddToolButton(NameToCommandMap.FindChecked("Tool_Flatten"), NAME_None, LOCTEXT("Tool.Flatten", "Flatten"), LOCTEXT("Tool.Flatten.Tooltip", "Flattens an area of heightmap or blend layer"));
 			MenuBuilder.AddToolButton(NameToCommandMap.FindChecked("Tool_Ramp"), NAME_None, LOCTEXT("Tool.Ramp", "Ramp"), LOCTEXT("Tool.Ramp.Tooltip", "Creates a ramp between two points"));
@@ -324,9 +330,9 @@ TSharedRef<SWidget> FLandscapeEditorDetails::GetToolSelector()
 			MenuBuilder.AddToolButton(NameToCommandMap.FindChecked("Tool_Retopologize"), NAME_None, LOCTEXT("Tool.Retopologize", "Retopologize"), LOCTEXT("Tool.Retopologize.Tooltip", "Automatically adjusts landscape vertices with an X/Y offset map to improve vertex density on cliffs, reducing texture stretching.\nNote: An X/Y offset map makes the landscape slower to render and paint on with other tools, so only use if needed"));
 			MenuBuilder.AddToolButton(NameToCommandMap.FindChecked("Tool_Visibility"), NAME_None, LOCTEXT("Tool.Visibility", "Visibility"), LOCTEXT("Tool.Visibility.Tooltip", "Mask out individual quads in the landscape, leaving a hole."));
 
-			if (GetMutableDefault<UEditorExperimentalSettings>()->bProceduralLandscape)
+			if (LandscapeEdMode->CanHaveLandscapeLayersContent())
 			{
-				MenuBuilder.AddToolButton(NameToCommandMap.FindChecked("Tool_BPCustom"), NAME_None, LOCTEXT("Tool.SculptBPCustom", "Blueprint Custom"), LOCTEXT("Tool.SculptBPCustom.Tooltip", "Custom sculpting tools created using Blueprint."));
+				MenuBuilder.AddToolButton(NameToCommandMap.FindChecked("Tool_BlueprintBrush"), NAME_None, LOCTEXT("Tool.SculptBlueprintBrush", "Blueprint Brushes"), LOCTEXT("Tool.SculptBlueprintBrush.Tooltip", "Custom sculpting tools created using Blueprint."));
 			}
 
 			MenuBuilder.EndSection();
@@ -346,9 +352,9 @@ TSharedRef<SWidget> FLandscapeEditorDetails::GetToolSelector()
 			MenuBuilder.AddToolButton(NameToCommandMap.FindChecked("Tool_Flatten"), NAME_None, LOCTEXT("Tool.Flatten", "Flatten"), LOCTEXT("Tool.Flatten.Tooltip", "Flattens an area of heightmap or blend layer"));
 			MenuBuilder.AddToolButton(NameToCommandMap.FindChecked("Tool_Noise"), NAME_None, LOCTEXT("Tool.Noise", "Noise"), LOCTEXT("Tool.Noise.Tooltip", "Adds noise to the heightmap or blend layer"));
 
-			if (GetMutableDefault<UEditorExperimentalSettings>()->bProceduralLandscape)
+			if (LandscapeEdMode->CanHaveLandscapeLayersContent())
 			{
-				MenuBuilder.AddToolButton(NameToCommandMap.FindChecked("Tool_BPCustom"), NAME_None, LOCTEXT("Tool.PaintBPCustom", "Blueprint Custom"), LOCTEXT("Tool.PaintBPCustom.Tooltip", "Custom painting tools created using Blueprint."));
+				MenuBuilder.AddToolButton(NameToCommandMap.FindChecked("Tool_BlueprintBrush"), NAME_None, LOCTEXT("Tool.PaintBlueprintBrush", "Blueprint Brushes"), LOCTEXT("Tool.PaintBlueprintBrush.Tooltip", "Custom painting tools created using Blueprint."));
 			}
 
 			MenuBuilder.EndSection();
@@ -365,6 +371,11 @@ bool FLandscapeEditorDetails::GetToolSelectorIsVisible() const
 	FEdModeLandscape* LandscapeEdMode = GetEditorMode();
 	if (LandscapeEdMode && LandscapeEdMode->CurrentTool)
 	{
+		if (!LandscapeEdMode->CanEditCurrentTarget())
+		{
+			return false;
+		}
+
 		if (!IsToolActive("NewLandscape") || LandscapeEdMode->GetLandscapeList().Num() > 0)
 		{
 			return true;

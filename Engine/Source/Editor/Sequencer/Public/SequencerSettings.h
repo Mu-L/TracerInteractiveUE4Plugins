@@ -15,20 +15,6 @@ enum class EAllowEditsMode : uint8;
 enum class EKeyGroupMode : uint8;
 enum class EMovieSceneKeyInterpolation : uint8;
 
-
-
-/** Defines visibility states for the curves in the curve editor. */
-UENUM()
-enum class ECurveEditorCurveVisibility : uint8
-{
-	/** All curves should be visible. */
-	AllCurves,
-	/** Only curves from selected nodes should be visible. */
-	SelectedCurves,
-	/** Only curves which have keyframes should be visible. */
-	AnimatedCurves
-};
-
 UENUM()
 enum ESequencerSpawnPosition
 {
@@ -106,7 +92,6 @@ public:
 	DECLARE_MULTICAST_DELEGATE( FOnEvaluateSubSequencesInIsolationChanged );
 	DECLARE_MULTICAST_DELEGATE( FOnShowSelectedNodesOnlyChanged );
 	DECLARE_MULTICAST_DELEGATE_OneParam( FOnAllowEditsModeChanged, EAllowEditsMode );
-	DECLARE_MULTICAST_DELEGATE( FOnCurveEditorCurveVisibilityChanged );
 	DECLARE_MULTICAST_DELEGATE(FOnLoopStateChanged);
 
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
@@ -178,6 +163,11 @@ public:
 	/** sets whether or not to snap sections to other sections. */
 	void SetSnapSectionTimesToSections( bool InbSnapSectionTimesToSections );
 
+	/** @return true if keys and sections should be kept within the playback range when moving them */
+	bool GetSnapKeysAndSectionsToPlayRange() const;
+	/** Set whether or not keys and sections should be kept within the playback range when moving them */
+	void SetSnapKeysAndSectionsToPlayRange(bool bInSnapKeysAndSectionsToPlayRange);
+
 	/** Gets whether or not to snap the play time to keys while scrubbing. */
 	bool GetSnapPlayTimeToKeys() const;
 	/** Sets whether or not to snap the play time to keys while scrubbing. */
@@ -229,15 +219,25 @@ public:
 	/** Set zoom in/out position (mouse position or current time). */
 	void SetZoomPosition(ESequencerZoomPosition InZoomPosition);
 
-	/** Gets whether or not auto-scroll is enabled. */
+	/** Gets whether or not auto-scroll is enabled when playing. */
 	bool GetAutoScrollEnabled() const;
-	/** Sets whether or not auto-scroll is enabled. */
+	/** Sets whether or not auto-scroll is enabled when playing. */
 	void SetAutoScrollEnabled(bool bInAutoScrollEnabled);
 	
 	/** Gets whether or not to link the curve editor time range. */
 	bool GetLinkCurveEditorTimeRange() const;
 	/** Sets whether or not to link the curve editor time range. */
 	void SetLinkCurveEditorTimeRange(bool InbLinkCurveEditorTimeRange);
+
+	/** Return true if we are to synchronize the curve editor and sequencer trees */
+	bool ShouldSyncCurveEditorSelection() const { return bSynchronizeCurveEditorSelection; }
+	/** Assign whether we are to synchronize the curve editor and sequencer trees */
+	void SyncCurveEditorSelection(bool bInSynchronizeCurveEditorSelection);
+
+	/** Return true if we should filter the curve editor tree to only nodes that are relevant to the current sequencer selection */
+	bool ShouldIsolateToCurveEditorSelection() const { return bIsolateCurveEditorToSelection; }
+	/** Assign whether we should filter the curve editor tree to only nodes that are relevant to the current sequencer selection */
+	void IsolateCurveEditorToSelection(bool bInIsolateCurveEditorToSelection);
 
 	/** Gets the loop mode. */
 	ESequencerLoopMode GetLoopMode() const;
@@ -321,12 +321,10 @@ public:
 
 	uint32 GetTrajectoryPathCap() const { return TrajectoryPathCap; }
 
-	/** Gets the current curve visibility. */
-	ECurveEditorCurveVisibility GetCurveVisibility() const;
-	/** Sets the current curve visibility. */
-	void SetCurveVisibility(ECurveEditorCurveVisibility InCurveVisibility);
-
-	FOnCurveEditorCurveVisibilityChanged& GetOnCurveEditorCurveVisibilityChanged();
+	/** Gets whether to show the sequencer outliner info column */
+	bool GetShowOutlinerInfoColumn() const;
+	/** Sets whether to show the sequencer outliner info column */
+	void SetShowOutlinerInfoColumn(bool bInShowOutlinerInfoColumn);
 
 	FOnLoopStateChanged& GetOnLoopStateChanged();
 
@@ -392,6 +390,10 @@ protected:
 	UPROPERTY( config, EditAnywhere, Category=Snapping )
 	bool bSnapSectionTimesToSections;
 
+	/** Enable or disable keeping keys and sections in the playback range. */
+	UPROPERTY(config, EditAnywhere, Category = Timeline)
+	bool bSnapKeysAndSectionsToPlayRange;
+
 	/** Enable or disable snapping the current time to keys of the selected track while scrubbing. */
 	UPROPERTY( config, EditAnywhere, Category=Snapping )
 	bool bSnapPlayTimeToKeys;
@@ -431,7 +433,7 @@ protected:
 	UPROPERTY( config, EditAnywhere, Category=Timeline )
 	TEnumAsByte<ESequencerZoomPosition> ZoomPosition;
 
-	/** Enable or disable auto scroll in the timeline. */
+	/** Enable or disable auto scroll in the timeline when playing. */
 	UPROPERTY( config, EditAnywhere, Category=Timeline )
 	bool bAutoScrollEnabled;
 
@@ -439,12 +441,20 @@ protected:
 	UPROPERTY( config, EditAnywhere, Category=CurveEditor )
 	bool bLinkCurveEditorTimeRange;
 
+	/** When enabled, changing the sequencer tree selection will also select the relevant nodes in the curve editor tree if possible. */
+	UPROPERTY( config, EditAnywhere, Category=CurveEditor )
+	bool bSynchronizeCurveEditorSelection;
+
+	/** When enabled, changing the sequencer tree selection will isolate (auto-filter) the selected nodes in the curve editor. */
+	UPROPERTY( config, EditAnywhere, Category=CurveEditor )
+	bool bIsolateCurveEditorToSelection;
+
 	/** The loop mode of the playback in timeline. */
 	UPROPERTY( config )
 	TEnumAsByte<ESequencerLoopMode> LoopMode;
 
 	/** Enable or disable keeping the cursor in the current playback range while scrubbing. */
-	UPROPERTY( config, EditAnywhere, Category=Timeline )
+	UPROPERTY(config, EditAnywhere, Category = Timeline)
 	bool bKeepCursorInPlayRangeWhileScrubbing;
 
 	/** Enable or disable keeping the cursor in the current playback range during playback. */
@@ -496,17 +506,17 @@ protected:
 	bool bCompileDirectorOnEvaluate;
 
 	/** Specifies the maximum number of keys to draw when rendering trajectories in viewports */
-	UPROPERTY(config, EditAnywhere, Category=General)
+	UPROPERTY(config, EditAnywhere, Category = General)
 	uint32 TrajectoryPathCap;
 
-	/** What format do we display time in to the user? */	
+	/** Whether to show the sequencer outliner info column */
+	UPROPERTY(config, EditAnywhere, Category = General)
+	bool bShowOutlinerInfoColumn;
+
+	/** What format do we display time in to the user? */
 	UPROPERTY(config, EditAnywhere, Category=General)
 	EFrameNumberDisplayFormats FrameNumberDisplayFormat;
 
-	/** Specifies which curves to show in the curve editor */
-	UPROPERTY(config, EditAnywhere, Category=General)
-	ECurveEditorCurveVisibility CurveVisibility;
-	FOnCurveEditorCurveVisibilityChanged OnCurveEditorCurveVisibilityChanged;
 	FOnEvaluateSubSequencesInIsolationChanged OnEvaluateSubSequencesInIsolationChangedEvent;
 	FOnShowSelectedNodesOnlyChanged OnShowSelectedNodesOnlyChangedEvent;
 	FOnAllowEditsModeChanged OnAllowEditsModeChangedEvent;

@@ -359,10 +359,13 @@ USkinnedMeshComponent::USkinnedMeshComponent(const FObjectInitializer& ObjectIni
 
 	ExternalInterpolationAlpha = 0.0f;
 	ExternalDeltaTime = 0.0f;
+	ExternalTickRate = 1;
 	bExternalInterpolate = false;
 	bExternalUpdate = false;
 	bExternalEvaluationRateLimited = false;
 	bExternalTickRateControlled = false;
+
+	CurrentSkinWeightProfileName = NAME_None;
 }
 
 
@@ -413,6 +416,7 @@ void USkinnedMeshComponent::GetResourceSizeEx(FResourceSizeEx& CumulativeResourc
 
 FPrimitiveSceneProxy* USkinnedMeshComponent::CreateSceneProxy()
 {
+	LLM_SCOPE(ELLMTag::SkeletalMesh);
 	ERHIFeatureLevel::Type SceneFeatureLevel = GetWorld()->FeatureLevel;
 	FSkeletalMeshSceneProxy* Result = nullptr;
 	FSkeletalMeshRenderData* SkelMeshRenderData = GetSkeletalMeshRenderData();
@@ -456,6 +460,8 @@ void USkinnedMeshComponent::Serialize(FArchive& Ar)
 
 void USkinnedMeshComponent::OnRegister()
 {
+	LLM_SCOPE(ELLMTag::SkeletalMesh);
+
 	// The reason this happens before register
 	// is so that any transform update (or children transform update)
 	// won't result in any issues of accessing SpaceBases
@@ -503,6 +509,8 @@ void USkinnedMeshComponent::OnUnregister()
 
 void USkinnedMeshComponent::CreateRenderState_Concurrent()
 {
+	LLM_SCOPE(ELLMTag::SkeletalMesh);
+
 	if( SkeletalMesh )
 	{
 		// Attempting to track down UE-45505, where it looks as if somehow a skeletal mesh component's mesh has only been partially loaded, causing a mismatch in the LOD arrays
@@ -596,10 +604,6 @@ void USkinnedMeshComponent::DestroyRenderState_Concurrent()
 {
 	Super::DestroyRenderState_Concurrent();
 
-	// clear morphtarget array info while rendering state is destroyed
-	ActiveMorphTargets.Empty();
-	MorphTargetWeights.Empty();
-
 	if(MeshObject)
 	{
 		// Begin releasing the RHI resources used by this skeletal mesh component.
@@ -654,6 +658,7 @@ void USkinnedMeshComponent::SendRenderDynamicData_Concurrent()
 		check (UseLOD < MeshObject->GetSkeletalMeshRenderData().LODRenderData.Num());
 		MeshObject->Update(UseLOD,this,ActiveMorphTargets, MorphTargetWeights, bExternalEvaluationRateLimited && !bExternalInterpolate ? EPreviousBoneTransformUpdateMode::DuplicateCurrentToPrevious : EPreviousBoneTransformUpdateMode::None);  // send to rendering thread
 		MeshObject->bHasBeenUpdatedAtLeastOnce = true;
+		bForceMeshObjectUpdate = false; 
 		
 		// scene proxy update of material usage based on active morphs
 		UpdateMorphMaterialUsageOnProxy();
@@ -676,6 +681,15 @@ void USkinnedMeshComponent::ClearMotionVector()
 
 		++CurrentBoneTransformRevisionNumber;
 		MeshObject->Update(UseLOD, this, ActiveMorphTargets, MorphTargetWeights, EPreviousBoneTransformUpdateMode::None);  // send to rendering thread
+	}
+}
+
+void USkinnedMeshComponent::ForceMotionVector()
+{
+	if (MeshObject)
+	{
+		++CurrentBoneTransformRevisionNumber;
+		MeshObject->Update(PredictedLODLevel, this, ActiveMorphTargets, MorphTargetWeights, EPreviousBoneTransformUpdateMode::None);
 	}
 }
 
@@ -770,7 +784,7 @@ void USkinnedMeshComponent::TickComponent(float DeltaTime, enum ELevelTick TickT
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
 	// See if this mesh was rendered recently. This has to happen first because other data will rely on this
-	bRecentlyRendered = (LastRenderTime > GetWorld()->TimeSeconds - 1.0f);
+	bRecentlyRendered = (GetLastRenderTime() > GetWorld()->TimeSeconds - 1.0f);
 
 	// Update component's LOD settings
 	// This must be done BEFORE animation Update and Evaluate (TickPose and RefreshBoneTransforms respectively)
@@ -900,9 +914,9 @@ bool USkinnedMeshComponent::GetMaterialStreamingData(int32 MaterialIndex, FPrimi
 	return MaterialData.IsValid();
 }
 
-void USkinnedMeshComponent::GetStreamingTextureInfo(FStreamingTextureLevelContext& LevelContext, TArray<FStreamingTexturePrimitiveInfo>& OutStreamingTextures) const
+void USkinnedMeshComponent::GetStreamingRenderAssetInfo(FStreamingTextureLevelContext& LevelContext, TArray<FStreamingRenderAssetPrimitiveInfo>& OutStreamingRenderAssets) const
 {
-	GetStreamingTextureInfoInner(LevelContext, nullptr, GetComponentTransform().GetMaximumAxisScale() * StreamingDistanceMultiplier, OutStreamingTextures);
+	GetStreamingTextureInfoInner(LevelContext, nullptr, GetComponentTransform().GetMaximumAxisScale() * StreamingDistanceMultiplier, OutStreamingRenderAssets);
 }
 
 bool USkinnedMeshComponent::ShouldUpdateBoneVisibility() const
@@ -925,7 +939,12 @@ void USkinnedMeshComponent::RebuildVisibilityArray()
 
 		// The following code relies on a complete hierarchy sorted from parent to children
 		TArray<uint8>& EditableBoneVisibilityStates = GetEditableBoneVisibilityStates();
-		check(EditableBoneVisibilityStates.Num() == SkeletalMesh->RefSkeleton.GetNum());
+		if (EditableBoneVisibilityStates.Num() != SkeletalMesh->RefSkeleton.GetNum())
+		{
+			UE_LOG(LogSkinnedMeshComp, Warning, TEXT("RebuildVisibilityArray() failed because EditableBoneVisibilityStates size: %d not equal to RefSkeleton bone count: %d."), EditableBoneVisibilityStates.Num(), SkeletalMesh->RefSkeleton.GetNum());
+			return;
+		}
+
 		for (int32 BoneId=0; BoneId < EditableBoneVisibilityStates.Num(); ++BoneId)
 		{
 			uint8 VisState = EditableBoneVisibilityStates[BoneId];
@@ -1054,6 +1073,26 @@ FBoxSphereBounds USkinnedMeshComponent::CalcMeshBound(const FVector& RootOffset,
 	return NewBounds;
 }
 
+void USkinnedMeshComponent::GetPreSkinnedLocalBounds(FBoxSphereBounds& OutBounds) const
+{
+	const USkinnedMeshComponent* const MasterPoseComponentInst = MasterPoseComponent.Get();
+
+	if (SkeletalMesh)
+	{
+		// Get the Pre-skinned bounds from the skeletal mesh. Note that these bounds are the "ExtendedBounds", so they can be tweaked on the SkeletalMesh   
+		OutBounds = SkeletalMesh->GetBounds();
+	}
+	else if(MasterPoseComponentInst && MasterPoseComponentInst->SkeletalMesh)
+	{
+		// Get the bounds from the master pose if ther is no skeletal mesh
+		OutBounds = MasterPoseComponentInst->SkeletalMesh->GetBounds();
+	}
+	else
+	{
+		// Fall back
+		OutBounds = FBoxSphereBounds(ForceInitToZero);
+	}
+}
 
 FMatrix USkinnedMeshComponent::GetBoneMatrix(int32 BoneIdx) const
 {
@@ -1131,16 +1170,29 @@ FTransform USkinnedMeshComponent::GetBoneTransform(int32 BoneIdx, const FTransfo
 		}
 		if(BoneIdx < MasterBoneMap.Num())
 		{
-			int32 ParentBoneIndex = MasterBoneMap[BoneIdx];
+			int32 MasterBoneIndex = MasterBoneMap[BoneIdx];
 
 			// If ParentBoneIndex is valid, grab matrix from MasterPoseComponent.
-			if(	ParentBoneIndex != INDEX_NONE && 
-				ParentBoneIndex < MasterPoseComponentInst->GetNumComponentSpaceTransforms())
+			if(	MasterBoneIndex != INDEX_NONE && 
+				MasterBoneIndex < MasterPoseComponentInst->GetNumComponentSpaceTransforms())
 			{
-				return MasterPoseComponentInst->GetComponentSpaceTransforms()[ParentBoneIndex] * LocalToWorld;
+				return MasterPoseComponentInst->GetComponentSpaceTransforms()[MasterBoneIndex] * LocalToWorld;
 			}
 			else
 			{
+				// Is this a missing bone we have cached?
+				FMissingMasterBoneCacheEntry MissingBoneInfo;
+				const FMissingMasterBoneCacheEntry* MissingBoneInfoPtr = MissingMasterBoneMap.Find(BoneIdx);
+				if(MissingBoneInfoPtr != nullptr)
+				{
+					return MissingBoneInfoPtr->RelativeTransform * MasterPoseComponentInst->GetComponentSpaceTransforms()[MissingBoneInfoPtr->CommonAncestorBoneIndex] * LocalToWorld;
+				}
+				// Otherwise we might be able to generate the missing transform on the fly (although this is expensive)
+				else if(GetMissingMasterBoneRelativeTransform(BoneIdx, MissingBoneInfo))
+				{
+					return MissingBoneInfo.RelativeTransform * MasterPoseComponentInst->GetComponentSpaceTransforms()[MissingBoneInfo.CommonAncestorBoneIndex] * LocalToWorld;
+				}
+
 				UE_LOG(LogSkinnedMeshComp, Verbose, TEXT("GetBoneTransform : ParentBoneIndex(%d) out of range of MasterPoseComponent->SpaceBases for %s"), BoneIdx, *this->GetFName().ToString() );
 				return FTransform::Identity;
 			}
@@ -1229,6 +1281,40 @@ FTransform USkinnedMeshComponent::GetDeltaTransformFromRefPose(FName BoneName, F
 	}
 
 	return FTransform::Identity;
+}
+
+bool USkinnedMeshComponent::GetTwistAndSwingAngleOfDeltaRotationFromRefPose(FName BoneName, float& OutTwistAngle, float& OutSwingAngle) const
+{
+	const FReferenceSkeleton& RefSkeleton = SkeletalMesh->RefSkeleton;
+	const int32 BoneIndex = GetBoneIndex(BoneName);
+	if (BoneIndex != INDEX_NONE)
+	{
+		FTransform LocalTransform = GetComponentSpaceTransforms()[BoneIndex];
+		FTransform ReferenceTransform = RefSkeleton.GetRefBonePose()[BoneIndex];
+		FName ParentName = GetParentBone(BoneName);
+		int32 ParentIndex = INDEX_NONE;
+		if (ParentName != NAME_None)
+		{
+			ParentIndex = GetBoneIndex(ParentName);
+		}
+
+		if (ParentIndex != INDEX_NONE)
+		{
+			LocalTransform = LocalTransform.GetRelativeTransform(GetComponentSpaceTransforms()[ParentIndex]);
+		}
+
+		FQuat Swing, Twist;
+
+		// figure out based on ref pose rotation, and calculate twist based on that 
+		FVector TwistAxis = ReferenceTransform.GetRotation().Vector();
+		ensure(TwistAxis.IsNormalized());
+		LocalTransform.GetRotation().ToSwingTwist(TwistAxis, Swing, Twist);
+		OutTwistAngle = FMath::RadiansToDegrees(Twist.GetAngle());
+		OutSwingAngle = FMath::RadiansToDegrees(Swing.GetAngle());
+		return true;
+	}
+
+	return false;
 }
 
 void USkinnedMeshComponent::GetBoneNames(TArray<FName>& BoneNames)
@@ -1346,6 +1432,8 @@ FSkeletalMeshRenderData* USkinnedMeshComponent::GetSkeletalMeshRenderData() cons
 
 bool USkinnedMeshComponent::AllocateTransformData()
 {
+	LLM_SCOPE(ELLMTag::SkeletalMesh);
+
 	// Allocate transforms if not present.
 	if ( SkeletalMesh != NULL && MasterPoseComponent == NULL )
 	{
@@ -1640,32 +1728,85 @@ UMorphTarget* USkinnedMeshComponent::FindMorphTarget( FName MorphTargetName ) co
 	return NULL;
 }
 
+bool USkinnedMeshComponent::GetMissingMasterBoneRelativeTransform(int32 InBoneIndex, FMissingMasterBoneCacheEntry& OutInfo) const
+{
+	const FReferenceSkeleton& SlaveRefSkeleton = SkeletalMesh->RefSkeleton;
+	check(SlaveRefSkeleton.IsValidIndex(InBoneIndex));
+	const TArray<FTransform>& BoneSpaceRefPoseTransforms = SlaveRefSkeleton.GetRefBonePose();
+
+	OutInfo.CommonAncestorBoneIndex = INDEX_NONE;
+	OutInfo.RelativeTransform = FTransform::Identity;
+
+	FTransform RelativeTransform = BoneSpaceRefPoseTransforms[InBoneIndex];
+
+	// we need to find a common base component-space transform in this skeletal mesh as it
+	// isnt present in the master, so run up the hierarchy
+	int32 CommonAncestorBoneIndex = InBoneIndex;
+	while(CommonAncestorBoneIndex != INDEX_NONE)
+	{
+		CommonAncestorBoneIndex = SlaveRefSkeleton.GetParentIndex(CommonAncestorBoneIndex);
+		if(CommonAncestorBoneIndex != INDEX_NONE)
+		{
+			OutInfo.CommonAncestorBoneIndex = MasterBoneMap[CommonAncestorBoneIndex];
+			if(OutInfo.CommonAncestorBoneIndex != INDEX_NONE)
+			{
+				OutInfo.RelativeTransform = RelativeTransform;
+				return true;
+			}
+
+			RelativeTransform = RelativeTransform * BoneSpaceRefPoseTransforms[CommonAncestorBoneIndex];
+		}
+	}
+
+	return false;
+}
 
 void USkinnedMeshComponent::UpdateMasterBoneMap()
 {
 	MasterBoneMap.Reset();
+	MissingMasterBoneMap.Reset();
 
 	if (SkeletalMesh)
 	{
 		if (USkinnedMeshComponent* MasterPoseComponentPtr = MasterPoseComponent.Get())
 		{
-			if (USkeletalMesh* ParentMesh = MasterPoseComponentPtr->SkeletalMesh)
+			if (USkeletalMesh* MasterMesh = MasterPoseComponentPtr->SkeletalMesh)
 			{
-				MasterBoneMap.AddUninitialized(SkeletalMesh->RefSkeleton.GetNum());
-				if (SkeletalMesh == ParentMesh)
+				const FReferenceSkeleton& SlaveRefSkeleton = SkeletalMesh->RefSkeleton;
+				const FReferenceSkeleton& MasterRefSkeleton = MasterMesh->RefSkeleton;
+
+				MasterBoneMap.AddUninitialized(SlaveRefSkeleton.GetNum());
+				if (SkeletalMesh == MasterMesh)
 				{
 					// if the meshes are the same, the indices must match exactly so we don't need to look them up
-					for (int32 i = 0; i < MasterBoneMap.Num(); i++)
+					for (int32 BoneIndex = 0; BoneIndex < MasterBoneMap.Num(); BoneIndex++)
 					{
-						MasterBoneMap[i] = i;
+						MasterBoneMap[BoneIndex] = BoneIndex;
 					}
 				}
 				else
 				{
-					for (int32 i = 0; i < MasterBoneMap.Num(); i++)
+					for (int32 BoneIndex = 0; BoneIndex < MasterBoneMap.Num(); BoneIndex++)
 					{
-						FName BoneName = SkeletalMesh->RefSkeleton.GetBoneName(i);
-						MasterBoneMap[i] = ParentMesh->RefSkeleton.FindBoneIndex(BoneName);
+						const FName BoneName = SlaveRefSkeleton.GetBoneName(BoneIndex);
+						MasterBoneMap[BoneIndex] = MasterRefSkeleton.FindBoneIndex(BoneName);
+					}
+
+					// Cache bones for any SOCKET bones that are missing in the master.
+					// We assume that sockets will be potentially called more often, so we
+					// leave out missing BONE transforms here to try to balance memory & performance.
+					for(USkeletalMeshSocket* Socket : SkeletalMesh->GetActiveSocketList())
+					{
+						int32 BoneIndex = SlaveRefSkeleton.FindBoneIndex(Socket->BoneName);
+						int32 MasterBoneIndex = MasterRefSkeleton.FindBoneIndex(Socket->BoneName);
+						if(BoneIndex != INDEX_NONE && MasterBoneIndex == INDEX_NONE)
+						{
+							FMissingMasterBoneCacheEntry MissingBoneInfo;
+							if(GetMissingMasterBoneRelativeTransform(BoneIndex, MissingBoneInfo))
+							{
+								MissingMasterBoneMap.Add(BoneIndex, MissingBoneInfo);
+							}
+						}
 					}
 				}
 			}
@@ -1802,12 +1943,15 @@ void USkinnedMeshComponent::AddSocketOverride(FName SourceSocketName, FName Over
 {
 	if (FName* FoundName = SocketOverrideLookup.Find(SourceSocketName))
 	{
-		if (bWarnHasOverrided)
+		if (*FoundName != OverrideSocketName)
 		{
-			UE_LOG(LogSkinnedMeshComp, Warning, TEXT("AddSocketOverride(%s, %s): Component(%s) Actor(%s) has already defined an override for socket(%s), replacing %s as override"),
-				*SourceSocketName.ToString(), *OverrideSocketName.ToString(), *GetName(), *GetNameSafe(GetOuter()), *SourceSocketName.ToString(), *(FoundName->ToString()));
+			if (bWarnHasOverrided)
+			{
+				UE_LOG(LogSkinnedMeshComp, Warning, TEXT("AddSocketOverride(%s, %s): Component(%s) Actor(%s) has already defined an override for socket(%s), replacing %s as override"),
+					*SourceSocketName.ToString(), *OverrideSocketName.ToString(), *GetName(), *GetNameSafe(GetOuter()), *SourceSocketName.ToString(), *(FoundName->ToString()));
+			}
+			*FoundName = OverrideSocketName;
 		}
-		*FoundName = OverrideSocketName;
 	}
 	else
 	{
@@ -2006,7 +2150,7 @@ void USkinnedMeshComponent::QuerySupportedSockets(TArray<FComponentSocketDescrip
 	}
 }
 
-bool USkinnedMeshComponent::UpdateOverlapsImpl(TArray<FOverlapInfo> const* PendingOverlaps, bool bDoNotifies, const TArray<FOverlapInfo>* OverlapsAtEndLocation)
+bool USkinnedMeshComponent::UpdateOverlapsImpl(const TOverlapArrayView* PendingOverlaps, bool bDoNotifies, const TOverlapArrayView* OverlapsAtEndLocation)
 {
 	// we don't support overlap test on destructible or physics asset
 	// so use SceneComponent::UpdateOverlaps to handle children
@@ -2264,9 +2408,15 @@ FSkinWeightVertexBuffer* USkinnedMeshComponent::GetSkinWeightBuffer(int32 LODInd
 		{
 			WeightBuffer = LODInfo[LODIndex].OverrideSkinWeights;
 		}
+		else if (LODInfo.IsValidIndex(LODIndex) &&
+			LODInfo[LODIndex].OverrideProfileSkinWeights &&
+			LODInfo[LODIndex].OverrideProfileSkinWeights->GetNumVertices() == LODData.GetNumVertices())
+		{
+			WeightBuffer = LODInfo[LODIndex].OverrideProfileSkinWeights;
+		}
 		else
 		{
-			WeightBuffer = &LODData.SkinWeightVertexBuffer;
+			WeightBuffer = LODData.GetSkinWeightVertexBuffer();
 		}
 	}
 
@@ -2317,7 +2467,7 @@ void USkinnedMeshComponent::SetRefPoseOverride(const TArray<FTransform>& NewRefP
 
 	if (NumRealBones != NewRefPoseTransforms.Num())
 	{
-		UE_LOG(LogSkeletalMesh, Warning, TEXT("SetRefPoseOverride (%s) : Expected %d transforms, got %d."), NumRealBones, NewRefPoseTransforms.Num());
+		UE_LOG(LogSkeletalMesh, Warning, TEXT("SetRefPoseOverride (%s) : Expected %d transforms, got %d."), *SkeletalMesh->GetName(), NumRealBones, NewRefPoseTransforms.Num());
 		return;
 	}
 
@@ -2368,7 +2518,7 @@ void USkinnedMeshComponent::SetRefPoseOverride(const TArray<FTransform>& NewRefP
 			ZAxis.IsNearlyZero(SMALL_NUMBER))
 		{
 			// this is not allowed, warn them 
-			UE_LOG(LogSkeletalMesh, Warning, TEXT("Reference Pose for joint (%s) includes NIL matrix. Zero scale isn't allowed on ref pose. "), *SkeletalMesh->RefSkeleton.GetBoneName(BoneIndex).ToString());
+			UE_LOG(LogSkeletalMesh, Warning, TEXT("Reference Pose for asset %s for joint (%s) includes NIL matrix. Zero scale isn't allowed on ref pose. "), *SkeletalMesh->GetPathName(), *SkeletalMesh->RefSkeleton.GetBoneName(BoneIndex).ToString());
 		}
 
 		// Precompute inverse so we can use from-refpose-skin vertices.
@@ -2666,8 +2816,7 @@ bool USkinnedMeshComponent::UpdateLODStatus_Internal(int32 InMasterPoseComponent
 		const int32 LODBias = GSkeletalMeshLODBias;
 #endif
 
-		int32 MinLodIndex = bOverrideMinLod ? MinLodModel : 0;
-		MinLodIndex = FMath::Max(MinLodIndex, SkeletalMesh->MinLod.GetValueForFeatureLevel(CachedSceneFeatureLevel));
+		int32 MinLodIndex = bOverrideMinLod ? MinLodModel : SkeletalMesh->MinLod.GetValueForFeatureLevel(CachedSceneFeatureLevel);
 
 		int32 MaxLODIndex = 0;
 		if (MeshObject)
@@ -2920,6 +3069,7 @@ void USkinnedMeshComponent::BeginDestroy()
 FSkelMeshComponentLODInfo::FSkelMeshComponentLODInfo()
 : OverrideVertexColors(nullptr)
 , OverrideSkinWeights(nullptr)
+, OverrideProfileSkinWeights(nullptr)
 {
 
 }
@@ -2989,6 +3139,11 @@ void FSkelMeshComponentLODInfo::CleanUpOverrideSkinWeights()
 	{
 		delete OverrideSkinWeights;
 		OverrideSkinWeights = nullptr;
+	}
+
+	if (OverrideProfileSkinWeights)
+	{
+		OverrideProfileSkinWeights = nullptr;
 	}
 }
 
@@ -3268,6 +3423,8 @@ void USkinnedMeshComponent::SetSkinWeightOverride(int32 LODIndex, const TArray<F
 
 void USkinnedMeshComponent::ClearSkinWeightOverride(int32 LODIndex)
 {
+	SCOPED_NAMED_EVENT(USkinnedMeshComponent_ClearSkinWeightOverride, FColor::Yellow);
+
 	// If we have a render resource, and the requested LODIndex is valid (for both component and mesh, though these should be the same)
 	if (LODInfo.IsValidIndex(LODIndex))
 	{
@@ -3277,6 +3434,114 @@ void USkinnedMeshComponent::ClearSkinWeightOverride(int32 LODIndex)
 			Info.ReleaseOverrideSkinWeightsAndBlock();
 			MarkRenderStateDirty();
 		}
+	}
+}
+
+bool USkinnedMeshComponent::SetSkinWeightProfile(FName InProfileName)
+{
+	if (FSkeletalMeshRenderData* SkelMeshRenderData = GetSkeletalMeshRenderData())
+	{
+		// Ensure the LOD infos array is initialized
+		InitLODInfos();
+        for (int32 LODIndex = 0; LODIndex < LODInfo.Num(); ++LODIndex)
+        {
+			// Check whether or not setting a profile is allow for this LOD index
+			if (LODIndex > GSkinWeightProfilesAllowedFromLOD)
+			{
+				FSkeletalMeshLODRenderData& RenderData = SkelMeshRenderData->LODRenderData[LODIndex];
+				
+				// Retrieve this profile's skin weight buffer
+				FSkinWeightVertexBuffer* Buffer = RenderData.SkinWeightProfilesData.GetOverrideBuffer(InProfileName);
+				if (Buffer != nullptr)
+				{
+					FSkelMeshComponentLODInfo& Info = LODInfo[LODIndex];
+					Info.OverrideProfileSkinWeights = Buffer;
+
+					bSkinWeightProfileSet = true;
+					CurrentSkinWeightProfileName = InProfileName;
+				}
+			}
+        }
+
+		if (bSkinWeightProfileSet)
+		{
+			UpdateSkinWeightOverrideBuffer();
+		}
+	}
+
+	return bSkinWeightProfileSet;
+}
+
+void USkinnedMeshComponent::ClearSkinWeightProfile()
+{
+	if (FSkeletalMeshRenderData* SkelMeshRenderData = GetSkeletalMeshRenderData())
+	{	
+		bool bCleared = false;
+
+		// Clear skin weight buffer set for all of the LODs
+		for (int32 LODIndex = 0; LODIndex < LODInfo.Num(); ++LODIndex)
+		{
+			FSkelMeshComponentLODInfo& Info = LODInfo[LODIndex];
+			bCleared |= (Info.OverrideProfileSkinWeights != nullptr);
+			Info.OverrideProfileSkinWeights = nullptr;
+		}
+
+		if (bCleared)
+		{
+			UpdateSkinWeightOverrideBuffer();
+		}
+	}
+
+	bSkinWeightProfileSet = false;
+	CurrentSkinWeightProfileName = NAME_None;
+}
+
+void USkinnedMeshComponent::UnloadSkinWeightProfile(FName InProfileName)
+{
+	if (FSkeletalMeshRenderData* SkelMeshRenderData = GetSkeletalMeshRenderData())
+	{
+		if (LODInfo.Num())
+		{
+			bool bCleared = false;
+			for (int32 LODIndex = 0; LODIndex < LODInfo.Num(); ++LODIndex)
+			{
+				// Queue release and deletion of the skin weight buffer associated with the profile name
+				FSkeletalMeshLODRenderData& RenderData = SkelMeshRenderData->LODRenderData[LODIndex];
+				RenderData.SkinWeightProfilesData.ReleaseBuffer(InProfileName);
+
+				// In case the buffer previously released is currently set for this component, clear it
+				if (CurrentSkinWeightProfileName == InProfileName)
+				{
+					FSkelMeshComponentLODInfo& Info = LODInfo[LODIndex];
+					Info.OverrideProfileSkinWeights = nullptr;
+					bCleared = true;
+				}
+			}
+
+			if (bCleared)
+			{
+				UpdateSkinWeightOverrideBuffer();
+			}
+		}
+	}
+
+	if (CurrentSkinWeightProfileName == InProfileName)
+	{
+		bSkinWeightProfileSet = false;
+		CurrentSkinWeightProfileName = NAME_None;
+	}
+}
+
+void USkinnedMeshComponent::UpdateSkinWeightOverrideBuffer()
+{
+	// Force a mesh update to ensure bone buffers are up to date
+	bForceMeshObjectUpdate = true;
+	MarkRenderDynamicDataDirty();
+
+	// Queue an update of the skin weight buffer used by the current Mesh Object
+	if (MeshObject)
+	{
+		MeshObject->UpdateSkinWeightBuffer(this);
 	}
 }
 

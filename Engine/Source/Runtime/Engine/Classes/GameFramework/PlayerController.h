@@ -1864,6 +1864,9 @@ protected:
 	/** Destroys the SpectatorPawn and sets it to nullptr. */
 	virtual void DestroySpectatorPawn();
 
+	/** Useful to spectate other pawn without un-possessing the current pawn */
+	virtual bool ShouldKeepCurrentPawnUponSpectating() const { return false; }
+
 private:
 	/** The pawn used when spectating (nullptr if not spectating). */
 	UPROPERTY()
@@ -1883,6 +1886,12 @@ protected:
 
 	/** Set the SpawnLocation for use when changing states or when there is no pawn or spectator. */
 	virtual void SetSpawnLocation(const FVector& NewLocation);
+
+	/** Last real time (undilated) recorded in TickActor() when checking for forced client movement updates. */
+	float LastMovementUpdateTime;
+
+	/** Last real time (undilated) a hitch was detected in TickActor() when checking for forced client movement updates. */
+	float LastMovementHitch;
 
 public:
 	/** Get the location used when initially created, or when changing states when there is no pawn or spectator. */

@@ -1,6 +1,48 @@
 // Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
 
 #include "ControlRigConnectionDrawingPolicy.h"
+#include "Graph/ControlRigGraph.h"
+#include "Graph/ControlRigGraphNode.h"
+#include "ControlRigBlueprint.h"
+#include "ControlRigController.h"
+#include "Kismet2/BlueprintEditorUtils.h"
+
+void FControlRigConnectionDrawingPolicy::SetIncompatiblePinDrawState(const TSharedPtr<SGraphPin>& StartPin, const TSet< TSharedRef<SWidget> >& VisiblePins)
+{
+	UEdGraphPin* Pin = StartPin->GetPinObj();
+	if (Pin != nullptr)
+	{
+		UBlueprint* Blueprint = FBlueprintEditorUtils::FindBlueprintForNodeChecked(Pin->GetOwningNode());
+		UControlRigBlueprint* RigBlueprint = Cast<UControlRigBlueprint>(Blueprint);
+		if (RigBlueprint != nullptr)
+		{
+			FString Left, Right;
+			RigBlueprint->Model->SplitPinPath(Pin->GetName(), Left, Right);
+			RigBlueprint->ModelController->PrepareCycleCheckingForPin(*Left, *Right, Pin->Direction == EGPD_Input);
+		}
+	}
+	FKismetConnectionDrawingPolicy::SetIncompatiblePinDrawState(StartPin, VisiblePins);
+}
+
+void FControlRigConnectionDrawingPolicy::ResetIncompatiblePinDrawState(const TSet< TSharedRef<SWidget> >& VisiblePins)
+{
+	if (VisiblePins.Num() > 0)
+	{
+		TSharedRef<SWidget> WidgetRef = *VisiblePins.begin();
+		const SGraphPin* PinWidget = (const SGraphPin*)&WidgetRef.Get();
+		UEdGraphPin* Pin = PinWidget->GetPinObj();
+		if (Pin != nullptr)
+		{
+			UBlueprint* Blueprint = FBlueprintEditorUtils::FindBlueprintForNodeChecked(Pin->GetOwningNode());
+			UControlRigBlueprint* RigBlueprint = Cast<UControlRigBlueprint>(Blueprint);
+			if (RigBlueprint != nullptr)
+			{
+				RigBlueprint->ModelController->ResetCycleCheck();
+			}
+		}
+	}
+	FKismetConnectionDrawingPolicy::ResetIncompatiblePinDrawState(VisiblePins);
+}
 
 void FControlRigConnectionDrawingPolicy::BuildPinToPinWidgetMap(TMap<TSharedRef<SWidget>, FArrangedWidget>& InPinGeometries)
 {
@@ -11,24 +53,25 @@ void FControlRigConnectionDrawingPolicy::BuildPinToPinWidgetMap(TMap<TSharedRef<
 	{
 		struct Local
 		{
-			static void AddSubPins_Recursive(UEdGraphPin* PinObj, TMap<UEdGraphPin*, TSharedRef<SGraphPin>>& InPinToPinWidgetMap, TSharedRef<SGraphPin>& InGraphPinWidget)
+			static void AddSubPins_Recursive(UEdGraphPin* PinObj, TMap<UEdGraphPin*, TSharedPtr<SGraphPin>>& InPinToPinWidgetMap, TSharedPtr<SGraphPin>& InGraphPinWidget)
 			{
 				for(UEdGraphPin* SubPin : PinObj->SubPins)
 				{
 					// Only add to the pin-to-pin widget map if the sub-pin widget is not there already
-					TSharedRef<SGraphPin>* SubPinWidgetPtr = InPinToPinWidgetMap.Find(SubPin);
+					TSharedPtr<SGraphPin>* SubPinWidgetPtr = InPinToPinWidgetMap.Find(SubPin);
 					if(SubPinWidgetPtr == nullptr)
 					{
 						SubPinWidgetPtr = &InGraphPinWidget;
 					}
 
-					InPinToPinWidgetMap.Add(SubPin, *SubPinWidgetPtr);
-					AddSubPins_Recursive(SubPin, InPinToPinWidgetMap, *SubPinWidgetPtr);
+					TSharedPtr<SGraphPin> PinWidgetPtr = *SubPinWidgetPtr;
+					InPinToPinWidgetMap.Add(SubPin, PinWidgetPtr);
+					AddSubPins_Recursive(SubPin, InPinToPinWidgetMap, PinWidgetPtr);
 				}
 			}
 		};
 
-		TSharedRef<SGraphPin> GraphPinWidget = StaticCastSharedRef<SGraphPin>(ConnectorIt.Key());
+		TSharedPtr<SGraphPin> GraphPinWidget = StaticCastSharedRef<SGraphPin>(ConnectorIt.Key());
 		Local::AddSubPins_Recursive(GraphPinWidget->GetPinObj(), PinToPinWidgetMap, GraphPinWidget);
 	}
 }
@@ -89,13 +132,13 @@ void FControlRigConnectionDrawingPolicy::DetermineLinkGeometry(
 	/*out*/ FArrangedWidget*& EndWidgetGeometry
 	)
 {
-	if (TSharedRef<SGraphPin>* pOutputWidget = PinToPinWidgetMap.Find(OutputPin))
+	if (TSharedPtr<SGraphPin>* pOutputWidget = PinToPinWidgetMap.Find(OutputPin))
 	{
-		StartWidgetGeometry = PinGeometries->Find(*pOutputWidget);
+		StartWidgetGeometry = PinGeometries->Find((*pOutputWidget).ToSharedRef());
 	}
 	
-	if (TSharedRef<SGraphPin>* pInputWidget = PinToPinWidgetMap.Find(InputPin))
+	if (TSharedPtr<SGraphPin>* pInputWidget = PinToPinWidgetMap.Find(InputPin))
 	{
-		EndWidgetGeometry = PinGeometries->Find(*pInputWidget);
+		EndWidgetGeometry = PinGeometries->Find((*pInputWidget).ToSharedRef());
 	}
 }

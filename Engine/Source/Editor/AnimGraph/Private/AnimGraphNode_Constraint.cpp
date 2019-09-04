@@ -55,6 +55,19 @@ void UAnimGraphNode_Constraint::ValidateAnimNodeDuringCompilation(USkeleton* For
 		}
 	}
 
+	float OverallWeight = 0.f;
+	for (UEdGraphPin* Pin : Pins)
+	{
+		if (Pin->GetName().StartsWith(TEXT("ConstraintWeights")))
+		{
+			OverallWeight += FCString::Atof(*(Pin->DefaultValue));
+		}
+	}
+	if (Node.ConstraintWeights.Num() > 0 && !FMath::IsNearlyEqual(OverallWeight, 1.f, ZERO_ANIMWEIGHT_THRESH * float(Node.ConstraintWeights.Num())))
+	{
+		MessageLog.Note(*LOCTEXT("WeightsDontSumToOne", "@@ - The weights don't add up to 1.0").ToString(), this);
+	}
+
 	Super::ValidateAnimNodeDuringCompilation(ForSkeleton, MessageLog);
 }
 

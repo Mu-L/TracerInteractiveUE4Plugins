@@ -11,6 +11,7 @@
 #include "Misc/Optional.h"
 #include "Internationalization/Internationalization.h"
 #include "Misc/Guid.h"
+#include "Misc/SecureHash.h"
 #include "Containers/Ticker.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/CoreDelegates.h"
@@ -19,10 +20,13 @@
 #include "Misc/EngineBuildSettings.h"
 #include "Stats/Stats.h"
 #include "Internationalization/TextLocalizationManager.h"
+#include "Logging/LogScopedCategoryAndVerbosityOverride.h"
 
 #ifndef NOINITCRASHREPORTER
 #define NOINITCRASHREPORTER 0
 #endif
+
+DEFINE_LOG_CATEGORY_STATIC(LogCrashContext, Display, All);
 
 extern CORE_API bool GIsGPUCrashed;
 
@@ -44,6 +48,7 @@ const FString FGenericCrashContext::CrashContextExtension = TEXT(".runtime-xml")
 const FString FGenericCrashContext::RuntimePropertiesTag = TEXT( "RuntimeProperties" );
 const FString FGenericCrashContext::PlatformPropertiesTag = TEXT( "PlatformProperties" );
 const FString FGenericCrashContext::EngineDataTag = TEXT( "EngineData" );
+const FString FGenericCrashContext::GameDataTag = TEXT( "GameData" );
 const FString FGenericCrashContext::EnabledPluginsTag = TEXT("EnabledPlugins");
 const FString FGenericCrashContext::UE4MinidumpName = TEXT( "UE4Minidump.dmp" );
 const FString FGenericCrashContext::NewLineTag = TEXT( "&nl;" );
@@ -52,6 +57,7 @@ const FString FGenericCrashContext::CrashTypeCrash = TEXT("Crash");
 const FString FGenericCrashContext::CrashTypeAssert = TEXT("Assert");
 const FString FGenericCrashContext::CrashTypeEnsure = TEXT("Ensure");
 const FString FGenericCrashContext::CrashTypeGPU = TEXT("GPUCrash");
+const FString FGenericCrashContext::CrashTypeHang = TEXT("Hang");
 
 const FString FGenericCrashContext::EngineModeExUnknown = TEXT("Unset");
 const FString FGenericCrashContext::EngineModeExDirty = TEXT("Dirty");
@@ -72,8 +78,6 @@ namespace NCachedCrashContextProperties
 	static TOptional<bool> bIsVanilla;
 	static FString GameName;
 	static FString ExecutableName;
-	static FString PlatformName;
-	static FString PlatformNameIni;
 	static FString DeploymentName;
 	static FString BaseDir;
 	static FString RootDir;
@@ -99,6 +103,7 @@ namespace NCachedCrashContextProperties
 	static FString GameStateName;
 	static TArray<FString> EnabledPluginsList;
 	static TMap<FString, FString> EngineData;
+	static TMap<FString, FString> GameData;
 }
 
 void FGenericCrashContext::Initialize()
@@ -111,8 +116,6 @@ void FGenericCrashContext::Initialize()
 
 	NCachedCrashContextProperties::GameName = FString::Printf( TEXT("UE4-%s"), FApp::GetProjectName() );
 	NCachedCrashContextProperties::ExecutableName = FPlatformProcess::ExecutableName();
-	NCachedCrashContextProperties::PlatformName = FPlatformProperties::PlatformName();
-	NCachedCrashContextProperties::PlatformNameIni = FPlatformProperties::IniPlatformName();
 	NCachedCrashContextProperties::BaseDir = FPlatformProcess::BaseDir();
 	NCachedCrashContextProperties::RootDir = FPlatformMisc::RootDir();
 	NCachedCrashContextProperties::EpicAccountId = FPlatformMisc::GetEpicAccountId();
@@ -165,7 +168,8 @@ void FGenericCrashContext::Initialize()
 	}
 
 	const FGuid Guid = FGuid::NewGuid();
-	NCachedCrashContextProperties::CrashGUIDRoot = FString::Printf(TEXT("%s%s-%s"), *CrashGUIDRootPrefix, *NCachedCrashContextProperties::PlatformNameIni, *Guid.ToString(EGuidFormats::Digits));
+	const FString IniPlatformName(FPlatformProperties::IniPlatformName());
+	NCachedCrashContextProperties::CrashGUIDRoot = FString::Printf(TEXT("%s%s-%s"), *CrashGUIDRootPrefix, *IniPlatformName, *Guid.ToString(EGuidFormats::Digits));
 
 	// Initialize delegate for updating SecondsSinceStart, because FPlatformTime::Seconds() is not POSIX safe.
 	const float PollingInterval = 1.0f;
@@ -292,7 +296,22 @@ void FGenericCrashContext::SerializeContentToBuffer() const
 	AddCrashProperty( TEXT( "SecondsSinceStart" ), NCachedCrashContextProperties::SecondsSinceStart );
 
 	// Add common crash properties.
-	AddCrashProperty( TEXT( "GameName" ), *NCachedCrashContextProperties::GameName );
+	if (NCachedCrashContextProperties::GameName.Len() > 0)
+	{
+		AddCrashProperty(TEXT("GameName"), *NCachedCrashContextProperties::GameName);
+	}
+	else
+	{
+		const TCHAR* ProjectName = FApp::GetProjectName();
+		if (ProjectName != nullptr && ProjectName[0] != 0)
+		{
+			AddCrashProperty(TEXT("GameName"), *FString::Printf(TEXT("UE4-%s"), ProjectName));
+		}
+		else
+		{
+			AddCrashProperty(TEXT("GameName"), TEXT(""));
+		}
+	}
 	AddCrashProperty( TEXT( "ExecutableName" ), *NCachedCrashContextProperties::ExecutableName );
 	AddCrashProperty( TEXT( "BuildConfiguration" ), EBuildConfigurations::ToString( FApp::GetBuildConfiguration() ) );
 	AddCrashProperty( TEXT( "GameSessionID" ), *NCachedCrashContextProperties::GameSessionID );
@@ -305,8 +324,8 @@ void FGenericCrashContext::SerializeContentToBuffer() const
 
 	AddCrashProperty( TEXT( "Symbols" ), Symbols);
 
-	AddCrashProperty( TEXT( "PlatformName" ), *NCachedCrashContextProperties::PlatformName );
-	AddCrashProperty( TEXT( "PlatformNameIni" ), *NCachedCrashContextProperties::PlatformNameIni );
+	AddCrashProperty( TEXT( "PlatformName" ), FPlatformProperties::PlatformName() );
+	AddCrashProperty( TEXT( "PlatformNameIni" ), FPlatformProperties::IniPlatformName());
 	AddCrashProperty( TEXT( "EngineMode" ), FPlatformMisc::GetEngineMode() );
 	AddCrashProperty( TEXT( "EngineModeEx" ), EngineModeExString());
 
@@ -336,6 +355,7 @@ void FGenericCrashContext::SerializeContentToBuffer() const
 
 	// Add new portable callstack element with crash stack
 	AddPortableCallStack();
+	AddPortableCallStackHash();
 
 	AddCrashProperty( TEXT( "SourceContext" ), TEXT( "" ) );
 	AddCrashProperty( TEXT( "UserDescription" ), TEXT( "" ) );
@@ -413,6 +433,14 @@ void FGenericCrashContext::SerializeContentToBuffer() const
 	}
 	EndSection( *EngineDataTag );
 
+	// Add the game data
+	BeginSection( *GameDataTag );
+	for (const TPair<FString, FString>& Pair : NCachedCrashContextProperties::GameData)
+	{
+		AddCrashProperty(*Pair.Key, *Pair.Value);
+	}
+	EndSection( *GameDataTag );
+
 	// Writing out the list of plugin JSON descriptors causes us to run out of memory
 	// in GMallocCrash on console, so enable this only for desktop platforms.
 #if PLATFORM_DESKTOP
@@ -486,6 +514,44 @@ void FGenericCrashContext::AddPlatformSpecificProperties() const
 {
 	// Nothing really to do here. Can be overridden by the platform code.
 	// @see FWindowsPlatformCrashContext::AddPlatformSpecificProperties
+}
+
+void FGenericCrashContext::AddPortableCallStackHash() const
+{
+	if (CallStack.Num() == 0)
+	{
+		AddCrashProperty(TEXT("PCallStackHash"), TEXT(""));
+		return;
+	}
+
+	// This may allocate if its the first time calling into this function
+	const TCHAR* ExeName = FPlatformProcess::ExecutableName();
+
+	// We dont want this to be thrown into an FString as it will alloc memory
+	const TCHAR* UE4EditorName = TEXT("UE4Editor");
+
+	FSHA1 Sha;
+	FSHAHash Hash;
+
+	for (TArray<FCrashStackFrame>::TConstIterator It(CallStack); It; ++It)
+	{
+		// If we are our own module or our module contains UE4Editor we assume we own these. We cannot depend on offsets of system libs
+		// as they may have different versions
+		if (It->ModuleName == ExeName || It->ModuleName.Contains(UE4EditorName))
+		{
+			Sha.Update(reinterpret_cast<const uint8*>(&It->Offset), sizeof(It->Offset));
+		}
+	}
+
+	Sha.Final();
+	Sha.GetHash(Hash.Hash);
+
+	FString EscapedPortableHash;
+
+	// Allocations here on both the ToString and AppendEscapedXMLString it self adds to the out FString
+	AppendEscapedXMLString(EscapedPortableHash, *Hash.ToString());
+
+	AddCrashProperty(TEXT("PCallStackHash"), *EscapedPortableHash);
 }
 
 void FGenericCrashContext::AddPortableCallStack() const
@@ -601,6 +667,8 @@ const TCHAR* FGenericCrashContext::GetCrashTypeString(ECrashContextType Type)
 {
 	switch (Type)
 	{
+	case ECrashContextType::Hang:
+		return *CrashTypeHang;
 	case ECrashContextType::GPUCrash:
 		return *CrashTypeGPU;
 	case ECrashContextType::Ensure:
@@ -672,11 +740,59 @@ void FGenericCrashContext::SetEngineData(const FString& Key, const FString& Valu
 {
 	if (Value.Len() == 0)
 	{
+		// for testing purposes, only log values when they change, but don't pay the lookup price normally.
+		UE_SUPPRESS(LogCrashContext, VeryVerbose, 
+		{
+			if (NCachedCrashContextProperties::EngineData.Find(Key))
+			{
+				UE_LOG(LogCrashContext, VeryVerbose, TEXT("FGenericCrashContext::SetEngineData(%s, <RemoveKey>)"), *Key);
+			}
+		});
 		NCachedCrashContextProperties::EngineData.Remove(Key);
 	}
 	else
 	{
 		FString& OldVal = NCachedCrashContextProperties::EngineData.FindOrAdd(Key);
+		UE_SUPPRESS(LogCrashContext, VeryVerbose, 
+		{
+			if (OldVal != Value)
+			{
+				UE_LOG(LogCrashContext, VeryVerbose, TEXT("FGenericCrashContext::SetEngineData(%s, %s)"), *Key, *Value);
+			}
+		});
+		OldVal = Value;
+	}
+}
+
+void FGenericCrashContext::ResetGameData()
+{
+	NCachedCrashContextProperties::GameData.Reset();
+}
+
+void FGenericCrashContext::SetGameData(const FString& Key, const FString& Value)
+{
+	if (Value.Len() == 0)
+	{
+		// for testing purposes, only log values when they change, but don't pay the lookup price normally.
+		UE_SUPPRESS(LogCrashContext, VeryVerbose, 
+		{
+			if (NCachedCrashContextProperties::GameData.Find(Key))
+			{
+				UE_LOG(LogCrashContext, VeryVerbose, TEXT("FGenericCrashContext::SetGameData(%s, <RemoveKey>)"), *Key);
+			}
+		});
+		NCachedCrashContextProperties::GameData.Remove(Key);
+	}
+	else
+	{
+		FString& OldVal = NCachedCrashContextProperties::GameData.FindOrAdd(Key);
+		UE_SUPPRESS(LogCrashContext, VeryVerbose, 
+		{
+			if (OldVal != Value)
+			{
+				UE_LOG(LogCrashContext, VeryVerbose, TEXT("FGenericCrashContext::SetGameData(%s, %s)"), *Key, *Value);
+			}
+		});
 		OldVal = Value;
 	}
 }
@@ -709,6 +825,11 @@ FORCENOINLINE void FGenericCrashContext::CapturePortableCallStack(int32 NumStack
 
 void FGenericCrashContext::SetPortableCallStack(const uint64* StackFrames, int32 NumStackFrames)
 {
+	GetPortableCallStack(StackFrames, NumStackFrames, CallStack);
+}
+
+void FGenericCrashContext::GetPortableCallStack(const uint64* StackFrames, int32 NumStackFrames, TArray<FCrashStackFrame>& OutCallStack)
+{
 	// Get all the modules in the current process
 	uint32 NumModules = (uint32)FPlatformStackWalk::GetProcessModuleCount();
 
@@ -719,7 +840,7 @@ void FGenericCrashContext::SetPortableCallStack(const uint64* StackFrames, int32
 	Modules.SetNum(NumModules);
 
 	// Update the callstack with offsets from each module
-	CallStack.Reset(NumStackFrames);
+	OutCallStack.Reset(NumStackFrames);
 	for(int32 Idx = 0; Idx < NumStackFrames; Idx++)
 	{
 		const uint64 StackFrame = StackFrames[Idx];
@@ -738,11 +859,11 @@ void FGenericCrashContext::SetPortableCallStack(const uint64* StackFrames, int32
 		// Add the callstack item
 		if(FoundModule == nullptr)
 		{
-			CallStack.Add(FCrashStackFrame(TEXT("Unknown"), 0, StackFrame));
+			OutCallStack.Add(FCrashStackFrame(TEXT("Unknown"), 0, StackFrame));
 		}
 		else
 		{
-			CallStack.Add(FCrashStackFrame(FPaths::GetBaseFilename(FoundModule->ImageName), FoundModule->BaseOfImage, StackFrame - FoundModule->BaseOfImage));
+			OutCallStack.Add(FCrashStackFrame(FPaths::GetBaseFilename(FoundModule->ImageName), FoundModule->BaseOfImage, StackFrame - FoundModule->BaseOfImage));
 		}
 	}
 }

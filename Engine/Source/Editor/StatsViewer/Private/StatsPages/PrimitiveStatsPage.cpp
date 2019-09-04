@@ -352,7 +352,6 @@ struct PrimitiveStatsGenerator
 						NewStatsEntry->Sections += FMath::Square(CurrentComponent->NumSubsections);
 
 						// count resource usage of landscape
-						//TODO: take into consideration all the editing RT/heightmap, etc.
 						bool bNotUnique = false;
 						UniqueTextures.Add(CurrentComponent->GetHeightmap(), &bNotUnique);
 						if (!bNotUnique)
@@ -370,12 +369,14 @@ struct PrimitiveStatsGenerator
 							}
 						}
 
-						for (auto ItWeightmaps = CurrentComponent->WeightmapTextures.CreateConstIterator(); ItWeightmaps; ++ItWeightmaps)
+						const TArray<UTexture2D*>& ComponentWeightmapTextures = CurrentComponent->GetWeightmapTextures();
+
+						for (UTexture2D* Weightmap : ComponentWeightmapTextures)
 						{
-							UniqueTextures.Add((*ItWeightmaps), &bNotUnique);
+							UniqueTextures.Add(Weightmap, &bNotUnique);
 							if (!bNotUnique)
 							{
-								const SIZE_T WeightmapResourceSize = (*ItWeightmaps)->GetResourceSizeBytes(EResourceSizeMode::EstimatedTotal);
+								const SIZE_T WeightmapResourceSize = Weightmap->GetResourceSizeBytes(EResourceSizeMode::EstimatedTotal);
 								NewStatsEntry->ResourceSize += (float)WeightmapResourceSize / 1024.f;
 							}
 						}
@@ -415,6 +416,8 @@ void FPrimitiveStatsPage::Generate( TArray< TWeakObjectPtr<UObject> >& OutObject
 {
 	PrimitiveStatsGenerator Generator;
 	Generator.Generate();
+	
+	UWorld* World = GEditor->PlayWorld ? GEditor->PlayWorld : GWorld;
 
 	switch ((EPrimitiveObjectSets)ObjectSetIndex)
 	{
@@ -424,7 +427,7 @@ void FPrimitiveStatsPage::Generate( TArray< TWeakObjectPtr<UObject> >& OutObject
 			{
 				AActor* Owner = (*It)->GetOwner();
 
-				if (Owner != nullptr && !Owner->HasAnyFlags(RF_ClassDefaultObject) && Owner->IsInLevel(GWorld->GetCurrentLevel()))
+				if (Owner != nullptr && !Owner->HasAnyFlags(RF_ClassDefaultObject) && Owner->IsInLevel(World->GetCurrentLevel()))
 				{
 					UPrimitiveStats* StatsEntry = Generator.Add(*It, (EPrimitiveObjectSets)ObjectSetIndex);
 
@@ -439,7 +442,7 @@ void FPrimitiveStatsPage::Generate( TArray< TWeakObjectPtr<UObject> >& OutObject
 
 		case PrimitiveObjectSets_AllObjects:
 		{
-			if (UWorld* World = GWorld)
+			if (World)
 			{
 				TArray<ULevel*> Levels;
 

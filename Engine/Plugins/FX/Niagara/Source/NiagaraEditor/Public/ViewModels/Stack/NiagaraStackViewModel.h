@@ -83,6 +83,9 @@ public:
 
 	bool HasDismissedStackIssues();
 
+	bool HasParentEmitter() const;
+	void RemoveEmitterSource();
+
 private:
 
 	/** Recursively Expands all groups and collapses all items in the stack. */

@@ -5,6 +5,14 @@
 #include "HAL/RunnableThread.h"
 #include "Misc/ConfigCacheIni.h"
 #include "HAL/ThreadSafeCounter.h"
+#include "ProfilingDebugging/CsvProfiler.h"
+
+
+// Defines the "Audio" category in the CSV profiler.
+// This should only be defined here. Modules who wish to use this category should contain the line
+// 		CSV_DECLARE_CATEGORY_MODULE_EXTERN(AUDIOMIXER_API, Audio);
+// 		
+CSV_DEFINE_CATEGORY_MODULE(AUDIOMIXER_API, Audio, true);
 
 // Command to enable logging to display accurate audio render times
 static int32 LogRenderTimesCVar = 0;
@@ -24,17 +32,29 @@ FAutoConsoleVariableRef CVarLogRenderThreadPriority(
 	TEXT("0: Normal, 1: Above Normal, 2: Below Normal, 3: Highest, 4: Lowest, 5: Slightly Below Normal, 6: Time Critical"),
 	ECVF_Default);
 
-DEFINE_STAT(STAT_AudioMixerRenderAudio);
-DEFINE_STAT(STAT_AudioMixerSourceManagerUpdate);
-DEFINE_STAT(STAT_AudioMixerSourceBuffers);
-DEFINE_STAT(STAT_AudioMixerSourceEffectBuffers);
-DEFINE_STAT(STAT_AudioMixerSourceOutputBuffers);
-DEFINE_STAT(STAT_AudioMixerSubmixes);
-DEFINE_STAT(STAT_AudioMixerSubmixChildren);
-DEFINE_STAT(STAT_AudioMixerSubmixSource);
-DEFINE_STAT(STAT_AudioMixerSubmixEffectProcessing);
-DEFINE_STAT(STAT_AudioMixerMasterReverb);
-DEFINE_STAT(STAT_AudioMixerMasterEQ);
+static int32 EnableDetailedWindowsDeviceLoggingCVar = 0;
+FAutoConsoleVariableRef CVarEnableDetailedWindowsDeviceLogging(
+	TEXT("au.EnableDetailedWindowsDeviceLogging"),
+	EnableDetailedWindowsDeviceLoggingCVar,
+	TEXT("Enables detailed windows device logging.\n")
+	TEXT("0: Not Enabled, 1: Enabled"),
+	ECVF_Default);
+
+static int32 DisableDeviceSwapCVar = 0;
+FAutoConsoleVariableRef CVarDisableDeviceSwap(
+	TEXT("au.DisableDeviceSwap"),
+	DisableDeviceSwapCVar,
+	TEXT("Disable device swap handling code for Audio Mixer on Windows.\n")
+	TEXT("0: Not Enabled, 1: Enabled"),
+	ECVF_Default);
+
+
+static int32 OverrunTimeoutCVar = 1000;
+FAutoConsoleVariableRef CVarOverrunTimeout(
+	TEXT("au.OverrunTimeoutMSec"),
+	OverrunTimeoutCVar,
+	TEXT("Amount of time to wait for the render thread to time out before swapping to the null device. \n"),
+	ECVF_Default);
 
 namespace Audio
 {
@@ -119,7 +139,7 @@ namespace Audio
 
 	void FOutputBuffer::MixNextBuffer()
  	{
-		SCOPE_CYCLE_COUNTER(STAT_AudioMixerRenderAudio);
+		CSV_SCOPED_TIMING_STAT(Audio, RenderAudio);
 
 		// Zero the buffer
 		FPlatformMemory::Memzero(Buffer.GetData(), Buffer.Num() * sizeof(float));
@@ -211,16 +231,17 @@ namespace Audio
 		: bWarnedBufferUnderrun(false)
 		, AudioRenderThread(nullptr)
 		, AudioRenderEvent(nullptr)
+		, bIsInDeviceSwap(false)
 		, AudioFadeEvent(nullptr)
 		, CurrentBufferReadIndex(INDEX_NONE)
 		, CurrentBufferWriteIndex(INDEX_NONE)
 		, NumOutputBuffers(0)
 		, FadeVolume(0.0f)
 		, LastError(TEXT("None"))
-		, bAudioDeviceChanging(false)
 		, bPerformingFade(true)
 		, bFadedOut(false)
 		, bIsDeviceInitialized(false)
+		, bMoveAudioStreamToNewAudioDevice(false)
 		, bIsUsingNullDevice(false)
 		, NullDeviceCallback(nullptr)
 	{
@@ -286,6 +307,20 @@ namespace Audio
 	{
 		if (!NullDeviceCallback.IsValid())
 		{
+			// Reset all of the buffers, then immediately kick off another render.
+			for (int32 Index = 0; Index < OutputBuffers.Num(); ++Index)
+			{
+				OutputBuffers[Index].Reset(OpenStreamParams.NumFrames * AudioStreamInfo.DeviceInfo.NumChannels);
+			}
+
+			CurrentBufferReadIndex = 0;
+			CurrentBufferWriteIndex = 1;
+
+			SubmitBuffer(OutputBuffers[CurrentBufferReadIndex].GetBufferData());
+			check(OpenStreamParams.NumFrames * AudioStreamInfo.DeviceInfo.NumChannels == OutputBuffers[CurrentBufferReadIndex].GetBuffer().Num());
+
+			AudioRenderEvent->Trigger();
+
 			float BufferDuration = ((float) OpenStreamParams.NumFrames) / OpenStreamParams.SampleRate;
 			NullDeviceCallback.Reset(new FMixerNullCallback( BufferDuration, [this]()
 			{
@@ -326,9 +361,24 @@ namespace Audio
 	{
 		LLM_SCOPE(ELLMTag::AudioMixer);
 
-		// Don't read any more audio if we're not running or changing device
-		if (AudioStreamInfo.StreamState != EAudioOutputStreamState::Running || bAudioDeviceChanging)
+		// If we are flushing buffers for our output voice and this is being called on the audio thread directly,
+		// early exit.
+		if (bIsInDeviceSwap)
 		{
+			return;
+		}
+
+		// If we are currently swapping devices and OnBufferEnd is being triggered in an XAudio2Thread,
+		// early exit.
+		if (!DeviceSwapCriticalSection.TryLock())
+		{
+			return;
+		}
+
+		// Don't read any more audio if we're not running or changing device
+		if (AudioStreamInfo.StreamState != EAudioOutputStreamState::Running)
+		{
+			DeviceSwapCriticalSection.Unlock();
 			return;
 		}
 
@@ -378,6 +428,8 @@ namespace Audio
 			// Update the current read index to the next read index
 			CurrentBufferReadIndex = NextReadIndex;
 		}
+
+		DeviceSwapCriticalSection.Unlock();
 
 		// Kick off rendering of the next set of buffers
 		AudioRenderEvent->Trigger();
@@ -509,8 +561,16 @@ namespace Audio
 
 			RenderTimeAnalysis.End();
 
+			// Bounds check the timeout for our audio render event.
+			OverrunTimeoutCVar = FMath::Clamp(OverrunTimeoutCVar, 500, 5000);
+
 			// Now wait for a buffer to be consumed, which will bump up the read index.
-			AudioRenderEvent->Wait();
+			if (AudioRenderEvent && !AudioRenderEvent->Wait(static_cast<uint32>(OverrunTimeoutCVar)))
+			{
+				// if we reached this block, we timed out, and should attempt to
+				// bail on our current device.
+				bMoveAudioStreamToNewAudioDevice = true;
+			}
 		}
 
 		OpenStreamParams.AudioMixer->OnAudioStreamShutdown();
@@ -625,5 +685,15 @@ namespace Audio
 			return true;
 		}
 		return false;
+	}
+
+	bool IAudioMixer::ShouldIgnoreDeviceSwaps()
+	{
+		return DisableDeviceSwapCVar != 0;
+	}
+
+	bool IAudioMixer::ShouldLogDeviceSwaps()
+	{
+		return EnableDetailedWindowsDeviceLoggingCVar != 0;
 	}
 }

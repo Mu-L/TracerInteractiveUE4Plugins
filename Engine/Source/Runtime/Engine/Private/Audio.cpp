@@ -11,8 +11,9 @@
 #include "Components/AudioComponent.h"
 #include "ContentStreaming.h"
 #include "DrawDebugHelpers.h"
-#include "AudioThread.h"
+#include "Audio/AudioDebug.h"
 #include "AudioDevice.h"
+#include "AudioThread.h"
 #include "Sound/SoundBase.h"
 #include "Sound/SoundCue.h"
 #include "Sound/SoundWave.h"
@@ -32,8 +33,11 @@ DEFINE_LOG_CATEGORY(LogAudioDebug);
 DEFINE_STAT(STAT_AudioMemorySize);
 DEFINE_STAT(STAT_ActiveSounds);
 DEFINE_STAT(STAT_AudioSources);
+DEFINE_STAT(STAT_AudioVirtualLoops);
 DEFINE_STAT(STAT_WaveInstances);
 DEFINE_STAT(STAT_WavesDroppedDueToPriority);
+DEFINE_STAT(STAT_AudioMaxChannels);
+DEFINE_STAT(STAT_AudioMaxStoppingSources);
 DEFINE_STAT(STAT_AudibleWavesDroppedDueToPriority);
 DEFINE_STAT(STAT_AudioFinishedDelegatesCalled);
 DEFINE_STAT(STAT_AudioFinishedDelegates);
@@ -66,19 +70,35 @@ FAutoConsoleVariableRef CVarDisableStereoSpread(
 	TEXT("0: Not Disabled, 1: Disabled"),
 	ECVF_Default);
 
+static int32 AllowAudioSpatializationCVar = 1;
+FAutoConsoleVariableRef CVarAllowAudioSpatializationCVar(
+	TEXT("au.AllowAudioSpatialization"),
+	AllowAudioSpatializationCVar,
+	TEXT("Controls if we allow spatialization of audio, normally this is enabled.  If disabled all audio won't be spatialized, but will have attenuation.\n")
+	TEXT("0: Disable, >0: Enable"),
+	ECVF_Default);
+
+static int32 AllowReverbForMultichannelSources = 1;
+FAutoConsoleVariableRef CvarAllowReverbForMultichannelSources(
+	TEXT("au.AllowReverbForMultichannelSources"),
+	AllowReverbForMultichannelSources,
+	TEXT("Controls if we allow Reverb processing for sources with channel counts > 2.\n")
+	TEXT("0: Disable, >0: Enable"),
+	ECVF_Default);
+
+
 bool IsAudioPluginEnabled(EAudioPlugin PluginType)
 {
 	switch (PluginType)
 	{
 	case EAudioPlugin::SPATIALIZATION:
 		return AudioPluginUtilities::GetDesiredSpatializationPlugin(AudioPluginUtilities::CurrentPlatform) != nullptr;
-		break;
 	case EAudioPlugin::REVERB:
 		return AudioPluginUtilities::GetDesiredReverbPlugin(AudioPluginUtilities::CurrentPlatform) != nullptr;
-		break;
 	case EAudioPlugin::OCCLUSION:
 		return AudioPluginUtilities::GetDesiredOcclusionPlugin(AudioPluginUtilities::CurrentPlatform) != nullptr;
-		break;
+	case EAudioPlugin::MODULATION:
+		return AudioPluginUtilities::GetDesiredModulationPlugin(AudioPluginUtilities::CurrentPlatform) != nullptr;
 	default:
 		return false;
 		break;
@@ -91,8 +111,7 @@ UClass* GetAudioPluginCustomSettingsClass(EAudioPlugin PluginType)
 	{
 		case EAudioPlugin::SPATIALIZATION:
 		{
-			IAudioSpatializationFactory* Factory = AudioPluginUtilities::GetDesiredSpatializationPlugin(AudioPluginUtilities::CurrentPlatform);
-			if (Factory)
+			if (IAudioSpatializationFactory* Factory = AudioPluginUtilities::GetDesiredSpatializationPlugin(AudioPluginUtilities::CurrentPlatform))
 			{
 				return Factory->GetCustomSpatializationSettingsClass();
 			}
@@ -101,8 +120,7 @@ UClass* GetAudioPluginCustomSettingsClass(EAudioPlugin PluginType)
 
 		case EAudioPlugin::REVERB:
 		{
-			IAudioReverbFactory* Factory = AudioPluginUtilities::GetDesiredReverbPlugin(AudioPluginUtilities::CurrentPlatform);
-			if (Factory)
+			if (IAudioReverbFactory* Factory = AudioPluginUtilities::GetDesiredReverbPlugin(AudioPluginUtilities::CurrentPlatform))
 			{
 				return Factory->GetCustomReverbSettingsClass();
 			}
@@ -111,15 +129,24 @@ UClass* GetAudioPluginCustomSettingsClass(EAudioPlugin PluginType)
 
 		case EAudioPlugin::OCCLUSION:
 		{
-			IAudioOcclusionFactory* Factory = AudioPluginUtilities::GetDesiredOcclusionPlugin(AudioPluginUtilities::CurrentPlatform);
-			if (Factory)
+			if (IAudioOcclusionFactory* Factory = AudioPluginUtilities::GetDesiredOcclusionPlugin(AudioPluginUtilities::CurrentPlatform))
 			{
 				return Factory->GetCustomOcclusionSettingsClass();
 			}
 		}
 		break;
 
+		case EAudioPlugin::MODULATION:
+		{
+			if (IAudioModulationFactory* Factory = AudioPluginUtilities::GetDesiredModulationPlugin(AudioPluginUtilities::CurrentPlatform))
+			{
+				return Factory->GetCustomModulationSettingsClass();
+			}
+		}
+		break;
+
 		default:
+			static_assert(static_cast<uint32>(EAudioPlugin::COUNT) == 4, "Possible missing audio plugin type case coverage");
 		break;
 	}
 
@@ -295,7 +322,7 @@ bool FSoundSource::SetReverbApplied(bool bHardwareAvailable)
 	}
 
 	// Do not apply reverb to multichannel sounds
-	if (WaveInstance->WaveData->NumChannels > 2)
+	if (!AllowReverbForMultichannelSources && (WaveInstance->WaveData->NumChannels > 2))
 	{
 		bReverbApplied = false;
 	}
@@ -335,44 +362,60 @@ float FSoundSource::SetLFEBleed()
 
 void FSoundSource::SetFilterFrequency()
 {
-	LPFFrequency = MAX_FILTER_FREQUENCY;
-
-	if (AudioDevice->GetMixDebugState() == DEBUGSTATE_TestLPF)
+	// HPF is only available with audio mixer enabled
+	switch (AudioDevice->GetMixDebugState())
 	{
-		// If in debug mode, lets set all sounds to a LPF of MIN_FILTER_FREQUENCY
-		LPFFrequency = MIN_FILTER_FREQUENCY;
+		case DEBUGSTATE_TestLPF:
+		{
+			LPFFrequency = MIN_FILTER_FREQUENCY;
+		}
+		break;
+
+		case DEBUGSTATE_DisableLPF:
+		{
+			LPFFrequency = MAX_FILTER_FREQUENCY;
+		}
+		break;
+
+		default:
+		{
+			// Set the LPFFrequency to lowest provided value
+			LPFFrequency = FMath::Min(WaveInstance->OcclusionFilterFrequency, WaveInstance->LowPassFilterFrequency);
+			LPFFrequency = FMath::Min(LPFFrequency, WaveInstance->AmbientZoneFilterFrequency);
+			LPFFrequency = FMath::Min(LPFFrequency, WaveInstance->AttenuationLowpassFilterFrequency);
+			LPFFrequency = FMath::Min(LPFFrequency, WaveInstance->SoundModulationControls.Lowpass);
+		}
+		break;
 	}
-	else if (AudioDevice->GetMixDebugState() != DEBUGSTATE_DisableLPF)
+
+	// HPF is only available with audio mixer enabled
+	switch (AudioDevice->GetMixDebugState())
 	{
-		// If so, override the frequency with the occluded filter frequency
-		LPFFrequency = WaveInstance->OcclusionFilterFrequency;
-
-		// Set the LPFFrequency to the manual LowPassFilterFrequency if it's lower
-		if (WaveInstance->bEnableLowPassFilter && WaveInstance->LowPassFilterFrequency < LPFFrequency)
+		case DEBUGSTATE_TestHPF:
 		{
-			LPFFrequency = WaveInstance->LowPassFilterFrequency;
+			HPFFrequency = MAX_FILTER_FREQUENCY;
 		}
+		break;
 
-		// Set the LPFFrequency to the ambient filter frequency if it's lower
-		if (WaveInstance->AmbientZoneFilterFrequency < LPFFrequency)
+		case DEBUGSTATE_DisableHPF:
 		{
-			LPFFrequency = WaveInstance->AmbientZoneFilterFrequency;
+			HPFFrequency = MIN_FILTER_FREQUENCY;
 		}
+		break;
 
-		if (WaveInstance->AttenuationLowpassFilterFrequency < LPFFrequency)
+		default:
 		{
-			LPFFrequency = WaveInstance->AttenuationLowpassFilterFrequency;
+			// Set the HPFFrequency to highest provided value
+			HPFFrequency = FMath::Max(WaveInstance->AttenuationHighpassFilterFrequency, WaveInstance->SoundModulationControls.Highpass);
 		}
-
-		// This is only used in audio mixer, and only one thing is setting HPF
-		HPFFrequency = WaveInstance->AttenuationHighpassFilterFrequency;
+		break;
 	}
 }
 
 void FSoundSource::UpdateStereoEmitterPositions()
 {
 	// Only call this function if we're told to use spatialization
-	check(WaveInstance->bUseSpatialization);
+	check(WaveInstance->GetUseSpatialization());
 	check(Buffer->NumChannels == 2);
 
 	if (!DisableStereoSpreadCvar && WaveInstance->StereoSpread > 0.0f)
@@ -398,54 +441,6 @@ void FSoundSource::UpdateStereoEmitterPositions()
 		LeftChannelSourceLocation = WaveInstance->Location;
 		RightChannelSourceLocation = WaveInstance->Location;
 	}
-}
-
-void FSoundSource::DrawDebugInfo()
-{
-#if ENABLE_DRAW_DEBUG
-	// Draw 3d Debug information about this source, if enabled
-	FAudioDeviceManager* DeviceManager = GEngine->GetAudioDeviceManager();
-
-	if (DeviceManager && DeviceManager->IsVisualizeDebug3dEnabled())
-	{
-		const uint32 AudioComponentID = WaveInstance->ActiveSound->GetAudioComponentID();
-
-		if (AudioComponentID > 0)
-		{
-			DECLARE_CYCLE_STAT(TEXT("FAudioThreadTask.DrawSourceDebugInfo"), STAT_AudioDrawSourceDebugInfo, STATGROUP_TaskGraphTasks);
-
-			USoundBase* Sound = WaveInstance->ActiveSound->GetSound();
-			const FVector Location = WaveInstance->Location;
-
-			const bool bSpatialized = Buffer->NumChannels == 2 && WaveInstance->bUseSpatialization;
-			const FVector LeftChannelSourceLoc = LeftChannelSourceLocation;
-			const FVector RightChannelSourceLoc = RightChannelSourceLocation;
-
-			FAudioThread::RunCommandOnGameThread([AudioComponentID, Sound, bSpatialized, Location, LeftChannelSourceLoc, RightChannelSourceLoc]()
-			{
-				UAudioComponent* AudioComponent = UAudioComponent::GetAudioComponentFromID(AudioComponentID);
-				if (AudioComponent)
-				{
-					UWorld* SoundWorld = AudioComponent->GetWorld();
-					if (SoundWorld)
-					{
-						FRotator SoundRotation = AudioComponent->GetComponentRotation();
-						DrawDebugCrosshairs(SoundWorld, Location, SoundRotation, 20.0f, FColor::White, false, -1.0f, SDPG_Foreground);
-
-						if (bSpatialized)
-						{
-							DrawDebugCrosshairs(SoundWorld, LeftChannelSourceLoc, SoundRotation, 20.0f, FColor::Red, false, -1.0f, SDPG_Foreground);
-							DrawDebugCrosshairs(SoundWorld, RightChannelSourceLoc, SoundRotation, 20.0f, FColor::Green, false, -1.0f, SDPG_Foreground);
-						}
-
-						const FString Name = Sound->GetName();
-						DrawDebugString(SoundWorld, AudioComponent->GetComponentLocation() + FVector(0, 0, 32), *Name, nullptr, FColor::White, 0.033, false);
-					}
-				}
-			}, GET_STATID(STAT_AudioDrawSourceDebugInfo));
-		}
-	}
-#endif // ENABLE_DRAW_DEBUG
 }
 
 float FSoundSource::GetDebugVolume(const float InVolume)
@@ -527,7 +522,7 @@ FSpatializationParams FSoundSource::GetSpatializationParams()
 {
 	FSpatializationParams Params;
 
-	if (WaveInstance->bUseSpatialization)
+	if (WaveInstance->GetUseSpatialization())
 	{
 		FVector EmitterPosition = AudioDevice->GetListenerTransformedDirection(WaveInstance->Location, &Params.Distance);
 
@@ -598,7 +593,7 @@ void FSoundSource::UpdateCommon()
 {
 	check(WaveInstance);
 
-	Pitch = WaveInstance->Pitch;
+	Pitch = WaveInstance->GetPitch();
 
 	// Don't apply global pitch scale to UI sounds
 	if (!WaveInstance->bIsUISound)
@@ -629,6 +624,13 @@ float FSoundSource::GetPlaybackPercent() const
 	}
 
 }
+
+void FSoundSource::GetChannelLocations(FVector& Left, FVector&Right) const
+{
+	Left = LeftChannelSourceLocation;
+	Right = RightChannelSourceLocation;
+}
+
 
 void FSoundSource::NotifyPlaybackData()
 {
@@ -757,16 +759,15 @@ uint32 FWaveInstance::TypeHashCounter = 0;
  *
  * @param InActiveSound		ActiveSound this wave instance belongs to.
  */
-FWaveInstance::FWaveInstance( FActiveSound* InActiveSound )
+FWaveInstance::FWaveInstance(const UPTRINT InWaveInstanceHash, FActiveSound& InActiveSound)
 	: WaveData(nullptr)
 	, SoundClass(nullptr)
 	, SoundSubmix(nullptr)
 	, SourceEffectChain(nullptr)
-	, ActiveSound(InActiveSound)
+	, ActiveSound(&InActiveSound)
 	, Volume(0.0f)
 	, DistanceAttenuation(1.0f)
 	, VolumeMultiplier(1.0f)
-	, VolumeApp(1.0f)
 	, EnvelopValue(0.0f)
 	, EnvelopeFollowerAttackTime(10)
 	, EnvelopeFollowerReleaseTime(100)
@@ -811,6 +812,7 @@ FWaveInstance::FWaveInstance( FActiveSound* InActiveSound )
 	, StereoSpread(0.0f)
 	, AttenuationDistance(0.0f)
 	, ListenerToSoundDistance(0.0f)
+	, ListenerToSoundDistanceForPanning(0.0f)
 	, AbsoluteAzimuth(0.0f)
 	, PlaybackTime(0.0f)
 	, ReverbSendMethod(EReverbSendMethod::Linear)
@@ -818,7 +820,7 @@ FWaveInstance::FWaveInstance( FActiveSound* InActiveSound )
 	, ReverbSendLevelDistanceRange(0.0f, 0.0f)
 	, ManualReverbSendLevel(0.0f)
 	, TypeHash(0)
-	, WaveInstanceHash(0)
+	, WaveInstanceHash(InWaveInstanceHash)
 	, UserIndex(0)
 {
 	TypeHash = ++TypeHashCounter;
@@ -887,10 +889,17 @@ void FWaveInstance::AddReferencedObjects( FReferenceCollector& Collector )
 float FWaveInstance::GetActualVolume() const
 {
 	// Include all volumes
-	float ActualVolume = GetVolume() * VolumeApp * DistanceAttenuation;
+	float ActualVolume = GetVolume() * DistanceAttenuation;
 	if (ActualVolume != 0.0f)
 	{
 		ActualVolume *= GetDynamicVolume();
+
+		check(ActiveSound);
+		if (!ActiveSound->bIsPreviewSound)
+		{
+			check(ActiveSound->AudioDevice);
+			ActualVolume *= ActiveSound->AudioDevice->GetMasterVolume();
+		}
 	}
 
 	return ActualVolume;
@@ -927,10 +936,15 @@ float FWaveInstance::GetVolumeWithDistanceAttenuation() const
 	return GetVolume() * DistanceAttenuation;
 }
 
+float FWaveInstance::GetPitch() const
+{
+	return Pitch * SoundModulationControls.Pitch;
+}
+
 float FWaveInstance::GetVolume() const
 {
 	// Only includes non-attenuation and non-app volumes
-	return Volume * VolumeMultiplier;
+	return Volume * VolumeMultiplier * SoundModulationControls.Volume;
 }
 
 bool FWaveInstance::ShouldStopDueToMaxConcurrency() const
@@ -965,9 +979,36 @@ float FWaveInstance::GetVolumeWeightedPriority() const
 	}
 }
 
+bool FWaveInstance::IsSeekable() const
+{
+	check(WaveData);
+
+	if (StartTime == 0.0f)
+	{
+		return false;
+	}
+
+	if (WaveData->bIsBus || WaveData->bProcedural)
+	{
+		return false;
+	}
+
+	if (IsStreaming() && !WaveData->IsSeekableStreaming())
+	{
+		return false;
+	}
+
+	return true;
+}
+
 bool FWaveInstance::IsStreaming() const
 {
 	return FPlatformProperties::SupportsAudioStreaming() && WaveData != nullptr && WaveData->IsStreaming();
+}
+
+bool FWaveInstance::GetUseSpatialization() const
+{
+	return AllowAudioSpatializationCVar && bUseSpatialization;
 }
 
 FString FWaveInstance::GetName() const

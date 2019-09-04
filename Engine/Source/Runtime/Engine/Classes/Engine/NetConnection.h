@@ -19,10 +19,12 @@
 #include "Engine/Channel.h"
 #include "ProfilingDebugging/Histogram.h"
 #include "Containers/ArrayView.h"
+#include "Containers/CircularBuffer.h"
 #include "ReplicationDriver.h"
 #include "Analytics/EngineNetAnalytics.h"
 #include "PacketTraits.h"
 #include "Net/Util/ResizableCircularQueue.h"
+#include "Net/NetAnalyticsTypes.h"
 
 #include "NetConnection.generated.h"
 
@@ -134,6 +136,13 @@ namespace EClientLoginState
 	}
 };
 
+/** Type of property data resend used by replay checkpoints */
+ enum class EResendAllDataState : uint8
+ {
+	 None,
+	 SinceOpen,
+	 SinceCheckpoint
+ };
 
 // Delegates
 #if !UE_BUILD_SHIPPING
@@ -231,7 +240,7 @@ public:
 };
 
 UCLASS(customConstructor, Abstract, MinimalAPI, transient, config=Engine)
-class UNetConnection : public UPlayer
+class ENGINE_VTABLE UNetConnection : public UPlayer
 {
 	GENERATED_UCLASS_BODY()
 
@@ -274,6 +283,9 @@ class UNetConnection : public UPlayer
 	uint32 InternalAck:1;					// Internally ack all packets, for 100% reliable connections.
 
 	struct FURL			URL;				// URL of the other side.
+	
+	/** The remote address of this connection, typically generated from the URL. */
+	TSharedPtr<FInternetAddr>	RemoteAddr;
 
 	// Track each type of bit used per-packet for bandwidth profiling
 
@@ -342,7 +354,9 @@ public:
 	uint8					ExpectedClientLoginMsgType;	// Used to determine what the next expected control channel msg type should be from a connecting client
 
 	// CD key authentication
+	UE_DEPRECATED(4.23, "CDKeyHash is deprecated.")
 	FString			CDKeyHash;				// Hash of client's CD key
+	UE_DEPRECATED(4.23, "CDKeyResponse is deprecated.")
 	FString			CDKeyResponse;			// Client's response to CD key challenge
 
 	// Internal.
@@ -354,6 +368,7 @@ public:
 	double			LastTickTime;			// Last time of polling.
 	int32			QueuedBits;			// Bits assumed to be queued up.
 	int32			TickCount;				// Count of ticks.
+	uint32			LastProcessedFrame;   // The last frame where we gathered and processed actors for this connection
 	/** The last time an ack was received */
 	float			LastRecvAckTime;
 	/** Time when connection request was first initiated */
@@ -613,8 +628,10 @@ public:
 	 *	This will also act as if it needs to re-open all the channels, etc.
 	 *   NOTE - This doesn't force all exports to happen again though, it will only export new stuff, so keep that in mind.
 	 */
+	UE_DEPRECATED(4.23, "Use ResendAllDataState instead.")
 	bool bResendAllDataSinceOpen;
 
+	EResendAllDataState ResendAllDataState;
 
 #if !UE_BUILD_SHIPPING
 	/** Delegate for hooking ReceivedRawPacket */
@@ -741,14 +758,28 @@ public:
 	ENGINE_API virtual void HandleClientPlayer( class APlayerController* PC, class UNetConnection* NetConnection );
 
 	/** @return the address of the connection as an integer */
+	UE_DEPRECATED(4.23, "Use GetRemoteAddr as it allows direct access to the RemoteAddr and allows for dynamic address sizing.")
 	virtual int32 GetAddrAsInt(void)
 	{
+		PRAGMA_DISABLE_DEPRECATION_WARNINGS
+		if (RemoteAddr.IsValid())
+		{
+			uint32 OutAddr = 0;
+			// Get the host byte order ip addr
+			RemoteAddr->GetIp(OutAddr);
+			return (int32)OutAddr;
+		}
+		PRAGMA_ENABLE_DEPRECATION_WARNINGS
 		return 0;
 	}
 
 	/** @return the port of the connection as an integer */
 	virtual int32 GetAddrPort(void)
 	{
+		if (RemoteAddr.IsValid())
+		{
+			return RemoteAddr->GetPort();
+		}
 		return 0;
 	}
 
@@ -758,7 +789,16 @@ public:
 	 *
 	 * @return	The platform specific FInternetAddr containing this connections address
 	 */
-	virtual TSharedPtr<FInternetAddr> GetInternetAddr() PURE_VIRTUAL(UNetConnection::GetInternetAddr,return TSharedPtr<FInternetAddr>(););
+	UE_DEPRECATED(4.23, "Use GetRemoteAddr to safely get the FInternetAddr tied to this connection")
+	virtual TSharedPtr<FInternetAddr> GetInternetAddr() { return ConstCastSharedPtr<FInternetAddr>(GetRemoteAddr()); }
+
+	/**
+	 * Return the platform specific FInternetAddr type, containing this connections address.
+	 * If nullptr is returned, connection is not added to MappedClientConnections, and can't receive net packets which depend on this.
+	 *
+	 * @return	The platform specific FInternetAddr containing this connections address
+	 */
+	virtual TSharedPtr<const FInternetAddr> GetRemoteAddr() { return RemoteAddr; }
 
 	/** closes the connection (including sending a close notify across the network) */
 	ENGINE_API void Close();
@@ -873,7 +913,14 @@ public:
 	* Gets a unique ID for the connection, this ID depends on the underlying connection
 	* For IP connections this is an IP Address and port, for steam this is a SteamID
 	*/
-	ENGINE_API virtual FString RemoteAddressToString() PURE_VIRTUAL(UNetConnection::RemoteAddressToString, return TEXT("Error"););
+	ENGINE_API virtual FString RemoteAddressToString()
+	{
+		if (RemoteAddr.IsValid())
+		{
+			return RemoteAddr->ToString(true);
+		}
+		return TEXT("Invalid");
+	}
 	
 	
 	/** Called by UActorChannel. Handles creating a new replicator for an actor */
@@ -886,7 +933,8 @@ public:
 	void PurgeAcks();
 
 	/** Send package map to the remote. */
-	void SendPackageMap();
+	UE_DEPRECATED(4.23, "This method will be removed.")
+	void SendPackageMap() {}
 
 	/** 
 	 * Appends the passed in data to the SendBuffer to be sent when FlushNet is called
@@ -1036,6 +1084,12 @@ public:
 	 */
 	void SetIgnoreAlreadyOpenedChannels(bool bInIgnoreAlreadyOpenedChannels);
 
+	/**
+	 * Sets whether or not we should ignore bunches for a specific set of NetGUIDs.
+	 * Should only be used with InternalAck.
+	 */
+	void SetIgnoreActorBunches(bool bInIgnoreActorBunches, TSet<FNetworkGUID>&& InIgnoredBunchGuids);
+
 	/** Returns the OutgoingBunches array, only to be used by UChannel::SendBunch */
 	TArray<FOutBunch *>& GetOutgoingBunches() { return OutgoingBunches; }
 
@@ -1045,7 +1099,58 @@ public:
 	/** Removes stale entries from DormantReplicatorMap. */
 	void CleanupStaleDormantReplicators();
 
+	/**
+	 * Flush the cache of sequenced packets waiting for a missing packet. Will flush only up to the next missing packet, unless bFlushWholeCache is set.
+	 *
+	 * @param bFlushWholeCache	Whether or not the whole cache should be flushed, or only flush up to the next missing packet
+	 */
+	void FlushPacketOrderCache(bool bFlushWholeCache=false);
+
+	/** Called when an actor channel is open and knows its NetGUID. */
+	ENGINE_API virtual void NotifyActorNetGUID(UActorChannel* Channel) {}
+
+	/**
+	 * Returns the current delinquency analytics and resets them.
+	 * This would be similar to calls to Get and Reset separately, except that the caller
+	 * will assume ownership of data in this case.
+	 */
+	ENGINE_API void ConsumeQueuedActorDelinquencyAnalytics(FNetQueuedActorDelinquencyAnalytics& Out);
+
+	/** Returns the current delinquency analytics. */
+	ENGINE_API const FNetQueuedActorDelinquencyAnalytics& GetQueuedActorDelinquencyAnalytics() const;
+
+	/** Resets the current delinquency analytics. */
+	ENGINE_API void ResetQueuedActorDelinquencyAnalytics();
+
+	/**
+	 * Returns the current saturation analytics and resets them.
+	 * This would be similar to calls to Get and Reset separately, except that the caller
+	 * will assume ownership of data in this case.
+	 */
+	ENGINE_API void ConsumeSaturationAnalytics(FNetConnectionSaturationAnalytics& Out);
+
+	/** Returns the current saturation analytics. */
+	ENGINE_API const FNetConnectionSaturationAnalytics& GetSaturationAnalytics() const;
+
+	/** Resets the current saturation analytics. */
+	ENGINE_API void ResetSaturationAnalytics();
+
+	/**
+	 * Called to notify the connection that we attempted to replicate its actors this frame.
+	 * This is primarily for analytics book keeping.
+	 *
+	 * @param bWasSaturated		True if we failed to replicate all data because we were saturated.
+	 */
+	ENGINE_API void TrackReplicationForAnalytics(const bool bWasSaturated);
+
+	/**
+	 * Get the current number of sent packets for which we have received a delivery notification
+	 */
+	ENGINE_API uint32 GetOutTotalNotifiedPackets() const { return OutTotalNotifiedPackets; }
+	
 protected:
+
+	ENGINE_API void SetPendingCloseDueToSocketSendFailure();
 
 	void CleanupDormantActorState();
 
@@ -1105,6 +1210,14 @@ private:
 	TMap<int32, FNetworkGUID> IgnoringChannels;
 	bool bIgnoreAlreadyOpenedChannels;
 
+	/** Set of guids we may need to ignore when processing a delta checkpoint */
+	TSet<FNetworkGUID> IgnoredBunchGuids;
+
+	/** Set of channels we may need to ignore when processing a delta checkpoint */
+	TSet<int32> IgnoredBunchChannels;
+
+	bool bIgnoreActorBunches;
+
 	/** This is only used in UChannel::SendBunch. It's a member so that we can preserve the allocation between calls, as an optimization, and in a thread-safe way to be compatible with demo.ClientRecordAsyncEndOfFrame */
 	TArray<FOutBunch*> OutgoingBunches;
 
@@ -1117,14 +1230,39 @@ private:
 	/** Full PacketId  of last sent packet that we have received notification for (i.e. we know if it was delivered or not). Related to OutAckPacketId which is tha last successfully delivered PacketId */
 	int32 LastNotifiedPacketId;
 
+	/** Count the number of notified packets, i.e. packets that we know if they are delivered or not. Used to reliably measure outgoing packet loss */
+	uint32 OutTotalNotifiedPackets;
+
 	/** Keep old behavior where we send a packet with only acks even if we have no other outgoing data if we got incoming data */
 	uint32 HasDirtyAcks;
 	
 	/** True if we've hit the actor channel limit and logged a warning about it */
 	bool bHasWarnedAboutChannelLimit;
+
+	/** True if we are pending close due to a socket failure during send */
+	bool bConnectionPendingCloseDueToSocketSendFailure;
+
+	FNetworkGUID GetActorGUIDFromOpenBunch(FInBunch& Bunch);
+
+	/** Out of order packet tracking/correction */
+
+	/** Stat tracking for the total number of out of order packets, for this connection */
+	int32 TotalOutOfOrderPackets;
+
+	/** Buffer of partially read (post-PacketHandler) sequenced packets, which are waiting for a missing packet/sequence */
+	TOptional<TCircularBuffer<TUniquePtr<FBitReader>>> PacketOrderCache;
+
+	/** The current start index for PacketOrderCache */
+	int32 PacketOrderCacheStartIdx;
+
+	/** The current number of valid packets in PacketOrderCache */
+	int32 PacketOrderCacheCount;
+
+	FNetConnectionSaturationAnalytics SaturationAnalytics;
+
+	/** Whether or not PacketOrderCache is presently being flushed */
+	bool bFlushingPacketOrderCache;
 };
-
-
 
 /** Help structs for temporarily setting network settings */
 struct FNetConnectionSettings
@@ -1194,7 +1332,6 @@ public:
 	virtual FString LowLevelGetRemoteAddress(bool bAppendPort=false) override { return FString(); }
 	virtual bool ClientHasInitializedLevelFor(const AActor* TestActor) const { return true; }
 
-
-	virtual TSharedPtr<FInternetAddr> GetInternetAddr() override { return TSharedPtr<FInternetAddr>(); }
+	virtual TSharedPtr<const FInternetAddr> GetRemoteAddr() override { return nullptr; }
 };
 

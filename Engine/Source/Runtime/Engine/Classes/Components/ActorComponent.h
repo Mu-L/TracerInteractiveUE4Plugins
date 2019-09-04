@@ -67,9 +67,10 @@ CONSTEXPR inline EUpdateTransformFlags operator ~(EUpdateTransformFlags Value)
 /** Converts legacy bool into the SkipPhysicsUpdate bitflag */
 FORCEINLINE EUpdateTransformFlags SkipPhysicsToEnum(bool bSkipPhysics){ return bSkipPhysics ? EUpdateTransformFlags::SkipPhysicsUpdate : EUpdateTransformFlags::None; }
 
+class UActorComponent;
 
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FActorComponentActivatedSignature, UActorComponent*, Component, bool, bReset);
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FActorComponentDeactivateSignature, UActorComponent*, Component);
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_TwoParams(FActorComponentActivatedSignature, UActorComponent, OnComponentActivated, UActorComponent*, Component, bool, bReset);
+DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_OneParam(FActorComponentDeactivateSignature, UActorComponent, OnComponentDeactivated, UActorComponent*, Component);
 
 DECLARE_MULTICAST_DELEGATE_OneParam(FActorComponentGlobalCreatePhysicsSignature, UActorComponent*);
 DECLARE_MULTICAST_DELEGATE_OneParam(FActorComponentGlobalDestroyPhysicsSignature, UActorComponent*);
@@ -237,6 +238,9 @@ private:
 #if WITH_EDITOR
 	/** During undo/redo it isn't safe to cache owner */
 	uint8 bCanUseCachedOwner:1;
+
+	/** Marks this component pending kill once PostLoad occurs. Used to clean up old native default subobjects that were removed from code */
+	uint8 bMarkPendingKillOnPostLoad : 1;
 #endif
 
 	/** True if this component was owned by a net startup actor during level load. */
@@ -249,10 +253,6 @@ public:
 	/** Describes how a component instance will be created */
 	UPROPERTY()
 	EComponentCreationMethod CreationMethod;
-
-private:
-	UPROPERTY()
-	TArray<FSimpleMemberReference> UCSModifiedProperties;
 
 public:
 	/** Tracks whether the component has been added to one of the world's end of frame update lists */
@@ -321,6 +321,11 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Components|Activation")
 	FActorComponentDeactivateSignature OnComponentDeactivated;
 
+private:
+	UPROPERTY()
+	TArray<FSimpleMemberReference> UCSModifiedProperties;
+
+public:
 	/**
 	 * Activates the SceneComponent, should be overridden by native child classes.
 	 * @param bReset - Whether the activation should happen even if ShouldActivate returns false.
@@ -449,6 +454,9 @@ public:
 	/** This should only be called by the engine in ULevel::InitializeNetworkActors to initialize bIsNetStartupComponent. */
 	void SetIsNetStartupComponent(const bool bInIsNetStartupComponent) { bIsNetStartupComponent = bInIsNetStartupComponent; }
 
+	/** Allows components to handle an EOF update happening mid tick. Can be used to block on in-flight async tasks etc. This should ensure the the component's tick is complete so that it's render update is correct. */
+	virtual void OnEndOfFrameUpdateDuringTick() {}
+
 private:
 	/** Cached pointer to owning actor */
 	mutable AActor* OwnerPrivate;
@@ -545,9 +553,9 @@ public:
 	virtual void InitializeComponent();
 
 	/**
-	 * BeginsPlay for the component.  Occurs at level startup or actor spawn. This is before BeginPlay (Actor or Component).  
-	 * All Components (that want initialization) in the level will be Initialized on load before any 
-	 * Actor/Component gets BeginPlay.
+	 * Begins Play for the component. 
+	 * Called when the owning Actor begins play or when the component is created if the Actor has already begun play.
+	 * Actor BeginPlay normally happens right after PostInitializeComponents but can be delayed for networked or child actors.
 	 * Requires component to be registered and initialized.
 	 */
 	virtual void BeginPlay();
@@ -779,7 +787,7 @@ public:
 	virtual bool IsNameStableForNetworking() const override;
 	virtual bool IsSupportedForNetworking() const override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
-	virtual int32 GetFunctionCallspace( UFunction* Function, void* Parameters, FFrame* Stack ) override;
+	virtual int32 GetFunctionCallspace( UFunction* Function, FFrame* Stack ) override;
 	virtual bool CallRemoteFunction( UFunction* Function, void* Parameters, FOutParmRec* OutParms, FFrame* Stack ) override;
 	virtual void PostInitProperties() override;
 	virtual void PostLoad() override;
@@ -884,6 +892,11 @@ public:
 
 	/** Prefix used to identify template component instances */
 	static const FString ComponentTemplateNameSuffix;
+
+	DECLARE_MULTICAST_DELEGATE_OneParam(FOnMarkRenderStateDirty, UActorComponent&);
+
+	/** Called When render state is marked dirty */
+	static FOnMarkRenderStateDirty MarkRenderStateDirtyEvent;
 
 protected:
 	/** Makes sure navigation system has up to date information regarding component's navigation relevancy 

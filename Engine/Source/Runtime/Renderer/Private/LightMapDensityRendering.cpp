@@ -152,12 +152,14 @@ void FLightmapDensityMeshProcessor::Process(
 			static const auto CVar = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.VirtualTexturedLightmaps"));
 			if (CVar->GetValueOnRenderThread() == 1)
 			{
-				const ULightMapVirtualTexture* VT = MeshBatch.LCI->GetLightMapInteraction(FeatureLevel).GetVirtualTexture();
-				if (VT && VT->Space)
+				IAllocatedVirtualTexture* AllocatedVT = MeshBatch.LCI->GetResourceCluster()->AllocatedVT;
+				if (AllocatedVT)
 				{
 					// We use the total Space size here as the Lightmap Scale/Bias is transformed to VT space
-					ShaderElementData.LightMapResolutionScale.X = VT->Space->Size * VT->Space->TileSize;
-					ShaderElementData.LightMapResolutionScale.Y = (VT->Space->Size * VT->Space->TileSize) * 2.0f; // Compensates the VT specific math in GetLightMapCoordinates (used to pack more coefficients per texture)
+					// TODO - what should we do about multiple layers, as physical texture backing each layer may be different size
+					const uint32 PhysicalTextureSize = AllocatedVT->GetPhysicalTextureSize(0u);
+					ShaderElementData.LightMapResolutionScale.X = PhysicalTextureSize;
+					ShaderElementData.LightMapResolutionScale.Y = PhysicalTextureSize * 2.0f; // Compensates the VT specific math in GetLightMapCoordinates (used to pack more coefficients per texture)
 				}
 			}
 			else
@@ -240,7 +242,7 @@ void FLightmapDensityMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT Mesh
 		const FMaterial* Material = &MeshBatch.MaterialRenderProxy->GetMaterialWithFallback(FeatureLevel, MaterialRenderProxy);
 		const bool bMaterialMasked = Material->IsMasked();
 		const bool bTranslucentBlendMode = IsTranslucentBlendMode(Material->GetBlendMode());
-		const bool bIsLitMaterial = Material->GetShadingModel() != MSM_Unlit;
+		const bool bIsLitMaterial = Material->GetShadingModels().IsLit();
 		const ERasterizerFillMode MeshFillMode = ComputeMeshFillMode(MeshBatch, *Material);
 		const ERasterizerCullMode MeshCullMode = ComputeMeshCullMode(MeshBatch, *Material);
 		const FLightMapInteraction LightMapInteraction = (MeshBatch.LCI && bIsLitMaterial) ? MeshBatch.LCI->GetLightMapInteraction(FeatureLevel) : FLightMapInteraction();

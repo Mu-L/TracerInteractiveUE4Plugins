@@ -52,6 +52,9 @@ enum class ETargetPlatformFeatures
 	/** Texture streaming. */
 	TextureStreaming,
 
+	/** Mesh LOD streaming. */
+	MeshLODStreaming,
+
 	/** User credentials are required to use the device. */
 	UserCredentials,
 
@@ -72,6 +75,21 @@ enum class ETargetPlatformFeatures
 
 	/* The platform supports the experimental Device Output Log window */
 	DeviceOutputLog,
+
+	/* The platform supports memory mapped files */
+	MemoryMappedFiles,
+
+	/* The platform supports memory mapped audio */
+	MemoryMappedAudio,
+
+	/* The platform supports memory mapped animation */
+	MemoryMappedAnimation,
+
+	/* The platform supports sparse textures */
+	SparseTextures,
+	
+	/* Can we use the virtual texture streaming system on this platform. */
+	VirtualTextureStreaming,
 };
 
 
@@ -189,13 +207,20 @@ public:
 	virtual FName GetZlibReplacementFormat() const = 0;
 
 	/**
+	 * Gets the alignment of memory mapping for this platform, typically the page size.
+	 *
+	 * @return alignment of memory mapping.
+	 */
+	virtual int32 GetMemoryMappingAlignment() const = 0;
+
+	/**
 	 * Generates a platform specific asset manifest given an array of FAssetData.
 	 *
-	 * @param ChunkMap A map of asset path to ChunkIDs for all of the assets.
-	 * @param ChunkIDsInUse A set of all ChunkIDs used by this set of assets.
+	 * @param PakchunkMap A map of asset path to Pakchunk file indices for all of the assets.
+	 * @param PakchunkIndicesInUse A set of all Pakchunk file indices used by this set of assets.
 	 * @return true if the manifest was successfully generated, or if the platform doesn't need a manifest .
 	 */
-	virtual bool GenerateStreamingInstallManifest( const TMultiMap<FString, int32>& ChunkMap, const TSet<int32>& ChunkIDsInUse ) const = 0;
+	virtual bool GenerateStreamingInstallManifest( const TMultiMap<FString, int32>& PakchunkMap, const TSet<int32>& PakchunkIndicesInUse) const = 0;
 
 	/**
 	 * Gets the default device.
@@ -321,6 +346,28 @@ public:
 	*/
 	virtual bool UsesDBuffer() const = 0;
 	
+	/**
+	* Gets whether the platform should output velocity in the base pass.
+	*/
+	virtual bool UsesBasePassVelocity() const = 0;
+
+	/**
+	* Gets whether the platform will use selective outputs in the base pass shaders.
+	*/
+	virtual bool UsesSelectiveBasePassOutputs() const = 0; 
+
+	/**
+	* Gets whether the platform will use distance fields.
+	*/
+	virtual bool UsesDistanceFields() const = 0;
+
+	/**
+	* Gets down sample mesh distance field divider.
+	*
+	* @return 1 if platform does not need to downsample mesh distance fields
+	*/
+	virtual float GetDownSampleMeshDistanceFieldDivider() const = 0;
+
 #if WITH_ENGINE
 	/**
 	 * Gets the format to use for a particular body setup.
@@ -354,9 +401,10 @@ public:
 	 * Gets the format to use for a particular texture.
 	 *
 	 * @param Texture The texture to get the format for.
+	 * @param LayerIndex Index of layer within Texture to get the format for
 	 * @param OutFormats Will contain the list of supported formats.
 	 */
-	virtual void GetTextureFormats( const class UTexture* Texture, TArray<FName>& OutFormats ) const = 0;
+	virtual void GetTextureFormats( const class UTexture* Texture, TArray< TArray<FName> >& OutFormats ) const = 0;
 
 	/**
 	 * Gets the texture formats this platform can use

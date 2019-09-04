@@ -33,23 +33,23 @@ protected:
 	UMaterialInterface* Material_DEPRECATED;
 
 	/** Current play rate of the flipbook */
-	UPROPERTY(Category=Sprite, EditAnywhere, Replicated)
+	UPROPERTY(Category=Sprite, EditAnywhere)
 	float PlayRate;
 
 	/** Whether the flipbook should loop when it reaches the end, or stop */
-	UPROPERTY(Replicated)
+	UPROPERTY()
 	uint32 bLooping:1;
 
 	/** If playback should move the current position backwards instead of forwards */
-	UPROPERTY(Replicated)
+	UPROPERTY()
 	uint32 bReversePlayback:1;
 
 	/** Are we currently playing (moving Position) */
-	UPROPERTY(Replicated)
+	UPROPERTY()
 	uint32 bPlaying:1;
 
 	/** Current position in the timeline */
-	UPROPERTY(Replicated)
+	UPROPERTY()
 	float AccumulatedTime;
 
 	/** Last frame index calculated */
@@ -196,7 +196,7 @@ public:
 	virtual void GetUsedTextures(TArray<UTexture*>& OutTextures, EMaterialQualityLevel::Type QualityLevel) override;
 	virtual UMaterialInterface* GetMaterial(int32 MaterialIndex) const override;
 	virtual void GetUsedMaterials(TArray<UMaterialInterface*>& OutMaterials, bool bGetDebugMaterials = false) const override;
-	virtual void GetStreamingTextureInfo(FStreamingTextureLevelContext& LevelContext, TArray<FStreamingTexturePrimitiveInfo>& OutStreamingTextures) const override;
+	virtual void GetStreamingRenderAssetInfo(FStreamingTextureLevelContext& LevelContext, TArray<FStreamingRenderAssetPrimitiveInfo>& OutStreamingTextures) const override;
 	virtual int32 GetNumMaterials() const override;
 	virtual UBodySetup* GetBodySetup() override;
 	// End of UPrimitiveComponent interface

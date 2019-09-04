@@ -47,6 +47,7 @@
 #include "NavigationPath.h"
 #include "AbstractNavData.h"
 #include "CrowdManagerBase.h"
+#include "AI/NavigationModifier.h"
 
 
 static const uint32 INITIAL_ASYNC_QUERIES_SIZE = 32;
@@ -80,6 +81,8 @@ DEFINE_STAT(STAT_Navigation_GatheringNavigationModifiersSync);
 DEFINE_STAT(STAT_Navigation_ActorsGeometryExportSync);
 DEFINE_STAT(STAT_Navigation_ProcessingActorsForNavMeshBuilding);
 DEFINE_STAT(STAT_Navigation_AdjustingNavLinks);
+DEFINE_STAT(STAT_Navigation_RegisterNavOctreeElement);
+DEFINE_STAT(STAT_Navigation_UnregisterNavOctreeElement);
 DEFINE_STAT(STAT_Navigation_AddingActorsToNavOctree);
 DEFINE_STAT(STAT_Navigation_RecastAddGeneratedTiles);
 DEFINE_STAT(STAT_Navigation_RecastTick);
@@ -383,10 +386,9 @@ UNavigationSystemV1::UNavigationSystemV1(const FObjectInitializer& ObjectInitial
 	};
 	static FDelegatesInitializer DelegatesInitializer;
 	
-	// @hack, trying to load AIModule's CrowdManager
-	UClass* Class = StaticLoadClass(UCrowdManagerBase::StaticClass(), nullptr, TEXT("/Script/AIModule.CrowdManager"));
-	CrowdManagerClass = Class ? Class : UCrowdManagerBase::StaticClass();
-	
+	// Set to the ai module's crowd manager, this module may not exist at spawn time but then it will just fail to load
+	CrowdManagerClass = FSoftObjectPath(TEXT("/Script/AIModule.CrowdManager"));
+
 	// active tiles
 	NextInvokersUpdateTime = 0.f;
 	ActiveTilesUpdateInterval = 1.f;
@@ -643,17 +645,9 @@ bool UNavigationSystemV1::ConditionalPopulateNavOctree()
 			for (int32 LevelIndex = 0; LevelIndex < World->GetNumLevels(); ++LevelIndex)
 			{
 				ULevel* Level = World->GetLevel(LevelIndex);
-				AddLevelCollisionToOctree(Level);
-
-				for (int32 ActorIndex = 0; ActorIndex < Level->Actors.Num(); ActorIndex++)
+				if (ensure(Level))
 				{
-					AActor* Actor = Level->Actors[ActorIndex];
-
-					const bool bLegalActor = Actor && !Actor->IsPendingKill();
-					if (bLegalActor)
-					{
-						UpdateActorAndComponentsInNavOctree(*Actor);
-					}
+					AddLevelToOctree(*Level);
 				}
 			}
 		}
@@ -979,46 +973,40 @@ void UNavigationSystemV1::Tick(float DeltaSeconds)
 		}
 		INC_FLOAT_STAT_BY(STAT_Navigation_CumulativeBuildTime,(float)ThisTime*1000);
 	}
-	
-	if (bGenerateNavigationOnlyAroundNavigationInvokers)
+		
+	DirtyAreasUpdateTime += DeltaSeconds;
+
+	if (IsNavigationBuildingLocked() == false)
 	{
-		UpdateInvokers();
-	}
-
-	{
-		SCOPE_CYCLE_COUNTER(STAT_Navigation_TickMarkDirty);
-
-		DirtyAreasUpdateTime += DeltaSeconds;
-		const float DirtyAreasUpdateDeltaTime = 1.0f / DirtyAreasUpdateFreq;
-		const bool bCanRebuildNow = (DirtyAreasUpdateTime >= DirtyAreasUpdateDeltaTime) || !bIsGame;
-		const bool bIsLocked = IsNavigationBuildingLocked();
-
-		if (DirtyAreas.Num() > 0 && bCanRebuildNow && !bIsLocked)
+		if (bGenerateNavigationOnlyAroundNavigationInvokers)
 		{
-			for (int32 NavDataIndex = 0; NavDataIndex < NavDataSet.Num(); ++NavDataIndex)
+			UpdateInvokers();
+		}
+
+		{
+			SCOPE_CYCLE_COUNTER(STAT_Navigation_TickMarkDirty);
+
+			const float DirtyAreasUpdateDeltaTime = 1.0f / DirtyAreasUpdateFreq;
+			const bool bCanRebuildNow = (DirtyAreasUpdateTime >= DirtyAreasUpdateDeltaTime) || !bIsGame;
+
+			if (DirtyAreas.Num() > 0 && bCanRebuildNow)
 			{
-				ANavigationData* NavData = NavDataSet[NavDataIndex];
+				RebuildDirtyAreas();
+				DirtyAreasUpdateTime = 0;
+			}
+		}
+
+		// Tick navigation mesh async builders
+		if (bAsyncBuildPaused == false)
+		{
+			SCOPE_CYCLE_COUNTER(STAT_Navigation_TickAsyncBuild);
+
+			for (ANavigationData* NavData : NavDataSet)
+			{
 				if (NavData)
 				{
-					NavData->RebuildDirtyAreas(DirtyAreas);
+					NavData->TickAsyncBuild(DeltaSeconds);
 				}
-			}
-
-			DirtyAreasUpdateTime = 0;
-			DirtyAreas.Reset();
-		}
-	}
-
-	// Tick navigation mesh async builders
-	if (!bAsyncBuildPaused)
-	{
-		SCOPE_CYCLE_COUNTER(STAT_Navigation_TickAsyncBuild);
-
-		for (ANavigationData* NavData : NavDataSet)
-		{
-			if (NavData)
-			{
-				NavData->TickAsyncBuild(DeltaSeconds);
 			}
 		}
 	}
@@ -2386,6 +2374,8 @@ int32 GetDirtyFlagHelper(int32 UpdateFlags, int32 DefaultValue)
 
 FSetElementId UNavigationSystemV1::RegisterNavOctreeElement(UObject* ElementOwner, INavRelevantInterface* ElementInterface, int32 UpdateFlags)
 {
+	SCOPE_CYCLE_COUNTER(STAT_Navigation_RegisterNavOctreeElement);
+
 	FSetElementId SetId;
 
 #if WITH_EDITOR
@@ -2529,6 +2519,8 @@ bool UNavigationSystemV1::GetNavOctreeElementData(const UObject& NodeOwner, int3
 
 void UNavigationSystemV1::UnregisterNavOctreeElement(UObject* ElementOwner, INavRelevantInterface* ElementInterface, int32 UpdateFlags)
 {
+	SCOPE_CYCLE_COUNTER(STAT_Navigation_UnregisterNavOctreeElement);
+
 #if WITH_EDITOR
 	if (IsNavigationUnregisterLocked())
 	{
@@ -2600,12 +2592,17 @@ const FNavigationRelevantData* UNavigationSystemV1::GetDataForObject(const UObje
 
 	const FOctreeElementId* OctreeID = GetObjectsNavOctreeId(Object);
 
-	if (OctreeID != nullptr && OctreeID->IsValidId() == true)
+	if (OctreeID != nullptr && NavOctree->IsValidElementId(*OctreeID))
 	{
 		return NavOctree->GetDataForID(*OctreeID);
 	}
 
 	return nullptr;
+}
+
+FNavigationRelevantData* UNavigationSystemV1::GetMutableDataForObject(const UObject& Object)
+{
+	return const_cast<FNavigationRelevantData*>(GetDataForObject(Object));
 }
 
 void UNavigationSystemV1::UpdateActorInNavOctree(AActor& Actor)
@@ -2883,6 +2880,50 @@ bool UNavigationSystemV1::UpdateNavOctreeElementBounds(UActorComponent* Comp, co
 	}
 	
 	return false;
+}
+
+bool UNavigationSystemV1::ReplaceAreaInOctreeData(const UObject& Object, TSubclassOf<UNavArea> OldArea, TSubclassOf<UNavArea> NewArea, bool bReplaceChildClasses)
+{
+	FNavigationRelevantData* Data = GetMutableDataForObject(Object);
+	
+	if (Data == nullptr || Data->HasModifiers() == false)
+	{
+		return false;
+	}
+
+	for (FAreaNavModifier& AreaModifier : Data->Modifiers.GetMutableAreas())
+	{ 
+		if (AreaModifier.GetAreaClass() == OldArea
+			|| (bReplaceChildClasses && AreaModifier.GetAreaClass()->IsChildOf(OldArea)))
+		{
+			AreaModifier.SetAreaClass(NewArea);
+		}
+	}
+	for (FSimpleLinkNavModifier& SimpleLink : Data->Modifiers.GetSimpleLinks())
+	{ 
+		for (FNavigationLink& Link : SimpleLink.Links)
+		{
+			if (Link.GetAreaClass() == OldArea
+				|| (bReplaceChildClasses && Link.GetAreaClass()->IsChildOf(OldArea)))
+			{
+				Link.SetAreaClass(NewArea);
+			}
+		}
+		for (FNavigationSegmentLink& Link : SimpleLink.SegmentLinks)
+		{
+			if (Link.GetAreaClass() == OldArea
+				|| (bReplaceChildClasses && Link.GetAreaClass()->IsChildOf(OldArea)))
+			{
+				Link.SetAreaClass(NewArea);
+			}
+		}
+	}
+	for (FCustomLinkNavModifier& CustomLink : Data->Modifiers.GetCustomLinks())
+	{ 
+		ensureMsgf(false, TEXT("Not implemented yet"));
+	}
+
+	return true;
 }
 
 void UNavigationSystemV1::OnComponentRegistered(UActorComponent* Comp)
@@ -3289,6 +3330,13 @@ void UNavigationSystemV1::Build()
 
 	// make sure freshly created navigation instances are registered before we try to build them
 	ProcessRegistrationCandidates();
+	
+	// update invokers in case we're not updating navmesh automatically, in which case
+	// navigation generators wouldn't have up-to-date info.
+	if (bGenerateNavigationOnlyAroundNavigationInvokers)
+	{
+		UpdateInvokers();
+	}
 
 	// and now iterate through all registered and just start building them
 	RebuildAll();
@@ -3533,6 +3581,20 @@ void UNavigationSystemV1::RebuildAll(bool bIsLoadTime)
 	}
 }
 
+void UNavigationSystemV1::RebuildDirtyAreas()
+{
+	for (int32 NavDataIndex = 0; NavDataIndex < NavDataSet.Num(); ++NavDataIndex)
+	{
+		ANavigationData* NavData = NavDataSet[NavDataIndex];
+		if (NavData)
+		{
+			NavData->RebuildDirtyAreas(DirtyAreas);
+		}
+	}
+
+	DirtyAreas.Reset();
+}
+
 bool UNavigationSystemV1::IsNavigationBuildInProgress(bool bCheckDirtyToo)
 {
 	bool bRet = false;
@@ -3639,6 +3701,22 @@ void UNavigationSystemV1::OnLevelRemovedFromWorld(ULevel* InLevel, UWorld* InWor
 	}
 }
 
+void UNavigationSystemV1::AddLevelToOctree(ULevel& Level)
+{
+	AddLevelCollisionToOctree(&Level);
+
+	for (int32 ActorIndex = 0; ActorIndex < Level.Actors.Num(); ActorIndex++)
+	{
+		AActor* Actor = Level.Actors[ActorIndex];
+
+		const bool bLegalActor = Actor && !Actor->IsPendingKill();
+		if (bLegalActor)
+		{
+			UpdateActorAndComponentsInNavOctree(*Actor);
+		}
+	}
+}
+
 void UNavigationSystemV1::AddLevelCollisionToOctree(ULevel* Level)
 {
 #if WITH_RECAST
@@ -3706,9 +3784,13 @@ void UNavigationSystemV1::OnPostLoadMap(UWorld*)
 #if WITH_EDITOR
 void UNavigationSystemV1::OnActorMoved(AActor* Actor)
 {
-	if (Cast<ANavMeshBoundsVolume>(Actor) != NULL)
+	if (Cast<ANavMeshBoundsVolume>(Actor))
 	{
 		OnNavigationBoundsUpdated((ANavMeshBoundsVolume*)Actor);
+	}
+	else if (Actor)
+	{
+		UpdateActorAndComponentsInNavOctree(*Actor, /*bUpdateAttachedActors=*/true);
 	}
 }
 #endif // WITH_EDITOR
@@ -3878,10 +3960,11 @@ bool UNavigationSystemV1::K2_GetRandomReachablePointInRadius(UObject* WorldConte
 	return bResult;
 }
 
-bool UNavigationSystemV1::K2_GetRandomPointInNavigableRadius(UObject* WorldContextObject, const FVector& Origin, FVector& RandomLocation, float Radius, ANavigationData* NavData, TSubclassOf<UNavigationQueryFilter> FilterClass)
+bool UNavigationSystemV1::K2_GetRandomLocationInNavigableRadius(UObject* WorldContextObject, const FVector& Origin, FVector& RandomLocation, float Radius, ANavigationData* NavData, TSubclassOf<UNavigationQueryFilter> FilterClass)
 {
 	FNavLocation RandomPoint(Origin);
 	bool bResult = false;
+	RandomLocation = Origin;
 
 	UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
 	UNavigationSystemV1* NavSys = FNavigationSystem::GetCurrent<UNavigationSystemV1>(World);
@@ -3890,8 +3973,11 @@ bool UNavigationSystemV1::K2_GetRandomPointInNavigableRadius(UObject* WorldConte
 		ANavigationData* UseNavData = NavData ? NavData : NavSys->GetDefaultNavDataInstance(FNavigationSystem::DontCreate);
 		if (UseNavData)
 		{
-			bResult = NavSys->GetRandomPointInNavigableRadius(Origin, Radius, RandomPoint, UseNavData, UNavigationQueryFilter::GetQueryFilter(*UseNavData, WorldContextObject, FilterClass));
-			RandomLocation = RandomPoint.Location;
+			if (NavSys->GetRandomPointInNavigableRadius(Origin, Radius, RandomPoint, UseNavData, UNavigationQueryFilter::GetQueryFilter(*UseNavData, WorldContextObject, FilterClass)))
+			{
+				bResult = true;
+				RandomLocation = RandomPoint.Location;
+			}
 		}
 	}
 
@@ -3956,6 +4042,11 @@ bool UNavigationSystemV1::IsNavigationBeingBuiltOrLocked(UObject* WorldContextOb
 	}
 
 	return false;
+}
+
+bool UNavigationSystemV1::K2_ReplaceAreaInOctreeData(const UObject* Object, TSubclassOf<UNavArea> OldArea, TSubclassOf<UNavArea> NewArea)
+{
+	return Object ? ReplaceAreaInOctreeData(*Object, OldArea, NewArea) : false;
 }
 
 //----------------------------------------------------------------------//
@@ -4196,7 +4287,7 @@ void UNavigationSystemV1::UpdateInvokers()
 	const float CurrentTime = World->GetTimeSeconds();
 	if (CurrentTime >= NextInvokersUpdateTime)
 	{
-		TArray<FNavigationInvokerRaw> InvokerLocations;
+		InvokerLocations.Reset();
 
 		if (Invokers.Num() > 0)
 		{
@@ -4323,6 +4414,11 @@ FVector UNavigationSystemV1::GetRandomPointInNavigableRadius(UObject* WorldConte
 	}
 
 	return RandomPoint.Location;
+}
+
+bool UNavigationSystemV1::K2_GetRandomPointInNavigableRadius(UObject* WorldContextObject, const FVector& Origin, FVector& RandomLocation, float Radius, ANavigationData* NavData, TSubclassOf<UNavigationQueryFilter> FilterClass)
+{
+	return K2_GetRandomLocationInNavigableRadius(WorldContextObject, Origin, RandomLocation, Radius, NavData, FilterClass);
 }
 
 void UNavigationSystemV1::SimpleMoveToActor(AController* Controller, const AActor* Goal)

@@ -34,6 +34,7 @@ struct ENGINE_API FTextureLODGroup
 		, OptionalMaxLODMipCount(12)
 		, MinMagFilter(NAME_Aniso)
 		, MipFilter(NAME_Point)
+		, MipLoadOptions(ETextureMipLoadOptions::AllMips)
 	{
 		SetupGroup();
 	}
@@ -97,6 +98,9 @@ struct ENGINE_API FTextureLODGroup
 	UPROPERTY()
 	FName MipFilter;
 
+	UPROPERTY()
+	ETextureMipLoadOptions MipLoadOptions;
+
 	void SetupGroup();
 };
 
@@ -130,9 +134,10 @@ public:
 	 * @param	LODBias						LOD bias to include in the calculation
 	 * @param	NumCinematicMipLevels		The texture cinematic mip levels to include in the calculation
 	 * @param	MipGenSetting				Mip generation setting
+	 * @param	bVirtualTexture				If VT is enabled (in this case group's max LOD is ignored)
 	 * @return	LOD bias
 	 */
-	int32 CalculateLODBias( int32 Width, int32 Height, int32 MaxSize, int32 LODGroup, int32 LODBias, int32 NumCinematicMipLevels, TextureMipGenSettings MipGenSetting ) const;
+	int32 CalculateLODBias( int32 Width, int32 Height, int32 MaxSize, int32 LODGroup, int32 LODBias, int32 NumCinematicMipLevels, TextureMipGenSettings MipGenSetting, bool bVirtualTexture ) const;
 
 	/**
 	 * Calculate num optional mips
@@ -157,6 +162,14 @@ public:
 	ETextureSamplerFilter GetSamplerFilter(const UTexture* Texture) const;
 
 	ETextureSamplerFilter GetSamplerFilter(int32 InLODGroup) const;
+
+	/**
+	 * Returns the mip load options of a texture.
+	 *
+	 * @param	Texture		Texture to retrieve the mip load option, must not be 0
+	 * @return	The mip load option
+	 */
+	ETextureMipLoadOptions GetMipLoadOptions(const UTexture* Texture) const;
 
 	/**
 	 * Returns the LODGroup mip gen settings

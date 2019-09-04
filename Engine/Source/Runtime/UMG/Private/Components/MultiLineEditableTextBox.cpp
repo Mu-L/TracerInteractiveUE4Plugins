@@ -11,6 +11,9 @@
 /////////////////////////////////////////////////////
 // UMultiLineEditableTextBox
 
+static FEditableTextBoxStyle* DefaultMultiLineEditableTextBoxStyle = nullptr;
+static FTextBlockStyle* DefaultMultiLineEditableTextBoxTextStyle = nullptr;
+
 UMultiLineEditableTextBox::UMultiLineEditableTextBox(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
@@ -18,12 +21,30 @@ UMultiLineEditableTextBox::UMultiLineEditableTextBox(const FObjectInitializer& O
 	BackgroundColor_DEPRECATED = FLinearColor::White;
 	ReadOnlyForegroundColor_DEPRECATED = FLinearColor::Black;
 
-	SMultiLineEditableTextBox::FArguments Defaults;
-	bIsReadOnly = Defaults._IsReadOnly.Get();
-	WidgetStyle = *Defaults._Style;
-	TextStyle = *Defaults._TextStyle;
-	AllowContextMenu = Defaults._AllowContextMenu.Get();
-	VirtualKeyboardDismissAction = Defaults._VirtualKeyboardDismissAction.Get();
+	if (DefaultMultiLineEditableTextBoxStyle == nullptr)
+	{
+		// HACK: THIS SHOULD NOT COME FROM CORESTYLE AND SHOULD INSTEAD BE DEFINED BY ENGINE TEXTURES/PROJECT SETTINGS
+		DefaultMultiLineEditableTextBoxStyle = new FEditableTextBoxStyle(FCoreStyle::Get().GetWidgetStyle<FEditableTextBoxStyle>("NormalEditableTextBox"));
+
+		// Unlink UMG default colors from the editor settings colors.
+		DefaultMultiLineEditableTextBoxStyle->UnlinkColors();
+	}
+
+	if (DefaultMultiLineEditableTextBoxTextStyle == nullptr)
+	{
+		// HACK: THIS SHOULD NOT COME FROM CORESTYLE AND SHOULD INSTEAD BE DEFINED BY ENGINE TEXTURES/PROJECT SETTINGS
+		DefaultMultiLineEditableTextBoxTextStyle = new FTextBlockStyle(FCoreStyle::Get().GetWidgetStyle<FTextBlockStyle>("NormalText"));
+
+		// Unlink UMG default colors from the editor settings colors.
+		DefaultMultiLineEditableTextBoxTextStyle->UnlinkColors();
+	}
+	
+	WidgetStyle = *DefaultMultiLineEditableTextBoxStyle;
+	TextStyle = *DefaultMultiLineEditableTextBoxTextStyle;
+
+	bIsReadOnly = false;
+	AllowContextMenu = true;
+	VirtualKeyboardDismissAction = EVirtualKeyboardDismissAction::TextChangeOnDismiss;
 	AutoWrapText = true;
 
 	if (!IsRunningDedicatedServer())
@@ -108,6 +129,27 @@ void UMultiLineEditableTextBox::SetText(FText InText)
 	}
 }
 
+FText UMultiLineEditableTextBox::GetHintText() const
+{
+	if (MyEditableTextBlock.IsValid())
+	{
+		return MyEditableTextBlock->GetHintText();
+	}
+
+	return HintText;
+}
+
+void UMultiLineEditableTextBox::SetHintText(FText InHintText)
+{
+	HintText = InHintText;
+	HintTextDelegate.Clear();
+	if ( MyEditableTextBlock.IsValid() )
+	{
+		TAttribute<FText> HintTextBinding = PROPERTY_BINDING(FText, HintText);
+		MyEditableTextBlock->SetHintText(HintTextBinding);
+	}
+}
+
 void UMultiLineEditableTextBox::SetError(FText InError)
 {
 	if ( MyEditableTextBlock.IsValid() )
@@ -123,6 +165,16 @@ void UMultiLineEditableTextBox::SetIsReadOnly(bool bReadOnly)
 	if ( MyEditableTextBlock.IsValid() )
 	{
 		MyEditableTextBlock->SetIsReadOnly(bIsReadOnly);
+	}
+}
+
+void UMultiLineEditableTextBox::SetTextStyle(const FTextBlockStyle& InTextStyle)
+{
+	TextStyle = InTextStyle;
+
+	if (MyEditableTextBlock.IsValid())
+	{
+		MyEditableTextBlock->SetTextStyle(&TextStyle);
 	}
 }
 
