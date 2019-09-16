@@ -1,5 +1,6 @@
 // Copyright 2019 Tracer Interactive, LLC. All Rights Reserved.
 #include "SWebInterface.h"
+#if !UE_SERVER
 #include "SWebBrowser.h"
 #include "WebBrowserModule.h"
 #include "IWebBrowserPopupFeatures.h"
@@ -462,3 +463,4 @@ void SWebInterface::UnbindUObject( const FString& Name, UObject* Object, bool bI
 	if ( BrowserView.IsValid() )
 		BrowserView->UnbindUObject( Name, Object, bIsPermanent );
 }
+#endif
