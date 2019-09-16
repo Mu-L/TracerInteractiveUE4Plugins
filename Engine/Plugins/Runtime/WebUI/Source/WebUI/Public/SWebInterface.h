@@ -6,6 +6,8 @@
 #include "Widgets/DeclarativeSyntaxSupport.h"
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/SWindow.h"
+
+#if !UE_SERVER
 #include "SWebBrowserView.h"
 
 class SWebBrowserView;
@@ -137,3 +139,4 @@ public:
 	void BindUObject( const FString& Name, UObject* Object, bool bIsPermanent = true );
 	void UnbindUObject( const FString& Name, UObject* Object, bool bIsPermanent = true );
 };
+#endif
