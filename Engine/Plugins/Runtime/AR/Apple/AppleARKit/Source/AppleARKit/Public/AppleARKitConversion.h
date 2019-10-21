@@ -245,8 +245,28 @@ struct APPLEARKIT_API FAppleARKitConversion
 #endif
 
 	static ARConfiguration* ToARConfiguration( UARSessionConfig* SessionConfig, TMap< FString, UARCandidateImage* >& CandidateImages, TMap< FString, CGImageRef >& ConvertedCandidateImages, TMap< FString, UARCandidateObject* >& CandidateObjects );
+	
+	static void ConfigureSessionTrackingFeatures(UARSessionConfig* SessionConfig, ARConfiguration* SessionConfiguration);
 
 	#pragma clang diagnostic pop
+#endif
+	
+#if SUPPORTS_ARKIT_1_0
+	// Helper function to check if a particular session feature is supported with the specified session type
+	static bool IsSessionTrackingFeatureSupported(EARSessionType SessionType, EARSessionTrackingFeature SessionTrackingFeature);
+#else
+	static bool IsSessionTrackingFeatureSupported(EARSessionType SessionType, EARSessionTrackingFeature SessionTrackingFeature) { return false; }
+#endif
+		
+#if SUPPORTS_ARKIT_3_0
+	static void InitImageDetection(UARSessionConfig* SessionConfig, ARBodyTrackingConfiguration* BodyTrackingConfig, TMap< FString, UARCandidateImage* >& CandidateImages, TMap< FString, CGImageRef >& ConvertedCandidateImages);
+	static ARFrameSemantics ToARFrameSemantics(EARSessionTrackingFeature SessionTrackingFeature);
+	static FARPose2D ToARPose2D(const ARBody2D* InARPose2D);
+	static FARPose3D ToARPose3D(const ARBodyAnchor* InARBodyAnchor);
+    static FARPose3D ToARPose3D(const ARSkeleton3D* InSkeleton3D, bool bIdentityForUntracked);
+
+private:
+	static void ToSkeletonDefinition(const ARSkeletonDefinition* InARSkeleton, FARSkeletonDefinition& OutSkeletonDefinition);
 #endif
 };
 
@@ -259,6 +279,7 @@ enum class EAppleAnchorType : uint8
 	ImageAnchor,
 	EnvironmentProbeAnchor,
 	ObjectAnchor,
+	PoseAnchor,
 	MAX
 };
 
@@ -328,6 +349,14 @@ struct FAppleARKitAnchorData
 	{
 	}
 
+	FAppleARKitAnchorData(FGuid InAnchorGuid, FTransform InTransform, FARPose3D InTrackedPose)
+		: Transform( InTransform )
+		, AnchorType( EAppleAnchorType::PoseAnchor )
+		, AnchorGUID( InAnchorGuid )
+		, TrackedPose( MoveTemp(InTrackedPose) )
+	{
+	}
+	
 	FAppleARKitAnchorData& operator=(const FAppleARKitAnchorData& Other)
 	{
 		if (this != &Other)
@@ -369,6 +398,8 @@ struct FAppleARKitAnchorData
 		ObjectClassification = Other.ObjectClassification;
 
 		bIsTracked = Other.bIsTracked;
+		
+		TrackedPose = Other.TrackedPose;
 	}
 
 	void Clear()
@@ -379,6 +410,8 @@ struct FAppleARKitAnchorData
 		Vertices.Empty();
 		Indices.Empty();
 		ProbeTexture = nullptr;
+		
+		TrackedPose = {};
 	}
 
 	FTransform Transform;
@@ -413,6 +446,12 @@ struct FAppleARKitAnchorData
 
 	/** Only valid for tracked real world objects (face, images) */
 	bool bIsTracked;
+	
+	/** Only valid if this is a body anchor */
+	FARPose3D TrackedPose;
+
+	// only need to be initialized once
+	static TSharedPtr<FARPose3D> BodyRefPose;
 };
 #endif
 

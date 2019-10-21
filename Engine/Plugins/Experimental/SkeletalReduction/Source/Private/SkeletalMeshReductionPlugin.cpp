@@ -118,7 +118,7 @@ public:
 		                                const struct FMeshReductionSettings& ReductionSettings
 										) override {};
 
-	
+
 
 
 private:
@@ -461,21 +461,34 @@ void FQuadricSkeletalMeshReduction::ConvertToFSkinnedSkeletalMesh( const FSkelet
 
 
 
-	auto ApplySkinning = [](const FMatrix& XForm, FSoftSkinVertex& Vertex)->void
+	auto ApplySkinning = [](const FMatrix& XForm, FSoftSkinVertex& Vertex)->bool
 	{
+		// Some imported models will have garbage tangent space
+		bool bHasBadNTB =  ( Vertex.TangentX.ContainsNaN() || Vertex.TangentY.ContainsNaN() || Vertex.TangentZ.ContainsNaN() );
+
 		// transform position
 		FVector WeightedPosition = XForm.TransformPosition(Vertex.Position);
-		FVector WeightedTangentX = XForm.TransformVector(Vertex.TangentX);
-		FVector WeightedTangentY = XForm.TransformVector(Vertex.TangentY);
-		FVector WeightedTangentZ = XForm.TransformVector(Vertex.TangentZ);
+
+		FVector WeightedTangentX(1.f, 0.f, 0.f);
+		FVector WeightedTangentY(0.f, 1.f, 0.f);
+		FVector WeightedTangentZ(0.f ,0.f, 1.f);
+
+		if (!bHasBadNTB)
+		{
+			WeightedTangentX = XForm.TransformVector(Vertex.TangentX);
+			WeightedTangentY = XForm.TransformVector(Vertex.TangentY);
+			WeightedTangentZ = XForm.TransformVector(Vertex.TangentZ); // how does this work since TangentZ is a FVector4?
+		}
 
 		
 		Vertex.TangentX   = WeightedTangentX.GetSafeNormal();
 		Vertex.TangentY   = WeightedTangentY.GetSafeNormal();
-		uint8 WComponent  = Vertex.TangentZ.W;                    // NB: this looks bad.. the component of the vector is a float..
+		uint8 WComponent  = (bHasBadNTB) ? 1 : Vertex.TangentZ.W;                    // NB: this looks bad.. the component of the vector is a float..
 		Vertex.TangentZ   = WeightedTangentZ.GetSafeNormal();
 		Vertex.TangentZ.W = WComponent;
 		Vertex.Position   = WeightedPosition;
+
+		return bHasBadNTB;
 	};
 
 	auto CreateSkinningMatrix = [&BoneMatrices](const FSoftSkinVertex& Vertex, const FSkelMeshSection& Section, bool& bValidBoneWeights)->FMatrix
@@ -596,10 +609,9 @@ void FQuadricSkeletalMeshReduction::ConvertToFSkinnedSkeletalMesh( const FSkelet
 	const uint32 TexCoordCount = SrcLODModel.NumTexCoords;
 	check(TexCoordCount <= MAX_TEXCOORDS);
 
-	
-	
-	// Update the verts to the skinned location.
 
+	// Update the verts to the skinned location.
+	int32 NumBadNTBSpace = 0;
 	for (int32 SectionIndex = 0; SectionIndex < SectionCount; ++SectionIndex)
 	{
 		const FSkelMeshSection& Section  = SrcLODModel.Sections[SectionIndex];
@@ -614,9 +626,15 @@ void FQuadricSkeletalMeshReduction::ConvertToFSkinnedSkeletalMesh( const FSkelet
 			// Use the bone weights for this vertex to create a blended matrix 
 			const FMatrix BlendedMatrix = CreateSkinningMatrix(SkinVertex, Section, bHasValidBoneWeights);
 
-			// Update this Skin Vertex to the correct location, normal, etc.
-			ApplySkinning(BlendedMatrix, SkinVertex);
 
+			// Update this Skin Vertex to the correct location, normal, etc.
+			// also replace NaN tangent spaces with default tangent before skinning
+			bool bHasBadNTB = ApplySkinning(BlendedMatrix, SkinVertex);
+
+			if (bHasBadNTB)
+			{
+				NumBadNTBSpace++;
+			}
 		}
 
 		// Report any error with invalid bone weights
@@ -624,6 +642,11 @@ void FQuadricSkeletalMeshReduction::ConvertToFSkinnedSkeletalMesh( const FSkelet
 		{
 			UE_LOG(LogSkeletalMeshReduction, Warning, TEXT("Building LOD %d - Encountered questionable vertex weights in source."), LODIndex);
 		}
+	}
+
+	if (NumBadNTBSpace > 0)
+	{
+		UE_LOG(LogSkeletalMeshReduction, Warning, TEXT("There were NaNs in the Tangent Space of %d source model vertices."), NumBadNTBSpace);
 	}
 
 	// -- Make the index buffer; skipping the "SkipSections"

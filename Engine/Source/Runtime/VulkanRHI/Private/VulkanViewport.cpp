@@ -139,11 +139,11 @@ FVulkanViewport::FVulkanViewport(FVulkanDynamicRHI* InRHI, FVulkanDevice* InDevi
 	// Make sure Instance is created
 	RHI->InitInstance();
 
-	CreateSwapchain();
+	CreateSwapchain(nullptr);
 
 	if (FVulkanPlatform::SupportsStandardSwapchain())
 	{
-		for (int32 Index = 0; Index < NUM_BUFFERS; ++Index)
+		for (int32 Index = 0, NumBuffers = RenderingDoneSemaphores.Num(); Index < NumBuffers; ++Index)
 		{
 			RenderingDoneSemaphores[Index] = new VulkanRHI::FSemaphore(*InDevice);
 			RenderingDoneSemaphores[Index]->AddRef();
@@ -163,7 +163,7 @@ FVulkanViewport::~FVulkanViewport()
 	
 	if (FVulkanPlatform::SupportsStandardSwapchain())
 	{
-		for (int32 Index = 0; Index < NUM_BUFFERS; ++Index)
+		for (int32 Index = 0, NumBuffers = RenderingDoneSemaphores.Num(); Index < NumBuffers; ++Index)
 		{
 			RenderingDoneSemaphores[Index]->Release();
 
@@ -175,7 +175,7 @@ FVulkanViewport::~FVulkanViewport()
 			BackBufferImages[Index] = VK_NULL_HANDLE;
 		}
 
-		SwapChain->Destroy();
+		SwapChain->Destroy(nullptr);
 		delete SwapChain;
 		SwapChain = nullptr;
 	}
@@ -534,10 +534,11 @@ void FVulkanViewport::RecreateSwapchain(void* NewNativeWindow, bool bForce)
 		RHIBackBuffer->ReleaseViewport();
 		RHIBackBuffer = nullptr;
 	}
-	
+
+	FVulkanSwapChainRecreateInfo RecreateInfo = { VK_NULL_HANDLE, VK_NULL_HANDLE };
 	if (FVulkanPlatform::SupportsStandardSwapchain())
 	{
-		for (int32 Index = 0; Index < NUM_BUFFERS; ++Index)
+		for (int32 Index = 0, NumBuffers = BackBufferImages.Num(); Index < NumBuffers; ++Index)
 		{
 			TextureViews[Index].Destroy(*Device);
 			Device->NotifyDeletedImage(BackBufferImages[Index]);
@@ -547,7 +548,7 @@ void FVulkanViewport::RecreateSwapchain(void* NewNativeWindow, bool bForce)
 
 		Device->GetDeferredDeletionQueue().ReleaseResources(true);
 
-		SwapChain->Destroy();
+		SwapChain->Destroy(&RecreateInfo);
 		delete SwapChain;
 		SwapChain = nullptr;
 
@@ -555,7 +556,11 @@ void FVulkanViewport::RecreateSwapchain(void* NewNativeWindow, bool bForce)
 	}
 
 	WindowHandle = NewNativeWindow;
-	CreateSwapchain();
+	CreateSwapchain(&RecreateInfo);
+	check(RecreateInfo.Surface == VK_NULL_HANDLE);
+	check(RecreateInfo.SwapChain == VK_NULL_HANDLE);
+
+
 }
 
 void FVulkanViewport::Tick(float DeltaTime)
@@ -599,10 +604,11 @@ void FVulkanViewport::RecreateSwapchainFromRT(EPixelFormat PreferredPixelFormat)
 		RHIBackBuffer->ReleaseViewport();
 		RHIBackBuffer = nullptr;
 	}
-		
+
+	FVulkanSwapChainRecreateInfo RecreateInfo = { VK_NULL_HANDLE, VK_NULL_HANDLE};
 	if (FVulkanPlatform::SupportsStandardSwapchain())
 	{
-		for (int32 Index = 0; Index < NUM_BUFFERS; ++Index)
+		for (int32 Index = 0, NumBuffers = BackBufferImages.Num(); Index < NumBuffers; ++Index)
 		{
 			TextureViews[Index].Destroy(*Device);
 			Device->NotifyDeletedImage(BackBufferImages[Index]);
@@ -612,7 +618,7 @@ void FVulkanViewport::RecreateSwapchainFromRT(EPixelFormat PreferredPixelFormat)
 		
 		Device->GetDeferredDeletionQueue().ReleaseResources(true);
 
-		SwapChain->Destroy();
+		SwapChain->Destroy(&RecreateInfo);
 		delete SwapChain;
 		SwapChain = nullptr;
 
@@ -620,10 +626,12 @@ void FVulkanViewport::RecreateSwapchainFromRT(EPixelFormat PreferredPixelFormat)
 	}
 
 	PixelFormat = PreferredPixelFormat;
-	CreateSwapchain();
+	CreateSwapchain(&RecreateInfo);
+	check(RecreateInfo.Surface == VK_NULL_HANDLE);
+	check(RecreateInfo.SwapChain == VK_NULL_HANDLE);
 }
 
-void FVulkanViewport::CreateSwapchain()
+void FVulkanViewport::CreateSwapchain(FVulkanSwapChainRecreateInfo* RecreateInfo)
 {
 	if (FVulkanPlatform::SupportsStandardSwapchain())
 	{
@@ -635,10 +643,14 @@ void FVulkanViewport::CreateSwapchain()
 			PixelFormat, SizeX, SizeY,
 			&DesiredNumBackBuffers,
 			Images,
-			LockToVsync
+			LockToVsync,
+			RecreateInfo
 		);
 
-		checkf(Images.Num() == NUM_BUFFERS, TEXT("Actual Num: %i"), Images.Num());
+		checkf(Images.Num() >= NUM_BUFFERS, TEXT("We wanted at least %i images, actual Num: %i"), NUM_BUFFERS, Images.Num());
+		BackBufferImages.SetNum(Images.Num());
+		RenderingDoneSemaphores.SetNum(Images.Num());
+		TextureViews.SetNum(Images.Num());
 
 		FVulkanCmdBuffer* CmdBuffer = Device->GetImmediateContext().GetCommandBufferManager()->GetUploadCmdBuffer();
 		ensure(CmdBuffer->IsOutsideRenderPass());
@@ -680,6 +692,19 @@ void FVulkanViewport::CreateSwapchain()
 	else
 	{
 		PixelFormat = FVulkanPlatform::GetPixelFormatForNonDefaultSwapchain();
+		if (RecreateInfo != nullptr)
+		{
+			if(RecreateInfo->SwapChain)
+			{
+				VulkanRHI::vkDestroySwapchainKHR(Device->GetInstanceHandle(), RecreateInfo->SwapChain, VULKAN_CPU_ALLOCATOR);
+				RecreateInfo->SwapChain = VK_NULL_HANDLE;
+			}
+			if (RecreateInfo->Surface)
+			{
+				VulkanRHI::vkDestroySurfaceKHR(RHI->Instance, RecreateInfo->Surface, VULKAN_CPU_ALLOCATOR);
+				RecreateInfo->Surface = VK_NULL_HANDLE;
+			}
+		}
 	}
 
 	if (!FVulkanPlatform::SupportsStandardSwapchain() || GVulkanDelayAcquireImage == EDelayAcquireImageType::DelayAcquire)

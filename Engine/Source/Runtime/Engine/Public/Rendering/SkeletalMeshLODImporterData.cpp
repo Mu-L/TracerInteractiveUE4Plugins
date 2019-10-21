@@ -3,7 +3,8 @@
 #if WITH_EDITOR
 
 #include "SkeletalMeshLODImporterData.h"
-#include "Serialization/MemoryWriter.h"
+#include "Serialization/BulkDataWriter.h"
+#include "Serialization/BulkDataReader.h"
 #include "Rendering/SkeletalMeshModel.h"
 #include "Engine/SkeletalMesh.h"
 #include "Factories/FbxSkeletalMeshImportData.h"
@@ -362,10 +363,8 @@ void FReductionBaseSkeletalMeshBulkData::Serialize(FArchive& Ar, TArray<FReducti
 		for (int32 Index = 0; Index < NewNum; Index++)
 		{
 			FReductionBaseSkeletalMeshBulkData* EmptyData = new FReductionBaseSkeletalMeshBulkData();
-			ReductionBaseSkeletalMeshDatas.Add(EmptyData);
-		}
-		for (int32 Index = 0; Index < NewNum; Index++)
-		{
+			int32 NewEntryIndex = ReductionBaseSkeletalMeshDatas.Add(EmptyData);
+			check(NewEntryIndex == Index);
 			ReductionBaseSkeletalMeshDatas[Index]->Serialize(Ar, Owner);
 		}
 	}
@@ -383,31 +382,29 @@ void FReductionBaseSkeletalMeshBulkData::Serialize(FArchive& Ar, TArray<FReducti
 
 void FReductionBaseSkeletalMeshBulkData::Serialize(FArchive& Ar, UObject* Owner)
 {
-	if (Ar.IsLoading())
+	if (Ar.IsTransacting())
 	{
-		//Save the custom version so we can load FReductionSkeletalMeshData later
-		SerializeLoadingCustomVersionContainer = Ar.GetCustomVersions();
-		bUseSerializeLoadingCustomVersion = false;
-		const FCustomVersionContainer& RegisteredCustomVersionContainer = FCustomVersionContainer::GetRegistered();
-		const FCustomVersionArray& ArchiveCustomVersionArray = SerializeLoadingCustomVersionContainer.GetAllVersions();
-		for (const FCustomVersion& ArchiveVersion : ArchiveCustomVersionArray)
-		{
-			const FCustomVersion* RegisteredVersion = RegisteredCustomVersionContainer.GetVersion(ArchiveVersion.Key);
-			if (!RegisteredVersion || RegisteredVersion->Version != ArchiveVersion.Version)
-			{
-				bUseSerializeLoadingCustomVersion = true;
-				break;
-			}
-		}
+		// If transacting, keep these members alive the other side of an undo, otherwise their values will get lost
+		SerializeLoadingCustomVersionContainer.Serialize(Ar);
+		Ar << bUseSerializeLoadingCustomVersion;
 	}
-
-	if (Ar.IsSaving() && bUseSerializeLoadingCustomVersion == true)
+	else
 	{
-		//We need to update the FReductionSkeletalMeshData serialize version to the latest in case we save the Parent bulkdata
-		FSkeletalMeshLODModel BaseLODModel;
-		TMap<FString, TArray<FMorphTargetDelta>> BaseLODMorphTargetData;
-		LoadReductionData(BaseLODModel, BaseLODMorphTargetData);
-		SaveReductionData(BaseLODModel, BaseLODMorphTargetData);
+		if (Ar.IsLoading())
+		{
+			//Save the custom version so we can load FReductionSkeletalMeshData later
+			SerializeLoadingCustomVersionContainer = Ar.GetCustomVersions();
+			bUseSerializeLoadingCustomVersion = true;
+		}
+
+		if (Ar.IsSaving() && bUseSerializeLoadingCustomVersion == true)
+		{
+			//We need to update the FReductionSkeletalMeshData serialize version to the latest in case we save the Parent bulkdata
+			FSkeletalMeshLODModel BaseLODModel;
+			TMap<FString, TArray<FMorphTargetDelta>> BaseLODMorphTargetData;
+			LoadReductionData(BaseLODModel, BaseLODMorphTargetData);
+			SaveReductionData(BaseLODModel, BaseLODMorphTargetData);
+		}
 	}
 
 	BulkData.Serialize(Ar, Owner);
@@ -419,13 +416,19 @@ void FReductionBaseSkeletalMeshBulkData::SaveReductionData(FSkeletalMeshLODModel
 	SerializeLoadingCustomVersionContainer.Empty();
 	bUseSerializeLoadingCustomVersion = false;
 	FReductionSkeletalMeshData ReductionSkeletalMeshData(BaseLODModel, BaseLODMorphTargetData);
-	TArray<uint8> TempBytes;
-	FMemoryWriter Ar(TempBytes, /*bIsPersistent=*/ true);
-	Ar << ReductionSkeletalMeshData;
-	BulkData.Lock(LOCK_READ_WRITE);
-	uint8* Dest = (uint8*)BulkData.Realloc(TempBytes.Num());
-	FMemory::Memcpy(Dest, TempBytes.GetData(), TempBytes.Num());
-	BulkData.Unlock();
+
+	BulkData.RemoveBulkData();
+
+	// Get a lock on the bulk data
+	{
+		const bool bIsPersistent = true;
+		FBulkDataWriter Ar(BulkData, bIsPersistent);
+		Ar << ReductionSkeletalMeshData;
+
+		// Preserve CustomVersions at save time so we can reuse the same ones when reloading direct from memory
+		SerializeLoadingCustomVersionContainer = Ar.GetCustomVersions();
+	}
+	// Unlock the bulk data
 }
 
 void FReductionBaseSkeletalMeshBulkData::LoadReductionData(FSkeletalMeshLODModel& BaseLODModel, TMap<FString, TArray<FMorphTargetDelta>>& BaseLODMorphTargetData)
@@ -434,17 +437,19 @@ void FReductionBaseSkeletalMeshBulkData::LoadReductionData(FSkeletalMeshLODModel
 	if (BulkData.GetElementCount() > 0)
 	{
 		FReductionSkeletalMeshData ReductionSkeletalMeshData(BaseLODModel, BaseLODMorphTargetData);
-		FBufferReader Ar(
-			BulkData.Lock(LOCK_READ_ONLY), BulkData.GetElementCount(),
-			/*bInFreeOnClose=*/ false, /*bIsPersistent=*/ true
-		);
-		//If we load the bulkdata content and the bulk was using customVersion, we must set the same until we save the reduction data
-		if (bUseSerializeLoadingCustomVersion)
+
+		// Get a lock on the bulk data
 		{
+			const bool bIsPersistent = true;
+			FBulkDataReader Ar(BulkData, bIsPersistent);
+
+			// Propagate the custom version information from the package to the bulk data, so that the MeshDescription
+			// is serialized with the same versioning.
 			Ar.SetCustomVersions(SerializeLoadingCustomVersionContainer);
+
+			Ar << ReductionSkeletalMeshData;
 		}
-		Ar << ReductionSkeletalMeshData;
-		BulkData.Unlock();
+		// Unlock the bulk data
 	}
 }
 
@@ -526,13 +531,14 @@ void FRawSkeletalMeshBulkData::Serialize(FArchive& Ar, UObject* Owner)
 
 void FRawSkeletalMeshBulkData::SaveRawMesh(FSkeletalMeshImportData& InMesh)
 {
-	TArray<uint8> TempBytes;
-	FMemoryWriter Ar(TempBytes, /*bIsPersistent=*/ true);
-	Ar << InMesh;
-	BulkData.Lock(LOCK_READ_WRITE);
-	uint8* Dest = (uint8*)BulkData.Realloc(TempBytes.Num());
-	FMemory::Memcpy(Dest, TempBytes.GetData(), TempBytes.Num());
-	BulkData.Unlock();
+	BulkData.RemoveBulkData();
+	// Get a lock on the bulk data
+	{
+		const bool bIsPersistent = true;
+		FBulkDataWriter Ar(BulkData, bIsPersistent);
+		Ar << InMesh;
+	}
+	// Unlock bulk data when we leave scope
 	FPlatformMisc::CreateGuid(Guid);
 }
 
@@ -541,12 +547,13 @@ void FRawSkeletalMeshBulkData::LoadRawMesh(FSkeletalMeshImportData& OutMesh)
 	OutMesh.Empty();
 	if (BulkData.GetElementCount() > 0)
 	{
-		FBufferReader Ar(
-			BulkData.Lock(LOCK_READ_ONLY), BulkData.GetElementCount(),
-			/*bInFreeOnClose=*/ false, /*bIsPersistent=*/ true
-		);
-		Ar << OutMesh;
-		BulkData.Unlock();
+		// Get a lock on the bulk data
+		{
+			const bool bIsPersistent = true;
+			FBulkDataReader Ar(BulkData, bIsPersistent);
+			Ar << OutMesh;
+		}
+		// Unlock bulk data when we leave scope
 	}
 }
 

@@ -27,7 +27,7 @@
 
 // Page protection to catch FNameEntry stomps
 #ifndef FNAME_WRITE_PROTECT_PAGES
-#define FNAME_WRITE_PROTECT_PAGES 1
+#define FNAME_WRITE_PROTECT_PAGES 0
 #endif
 
 DEFINE_LOG_CATEGORY_STATIC(LogUnrealNames, Log, All);
@@ -297,13 +297,13 @@ public:
 		return FNameEntryHandle(CurrentBlock, ByteOffset / Stride);
 	}
 
-	FNameEntryHandle Create(FNameStringView Name, FNameEntryId ComparisonId, FNameEntryHeader Header)
+	FNameEntryHandle Create(FNameStringView Name, TOptional<FNameEntryId> ComparisonId, FNameEntryHeader Header)
 	{
 		FNameEntryHandle Handle = Allocate(FNameEntry::GetDataOffset() + Name.BytesWithoutTerminator());
 		FNameEntry& Entry = Resolve(Handle);
 
 #if WITH_CASE_PRESERVING_NAME
-		Entry.ComparisonId = ComparisonId ? ComparisonId : FNameEntryId(Handle);
+		Entry.ComparisonId = ComparisonId.IsSet() ? ComparisonId.GetValue() : FNameEntryId(Handle);
 #endif
 
 		Entry.Header = Header;
@@ -526,7 +526,7 @@ struct FNameValue
 
 	FNameStringView Name;
 	FNameHash Hash;
-	FNameEntryId ComparisonId;
+	TOptional<FNameEntryId> ComparisonId;
 };
 
 using FNameComparisonValue = FNameValue<ENameCase::IgnoreCase>;
@@ -789,7 +789,7 @@ static bool IsPureAnsi(const WIDECHAR* Str, const int32 Len)
 
 FNameEntryId FNamePool::Find(EName Ename) const
 {
-	check(Ename < NAME_MaxHardcodedNameIndex);
+	checkSlow(Ename < NAME_MaxHardcodedNameIndex);
 	return ENameToEntry[Ename];
 }
 
@@ -1387,7 +1387,7 @@ bool FName::IsWithinBounds(FNameEntryId Id)
 -----------------------------------------------------------------------------*/
 
 template<class CharType>
-static bool NumberEqualsString(int32 Number, const CharType* Str)
+static bool NumberEqualsString(uint32 Number, const CharType* Str)
 {
 	CharType* End = nullptr;
 	return TCString<CharType>::Strtoi64(Str, &End, 10) == Number && End && *End == '\0';
@@ -1509,8 +1509,8 @@ struct FNameHelper
 			{
 				// Attempt to convert what's following it to a number
 				// This relies on Name being null-terminated
-				uint64 Number = TCString<CharType>::Atoi64(Name + Len - Digits);
-				if (Number < MAX_uint32)
+				int64 Number = TCString<CharType>::Atoi64(Name + Len - Digits);
+				if (Number < MAX_int32)
 				{
 					View.Len -= 1 + Digits;
 					return MakeWithNumber(View, FindType, static_cast<uint32>(NAME_EXTERNAL_TO_INTERNAL(Number)));
@@ -1947,6 +1947,7 @@ void FName::AutoTest()
 	check(FCStringAnsi::Strlen("ABC_9") == FName("ABC_9").GetStringLength());
 	check(FCStringAnsi::Strlen("ABC_10") == FName("ABC_10").GetStringLength());
 	check(FCStringAnsi::Strlen("ABC_2000000000") == FName("ABC_2000000000").GetStringLength());
+	check(FCStringAnsi::Strlen("ABC_4000000000") == FName("ABC_4000000000").GetStringLength());
 
 	const FName NullName(static_cast<ANSICHAR*>(nullptr));
 	check(NullName.IsNone());
@@ -1956,6 +1957,8 @@ void FName::AutoTest()
 	check(NullName == FName(""));
 	check(NullName == FName(TEXT("")));
 	check(NullName == FName("None"));
+	check(NullName == FName("none"));
+	check(NullName == FName("NONE"));
 	check(NullName == FName(TEXT("None")));
 	check(FName().ToEName());
 	check(*FName().ToEName() == NAME_None);
@@ -2020,6 +2023,7 @@ void FName::AutoTest()
 	check(NumberEqualsString(0, "0"));
 	check(NumberEqualsString(11, "11"));
 	check(NumberEqualsString(2147483647, "2147483647"));
+	check(NumberEqualsString(4294967294, "4294967294"));
 
 	check(!NumberEqualsString(0, "1"));
 	check(!NumberEqualsString(1, "0"));

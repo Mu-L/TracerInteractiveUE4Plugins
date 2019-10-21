@@ -380,6 +380,8 @@ void FStaticMeshInstanceBuffer::BindInstanceVertexBuffer(const class FVertexFact
 		InstancedStaticMeshData.InstanceOriginSRV = InstanceOriginSRV;
 		InstancedStaticMeshData.InstanceTransformSRV = InstanceTransformSRV;
 		InstancedStaticMeshData.InstanceLightmapSRV = InstanceLightmapSRV;
+		InstancedStaticMeshData.NumInstances = InstanceData->GetNumInstances();
+		InstancedStaticMeshData.bInitialized = true;
 	}
 
 	{
@@ -749,7 +751,6 @@ void FInstancedStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<const F
 {
 	QUICK_SCOPE_CYCLE_COUNTER(STAT_InstancedStaticMeshSceneProxy_GetMeshElements);
 
-#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
 	const bool bSelectionRenderEnabled = GIsEditor && ViewFamily.EngineShowFlags.Selection;
 
 	// If the first pass rendered selected instances only, we need to render the deselected instances in a second pass
@@ -813,7 +814,6 @@ void FInstancedStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<const F
 			}
 		}
 	}
-#endif
 }
 
 int32 FInstancedStaticMeshSceneProxy::GetNumMeshBatches() const
@@ -2939,10 +2939,17 @@ void FInstancedStaticMeshVertexFactoryShaderParameters::GetElementShaderBindings
 	{
 		if (InstancedVertexFactory->SupportsManualVertexFetch(FeatureLevel))
 		{
-			ShaderBindings.Add(VertexFetch_InstanceOriginBufferParameter, InstancedVertexFactory->GetInstanceOriginSRV());
-			ShaderBindings.Add(VertexFetch_InstanceTransformBufferParameter, InstancedVertexFactory->GetInstanceTransformSRV());
-			ShaderBindings.Add(VertexFetch_InstanceLightmapBufferParameter, InstancedVertexFactory->GetInstanceLightmapSRV());
-			ShaderBindings.Add(InstanceOffset, InstanceOffsetValue);
+			if (InstancedVertexFactory->GetNumInstances() > 0)
+			{
+				ShaderBindings.Add(VertexFetch_InstanceOriginBufferParameter, InstancedVertexFactory->GetInstanceOriginSRV());
+				ShaderBindings.Add(VertexFetch_InstanceTransformBufferParameter, InstancedVertexFactory->GetInstanceTransformSRV());
+				ShaderBindings.Add(VertexFetch_InstanceLightmapBufferParameter, InstancedVertexFactory->GetInstanceLightmapSRV());
+				ShaderBindings.Add(InstanceOffset, InstanceOffsetValue);
+			}
+			else
+			{
+				ensureMsgf(false, TEXT("Instanced static mesh rendered with no instances. Data initialized: %d"), InstancedVertexFactory->IsDataInitialized());
+			}
 		}
 
 		if (InstanceOffsetValue > 0 && VertexStreams.Num() > 0)

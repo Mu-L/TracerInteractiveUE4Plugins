@@ -5397,7 +5397,7 @@ FSCSEditorTreeNodePtrType SSCSEditor::FindParentForNewComponent(UActorComponent*
 	{
 		if (TargetParentNode.IsValid())
 		{
-			while (TargetParentNode->GetNodeType() == FSCSEditorTreeNode::ComponentNode)
+			while (TargetParentNode->GetNodeType() != FSCSEditorTreeNode::RootActorNode)
 			{
 				TargetParentNode = TargetParentNode->GetParent();
 			}
@@ -5407,7 +5407,7 @@ FSCSEditorTreeNodePtrType SSCSEditor::FindParentForNewComponent(UActorComponent*
 			TargetParentNode = GetActorNode();
 		}
 
-		check(TargetParentNode->GetNodeType() == FSCSEditorTreeNode::RootActorNode);
+		check(TargetParentNode.IsValid() && TargetParentNode->GetNodeType() == FSCSEditorTreeNode::RootActorNode);
 	}
 
 	return TargetParentNode;

@@ -1330,7 +1330,7 @@ class BuildPhysX : BuildCommand
 		{
 			return "dSYM";
 		}
-		if (TargetData.Platform == UnrealTargetPlatform.Mac)
+		if (TargetData.Platform == UnrealTargetPlatform.Linux)
 		{
 			return "sym";
 		}

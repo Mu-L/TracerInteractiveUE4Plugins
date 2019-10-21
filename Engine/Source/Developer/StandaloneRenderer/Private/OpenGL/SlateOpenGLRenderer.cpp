@@ -124,47 +124,51 @@ void FSlateOpenGLRenderer::DrawWindows( FSlateDrawBuffer& InWindowDrawBuffer )
 			SWindow* WindowToDraw = ElementList.GetRenderWindow();
 
 			const FVector2D WindowSize = WindowToDraw->GetSizeInScreen();
-			FSlateOpenGLViewport* Viewport = WindowToViewportMap.Find( WindowToDraw );
-			check(Viewport);
-		
-			//@todo Slate OpenGL: Move this to ResizeViewport
-			if( WindowSize.X != Viewport->ViewportRect.Right || WindowSize.Y != Viewport->ViewportRect.Bottom )
+
+			if (WindowSize.X > 0 && WindowSize.Y > 0)
 			{
-				//@todo implement fullscreen
-				const bool bFullscreen = false;
-				Private_ResizeViewport( WindowSize, *Viewport, bFullscreen );
+				FSlateOpenGLViewport* Viewport = WindowToViewportMap.Find( WindowToDraw );
+				check(Viewport);
+
+				//@todo Slate OpenGL: Move this to ResizeViewport
+				if( WindowSize.X != Viewport->ViewportRect.Right || WindowSize.Y != Viewport->ViewportRect.Bottom )
+				{
+					//@todo implement fullscreen
+					const bool bFullscreen = false;
+					Private_ResizeViewport( WindowSize, *Viewport, bFullscreen );
+				}
+
+				Viewport->MakeCurrent();
+
+				// Batch elements.  Note that we must set the current viewport before doing this so we have a valid rendering context when calling OpenGL functions
+				ElementBatcher->AddElements( ElementList );
+
+				// Update the font cache with new text before elements are batched
+				FontCache->UpdateCache();
+
+				//@ todo Slate: implement for opengl
+				bool bRequiresStencilTest = false;
+
+				ElementBatcher->ResetBatches();
+
+				FSlateBatchData& BatchData = ElementList.GetBatchData();
+
+				BatchData.CreateRenderBatches(ElementList.GetRootDrawLayer().GetElementBatchMap());
+
+				RenderingPolicy->UpdateVertexAndIndexBuffers( BatchData );
+
+				check(Viewport);
+
+				glViewport( Viewport->ViewportRect.Left, Viewport->ViewportRect.Top, Viewport->ViewportRect.Right, Viewport->ViewportRect.Bottom );
+
+				// Draw all elements
+				RenderingPolicy->DrawElements( ViewMatrix*Viewport->ProjectionMatrix, WindowSize, BatchData.GetRenderBatches() );
+
+				Viewport->SwapBuffers();
+
+				// Reset all batch data for this window
+				ElementBatcher->ResetBatches();
 			}
-			
-			Viewport->MakeCurrent();
-
-			// Batch elements.  Note that we must set the current viewport before doing this so we have a valid rendering context when calling OpenGL functions
-			ElementBatcher->AddElements( ElementList );
-
-			// Update the font cache with new text before elements are batched
-			FontCache->UpdateCache();
-
-			//@ todo Slate: implement for opengl
-			bool bRequiresStencilTest = false;
-
-			ElementBatcher->ResetBatches();
-			
-			FSlateBatchData& BatchData = ElementList.GetBatchData();
-
-			BatchData.CreateRenderBatches(ElementList.GetRootDrawLayer().GetElementBatchMap());
-
-			RenderingPolicy->UpdateVertexAndIndexBuffers( BatchData );
-
-			check(Viewport);
-
-			glViewport( Viewport->ViewportRect.Left, Viewport->ViewportRect.Top, Viewport->ViewportRect.Right, Viewport->ViewportRect.Bottom );
-
-			// Draw all elements
-			RenderingPolicy->DrawElements( ViewMatrix*Viewport->ProjectionMatrix, WindowSize, BatchData.GetRenderBatches() );
-
-			Viewport->SwapBuffers();
-
-			// Reset all batch data for this window
-			ElementBatcher->ResetBatches();
 		}
 	}
 

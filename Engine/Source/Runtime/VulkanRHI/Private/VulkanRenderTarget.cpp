@@ -469,6 +469,28 @@ void FTransitionAndLayoutManager::NotifyDeletedRenderTarget(FVulkanDevice& InDev
 	}
 }
 
+VkImageLayout FTransitionAndLayoutManager::FindOrAddLayout(VkImage Image, VkImageLayout LayoutIfNotFound)
+{
+	VkImageLayout* Found = Layouts.Find(Image);
+	if (Found)
+	{
+		return *Found;
+	}
+
+	Layouts.Add(Image, LayoutIfNotFound);
+	return LayoutIfNotFound;
+}
+
+VkImageLayout& FTransitionAndLayoutManager::FindOrAddLayoutRW(VkImage Image, VkImageLayout LayoutIfNotFound)
+{
+	VkImageLayout* Found = Layouts.Find(Image);
+	if (Found)
+	{
+		return *Found;
+	}
+	return Layouts.Add(Image, LayoutIfNotFound);
+}
+
 void FTransitionAndLayoutManager::TransitionResource(FVulkanCmdBuffer* CmdBuffer, FVulkanSurface& Surface, VulkanRHI::EImageLayoutBarrier DestLayout)
 {
 	VkImageLayout* FoundLayout = Layouts.Find(Surface.Image);
@@ -966,8 +988,25 @@ void FVulkanDynamicRHI::RHIMapStagingSurface(FRHITexture* TextureRHI,void*& OutD
 	check(TextureRHI2D);
 	FVulkanTexture2D* Texture2D = ResourceCast(TextureRHI2D);
 
+	int32 Pitch = Texture2D->GetSizeX();
+	if (ensureMsgf(Texture2D->Surface.GetTiling() == VK_IMAGE_TILING_LINEAR, TEXT("RHIMapStagingSurface() called with a %d x %d texture in non-linear tiling %d, the result will likely be garbled."), static_cast<int32>(Texture2D->GetSizeX()), static_cast<int32>(Texture2D->GetSizeY()), static_cast<int32>(Texture2D->Surface.GetTiling())))
+	{
+		// Pitch can be only retrieved from linear textures.
+		VkImageSubresource ImageSubResource;
+		FMemory::Memzero(ImageSubResource);
 
-	OutWidth = Texture2D->GetSizeX();
+		ImageSubResource.aspectMask = Texture2D->Surface.GetFullAspectMask();
+		ImageSubResource.mipLevel = 0;
+		ImageSubResource.arrayLayer = 0;
+
+		VkSubresourceLayout SubResourceLayout;
+		VulkanRHI::vkGetImageSubresourceLayout(Device->GetInstanceHandle(), Texture2D->Surface.Image, &ImageSubResource, &SubResourceLayout);
+
+		int32 BytesPerPixel = GetNumBitsPerPixel(Texture2D->Surface.StorageFormat) / 8;
+		Pitch = SubResourceLayout.rowPitch / BytesPerPixel;
+	}
+
+	OutWidth = Pitch;
 	OutHeight = Texture2D->GetSizeY();
 
 	OutData = Texture2D->Surface.GetMappedPointer();
@@ -1283,6 +1322,7 @@ bool FVulkanCommandListContext::FPendingTransition::GatherBarriers(FTransitionAn
 			SrcAccess = VK_ACCESS_SHADER_WRITE_BIT;
 			DestAccess = VK_ACCESS_SHADER_READ_BIT;
 			break;
+		case EResourceTransitionAccess::ERWSubResBarrier: //not optimal, but will have to do for now
 		case EResourceTransitionAccess::ERWBarrier:
 			SrcAccess = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
 			DestAccess = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
@@ -1733,6 +1773,7 @@ void FVulkanCommandListContext::RHIEndRenderPass()
 		}
 	}
 	RHIPopEvent();
+	bUniformBufferUploadRenderPassDirty = true;
 }
 
 void FVulkanCommandListContext::RHINextSubpass()
