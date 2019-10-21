@@ -1698,8 +1698,7 @@ struct FPrecacheCallbackHandler
 		FPlatformFileManager::Get().GetPlatformFile().SetAsyncMinimumPriority(NewMinPriority);
 	}
 };
-
-static FPrecacheCallbackHandler GPrecacheCallbackHandler;
+TUniquePtr<FPrecacheCallbackHandler> GPrecacheCallbackHandler;
 
 int32 GRandomizeLoadOrder = 0;
 static FAutoConsoleVariableRef CVarRandomizeLoadOrder(
@@ -1781,7 +1780,7 @@ FORCEINLINE static bool CanAddWaitingPackages()
 	//marked by pathological load time performance, and this does not cover the "excessive load times when loading deployed, uncompressed data" case.
 	//applying a sane cap in all circumstances would not be a terrible idea.
 	const int32 MaxWaitingPackageCount = 1024;
-	return !FileOpenLogActive() || GPrecacheCallbackHandler.WaitingPackages.Num() < MaxWaitingPackageCount;
+	return !FileOpenLogActive() || GPrecacheCallbackHandler->WaitingPackages.Num() < MaxWaitingPackageCount;
 }
 
 void FAsyncLoadingThread::QueueEvent_CreateLinker(FAsyncPackage* Package, int32 EventSystemPriority)
@@ -3813,7 +3812,7 @@ void FAsyncPackage::StartPrecacheRequest()
 	FAsyncArchive* AsyncLoader = Linker->GetAsyncLoader();
 	check(AsyncLoader);
 
-	IAsyncReadRequest* Precache = AsyncLoader->MakeEventDrivenPrecacheRequest(NewReq.Offset, NewReq.BytesToRead,GPrecacheCallbackHandler.GetCompletionCallback());
+	IAsyncReadRequest* Precache = AsyncLoader->MakeEventDrivenPrecacheRequest(NewReq.Offset, NewReq.BytesToRead, GPrecacheCallbackHandler->GetCompletionCallback());
 
 	NewReq.FirstExportCovered = LocalExportIndex;
 	NewReq.LastExportCovered = LastExportIndex;
@@ -3825,7 +3824,7 @@ void FAsyncPackage::StartPrecacheRequest()
 	check(!PrecacheRequests.Contains(Precache));
 	FExportIORequest& RequestInPlace = PrecacheRequests.Add(Precache);
 	Swap(RequestInPlace, NewReq);
-	GPrecacheCallbackHandler.RegisterNewPrecacheRequest(Precache, this);
+	GPrecacheCallbackHandler->RegisterNewPrecacheRequest(Precache, this);
 }
 
 int64 FAsyncPackage::PrecacheRequestReady(IAsyncReadRequest * Read)
@@ -3848,7 +3847,7 @@ void FAsyncPackage::MakeNextPrecacheRequestCurrent()
 	CurrentBlockBytes = Req.BytesToRead;
 	ExportsInThisBlock.Reset();
 
-	GPrecacheCallbackHandler.FinishRequest(Req.BytesToRead);
+	GPrecacheCallbackHandler->FinishRequest(Req.BytesToRead);
 
 	FAsyncArchive* AsyncLoader = Linker->GetAsyncLoader();
 	check(AsyncLoader);
@@ -4505,7 +4504,7 @@ EAsyncPackageState::Type FAsyncLoadingThread::ProcessAsyncLoading(int32& OutPack
 
 			bool bDidSomething = false;
 			{
-				bDidSomething = GPrecacheCallbackHandler.ProcessIncoming();
+				bDidSomething = GPrecacheCallbackHandler->ProcessIncoming();
 				OutPackagesProcessed += (bDidSomething ? 1 : 0);
 
 				if (IsTimeLimitExceeded(TickStartTime, bUseTimeLimit, TimeLimit, TEXT("ProcessIncoming"), nullptr))
@@ -4607,7 +4606,7 @@ EAsyncPackageState::Type FAsyncLoadingThread::ProcessAsyncLoading(int32& OutPack
 			{
 				continue;
 			}
-			bool bAnyIOOutstanding = GPrecacheCallbackHandler.AnyIOOutstanding();
+			bool bAnyIOOutstanding = GPrecacheCallbackHandler->AnyIOOutstanding();
 			if (bAnyIOOutstanding)
 			{
 				SCOPED_LOADTIMER(Package_EventIOWait);
@@ -4619,7 +4618,7 @@ EAsyncPackageState::Type FAsyncLoadingThread::ProcessAsyncLoading(int32& OutPack
 						const float RemainingTimeLimit = FMath::Max(0.0f, TimeLimit - (float)(FPlatformTime::Seconds() - TickStartTime));
 						if (RemainingTimeLimit > 0.0f)
 						{
-							bool bGotIO = GPrecacheCallbackHandler.WaitForIO(RemainingTimeLimit);
+							bool bGotIO = GPrecacheCallbackHandler->WaitForIO(RemainingTimeLimit);
 							if (bGotIO)
 							{
 								OutPackagesProcessed++;
@@ -4635,7 +4634,7 @@ EAsyncPackageState::Type FAsyncLoadingThread::ProcessAsyncLoading(int32& OutPack
 				}
 				else
 				{
-					bool bGotIO = GPrecacheCallbackHandler.WaitForIO(10.0f); // wait "forever"
+					bool bGotIO = GPrecacheCallbackHandler->WaitForIO(10.0f); // wait "forever"
 					if (!bGotIO)
 					{
 						//UE_LOG(LogStreaming, Error, TEXT("Waited for 10 seconds on IO...."));
@@ -5276,7 +5275,7 @@ uint32 FAsyncLoadingThread::Run()
 
 void FAsyncLoadingThread::CheckForCycles()
 {
-	if (GPrecacheCallbackHandler.AnyIOOutstanding() || EventQueue.EventQueue.Num())
+	if (GPrecacheCallbackHandler->AnyIOOutstanding() || EventQueue.EventQueue.Num())
 	{
 		// we can't check for cycles if there is stuff in flight.
 		return;
@@ -5378,6 +5377,18 @@ EAsyncPackageState::Type FAsyncLoadingThread::TickAsyncThread(bool bUseTimeLimit
 void FAsyncLoadingThread::Stop()
 {
 	StopTaskCounter.Increment();
+}
+
+void FAsyncLoadingThread::Kill()
+{
+	check(IsInGameThread());
+
+	Stop();
+
+	if (IsMultithreaded() && Thread)
+	{
+		Thread->Kill(true); 
+	}
 }
 
 void FAsyncLoadingThread::CancelAsyncLoading()
@@ -6047,8 +6058,8 @@ EAsyncPackageState::Type FAsyncPackage::CreateLinker()
 				UE_LOG(LogStreaming, Fatal, TEXT("Package %s was reloaded before it even closed the linker from a previous load. Seems like a waste of time eh?"), *Desc.Name.ToString());
 				check(Package);
 				FWeakAsyncPackagePtr WeakPtr(this);
-				GPrecacheCallbackHandler.RegisterNewSummaryRequest(this);
-				GPrecacheCallbackHandler.SummaryComplete(WeakPtr);
+				GPrecacheCallbackHandler->RegisterNewSummaryRequest(this);
+				GPrecacheCallbackHandler->SummaryComplete(WeakPtr);
 			}
 		}
 
@@ -6143,17 +6154,17 @@ EAsyncPackageState::Type FAsyncPackage::CreateLinker()
 					, TFunction<void()>(
 						[WeakPtr]()
 				{
-					GPrecacheCallbackHandler.SummaryComplete(WeakPtr);
+					GPrecacheCallbackHandler->SummaryComplete(WeakPtr);
 				}
 				));
 				if (Linker)
 				{
-					GPrecacheCallbackHandler.RegisterNewSummaryRequest(this);
+					GPrecacheCallbackHandler->RegisterNewSummaryRequest(this);
 					if (Linker->bDynamicClassLinker)
 					{
 						//native blueprint 
 						check(!Linker->GetAsyncLoader());
-						GPrecacheCallbackHandler.SummaryComplete(WeakPtr);
+						GPrecacheCallbackHandler->SummaryComplete(WeakPtr);
 					}
 				}
 			}
@@ -7322,7 +7333,14 @@ void InitAsyncThread()
 {
 	FCoreDelegates::OnSyncLoadPackage.AddStatic([](const FString&) { GSyncLoadCount++; });
 
+	GPrecacheCallbackHandler = MakeUnique<FPrecacheCallbackHandler>();
 	FAsyncLoadingThread::Get().InitializeAsyncThread();
+}
+
+void ShutdownAsyncThread()
+{
+	FAsyncLoadingThread::Get().Kill();
+	GPrecacheCallbackHandler.Reset();
 }
 
 bool IsInAsyncLoadingThreadCoreUObjectInternal()

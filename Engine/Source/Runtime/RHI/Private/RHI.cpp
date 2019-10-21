@@ -1183,7 +1183,10 @@ void FDataDrivenShaderPlatformInfo::Initialize()
 				LexFromString(ShaderPlatform, *SectionName.Mid(15));
 				if (ShaderPlatform == EShaderPlatform::SP_NumPlatforms)
 				{
-					UE_LOG(LogRHI, Warning, TEXT("Found an unknown shader platform %s in a DataDriven ini file"), *SectionName.Mid(15));
+					if (SectionName.Mid(15) != TEXT("XXX"))
+					{
+						UE_LOG(LogRHI, Warning, TEXT("Found an unknown shader platform %s in a DataDriven ini file"), *SectionName.Mid(15));
+					}
 					continue;
 				}
 				

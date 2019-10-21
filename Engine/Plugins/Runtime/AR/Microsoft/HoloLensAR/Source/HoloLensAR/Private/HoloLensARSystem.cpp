@@ -535,10 +535,16 @@ void FHoloLensARSystem::SetupMeshObserver()
 	// Start the mesh observer. If the user says no to spatial mapping, then no updates will occur
 
 	// Get the settings for triangle density and mapping volume size
+	FString iniFile = GEngineIni;
+#if WITH_EDITOR
+	// If remoting, the default GEngineIni file will be Engine.ini whch does not have any HoloLens information.  Find HoloLensEngine.ini instead.
+	iniFile = FPaths::Combine(FPaths::ProjectConfigDir(), FString("HoloLens"), FString("HoloLensEngine.ini"));
+#endif
+
 	float TriangleDensity = 500.f;
-	GConfig->GetFloat(TEXT("/Script/HoloLensTargetPlatform.HoloLensTargetSettings"), TEXT("MaxTrianglesPerCubicMeter"), TriangleDensity, GEngineIni);
+	GConfig->GetFloat(TEXT("/Script/HoloLensPlatformEditor.HoloLensTargetSettings"), TEXT("MaxTrianglesPerCubicMeter"), TriangleDensity, *iniFile);
 	float VolumeSize = 1.f;
-	GConfig->GetFloat(TEXT("/Script/HoloLensTargetPlatform.HoloLensTargetSettings"), TEXT("SpatialMeshingVolumeSize"), VolumeSize, GEngineIni);
+	GConfig->GetFloat(TEXT("/Script/HoloLensPlatformEditor.HoloLensTargetSettings"), TEXT("SpatialMeshingVolumeSize"), VolumeSize, *iniFile);
 
 	WMRInterop->StartSpatialMapping(TriangleDensity, VolumeSize, &StartMeshUpdates_Raw, &AllocateMeshBuffers_Raw, &EndMeshUpdates_Raw);
 }
@@ -564,17 +570,16 @@ void FHoloLensARSystem::AllocateMeshBuffers(MeshUpdate* InMeshUpdate)
 		MeshUpdate->Indices.AddUninitialized(InMeshUpdate->NumIndices);
 		InMeshUpdate->Indices = MeshUpdate->Indices.GetData();
 
+		const FTransform TrackingToWorldTransform = TrackingSystem->GetTrackingToWorldTransform();
+		
 		// The transform information is only updated when the vertices are updated so it needs to be captured here
 		FVector Translation(InMeshUpdate->Translation[0], InMeshUpdate->Translation[1], InMeshUpdate->Translation[2]);
-		if (TrackingSystem->GetTrackingOrigin() == EHMDTrackingOrigin::Eye)
-		{
-			//@todo JoeG - we should pass eye height through to the interop layer, but use this value until then
-			Translation.Z += 180.f;
-		}
+		Translation = TrackingToWorldTransform.TransformPosition(Translation);
 		MeshUpdate->Location = Translation;
 		FVector Scale(InMeshUpdate->Scale[0], InMeshUpdate->Scale[1], InMeshUpdate->Scale[2]);
 		MeshUpdate->Scale = Scale;
 		FQuat Rotation(InMeshUpdate->Rotation[0], InMeshUpdate->Rotation[1], InMeshUpdate->Rotation[2], InMeshUpdate->Rotation[3]);
+		Rotation = TrackingToWorldTransform.TransformRotation(Rotation);
 		MeshUpdate->Rotation = Rotation;
 	}
 
@@ -682,6 +687,13 @@ void FHoloLensARSystem::AddOrUpdateMesh(FMeshUpdate* CurrentMesh)
 		{
 			// Attach this component to our single origin actor
 			AAROriginActor* OriginActor = AAROriginActor::GetOriginActor();
+
+			// During shutdown we can get a mesh update after the OriginActor has been destroyed, just return in that case.
+			if (OriginActor == nullptr)
+			{
+				return;
+			}
+
 			UMRMeshComponent* MRMesh = NewObject<UMRMeshComponent>(OriginActor);
 
 			// Set the occlusion and wireframe defaults

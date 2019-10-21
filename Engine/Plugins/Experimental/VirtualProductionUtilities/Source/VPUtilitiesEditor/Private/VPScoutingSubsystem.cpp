@@ -11,12 +11,32 @@
 #include "EditorUtilityActor.h"
 #include "IVREditorModule.h"
 #include "UObject/ConstructorHelpers.h"
+#include "UObject/WeakObjectPtrTemplates.h"
 #include "VPSettings.h"
 #include "VPUtilitiesEditorSettings.h"
+#include "LevelEditor.h"
 
 const FName UVPScoutingSubsystem::VProdPanelID = FName(TEXT("VirtualProductionPanel"));
 const FName UVPScoutingSubsystem::VProdPanelLeftID = FName(TEXT("VirtualProductionPanelLeft"));
 const FName UVPScoutingSubsystem::VProdPanelRightID = FName(TEXT("VirtualProductionPanelRight"));
+
+static void VPScoutingSubsystem_OnMapChanged(UVPScoutingSubsystem* Self, UClass* EditorUtilityActorClass, UWorld* World, EMapChangeType MapChangeType)
+{
+	if (Self && EditorUtilityActorClass)
+	{
+		if (MapChangeType == EMapChangeType::TearDownWorld)
+		{
+			Self->VProdHelper = nullptr;
+		}
+		else if (MapChangeType == EMapChangeType::LoadMap || MapChangeType == EMapChangeType::NewMap)
+		{
+			if (EditorUtilityActorClass)
+			{
+				Self->VProdHelper = NewObject<AEditorUtilityActor>(GetTransientPackage(), EditorUtilityActorClass);
+			}
+		}
+	}
+}
 
 UVPScoutingSubsystem::UVPScoutingSubsystem()
 	: UEditorSubsystem()
@@ -28,6 +48,12 @@ UVPScoutingSubsystem::UVPScoutingSubsystem()
 void UVPScoutingSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	UE_LOG(LogVPUtilitiesEditor, Log, TEXT("VP Scouting subsystem initialized."));
+
+	FLevelEditorModule& LevelEditorModule = FModuleManager::LoadModuleChecked<FLevelEditorModule>(TEXT("LevelEditor"));
+	TWeakObjectPtr<UVPScoutingSubsystem> WeakSelf = this;
+	TWeakObjectPtr<UClass> WeakEditorUtilityActorClass = EditorUtilityActorClass;
+	LevelEditorModule.OnMapChanged().AddWeakLambda(this, [WeakSelf, WeakEditorUtilityActorClass](UWorld* World, EMapChangeType MapChangeType)
+		{ VPScoutingSubsystem_OnMapChanged(WeakSelf.Get(), WeakEditorUtilityActorClass.Get(), World, MapChangeType); });
 
 	if (EditorUtilityActorClass)
 	{
@@ -44,6 +70,8 @@ void UVPScoutingSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 void UVPScoutingSubsystem::Deinitialize()
 {
+	FLevelEditorModule& LevelEditorModule = FModuleManager::LoadModuleChecked<FLevelEditorModule>(TEXT("LevelEditor"));
+	LevelEditorModule.OnMapChanged().RemoveAll(this);
 }
 
 void UVPScoutingSubsystem::ToggleVRScoutingUI(FVREditorFloatingUICreationContext& CreationContext)

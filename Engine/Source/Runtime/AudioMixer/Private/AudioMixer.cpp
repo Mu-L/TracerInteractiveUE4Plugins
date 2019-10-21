@@ -268,7 +268,11 @@ namespace Audio
 		}
 
 		bPerformingFade = true;
-		AudioFadeEvent->Wait();
+		if (AudioFadeEvent != nullptr)
+		{
+			AudioFadeEvent->Wait();
+		}
+
 		FadeVolume = 0.0f;
 	}
 
@@ -491,7 +495,16 @@ namespace Audio
 		if (AudioRenderThread != nullptr)
 		{
 			AudioRenderThread->WaitForCompletion();
-			check(AudioStreamInfo.StreamState == EAudioOutputStreamState::Stopped);
+
+			// WaitForCompletion will complete right away when single threaded, and AudioStreamInfo.StreamState will never be set to stopped
+			if (FPlatformProcess::SupportsMultithreading())
+			{
+				check(AudioStreamInfo.StreamState == EAudioOutputStreamState::Stopped);
+			}
+			else
+			{
+				AudioStreamInfo.StreamState = EAudioOutputStreamState::Stopped;
+			}
 
 			delete AudioRenderThread;
 			AudioRenderThread = nullptr;

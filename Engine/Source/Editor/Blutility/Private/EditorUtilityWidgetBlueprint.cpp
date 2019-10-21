@@ -105,8 +105,12 @@ void UEditorUtilityWidgetBlueprint::ChangeTabWorld(UWorld* World, EMapChangeType
 		{
 			CreatedTab.Pin()->SetContent(SNullWidget::NullWidget);
 		}
-		CreatedUMGWidget->Rename(nullptr, GetTransientPackage());
-		CreatedUMGWidget = nullptr;
+		
+		if(CreatedUMGWidget)
+		{
+			CreatedUMGWidget->Rename(nullptr, GetTransientPackage());
+			CreatedUMGWidget = nullptr;
+		}
 	}
 	else if (MapChangeType != EMapChangeType::SaveMap)
 	{

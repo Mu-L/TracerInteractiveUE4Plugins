@@ -101,30 +101,35 @@ void FDynamicDelayAPF::ProcessAudioBlock(const float* InSamples, const AlignedFl
 	// w[n - d]
 	FractionalDelayLine->ProcessAudio(WorkBufferA, InFractionalDelays, WorkBufferB);
 
-	// w[n] = x[n] + G * w[n - d]
 	DelayLineInput.Reset(InNum);
 	DelayLineInput.AddUninitialized(InNum);
 
+	// Cache the start and end values for G (in this process callback)
+	const float CurrG = G.GetValue(0);
 
-//	BufferWeightedSumFast(WorkBufferB.GetData(), G, InSamples, DelayLineInput.GetData(), InNum);
-	const float LastG = G.GetValue();
-	const float CurrG = G.GetValue(InNum);
+	for (int i = 0; i < InNum; ++i)
+	{
+		G.GetValue();
+	}
+
+	const float EndG = G.GetValue(0);
 
 	// WorkBufferA = G * WorkBufferB
 	FMemory::Memcpy(WorkBufferA.GetData(), WorkBufferB.GetData(), InNum * sizeof(float));
-	FadeBufferFast(WorkBufferA.GetData(), InNum, LastG, CurrG);
+
+	// w[n] = x[n] + G * w[n - d]
+	FadeBufferFast(WorkBufferA.GetData(), InNum, CurrG, EndG);
 	SumBuffers(InSamples, WorkBufferA.GetData(), DelayLineInput.GetData(), InNum);
 
-	BufferUnderflowClampFast(WorkBufferB.GetData(), InNum);
-
-	// y[n] = -G w[n] + w[n - d]
-//	BufferWeightedSumFast(DelayLineInput.GetData(), -G, WorkBufferB.GetData(), OutSamples, InNum);
-	FadeBufferFast(DelayLineInput.GetData(), InNum, -LastG, -CurrG);
-	SumBuffers(DelayLineInput.GetData(), WorkBufferB.GetData(), OutSamples, InNum);
+	BufferUnderflowClampFast(DelayLineInput);
 
 	// Update delay line
 	IntegerDelayLine->RemoveSamples(InNum);
 	IntegerDelayLine->AddSamples(DelayLineInput.GetData(), InNum);
+
+	// y[n] = -G w[n] + w[n - d]
+	FadeBufferFast(DelayLineInput.GetData(), InNum, -CurrG, -EndG);
+	SumBuffers(DelayLineInput.GetData(), WorkBufferB.GetData(), OutSamples, InNum);
 }
 
 void FDynamicDelayAPF::Reset() 
