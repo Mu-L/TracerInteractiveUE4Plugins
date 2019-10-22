@@ -72,8 +72,11 @@ Reference
 #### TaskForceAmmo
 ...
 
-#### TaskForceButton
+#### TaskForceArmory
 ...
+
+#### TaskForceButton
++ SWITCH
 
 #### TaskForceCamera
 ...
@@ -90,7 +93,10 @@ Reference
 #### TaskForceExplosion
 ...
 
-#### TaskForceLight
+#### TaskForceFire
+...
+
+#### TaskForceFoliage
 ...
 
 #### TaskForceGlass
@@ -99,23 +105,36 @@ Reference
 #### TaskForceLadder
 ...
 
+#### TaskForceLauncher
+- SPAWN
+- PHYSICS
+
 #### TaskForceLedge
 ...
 
+#### TaskForceLight
+...
+
 #### TaskForceProp
++ BREAKABLE
+
+#### TaskForceRope
 ...
 
 #### TaskForceRotor
 ...
 
 #### TaskForceSky
++ TEMPERATURE (COLD WORLD)
+
+#### TaskForceSmoke
 ...
 
 #### TaskForceSound
 ...
 
 #### TaskForceSpawn
-...
++ NPC
 
 #### TaskForceStairs
 ...
@@ -134,6 +153,9 @@ Reference
 
 #### TaskForceWeapon
 ...
+
+#### TaskForceZone
++ DAMAGE
 
 
 Licensing and Terms of Service
