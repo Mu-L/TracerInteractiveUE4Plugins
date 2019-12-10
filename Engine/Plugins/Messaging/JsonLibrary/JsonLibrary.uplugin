@@ -1,0 +1,31 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "JSON Library",
+	"Description": "Manage objects, arrays, and primitive data types using JSON.",
+	"Category": "Messaging",
+	"CreatedBy": "Tracer Interactive",
+	"CreatedByURL": "http://tracerinteractive.com",
+	"DocsURL": "http://cdn.tracerinteractive.com/jsonlibrary/documentation.pdf",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"EngineVersion": "4.24.0",
+	"CanContainContent": false,
+	"Installed": true,
+	"Modules": [
+		{
+			"Name": "JsonLibrary",
+			"Type": "Runtime",
+			"LoadingPhase": "PreDefault",
+			"WhitelistPlatforms": [
+				"Win64",
+				"Win32",
+				"Mac",
+				"Linux",
+				"Android",
+				"IOS"
+			]
+		}
+	]
+}
