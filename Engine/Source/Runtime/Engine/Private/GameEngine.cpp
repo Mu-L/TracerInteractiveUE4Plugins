@@ -31,6 +31,7 @@
 #include "GeneralProjectSettings.h"
 #include "Misc/PackageName.h"
 #include "HAL/PlatformApplicationMisc.h"
+#include "ShaderPipelineCache.h"
 
 #include "Misc/ConfigCacheIni.h"
 
@@ -456,7 +457,7 @@ TSharedRef<SWindow> UGameEngine::CreateGameWindow()
 	Args.Add( TEXT("GameName"), FText::FromString( FApp::GetProjectName() ) );
 	Args.Add( TEXT("PlatformArchitecture"), PlatformBits );
 	Args.Add( TEXT("RHIName"), FText::FromName( LegacyShaderPlatformToShaderFormat( GMaxRHIShaderPlatform ) ) );
-	Args.Add( TEXT("BuildConfiguration"), FText::FromString(EBuildConfigurations::ToString(FApp::GetBuildConfiguration()) ) );
+	Args.Add( TEXT("BuildConfiguration"), FText::FromString(LexToString(FApp::GetBuildConfiguration()) ) );
 
 	/************************************************************************/
 	/************************ Add device name to window title****************/
@@ -558,6 +559,7 @@ TSharedRef<SWindow> UGameEngine::CreateGameWindow()
 		Window = PIEPreviewDeviceModule->CreatePIEPreviewDeviceWindow(FVector2D(ResX, ResY), WindowTitle, AutoCenterType, FVector2D(WinX, WinY), MaxWindowWidth, MaxWindowHeight);
 	}
 #endif
+	Window->SetAllowFastUpdate(true);
 
 	const bool bShowImmediately = false;
 
@@ -683,7 +685,6 @@ void UGameEngine::OnViewportResized(FViewport* Viewport, uint32 Unused)
 UEngine::UEngine(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 	, ViewExtensions( new FSceneViewExtensions() )
-	, EngineSubsystemCollection(this)
 {
 	C_WorldBox = FColor(0, 0, 40, 255);
 	C_BrushWire = FColor(192, 0, 0, 255);
@@ -780,6 +781,16 @@ public:
 			{
 				bool bEnabled = Message.Parameters.FindRef(TEXT("enabled")).ToBool();
 				FPlatformApplicationMisc::ControlScreensaver(bEnabled ? FGenericPlatformApplicationMisc::Enable : FGenericPlatformApplicationMisc::Disable);
+				Message.OnCompleteDelegate({}, TEXT(""));
+			}
+			else if (Message.Command == TEXT("shaderresumebatching"))
+			{
+				FShaderPipelineCache::ResumeBatching();
+				Message.OnCompleteDelegate({}, TEXT(""));
+			}
+			else if (Message.Command == TEXT("shaderpausebatching"))
+			{
+				FShaderPipelineCache::PauseBatching();
 				Message.OnCompleteDelegate({}, TEXT(""));
 			}
 			else if (Message.Command == TEXT("getmemorybucket"))
@@ -1125,6 +1136,8 @@ void UGameEngine::Start()
 
 void UGameEngine::PreExit()
 {
+	UE_LOG(LogInit, Display, TEXT("PreExit Game."));
+
 	GetGameUserSettings()->SaveSettings();
 
 	// Stop tracking, automatically flushes.

@@ -186,12 +186,15 @@ struct FPrimitiveVirtualTextureFlags
 /** Lod data used for runtime virtual texture page rendering. Packed to reduce memory overhead since one of these is allocated per primitive. */
 struct FPrimitiveVirtualTextureLodInfo
 {
+	/** LodBias is in range [-7,8] so is stored with this offset. */
+	enum { LodBiasOffset = 7 };
+
 	/** Minimum Lod for primitive in the runtime virtual texture. */
 	uint16 MinLod : 4;
 	/** Maximum Lod for primitive in the runtime virtual texture. */
 	uint16 MaxLod : 4;
 	/** Bias to use for Lod calculation in the runtime virtual texture. */
-	uint16 LodBias : 3;
+	uint16 LodBias : 4;
 	/** 
 	 * Culling method used to remove the primitive from low mips of the runtime virtual texture.
 	 * 0: CullValue is the number of low mips for which we cull the primitive from the runtime virtual texture.
@@ -199,7 +202,7 @@ struct FPrimitiveVirtualTextureLodInfo
 	 */
 	uint16 CullMethod : 1;
 	/** Value used according to the CullMethod. */
-	uint16 CullValue : 4;
+	uint16 CullValue : 3;
 };
 
 /** The type of the octree used by FScene to find primitives. */
@@ -478,6 +481,15 @@ public:
 	/** Updates static lighting uniform buffer, returns the number of entries needed for GPUScene */
 	int32 UpdateStaticLightingBuffer();
 
+	/** Update the cached runtime virtual texture flags for this primitive. Do this when runtime virtual textures are created or destroyed. */
+	void UpdateRuntimeVirtualTextureFlags();
+
+	/** Get the cached runtime virtual texture flags for this primitive. */
+	FPrimitiveVirtualTextureFlags GetRuntimeVirtualTextureFlags() const { return RuntimeVirtualTextureFlags; }
+
+	/** Mark the runtime virtual textures covered by this primitive as dirty. */
+	void FlushRuntimeVirtualTexture();
+
 #if RHI_RAYTRACING
 	RENDERER_API FRayTracingGeometryRHIRef GetStaticRayTracingGeometryInstance(int LodLevel);
 #endif
@@ -509,6 +521,7 @@ private:
 	/** If this is TRUE, this primitive's indirect lighting cache buffer needs to be updated before it can be rendered. */
 	bool bIndirectLightingCacheBufferDirty : 1;
 
+	/** If this is TRUE, this primitive has registerd with the virtual texture system for a callback on virtual texture changes. */
 	bool bRegisteredVirtualTextureProducerCallback : 1;
 
 	/** Offset into the scene's lightmap data buffer, when GPUScene is enabled. */
@@ -528,6 +541,9 @@ private:
 
 	/** Removes cached mesh draw commands for all meshes. */
 	void RemoveCachedMeshDrawCommands();
+
+	/** These flags carry information about which runtime virtual textures are bound to this primitive. */
+	FPrimitiveVirtualTextureFlags RuntimeVirtualTextureFlags;
 
 #if RHI_RAYTRACING
 	TArray<FRayTracingGeometry*> RayTracingGeometries;

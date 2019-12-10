@@ -77,16 +77,22 @@ class ENGINE_API ULightComponentBase : public USceneComponent
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Light, AdvancedDisplay)
 	uint32 bCastVolumetricShadow : 1;
 
+	/**
+	 * Whether the light should cast high quality hair-strands self-shadowing. When this option is enabled, an extra GPU cost for this light. 
+	 **/
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Light, AdvancedDisplay)
+	uint32 bCastDeepShadow : 1;
+
 	/** Whether the light shadows are computed with shadow-mapping or ray-tracing (when available). */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Light, meta = (DisplayName = "Cast Ray Tracing Shadow"), AdvancedDisplay)
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Light, meta = (DisplayName = "Cast Ray Tracing Shadows"), AdvancedDisplay)
 	uint32 bCastRaytracedShadow : 1;
 
 	/** Whether the light affects objects in reflections, when ray-traced reflection is enabled. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Light, AdvancedDisplay)
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Light, AdvancedDisplay, meta = (DisplayName = "Affect Ray Tracing Reflections"))
 	uint32 bAffectReflection : 1;
 
-	/** Whether the light affects objects in reflections, when ray-traced global illumination is enabled. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Light, AdvancedDisplay)
+	/** Whether the light affects global illumination, when ray-traced global illumination is enabled. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Light, AdvancedDisplay, meta = (DisplayName = "Affect Ray Tracing Global Illumination"))
 	uint32 bAffectGlobalIllumination : 1;
 
 	/** 
@@ -132,6 +138,9 @@ class ENGINE_API ULightComponentBase : public USceneComponent
 
 	UFUNCTION(BlueprintCallable, Category = "Rendering|Components|Light")
 	void SetCastVolumetricShadow(bool bNewValue);
+
+	UFUNCTION(BlueprintCallable, Category = "Rendering|Components|Light")
+	void SetCastDeepShadow(bool bNewValue);
 
 	UFUNCTION(BlueprintCallable, Category = "Rendering|Components|Light")
 	void SetAffectReflection(bool bNewValue);

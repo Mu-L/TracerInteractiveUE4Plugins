@@ -985,6 +985,8 @@ void UPlayerInput::ProcessNonAxesKeys(FKey InKey, FKeyState* KeyState)
 
 void UPlayerInput::ProcessInputStack(const TArray<UInputComponent*>& InputComponentStack, const float DeltaTime, const bool bGamePaused)
 {
+	ConditionalBuildKeyMappings();
+
 	// We collect axis contributions by delegate, so we can sum up 
 	// contributions from multiple bindings.
 	struct FAxisDelegateDetails
@@ -1402,7 +1404,7 @@ void UPlayerInput::ClearSmoothing()
 float UPlayerInput::SmoothMouse(float aMouse, uint8& SampleCount, int32 Index)
 {
 	check(Index >= 0);
-	check(Index < ARRAY_COUNT(ZeroTime));
+	check(Index < UE_ARRAY_COUNT(ZeroTime));
 
 	UWorld* World = GetWorld();
 	if (World)
@@ -2004,7 +2006,7 @@ bool UPlayerInput::Exec(UWorld* InWorld, const TCHAR* Str,FOutputDevice& Ar)
 {
 	TCHAR Temp[256];
 
-	if( FParse::Command( &Str, TEXT("KEYBINDING") ) && FParse::Token( Str, Temp, ARRAY_COUNT(Temp), 0 ) )
+	if( FParse::Command( &Str, TEXT("KEYBINDING") ) && FParse::Token( Str, Temp, UE_ARRAY_COUNT(Temp), 0 ) )
 	{
 		FKey const Key(Temp);
 		if (Key.IsValid())
@@ -2021,7 +2023,7 @@ bool UPlayerInput::Exec(UWorld* InWorld, const TCHAR* Str,FOutputDevice& Ar)
 
 		return 1;
 	}
-	else if( !bExecutingBindCommand && FParse::Token( Str, Temp, ARRAY_COUNT(Temp), 0 ) )
+	else if( !bExecutingBindCommand && FParse::Token( Str, Temp, UE_ARRAY_COUNT(Temp), 0 ) )
 	{
 		FKey const Key(Temp);
 		if(Key.IsValid())

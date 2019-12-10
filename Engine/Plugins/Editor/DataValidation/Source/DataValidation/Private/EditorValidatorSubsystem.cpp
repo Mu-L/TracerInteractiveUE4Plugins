@@ -17,6 +17,8 @@
 
 #define LOCTEXT_NAMESPACE "EditorValidationSubsystem"
 
+DEFINE_LOG_CATEGORY(LogContentValidation);
+
 UEditorValidatorSubsystem::UEditorValidatorSubsystem()
 	: UEditorSubsystem()
 {
@@ -199,7 +201,8 @@ int32 UEditorValidatorSubsystem::ValidateAssets(TArray<FAssetData> AssetDataList
 	// Now add to map or update as needed
 	for (FAssetData& Data : AssetDataList)
 	{
-		SlowTask.EnterProgressFrame(1.0f / NumFilesToValidate, FText::Format(LOCTEXT("ValidatingFilename", "Validating {0}"), FText::FromString(Data.GetFullName())));
+		FText ValidatingMessage = FText::Format(LOCTEXT("ValidatingFilename", "Validating {0}"), FText::FromString(Data.GetFullName()));
+		SlowTask.EnterProgressFrame(1.0f / NumFilesToValidate, ValidatingMessage);
 
 		// Check exclusion path
 		if (bSkipExcludedDirectories && IsPathExcludedFromValidation(Data.PackageName.ToString()))
@@ -207,6 +210,8 @@ int32 UEditorValidatorSubsystem::ValidateAssets(TArray<FAssetData> AssetDataList
 			++NumFilesSkipped;
 			continue;
 		}
+
+		UE_LOG(LogContentValidation, Display, TEXT("%s"), *ValidatingMessage.ToString());
 
 		TArray<FText> ValidationErrors;
 		EDataValidationResult Result = IsAssetValid(Data, ValidationErrors);
@@ -225,7 +230,7 @@ int32 UEditorValidatorSubsystem::ValidateAssets(TArray<FAssetData> AssetDataList
 		{
 			if (Result == EDataValidationResult::Invalid)
 			{
-				DataValidationLog.Error()->AddToken(FAssetNameToken::Create(Data.PackageName.ToString()))
+				DataValidationLog.Info()->AddToken(FAssetNameToken::Create(Data.PackageName.ToString()))
 					->AddToken(FTextToken::Create(LOCTEXT("InvalidDataResult", "contains invalid data.")));
 				++NumInvalidFiles;
 			}
@@ -253,9 +258,8 @@ int32 UEditorValidatorSubsystem::ValidateAssets(TArray<FAssetData> AssetDataList
 		Arguments.Add(TEXT("NumSkipped"), NumFilesSkipped);
 		Arguments.Add(TEXT("NumUnableToValidate"), NumFilesUnableToValidate);
 
-		TSharedRef<FTokenizedMessage> ValidationLog = bFailed ? DataValidationLog.Error() : DataValidationLog.Info();
-		ValidationLog->AddToken(FTextToken::Create(FText::Format(LOCTEXT("SuccessOrFailure", "Data validation {Result}."), Arguments)));
-		ValidationLog->AddToken(FTextToken::Create(FText::Format(LOCTEXT("ResultsSummary", "Files Checked: {NumChecked}, Passed: {NumValid}, Failed: {NumInvalid}, Skipped: {NumSkipped}, Unable to validate: {NumUnableToValidate}"), Arguments)));
+		DataValidationLog.Info()->AddToken(FTextToken::Create(FText::Format(LOCTEXT("SuccessOrFailure", "Data validation {Result}."), Arguments)));
+		DataValidationLog.Info()->AddToken(FTextToken::Create(FText::Format(LOCTEXT("ResultsSummary", "Files Checked: {NumChecked}, Passed: {NumValid}, Failed: {NumInvalid}, Skipped: {NumSkipped}, Unable to validate: {NumUnableToValidate}"), Arguments)));
 
 		DataValidationLog.Open(EMessageSeverity::Info, true);
 	}
@@ -277,12 +281,13 @@ void UEditorValidatorSubsystem::ValidateOnSave(TArray<FAssetData> AssetDataList)
 		return;
 	}
 
-	FMessageLog DataValidationLog("DataValidation");
+	FMessageLog DataValidationLog("AssetCheck");
+	FText SavedAsset = AssetDataList.Num() == 1 ? FText::FromName(AssetDataList[0].AssetName) : LOCTEXT("MultipleErrors", "multiple assets");
+	DataValidationLog.NewPage(FText::Format(LOCTEXT("DataValidationLogPage", "Asset Save: {0}"), SavedAsset));
 	if (ValidateAssets(AssetDataList, true, false) > 0)
 	{
 		const FText ErrorMessageNotification = FText::Format(
-			LOCTEXT("ValidationFailureNotification", "Validation failed when saving {0}, check Data Validation log"),
-			AssetDataList.Num() == 1 ? FText::FromName(AssetDataList[0].AssetName) : LOCTEXT("MultipleErrors", "multiple assets"));
+			LOCTEXT("ValidationFailureNotification", "Validation failed when saving {0}, check Data Validation log"), SavedAsset);
 		DataValidationLog.Notify(ErrorMessageNotification, EMessageSeverity::Warning, /*bForce=*/ true);
 	}
 }
@@ -302,9 +307,12 @@ void UEditorValidatorSubsystem::ValidateSavedPackage(FName PackageName)
 		return;
 	}
 
-	SavedPackagesToValidate.AddUnique(PackageName);
+	if (SavedPackagesToValidate.Num() == 0)
+	{
+		GEditor->GetTimerManager()->SetTimerForNextTick(this, &UEditorValidatorSubsystem::ValidateAllSavedPackages);
+	}
 
-	GEditor->GetTimerManager()->SetTimerForNextTick(this, &UEditorValidatorSubsystem::ValidateAllSavedPackages);
+	SavedPackagesToValidate.AddUnique(PackageName);
 }
 
 bool UEditorValidatorSubsystem::IsPathExcludedFromValidation(const FString& Path) const

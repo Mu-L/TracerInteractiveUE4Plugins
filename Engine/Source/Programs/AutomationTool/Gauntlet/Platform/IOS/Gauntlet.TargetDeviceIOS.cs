@@ -289,7 +289,7 @@ namespace Gauntlet
 			if (Directory.Exists(DSymDir))
 			{
 				DSymBundle = Directory.GetDirectories(DSymDir).Where(D => Path.GetExtension(D).ToLower() == ".dsym").FirstOrDefault();
-				DSymBundle = string.IsNullOrEmpty(DSymBundle) ? "" : DSymBundle = " -s \"" + DSymBundle + "\"";
+				DSymBundle = string.IsNullOrEmpty(DSymBundle) ? "" : DSymBundle = " -S \"" + DSymBundle + "\"";
 			}
 
 			string CL = "--noinstall -I" + DSymBundle + " -b \"" + LocalAppBundle + "\" --args '" + CommandLine.Trim() + "'";
@@ -836,9 +836,9 @@ namespace Gauntlet
 					}
 
 					Log.Verbose("Unzipping IPA {0} to cache at: {1}", Build.SourceIPAPath, GauntletAppCache);
-					
-					IProcessResult Result = IOSBuild.ExecuteCommand("unzip", String.Format("{0} -d {1}", Build.SourceIPAPath, GauntletAppCache));
-					if (Result.ExitCode != 0 || !Directory.Exists(PayloadDir))
+
+					string Output;
+					if (!IOSBuild.ExecuteIPAZipCommand(String.Format("{0} -d {1}", Build.SourceIPAPath, GauntletAppCache), out Output, PayloadDir))
 					{
 						throw new Exception(String.Format("Unable to extract IPA {0}", Build.SourceIPAPath));
 					}
@@ -852,8 +852,7 @@ namespace Gauntlet
 					{						
 						Log.Verbose("Unzipping Symbols {0} to cache at: {1}", SymbolsZipFile, SymbolsDir);
 
-						Result = IOSBuild.ExecuteCommand("unzip", String.Format("{0} -d {1}", SymbolsZipFile, SymbolsDir));
-						if (Result.ExitCode != 0 || !Directory.Exists(SymbolsDir))
+						if (!IOSBuild.ExecuteIPAZipCommand(String.Format("{0} -d {1}", SymbolsZipFile, SymbolsDir), out Output, SymbolsDir))
 						{
 							throw new Exception(String.Format("Unable to extract build symbols {0} -> {1}", SymbolsZipFile, SymbolsDir));
 						}
@@ -966,7 +965,7 @@ namespace Gauntlet
 		class FrameInfo
 		{
 			public string Module;
-			public string Symbol;
+			public string Symbol = String.Empty;
 			public string Address;
 			public string Offset;
 			public string Source;
@@ -1030,16 +1029,15 @@ namespace Gauntlet
 			Regex LogLineRegex = new Regex(@"(?<timestamp>\s\[\d.+\]\[\s*\d+\])(?<log>.*)");
 			Regex TimeRegex = new Regex(@"\[(?<year>\d+)\.(?<month>\d+)\.(?<day>\d+)-(?<hour>\d+)\.(?<minute>\d+)\.(?<second>\d+):(?<millisecond>\d+)\]\[(?<frame>\s*\d+)\]", RegexOptions.IgnoreCase);
 			Regex ThreadRegex = new Regex(@"(thread\s#)(?<threadnum>\d+),?(?<status>.+)");
-			Regex SymbolicatedFrameRegex = new Regex(@"\s#(?<framenum>\d+):\s0x(?<address>[\da-f]+)\s(?<module>.+)\`(?<symbol>.+)(\sat\s)(?<source>.+)\s\[opt\]");
-			Regex UnsymbolicatedFrameRegex = new Regex(@"frame\s#(?<framenum>\d+):\s0x(?<address>[\da-f]+)\s(?<module>.+)\`(?<symbol>.+)\s\+\s(?<offset>\d+)");
+			Regex SymbolicatedFrameRegex = new Regex(@"\*?\s#(?<framenum>\d+):\s0x(?<address>[\da-f]+)\s(?<module>.+)\`(?<symbol>.+)(\sat\s)(?<source>.+)\s\[opt\]");
+			Regex UnsymbolicatedFrameRegex = new Regex(@"\*?frame\s#(?<framenum>\d+):\s0x(?<address>[\da-f]+)\s(?<module>.+)\`(?<symbol>.+)(\s\+\s(?<offset>\d+))?");
 
 			LinkedList<string> CrashLog = new LinkedList<string>(Regex.Split(LogOutput, "\r\n|\r|\n"));
-						
+
 			List<ThreadInfo> Threads = new List<ThreadInfo>();
 			ThreadInfo Thread = null;
-			ThreadInfo CrashThread = null;
 
-			var LineNode = CrashLog.First;			
+			var LineNode = CrashLog.First;
 			while (LineNode != null)
 			{
 				string Line = LineNode.Value.Trim();
@@ -1115,7 +1113,7 @@ namespace Gauntlet
 						Thread.Frames.Add(Frame);
 					}
 					else
-					{						
+					{
 						Thread = null;
 					}
 
@@ -1124,42 +1122,46 @@ namespace Gauntlet
 				// Parse thread
 				if (ThreadRegex.IsMatch(Line))
 				{
+
 					GroupCollection ThreadGroups = ThreadRegex.Match(Line).Groups;
-					Thread = new ThreadInfo()
-					{
-						Num = int.Parse(ThreadGroups["threadnum"].Value),
-						Status = ThreadGroups["status"].Value.Trim()
-					};
+					int Num = int.Parse(ThreadGroups["threadnum"].Value);
+					string Status = ThreadGroups["status"].Value.Trim();
 
-					if (Line.StartsWith("*"))
-					{
-						Thread.Current = true;
-					}
+					Thread = Threads.SingleOrDefault(T => T.Num == Num);
 
-					if (CrashThread == null)
+					if (Thread == null)
 					{
-						CrashThread = Thread;
-					}
-					else
-					{
+						Thread = new ThreadInfo()
+						{
+							Num = Num,
+							Status = Status
+						};
+
+						if (Line.Trim().StartsWith("*"))
+						{
+							Thread.Current = true;
+						}
+
 						Threads.Add(Thread);
+
 					}
 				}
 
 				LineNode = LineNode.Next;
 			}
 
-			if (CrashThread == null)
-			{
-				return null;
-			}
+			Thread = Threads.SingleOrDefault(T => T.Current == true);
 
-			Thread = Threads.Single(T => T.Num == CrashThread.Num);
-
-			if (Thread == null)
+			if (Threads.Count > 0 && Thread == null)
 			{
 				Log.Warning("Unable to parse full crash callstack");
-				Thread = CrashThread;
+			}
+
+
+			// Do not want to surface crashes which happen as a result of requesting exit
+			if (Thread != null && Thread.Frames.SingleOrDefault(F => F.Symbol.Contains("::RequestExit")) != null)
+			{
+				Thread = null;
 			}
 
 			return Thread;

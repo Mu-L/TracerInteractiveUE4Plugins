@@ -65,9 +65,11 @@ public:
 		, Flags(TexCreate_None)
 		, TargetableFlags(TexCreate_None)
 		, bForceSeparateTargetAndShaderResource(false)
+		, bForceSharedTargetAndShaderResource(false)
 		, DebugName(TEXT("UnknownTexture"))
 		, AutoWritable(true)
 		, bCreateRenderTargetWriteMask(false)
+		, bCreateRenderTargetFmask(false)
 	{
 		check(!IsValid());
 	}
@@ -85,7 +87,8 @@ public:
 		bool bInForceSeparateTargetAndShaderResource,
 		uint16 InNumMips = 1,
 		bool InAutowritable = true,
-		bool InCreateRTWriteMask = false)
+		bool InCreateRTWriteMask = false,
+		bool InCreateFmask = false)
 	{
 		check(InExtent.X);
 		check(InExtent.Y);
@@ -106,6 +109,7 @@ public:
 		NewDesc.DebugName = TEXT("UnknownTexture2D");
 		NewDesc.AutoWritable = InAutowritable;
 		NewDesc.bCreateRenderTargetWriteMask = InCreateRTWriteMask;
+		NewDesc.bCreateRenderTargetFmask = InCreateFmask;
 		check(NewDesc.Is2DTexture());
 		return NewDesc;
 	}
@@ -186,6 +190,43 @@ public:
 		return NewDesc;
 	}
 
+	/**
+	 * Factory function to create cube map array texture description
+	 * @param InFlags bit mask combined from elements of ETextureCreateFlags e.g. TexCreate_UAV
+	 */
+	static FPooledRenderTargetDesc CreateCubemapArrayDesc(
+		uint32 InExtent,
+		EPixelFormat InFormat,
+		const FClearValueBinding& InClearValue,
+		uint32 InFlags,
+		uint32 InTargetableFlags,
+		bool bInForceSeparateTargetAndShaderResource,
+		uint32 InArraySize,
+		uint16 InNumMips = 1,
+		bool InAutowritable = true)
+	{
+		check(InExtent);
+
+		FPooledRenderTargetDesc NewDesc;
+		NewDesc.ClearValue = InClearValue;
+		NewDesc.Extent = FIntPoint(InExtent, InExtent);
+		NewDesc.Depth = 0;
+		NewDesc.ArraySize = InArraySize;
+		NewDesc.bIsArray = true;
+		NewDesc.bIsCubemap = true;
+		NewDesc.NumMips = InNumMips;
+		NewDesc.NumSamples = 1;
+		NewDesc.Format = InFormat;
+		NewDesc.Flags = InFlags;
+		NewDesc.TargetableFlags = InTargetableFlags;
+		NewDesc.bForceSeparateTargetAndShaderResource = bInForceSeparateTargetAndShaderResource;
+		NewDesc.DebugName = TEXT("UnknownTextureCubeArray");
+		NewDesc.AutoWritable = InAutowritable;
+		check(NewDesc.IsCubemap());
+
+		return NewDesc;
+	}
+
 	/** Comparison operator to test if a render target can be reused */
 	bool Compare(const FPooledRenderTargetDesc& rhs, bool bExact) const
 	{
@@ -209,6 +250,7 @@ public:
 			&& LhsFlags == RhsFlags
 			&& TargetableFlags == rhs.TargetableFlags
 			&& bForceSeparateTargetAndShaderResource == rhs.bForceSeparateTargetAndShaderResource
+			&& bForceSharedTargetAndShaderResource == rhs.bForceSharedTargetAndShaderResource
 			&& ClearValue == rhs.ClearValue
 			&& AutoWritable == rhs.AutoWritable;
 	}
@@ -251,7 +293,7 @@ public:
 		}
 
 		return Extent.X != 0 && NumMips != 0 && NumSamples >=1 && NumSamples <=16 && Format != PF_Unknown
-			&& ((TargetableFlags & TexCreate_UAV) == 0 || GMaxRHIFeatureLevel == ERHIFeatureLevel::SM5);
+			&& ((TargetableFlags & TexCreate_UAV) == 0 || GMaxRHIFeatureLevel == ERHIFeatureLevel::SM5 || GMaxRHIFeatureLevel == ERHIFeatureLevel::ES3_1);
 	}
 
 	FIntVector GetSize() const
@@ -330,6 +372,7 @@ public:
 		NumSamples = 1;
 
 		bForceSeparateTargetAndShaderResource = false;
+		bForceSharedTargetAndShaderResource = false;
 		AutoWritable = true;
 
 		// Remove UAV flag for rendertargets that don't need it (some formats are incompatible)
@@ -363,12 +406,16 @@ public:
 	uint32 TargetableFlags;
 	/** Whether the shader-resource and targetable texture must be separate textures. */
 	bool bForceSeparateTargetAndShaderResource;
+	/** Whether the shader-resource and targetable texture must be the same resource. */
+	bool bForceSharedTargetAndShaderResource;
 	/** only set a pointer to memory that never gets released */
 	const TCHAR* DebugName;
 	/** automatically set to writable via barrier during */
 	bool AutoWritable;
 	/** create render target write mask (supported only on specific platforms) */
 	bool bCreateRenderTargetWriteMask;
+	/** create render target fmask (supported only on specific platforms) */
+	bool bCreateRenderTargetFmask;
 };
 
 
@@ -387,20 +434,15 @@ struct FSceneRenderTargetItem
 		,	UAV(InUAV)
 	{}
 
-	/** */
 	void SafeRelease()
 	{
 		TargetableTexture.SafeRelease();
 		ShaderResourceTexture.SafeRelease();
 		UAV.SafeRelease();
-		for (int32 i = 0; i < MipUAVs.Num(); i++)
-		{
-			MipUAVs[i].SafeRelease();
-		}
-		for( int32 i = 0; i < MipSRVs.Num(); i++ )
-		{
-			MipSRVs[i].SafeRelease();
-		}
+		MipUAVs.Empty();
+		SRVs.Empty();
+		HTileUAV.SafeRelease();
+		HTileSRV.SafeRelease();
 	}
 
 	bool IsValid() const
@@ -412,18 +454,26 @@ struct FSceneRenderTargetItem
 
 	/** The 2D or cubemap texture that may be used as a render or depth-stencil target. */
 	FTextureRHIRef TargetableTexture;
+
 	/** The 2D or cubemap shader-resource 2D texture that the targetable textures may be resolved to. */
 	FTextureRHIRef ShaderResourceTexture;
+	
 	/** only created if requested through the flag, same as MipUAVs[0] */
 	// TODO: refactor all the code to only use MipUAVs?
 	FUnorderedAccessViewRHIRef UAV;
+	
 	/** only created if requested through the flag  */
 	TArray< FUnorderedAccessViewRHIRef, TInlineAllocator<1> > MipUAVs;
-	/** only created if requested through the flag  */
-	TArray< FShaderResourceViewRHIRef > MipSRVs;
 
-	FShaderResourceViewRHIRef RTWriteMaskBufferRHI_SRV;
-	FStructuredBufferRHIRef RTWriteMaskDataBufferRHI;
+	/** All SRVs that has been created on for that ShaderResourceTexture.  */
+	TMap<FRHITextureSRVCreateInfo, FShaderResourceViewRHIRef> SRVs;
+
+	FShaderResourceViewRHIRef RTWriteMaskSRV;
+	FShaderResourceViewRHIRef FmaskSRV;
+
+	/** only created if requested through meta data access flags */
+	FUnorderedAccessViewRHIRef HTileUAV;
+	FShaderResourceViewRHIRef  HTileSRV;
 };
 
 /**
@@ -573,6 +623,15 @@ public:
 	float PreExposure;
 };
 
+class IPersistentViewUniformBufferExtension
+{
+public:
+	virtual void BeginFrame() {}
+	virtual void PrepareView(const FSceneView* View) {}
+	virtual void BeginRenderView(const FSceneView* View, bool bShouldWaitForJobs = true) {}
+	virtual void EndFrame() {}
+};
+
 /**
  * The public interface of the renderer module.
  */
@@ -613,6 +672,8 @@ public:
 
 	/** Forces reallocation of scene render targets. */
 	virtual void ReallocateSceneRenderTargets() = 0;
+
+	virtual void OnWorldCleanup(UWorld* World, bool bSessionEnded, bool bCleanupResources) = 0;
 
 	/** Sets the buffer size of the render targets. */
 	virtual void SceneRenderTargetsSetBufferSize(uint32 SizeX, uint32 SizeY) = 0;
@@ -703,5 +764,7 @@ public:
 
 	/** Evict all data from virtual texture caches*/
 	virtual void FlushVirtualTextureCache() = 0;
+
+	virtual void RegisterPersistentViewUniformBufferExtension(IPersistentViewUniformBufferExtension* Extension) = 0;
 };
 

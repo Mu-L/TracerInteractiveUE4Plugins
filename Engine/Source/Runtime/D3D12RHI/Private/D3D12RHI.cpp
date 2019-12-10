@@ -36,18 +36,11 @@ TAutoConsoleVariable<int32> CVarD3D12ZeroBufferSizeInMB(
 	ECVF_ReadOnly
 	);
 
-/// @cond DOXYGEN_WARNINGS
-
-__declspec(thread) FD3D12FastAllocator* FD3D12DynamicRHI::HelperThreadDynamicHeapAllocator = nullptr;
-
-/// @endcond
-
 FD3D12DynamicRHI* FD3D12DynamicRHI::SingleD3DRHI = nullptr;
 
 using namespace D3D12RHI;
 
 FD3D12DynamicRHI::FD3D12DynamicRHI(const TArray<TSharedPtr<FD3D12Adapter>>& ChosenAdaptersIn) :
-	NumThreadDynamicHeapAllocators(0),
 	ChosenAdapters(ChosenAdaptersIn),
 	AmdAgsContext(nullptr),
 	FlipEvent(INVALID_HANDLE_VALUE)
@@ -55,8 +48,6 @@ FD3D12DynamicRHI::FD3D12DynamicRHI(const TArray<TSharedPtr<FD3D12Adapter>>& Chos
 	// The FD3D12DynamicRHI must be a singleton
 	check(SingleD3DRHI == nullptr);
 	SingleD3DRHI = this;
-
-	ThreadDynamicHeapAllocatorArray.AddZeroed(FPlatformMisc::NumberOfCoresIncludingHyperthreads());
 
 	// This should be called once at the start 
 	check(IsInGameThread());
@@ -172,6 +163,7 @@ FD3D12DynamicRHI::FD3D12DynamicRHI(const TArray<TSharedPtr<FD3D12Adapter>>& Chos
 	GMaxShadowDepthBufferSizeX = GMaxTextureDimensions;
 	GMaxShadowDepthBufferSizeY = GMaxTextureDimensions;
 	GRHISupportsResolveCubemapFaces = true;
+	GRHISupportsCopyToTextureMultipleMips = true;
 
 	GRHISupportsRHIThread = true;
 #if PLATFORM_XBOXONE
@@ -195,6 +187,9 @@ FD3D12DynamicRHI::FD3D12DynamicRHI(const TArray<TSharedPtr<FD3D12Adapter>>& Chos
 
 	// Enable async compute by default
 	GEnableAsyncCompute = true;
+
+	// Manually enable Async BVH build for D3D12 RHI
+	GSupportAsyncComputeRaytracingBuildBVH = true;
 }
 
 FD3D12DynamicRHI::~FD3D12DynamicRHI()
@@ -286,22 +281,6 @@ IRHICommandContext* FD3D12DynamicRHI::RHIGetDefaultContext()
 	return DefaultCommandContext;
 }
 
-#if WITH_MGPU
-IRHICommandContext* FD3D12DynamicRHI::RHIGetDefaultContext(FRHIGPUMask GPUMask)
-{
-	FD3D12Adapter& Adapter = GetAdapter();
-
-	if (GNumExplicitGPUsForRendering > 1 && GPUMask == FRHIGPUMask::All())
-	{
-		return static_cast<IRHICommandContext*>(&Adapter.GetDefaultContextRedirector());
-	}
-	else // The next code assumes a single index.
-	{
-		return static_cast<IRHICommandContext*>(&Adapter.GetDevice(GPUMask.ToIndex())->GetDefaultCommandContext());
-	}
-}
-#endif // WITH_MGPU
-
 IRHIComputeContext* FD3D12DynamicRHI::RHIGetDefaultAsyncComputeContext()
 {
 	FD3D12Adapter& Adapter = GetAdapter();
@@ -324,28 +303,6 @@ IRHIComputeContext* FD3D12DynamicRHI::RHIGetDefaultAsyncComputeContext()
 	check(DefaultAsyncComputeContext);
 	return DefaultAsyncComputeContext;
 }
-
-#if WITH_MGPU
-IRHIComputeContext* FD3D12DynamicRHI::RHIGetDefaultAsyncComputeContext(FRHIGPUMask GPUMask)
-{
-	if (GEnableAsyncCompute)
-	{
-		FD3D12Adapter& Adapter = GetAdapter();
-		if (GNumExplicitGPUsForRendering > 1 && GPUMask == FRHIGPUMask::All())
-		{
-			return static_cast<IRHIComputeContext*>(&Adapter.GetDefaultAsyncComputeContextRedirector());
-		}
-		else // Single GPU path.
-		{
-			return static_cast<IRHIComputeContext*>(&Adapter.GetDevice(GPUMask.ToIndex())->GetDefaultAsyncComputeContext());
-		}
-	}
-	else 
-	{
-		return static_cast<IRHIComputeContext*>(RHIGetDefaultContext(GPUMask));
-	}
-}
-#endif // WITH_MGPU
 
 void FD3D12DynamicRHI::UpdateBuffer(FD3D12Resource* Dest, uint32 DestOffset, FD3D12Resource* Source, uint32 SourceOffset, uint32 NumBytes)
 {
@@ -384,6 +341,12 @@ void* FD3D12DynamicRHI::RHIGetNativeDevice()
 {
 	return (void*)GetAdapter().GetD3DDevice();
 }
+
+void* FD3D12DynamicRHI::RHIGetNativeInstance()
+{
+	return nullptr;
+}
+
 
 /**
 * Returns a supported screen resolution that most closely matches the input.
@@ -476,14 +439,6 @@ void FD3D12DynamicRHI::RHIGetSupportedResolution(uint32& Width, uint32& Height)
 
 void FD3D12DynamicRHI::GetBestSupportedMSAASetting(DXGI_FORMAT PlatformFormat, uint32 MSAACount, uint32& OutBestMSAACount, uint32& OutMSAAQualityLevels)
 {
-	//  We disable MSAA for Feature level 10
-	if (GMaxRHIFeatureLevel == ERHIFeatureLevel::SM4)
-	{
-		OutBestMSAACount = 1;
-		OutMSAAQualityLevels = 0;
-		return;
-	}
-
 	// start counting down from current setting (indicated the current "best" count) and move down looking for support
 	for (uint32 SampleCount = MSAACount; SampleCount > 0; SampleCount--)
 	{

@@ -9,33 +9,33 @@
 #include "HardwareTargetingSettings.h"
 
 class UTemplateProjectDefs;
+class UTemplateCategories;
 struct FProjectDescriptor;
 enum class EClassDomain : uint8;
+struct FTemplateConfigValue;
 
 struct FProjectInformation
 {
-	FProjectInformation(FString InProjectFilename, bool bInGenerateCode, bool bInCopyStarterContent, FString InTemplateFile = FString())
-		: ProjectFilename(MoveTemp(InProjectFilename))
-		, TemplateFile(MoveTemp(InTemplateFile))
-		, bShouldGenerateCode(bInGenerateCode)
-		, bCopyStarterContent(bInCopyStarterContent)
-		, bIsEnterpriseProject(false)
-		, bForceExtendedLuminanceRange(false)
-		, TargetedHardware(EHardwareClass::Desktop)
-		, DefaultGraphicsPerformance(EGraphicsPreset::Maximum)
-	{
-	}
+	FProjectInformation() = default;
 
 	FString ProjectFilename;
 	FString TemplateFile;
+	FName TemplateCategory;
 
-	bool bShouldGenerateCode;
-	bool bCopyStarterContent;
-	bool bIsEnterpriseProject;
+	bool bShouldGenerateCode = false;
+	bool bCopyStarterContent = false;
+	bool bIsBlankTemplate = false;
+	bool bIsEnterpriseProject = false;
 	bool bForceExtendedLuminanceRange; // See "r.DefaultFeature.AutoExposure.ExtendDefaultLuminanceRange"
 
-	EHardwareClass::Type TargetedHardware;
-	EGraphicsPreset::Type DefaultGraphicsPerformance;
+	// These are all optional, because there is an additional state introduced by hiding the setting in the template.
+	// In this case, the template author has chosen not to give the user a choice,
+	// so we must assume that the template already controls these settings explicitly.
+	TOptional<bool> bEnableXR;
+	TOptional<bool> bEnableRaytracing;
+
+	TOptional<EHardwareClass::Type> TargetedHardware;
+	TOptional<EGraphicsPreset::Type> DefaultGraphicsPerformance;
 };
 
 DECLARE_DELEGATE_RetVal_OneParam(bool, FProjectDescriptorModifier, FProjectDescriptor&);
@@ -134,6 +134,9 @@ public:
 
 	/** Adds new source code to the project. When returning Succeeded or FailedToHotReload, OutSyncFileAndLineNumber will be the the preferred target file to sync in the users code editing IDE, formatted for use with GenericApplication::GotoLineInSource */
 	static EAddCodeToProjectResult AddCodeToProject(const FString& NewClassName, const FString& NewClassPath, const FModuleContextInfo& ModuleInfo, const FNewClassInfo ParentClassInfo, const TSet<FString>& DisallowedHeaderNames, FString& OutHeaderFilePath, FString& OutCppFilePath, FText& OutFailReason);
+
+	/** Loads a list of template categories defined in the TemplateCategories.ini file in the specified folder */
+	static UTemplateCategories* LoadTemplateCategories(const FString& RootDir);
 
 	/** Loads a template project definitions object from the TemplateDefs.ini file in the specified project */
 	static UTemplateProjectDefs* LoadTemplateDefs(const FString& ProjectDirectory);
@@ -262,9 +265,6 @@ public:
 	/** Returns a list of #include lines formed from InList */
 	static FString MakeIncludeList(const TArray<FString>& InList);
 
-	/** Returns true if the currently loaded project requires a code build */
-	static bool ProjectRequiresBuild(const FName InPlatformInfoName);
-
 	/** Deletes the specified list of files that were created during file creation */
 	static void DeleteCreatedFiles(const FString& RootFolder, const TArray<FString>& CreatedFiles);
 
@@ -277,9 +277,12 @@ public:
 	 */
 	static void UpdateAdditionalPluginDirectory(const FString& InDir, const bool bAddOrRemove);
 
+	/** Gets the default build settings version for UBT */
+	static const TCHAR* GetDefaultBuildSettingsVersion();
+
 private:
 
-	static FString GetHardwareConfigString(const FProjectInformation& InProjectInfo);
+	static void AddHardwareConfigValues(const FProjectInformation& InProjectInfo, TArray<FTemplateConfigValue>& ConfigValues);
 
 	/** Generates a new project without using a template project */
 	static bool GenerateProjectFromScratch(const FProjectInformation& InProjectInfo, FText& OutFailReason, FText& OutFailLog);
@@ -302,9 +305,6 @@ private:
 	 * @returns true if no errors
 	 */
 	static bool AddSharedContentToProject(const FProjectInformation &InProjectInfo, TArray<FString> &CreatedFiles, FText& OutFailReason);
-
-	/** Returns list of starter content files */
-	static void GetStarterContentFiles(TArray<FString>& OutFilenames);
 
 	/** Returns the template defs ini filename */
 	static FString GetTemplateDefsFilename();
@@ -488,10 +488,6 @@ private:
 	 */
 	static bool UpdateRequiredAdditionalDependencies(FProjectDescriptor& Descriptor, TArray<FString>& RequiredDependencies, const FString& ModuleName);
 
-	/** checks the project ini file against the default ini file to determine whether or not the build settings have changed from default */
-	static bool HasDefaultBuildSettings(const FName InPlatformInfoName);
-	static bool DoProjectSettingsMatchDefault(const FString& InPlatformnName, const FString& InSection, const TArray<FString>* InBoolKeys, const TArray<FString>* InIntKeys = NULL, const TArray<FString>* InStringKeys = NULL);
-
 private:
 	/**
 	 * Updates the projects and modifies FProjectDescriptor accordingly to given modifier.
@@ -514,7 +510,6 @@ private:
 
 	static TWeakPtr<SNotificationItem> UpdateGameProjectNotification;
 	static TWeakPtr<SNotificationItem> WarningProjectNameNotification;
-	static FString DefaultFeaturePackExtension;
 
 	// Whether we should use AudioMixer for all platforms:
 	static bool bUseAudioMixerForAllPlatforms;

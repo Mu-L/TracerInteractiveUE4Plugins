@@ -1,0 +1,37 @@
+// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+
+#include "../Common.ush"
+#include "HairStrandsMeshProjectionCommon.ush"
+
+float3 RootTrianglePositionOffset;
+uint MeshSectionIndex;
+uint MeshMaxIndexCount;
+uint MeshMaxVertexCount;
+uint MeshIndexOffset;
+Buffer<uint> MeshIndexBuffer;
+Buffer<float> MeshPositionBuffer;
+
+uint MaxRootCount;
+Buffer<uint> RootTriangleIndex;
+
+RWBuffer<float4> OutRootTrianglePosition0;
+RWBuffer<float4> OutRootTrianglePosition1;
+RWBuffer<float4> OutRootTrianglePosition2;
+
+[numthreads(32, 1, 1)]
+void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{ 
+	const uint RootIndex = DispatchThreadId.x;
+	if (RootIndex >= MaxRootCount) 
+		return;
+	
+	const FHairTriangleIndex TriangleIndex = DecodeTriangleIndex(RootTriangleIndex[RootIndex]);
+	if (TriangleIndex.SectionIndex != MeshSectionIndex)
+		return;
+
+	const FHairMeshTriangle Tri = GetTriangleData(TriangleIndex.TriangleIndex, MeshPositionBuffer, MeshIndexBuffer, MeshIndexOffset, MeshMaxIndexCount, MeshMaxVertexCount);
+
+	OutRootTrianglePosition0[RootIndex] = (float4(Tri.P0 - RootTrianglePositionOffset,1));
+	OutRootTrianglePosition1[RootIndex] = (float4(Tri.P1 - RootTrianglePositionOffset,1));
+	OutRootTrianglePosition2[RootIndex] = (float4(Tri.P2 - RootTrianglePositionOffset,1));
+}

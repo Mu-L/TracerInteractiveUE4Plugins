@@ -111,7 +111,7 @@ public:
 		}
 
 		int32 TotalSize = SizeX * SizeY * SizeZ * DataSize;
-		if (InTextureData.GetElementCount() == TotalSize)
+		if (InTextureData.GetBulkDataSize() == TotalSize)
 		{
 			// Grab a copy of the static volume data.
 			InTextureData.GetCopy(&TextureData, false);
@@ -138,7 +138,7 @@ public:
 	 */
 	virtual void InitRHI() override
 	{
-		if (TextureData && GetFeatureLevel() >= ERHIFeatureLevel::SM4)
+		if (TextureData && GetFeatureLevel() >= ERHIFeatureLevel::SM5)
 		{
 			switch(TexType)
 			{

@@ -10,6 +10,7 @@ using System.Linq;
 using System.Net.NetworkInformation;
 using System.Text.RegularExpressions;
 using System.Net;
+using Newtonsoft.Json;
 
 namespace Gauntlet
 {
@@ -342,16 +343,18 @@ namespace Gauntlet
 		{
 			PlatformPath = Path;
 
-			if (BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Mac)
+			if (BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Mac || BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Linux)
 			{
+				string PosixMountPath = CommandUtils.IsBuildMachine ? "/Volumes/epicgames.net/root" : "/Volumes/root";
+
 				if (!Path.Contains("P:"))
 				{
-					PlatformPath = Regex.Replace(Path, @"\\\\epicgames.net\\root", "/Volumes/epicgames.net/root", RegexOptions.IgnoreCase);
+					PlatformPath = Regex.Replace(Path, @"\\\\epicgames.net\\root", PosixMountPath, RegexOptions.IgnoreCase);
 				}
-				else 
+				else
 				{
-					PlatformPath = Regex.Replace(Path, "P:", "/Volumes/epicgames.net/root", RegexOptions.IgnoreCase);					
-				}				
+					PlatformPath = Regex.Replace(Path, "P:", PosixMountPath, RegexOptions.IgnoreCase);
+				}
 				
 				PlatformPath = PlatformPath.Replace(@"\", "/");
 			}
@@ -368,5 +371,34 @@ namespace Gauntlet
 		}
 
 	}
+
+	/// <summary>
+	///  Converts between json and UnrealTargetPlatform
+	/// </summary>
+	public class UnrealTargetPlatformConvertor : JsonConverter
+	{
+		public override bool CanConvert(Type ObjectType)
+		{
+			return ObjectType == typeof(string) || ObjectType == typeof(UnrealTargetPlatform);
+		}
+
+		public override object ReadJson(JsonReader Reader, Type ObjectType, object ExistingValue, JsonSerializer Serializer)
+		{
+			UnrealTargetPlatform Platform;
+			if (!UnrealTargetPlatform.TryParse((string)Reader.Value, out Platform))
+			{
+				return null;
+			}
+			return Platform;
+		}
+
+		public override void WriteJson(JsonWriter Writer, object Value, JsonSerializer Serializer)
+		{
+			UnrealTargetPlatform? Platform = (UnrealTargetPlatform)Value;
+			Writer.WriteValue(Platform);
+		}
+
+	}
+
 
 }

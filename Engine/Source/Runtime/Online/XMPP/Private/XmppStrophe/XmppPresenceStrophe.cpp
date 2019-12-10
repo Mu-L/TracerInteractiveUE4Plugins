@@ -5,13 +5,15 @@
 #include "XmppStrophe/StropheStanza.h"
 #include "XmppStrophe/StropheStanzaConstants.h"
 #include "Misc/EmbeddedCommunication.h"
+#include "Containers/BackgroundableTicker.h"
 
 #if WITH_XMPP_STROPHE
 
-const FName FXmppPresenceStrophe::TickRequesterId = FName("StrophePresence");
+#define TickRequesterId FName("StrophePresence")
 
 FXmppPresenceStrophe::FXmppPresenceStrophe(FXmppConnectionStrophe& InConnectionManager)
-	: ConnectionManager(InConnectionManager)
+	: FTickerObjectBase(0.0f, FBackgroundableTicker::GetCoreTicker())
+	, ConnectionManager(InConnectionManager)
 {
 
 }
@@ -247,5 +249,7 @@ void FXmppPresenceStrophe::CleanupMessages()
 		FEmbeddedCommunication::AllowSleep(TickRequesterId);
 	}
 }
+
+#undef TickRequesterId
 
 #endif

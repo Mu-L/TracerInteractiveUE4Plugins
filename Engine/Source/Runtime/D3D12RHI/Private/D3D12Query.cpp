@@ -20,6 +20,14 @@ namespace D3D12RHI
 			TEXT("If true, enable stable power state. This increases GPU timing measurement accuracy but may decrease overall GPU clock rate."),
 			ECVF_Default
 			);
+
+		int32 GInsertOuterOcclusionQuery = 0;
+		static FAutoConsoleVariableRef CVarInsertOuterOcclusionQuery(
+			TEXT("D3D12.InsertOuterOcclusionQuery"),
+			GInsertOuterOcclusionQuery,
+			TEXT("If true, enable a dummy outer occlusion query around occlusion query batches. Can help performance on some GPU architectures"),
+			ECVF_Default
+		);
 	}
 }
 using namespace D3D12RHI;
@@ -160,10 +168,29 @@ bool FD3D12Device::GetQueryData(FD3D12RenderQuery& Query, bool bWait)
 void FD3D12CommandContext::RHIBeginOcclusionQueryBatch(uint32 NumQueriesInBatch)
 {
 	GetParentDevice()->GetOcclusionQueryHeap()->StartQueryBatch(*this, NumQueriesInBatch);
+	if (RHIConsoleVariables::GInsertOuterOcclusionQuery)
+	{
+		if (!OuterOcclusionQuery.IsValid())
+		{
+			OuterOcclusionQuery = GDynamicRHI->RHICreateRenderQuery(RQT_Occlusion);
+		}
+		
+		FD3D12RenderQuery* OuterOcclusionQueryD3D12 = RetrieveObject<FD3D12RenderQuery>(OuterOcclusionQuery.GetReference());
+		GetParentDevice()->GetOcclusionQueryHeap()->BeginQuery(*this, OuterOcclusionQueryD3D12);
+		bOuterOcclusionQuerySubmitted = true;
+	}
 }
 
 void FD3D12CommandContext::RHIEndOcclusionQueryBatch()
 {
+	if (bOuterOcclusionQuerySubmitted)
+	{
+		check(OuterOcclusionQuery.IsValid());
+		FD3D12RenderQuery* OuterOcclusionQueryD3D12 = RetrieveObject<FD3D12RenderQuery>(OuterOcclusionQuery.GetReference());
+		check(OuterOcclusionQueryD3D12->HeapIndex != INDEX_NONE);
+		GetParentDevice()->GetOcclusionQueryHeap()->EndQuery(*this, OuterOcclusionQueryD3D12);
+		bOuterOcclusionQuerySubmitted = false;
+	}
 	GetParentDevice()->GetOcclusionQueryHeap()->EndQueryBatchAndResolveQueryData(*this);
 
 	// Note: We want to execute this ASAP. The Engine will call RHISubmitCommandHint after this.
@@ -255,19 +282,19 @@ uint32 FD3D12QueryHeap::AllocQuery(FD3D12CommandContext& CmdContext)
 			check(CurrentQueryBatch.bOpen && CurrentQueryBatch.ElementCount == 0);
 		}
 
-		if (CurrentQueryBatch.StartElement > CurrentElement)
-		{
-			// We're in the middle of a batch, but we're at the end of the heap
-			// We need to split the batch in two and resolve the first piece
-			EndQueryBatchAndResolveQueryData(CmdContext);
+	if (CurrentQueryBatch.StartElement > CurrentElement)
+	{
+		// We're in the middle of a batch, but we're at the end of the heap
+		// We need to split the batch in two and resolve the first piece
+		EndQueryBatchAndResolveQueryData(CmdContext);
 		}
 
 		// check for the the batch being closed due to wrap and open a new one
 		if (!CurrentQueryBatch.bOpen)
 		{
 			StartQueryBatch(CmdContext, 256);
-			check(CurrentQueryBatch.bOpen && CurrentQueryBatch.ElementCount == 0);
-		}
+		check(CurrentQueryBatch.bOpen && CurrentQueryBatch.ElementCount == 0);
+	}
 	}
 
 	// Increment the count for the current batch
@@ -344,9 +371,9 @@ void FD3D12QueryHeap::EndQueryBatchAndResolveQueryData(FD3D12CommandContext& Cmd
 	if (CurrentQueryBatch.StartElement + CurrentQueryBatch.ElementCount <= QueryHeapCount)
 	{
 		// Single range
-		CmdContext.CommandListHandle->ResolveQueryData(
-			QueryHeap, QueryType, CurrentQueryBatch.StartElement, CurrentQueryBatch.ElementCount,
-			ResultBuffer->GetResource(), GetResultBufferOffsetForElement(CurrentQueryBatch.StartElement));
+	CmdContext.CommandListHandle->ResolveQueryData(
+		QueryHeap, QueryType, CurrentQueryBatch.StartElement, CurrentQueryBatch.ElementCount,
+		ResultBuffer->GetResource(), GetResultBufferOffsetForElement(CurrentQueryBatch.StartElement));
 	}
 	else
 	{
@@ -390,7 +417,7 @@ void FD3D12QueryHeap::EndQuery(FD3D12CommandContext& CmdContext, FD3D12RenderQue
 
 	if (QueryType == D3D12_QUERY_TYPE_OCCLUSION)
 	{
-		check(CurrentQueryBatch.bOpen);
+	check(CurrentQueryBatch.bOpen);
 	}
 	else
 	{
@@ -413,7 +440,7 @@ void FD3D12QueryHeap::CreateQueryHeap()
 	D3D12_QUERY_HEAP_DESC QueryHeapDesc;
 	QueryHeapDesc.Type = (QueryType == D3D12_QUERY_TYPE_OCCLUSION)? D3D12_QUERY_HEAP_TYPE_OCCLUSION : D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
 	QueryHeapDesc.Count = QueryHeapCount;
-	QueryHeapDesc.NodeMask = (uint32)GetGPUMask();
+	QueryHeapDesc.NodeMask = GetGPUMask().GetNative();
 
 	// Create the upload heap
 	VERIFYD3D12RESULT(GetParentDevice()->GetDevice()->CreateQueryHeap(&QueryHeapDesc, IID_PPV_ARGS(&QueryHeap)));
@@ -426,12 +453,13 @@ void FD3D12QueryHeap::CreateQueryHeap()
 
 	FD3D12Adapter* Adapter = GetParentDevice()->GetParentAdapter();
 
-	const D3D12_HEAP_PROPERTIES ResultBufferHeapProperties = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_READBACK, (uint32)GetGPUMask(), (uint32)GetVisibilityMask());
+	const D3D12_HEAP_PROPERTIES ResultBufferHeapProperties = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_READBACK, GetGPUMask().GetNative(), GetVisibilityMask().GetNative());
 	const D3D12_RESOURCE_DESC ResultBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(ResultSize * QueryHeapDesc.Count); // Each query's result occupies ResultSize bytes.
 
 	// Create the readback heap
 	VERIFYD3D12RESULT(Adapter->CreateCommittedResource(
 		ResultBufferDesc,
+		GetGPUMask(),
 		ResultBufferHeapProperties,
 		D3D12_RESOURCE_STATE_COPY_DEST,
 		nullptr,
@@ -627,7 +655,7 @@ void FD3D12LinearQueryHeap::CreateQueryHeap(int32 NumQueries, ID3D12QueryHeap** 
 	D3D12_QUERY_HEAP_DESC Desc;
 	Desc.Type = QueryHeapType;
 	Desc.Count = static_cast<uint32>(NumQueries);
-	Desc.NodeMask = static_cast<uint32>(GetGPUMask());
+	Desc.NodeMask = GetGPUMask().GetNative();
 	VERIFYD3D12RESULT(GetParentDevice()->GetDevice()->CreateQueryHeap(&Desc, IID_PPV_ARGS(OutHeap)));
 	SetName(*OutHeap, TEXT("FD3D12LinearQueryHeap"));
 
@@ -640,11 +668,12 @@ void FD3D12LinearQueryHeap::CreateQueryHeap(int32 NumQueries, ID3D12QueryHeap** 
 void FD3D12LinearQueryHeap::CreateResultBuffer(uint64 SizeInBytes, FD3D12Resource** OutBuffer)
 {
 	FD3D12Adapter* Adapter = GetParentDevice()->GetParentAdapter();
-	const D3D12_HEAP_PROPERTIES ResultBufferHeapProperties = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_READBACK, (uint32)GetGPUMask(), (uint32)GetVisibilityMask());
+	const D3D12_HEAP_PROPERTIES ResultBufferHeapProperties = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_READBACK, GetGPUMask().GetNative(), GetVisibilityMask().GetNative());
 	const D3D12_RESOURCE_DESC ResultBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(SizeInBytes);
 
 	VERIFYD3D12RESULT(Adapter->CreateCommittedResource(
 		ResultBufferDesc,
+		GetGPUMask(),
 		ResultBufferHeapProperties,
 		D3D12_RESOURCE_STATE_COPY_DEST,
 		nullptr,
@@ -749,7 +778,7 @@ void FD3D12BufferedGPUTiming::InitDynamicRHI()
 		TimestampQueryHeap = Adapter->CreateLinkedObject<QueryHeap>(FRHIGPUMask::All(), [&] (FD3D12Device* Device)
 		{
 			QueryHeap* NewHeap = new QueryHeap(Device);
-			QueryHeapDesc.NodeMask = (uint32)Device->GetGPUMask();
+			QueryHeapDesc.NodeMask = Device->GetGPUMask().GetNative();
 			VERIFYD3D12RESULT(D3DDevice->CreateQueryHeap(&QueryHeapDesc, IID_PPV_ARGS(NewHeap->Heap.GetInitReference())));
 			SetName(NewHeap->Heap, L"FD3D12BufferedGPUTiming: Timestamp Query Heap");
 

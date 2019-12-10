@@ -3,16 +3,17 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Misc/Attribute.h"
-#include "Styling/SlateColor.h"
 #include "Fonts/SlateFontInfo.h"
+#include "Framework/MultiBox/MultiBoxExtender.h"
 #include "Input/Reply.h"
-#include "Widgets/DeclarativeSyntaxSupport.h"
 #include "Layout/Margin.h"
-#include "Styling/SlateTypes.h"
+#include "Misc/Attribute.h"
 #include "Styling/CoreStyle.h"
-#include "Widgets/Layout/SBorder.h"
+#include "Styling/SlateColor.h"
+#include "Styling/SlateTypes.h"
+#include "Widgets/DeclarativeSyntaxSupport.h"
 #include "Widgets/Input/SEditableText.h"
+#include "Widgets/Layout/SBorder.h"
 
 class IErrorReportingWidget;
 class SBox;
@@ -102,6 +103,9 @@ public:
 
 		/** Delegate to call before a context menu is opened. User returns the menu content or null to the disable context menu */
 		SLATE_EVENT(FOnContextMenuOpening, OnContextMenuOpening)
+
+		/** Menu extender for the right-click context menu */
+		SLATE_EVENT(FMenuExtensionDelegate, ContextMenuExtender)
 
 		/** Called whenever the text is changed programmatically or interactively by the user */
 		SLATE_EVENT( FOnTextChanged, OnTextChanged )
@@ -320,13 +324,19 @@ public:
 	void GoTo(const FTextLocation& NewLocation);
 
 	/** Move the cursor to the specified location */
-	void GoTo(ETextLocation NewLocation)
+	void GoTo(const ETextLocation NewLocation)
 	{
 		EditableText->GoTo(NewLocation);
 	}
 
 	/** Scroll to the given location in the document (without moving the cursor) */
 	void ScrollTo(const FTextLocation& NewLocation);
+
+	/** Scroll to the given location in the document (without moving the cursor) */
+	void ScrollTo(const ETextLocation NewLocation)
+	{
+		EditableText->GoTo(NewLocation);
+	}
 
 	/** Begin a new text search (this is called automatically when the bound search text changes) */
 	void BeginSearch(const FText& InSearchText, const ESearchCase::Type InSearchCase = ESearchCase::IgnoreCase, const bool InReverse = false);
@@ -345,7 +355,7 @@ public:
 protected:
 #if WITH_ACCESSIBILITY
 	virtual TSharedRef<FSlateAccessibleWidget> CreateAccessibleWidget() override;
-	virtual void SetDefaultAccessibleText(EAccessibleType AccessibleType = EAccessibleType::Main) override;
+	virtual TOptional<FText> GetDefaultAccessibleText(EAccessibleType AccessibleType = EAccessibleType::Main) const override;
 #endif
 
 	const FEditableTextBoxStyle* Style;

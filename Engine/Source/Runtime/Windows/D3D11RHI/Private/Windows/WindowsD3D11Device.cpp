@@ -77,24 +77,6 @@ struct AmdAgsInfo
 static AmdAgsInfo AmdInfo;
 #endif
 
-static TAutoConsoleVariable<int32> CVarForceAMDToSM4(
-	TEXT("r.ForceAMDToSM4"),
-	0,
-	TEXT("Forces AMD devices to use SM4.0/D3D10.0 feature level."),
-	ECVF_RenderThreadSafe);
-
-static TAutoConsoleVariable<int32> CVarForceIntelToSM4(
-	TEXT("r.ForceIntelToSM4"),
-	0,
-	TEXT("Forces Intel devices to use SM4.0/D3D10.0 feature level."),
-	ECVF_RenderThreadSafe);
-
-static TAutoConsoleVariable<int32> CVarForceNvidiaToSM4(
-	TEXT("r.ForceNvidiaToSM4"),
-	0,
-	TEXT("Forces Nvidia devices to use SM4.0/D3D10.0 feature level."),
-	ECVF_RenderThreadSafe);
-
 static TAutoConsoleVariable<int32> CVarAMDUseMultiThreadedDevice(
 	TEXT("r.AMDD3D11MultiThreadedDevice"),
 	0,
@@ -128,10 +110,10 @@ static FAutoConsoleVariableRef CVarDX11NumGPUs(
  */
 namespace RHIConsoleVariables
 {
-	int32 FeatureSetLimit = -1;
-	static FAutoConsoleVariableRef CVarFeatureSetLimit(
+	int32 MaxFeatureSetLimit = -1;
+	static FAutoConsoleVariableRef CVarMaxFeatureSetLimit(
 		TEXT("RHI.FeatureSetLimit"),
-		FeatureSetLimit,
+		MaxFeatureSetLimit,
 		TEXT("If set to 10, limit D3D RHI to D3D10 feature level. Otherwise, it will use default. Changing this at run-time has no effect. (default is -1)")
 		);
 };
@@ -238,31 +220,24 @@ static void SafeCreateDXGIFactory(IDXGIFactory1** DXGIFactory1)
 }
 
 /**
+ * Returns the lowest D3D feature level we are allowed to created based on
+ * command line parameters.
+ */
+static D3D_FEATURE_LEVEL GetMinAllowedD3DFeatureLevel()
+{
+	// Default to 11.0
+	D3D_FEATURE_LEVEL AllowedFeatureLevel = D3D_FEATURE_LEVEL_11_0;
+	return AllowedFeatureLevel;
+}
+
+/**
  * Returns the highest D3D feature level we are allowed to created based on
  * command line parameters.
  */
-static D3D_FEATURE_LEVEL GetAllowedD3DFeatureLevel()
+static D3D_FEATURE_LEVEL GetMaxAllowedD3DFeatureLevel()
 {
-	// Default to D3D11 
+	// Default to 11.0
 	D3D_FEATURE_LEVEL AllowedFeatureLevel = D3D_FEATURE_LEVEL_11_0;
-
-	// Use a feature level 10 if specified on the command line.
-	if(FParse::Param(FCommandLine::Get(),TEXT("d3d10")) || 
-		FParse::Param(FCommandLine::Get(),TEXT("dx10")) ||
-		FParse::Param(FCommandLine::Get(),TEXT("sm4")) ||
-		RHIConsoleVariables::FeatureSetLimit == 10)
-	{
-		AllowedFeatureLevel = D3D_FEATURE_LEVEL_10_0;
-	}
-
-	if (bIsQuadBufferStereoEnabled)
-	{
-		if (AllowedFeatureLevel == D3D_FEATURE_LEVEL_10_0)
-		{
-			UE_LOG(LogD3D11RHI, Warning, TEXT("D3D Feature Level overriden from 10.0 to 11.1 due to quad_buffer_stereo"));
-		}
-		AllowedFeatureLevel = D3D_FEATURE_LEVEL_11_1;
-	}
 	return AllowedFeatureLevel;
 }
 
@@ -270,10 +245,10 @@ static D3D_FEATURE_LEVEL GetAllowedD3DFeatureLevel()
  * Attempts to create a D3D11 device for the adapter using at most MaxFeatureLevel.
  * If creation is successful, true is returned and the supported feature level is set in OutFeatureLevel.
  */
-static bool SafeTestD3D11CreateDevice(IDXGIAdapter* Adapter,D3D_FEATURE_LEVEL MaxFeatureLevel,D3D_FEATURE_LEVEL* OutFeatureLevel)
+static bool SafeTestD3D11CreateDevice(IDXGIAdapter* Adapter,D3D_FEATURE_LEVEL MinFeatureLevel,D3D_FEATURE_LEVEL MaxFeatureLevel,D3D_FEATURE_LEVEL* OutFeatureLevel)
 {
-	ID3D11Device* D3DDevice = NULL;
-	ID3D11DeviceContext* D3DDeviceContext = NULL;
+	ID3D11Device* D3DDevice = nullptr;
+	ID3D11DeviceContext* D3DDeviceContext = nullptr;
 	uint32 DeviceFlags = D3D11_CREATE_DEVICE_SINGLETHREADED;
 	// Use a debug device if specified on the command line.
 	if(D3D11RHI_ShouldCreateWithD3DDebug())
@@ -289,11 +264,13 @@ static bool SafeTestD3D11CreateDevice(IDXGIAdapter* Adapter,D3D_FEATURE_LEVEL Ma
 	{
 		D3D_FEATURE_LEVEL_11_1,
 		D3D_FEATURE_LEVEL_11_0,
-		D3D_FEATURE_LEVEL_10_0
 	};
-
+	
+	// Trim to allowed feature levels
 	int32 FirstAllowedFeatureLevel = 0;
-	int32 NumAllowedFeatureLevels = ARRAY_COUNT(RequestedFeatureLevels);
+	int32 NumAllowedFeatureLevels = UE_ARRAY_COUNT(RequestedFeatureLevels);
+	int32 LastAllowedFeatureLevel = NumAllowedFeatureLevels - 1;
+	
 	while (FirstAllowedFeatureLevel < NumAllowedFeatureLevels)
 	{
 		if (RequestedFeatureLevels[FirstAllowedFeatureLevel] == MaxFeatureLevel)
@@ -302,9 +279,18 @@ static bool SafeTestD3D11CreateDevice(IDXGIAdapter* Adapter,D3D_FEATURE_LEVEL Ma
 		}
 		FirstAllowedFeatureLevel++;
 	}
-	NumAllowedFeatureLevels -= FirstAllowedFeatureLevel;
 
-	if (NumAllowedFeatureLevels == 0)
+	while (LastAllowedFeatureLevel > 0)
+	{
+		if (RequestedFeatureLevels[LastAllowedFeatureLevel] >= MinFeatureLevel)
+		{
+			break;
+		}
+		LastAllowedFeatureLevel--;
+	}
+	
+	NumAllowedFeatureLevels = LastAllowedFeatureLevel - FirstAllowedFeatureLevel + 1;
+	if (MaxFeatureLevel < MinFeatureLevel || NumAllowedFeatureLevels <= 0)
 	{
 		return false;
 	}
@@ -317,7 +303,7 @@ static bool SafeTestD3D11CreateDevice(IDXGIAdapter* Adapter,D3D_FEATURE_LEVEL Ma
 		HRESULT Result = D3D11CreateDevice(
 			Adapter,
 			D3D_DRIVER_TYPE_UNKNOWN,
-			NULL,
+			nullptr,
 			DeviceFlags,
 			&RequestedFeatureLevels[FirstAllowedFeatureLevel],
 			NumAllowedFeatureLevels,
@@ -357,7 +343,7 @@ static bool SafeTestD3D11CreateDevice(IDXGIAdapter* Adapter,D3D_FEATURE_LEVEL Ma
 	return false;
 }
 
-// Display gamut and chromacities
+// Display gamut and chromaticities
 // Note: Must be kept in sync with CVars and Tonemapping shaders
 enum EDisplayGamut
 {
@@ -768,7 +754,11 @@ void FD3D11DynamicRHIModule::FindAdapter()
 	const bool bFavorNonIntegrated = CVarExplicitAdapterValue == -1;
 
 	TRefCountPtr<IDXGIAdapter> TempAdapter;
-	D3D_FEATURE_LEVEL MaxAllowedFeatureLevel = GetAllowedD3DFeatureLevel();
+	D3D_FEATURE_LEVEL MinAllowedFeatureLevel = GetMinAllowedD3DFeatureLevel();
+	D3D_FEATURE_LEVEL MaxAllowedFeatureLevel = GetMaxAllowedD3DFeatureLevel();
+
+	UE_LOG(LogD3D11RHI, Log, TEXT("D3D11 min allowed feature level: %s"), GetFeatureLevelString(MinAllowedFeatureLevel));
+	UE_LOG(LogD3D11RHI, Log, TEXT("D3D11 max allowed feature level: %s"), GetFeatureLevelString(MaxAllowedFeatureLevel));
 
 	FD3D11Adapter FirstWithoutIntegratedAdapter;
 	FD3D11Adapter FirstAdapter;
@@ -794,7 +784,7 @@ void FD3D11DynamicRHIModule::FindAdapter()
 		if(TempAdapter)
 		{
 			D3D_FEATURE_LEVEL ActualFeatureLevel = (D3D_FEATURE_LEVEL)0;
-			if(SafeTestD3D11CreateDevice(TempAdapter,MaxAllowedFeatureLevel,&ActualFeatureLevel))
+			if(SafeTestD3D11CreateDevice(TempAdapter,MinAllowedFeatureLevel,MaxAllowedFeatureLevel,&ActualFeatureLevel))
 			{
 				// Log some information about the available D3D11 adapters.
 				VERIFYD3D11RESULT(TempAdapter->GetDesc(&AdapterDesc));
@@ -903,27 +893,6 @@ void FD3D11DynamicRHIModule::FindAdapter()
 	else
 	{
 		UE_LOG(LogD3D11RHI, Error, TEXT("Failed to choose a D3D11 Adapter."));
-	}
-
-	// Workaround to force specific IHVs to SM4.0
-	if (ChosenAdapter.IsValid() && ChosenAdapter.MaxSupportedFeatureLevel != D3D_FEATURE_LEVEL_10_0)
-	{
-		DXGI_ADAPTER_DESC AdapterDesc;
-		ZeroMemory(&AdapterDesc, sizeof(DXGI_ADAPTER_DESC));
-
-		DXGIFactory1->EnumAdapters(ChosenAdapter.AdapterIndex, TempAdapter.GetInitReference());
-		VERIFYD3D11RESULT(TempAdapter->GetDesc(&AdapterDesc));	
-
-		const bool bIsAMD = AdapterDesc.VendorId == 0x1002;
-		const bool bIsIntel = AdapterDesc.VendorId == 0x8086;
-		const bool bIsNVIDIA = AdapterDesc.VendorId == 0x10DE;
-
-		if ((bIsAMD && CVarForceAMDToSM4.GetValueOnGameThread() > 0) ||
-			(bIsIntel && CVarForceIntelToSM4.GetValueOnGameThread() > 0) ||
-			(bIsNVIDIA && CVarForceNvidiaToSM4.GetValueOnGameThread() > 0))
-		{
-			ChosenAdapter.MaxSupportedFeatureLevel = D3D_FEATURE_LEVEL_10_0;
-		}
 	}
 }
 
@@ -1526,7 +1495,7 @@ void FD3D11DynamicRHI::InitD3DDevice()
 			CreateIntelMetricsDiscovery();
 		}
 #endif
-		
+
 		if (!bDeviceCreated)
 		{
 			// Creating the Direct3D device.
@@ -1562,7 +1531,7 @@ void FD3D11DynamicRHI::InitD3DDevice()
 
 		GShaderPlatformForFeatureLevel[ERHIFeatureLevel::ES2] = SP_PCD3D_ES2;
 		GShaderPlatformForFeatureLevel[ERHIFeatureLevel::ES3_1] = SP_PCD3D_ES3_1;
-		GShaderPlatformForFeatureLevel[ERHIFeatureLevel::SM4] = SP_PCD3D_SM4;
+		GShaderPlatformForFeatureLevel[ERHIFeatureLevel::SM4_REMOVED] = SP_NumPlatforms;
 		GShaderPlatformForFeatureLevel[ERHIFeatureLevel::SM5] = SP_PCD3D_SM5;
 
 		if (IsRHIDeviceAMD() && CVarAMDDisableAsyncTextureCreation.GetValueOnAnyThread())
@@ -1571,6 +1540,25 @@ void FD3D11DynamicRHI::InitD3DDevice()
 		}
 
 #ifdef NVAPI_INTERFACE
+
+		if (IsRHIDeviceNVIDIA() && bAllowVendorDevice)
+		{
+			NvAPI_Status NvStatus;
+			NvStatus = NvAPI_Initialize();
+			if (NvStatus == NVAPI_OK)
+			{
+				NvStatus = NvAPI_D3D11_IsNvShaderExtnOpCodeSupported(Direct3DDevice, NV_EXTN_OP_UINT64_ATOMIC, &GRHISupportsAtomicUInt64);
+				if (NvStatus != NVAPI_OK)
+				{
+					UE_LOG(LogD3D11RHI, Warning, TEXT("Failed to query support for 64 bit atomics"));
+				}
+			}
+			else
+			{
+				UE_LOG(LogD3D11RHI, Warning, TEXT("Failed to initialize NVAPI"));
+			}
+		}
+
 		if( IsRHIDeviceNVIDIA() && CVarNVidiaTimestampWorkaround.GetValueOnAnyThread() )
 		{
 			// Workaround for pre-maxwell TDRs with realtime GPU stats (timestamp queries)
@@ -1585,6 +1573,15 @@ void FD3D11DynamicRHI::InitD3DDevice()
 #endif //NVAPI_INTERFACE
 
 		CACHE_NV_AFTERMATH_ENABLED();
+
+		if (GRHISupportsAtomicUInt64)
+		{
+			UE_LOG(LogD3D11RHI, Log, TEXT("RHI has support for 64 bit atomics"));
+		}
+		else
+		{
+			UE_LOG(LogD3D11RHI, Log, TEXT("RHI does not have support for 64 bit atomics"));
+		}
 
 #if PLATFORM_WINDOWS
 		IUnknown* RenderDoc;

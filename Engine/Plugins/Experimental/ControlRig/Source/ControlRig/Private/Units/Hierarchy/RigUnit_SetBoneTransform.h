@@ -16,11 +16,14 @@ struct FRigUnit_SetBoneTransform : public FRigUnitMutable
 
 	FRigUnit_SetBoneTransform()
 		: Space(EBoneGetterSetterMode::LocalSpace)
+		, Weight(1.f)
 		, bPropagateToChildren(false)
 		, CachedBoneIndex(INDEX_NONE)
 	{}
 
 	virtual FString GetUnitLabel() const override;
+
+	RIGVM_METHOD()
 	virtual void Execute(const FRigUnitContext& Context) override;
 
 	/**
@@ -32,7 +35,7 @@ struct FRigUnit_SetBoneTransform : public FRigUnitMutable
 	/**
 	 * The transform value to set for the given Bone.
 	 */
-	UPROPERTY(meta = (Input))
+	UPROPERTY(meta = (Input, Output))
 	FTransform Transform;
 
 	/**
@@ -41,6 +44,12 @@ struct FRigUnit_SetBoneTransform : public FRigUnitMutable
 	 */
 	UPROPERTY(meta = (Input))
 	EBoneGetterSetterMode Space;
+	
+	/**
+	 * The weight of the change - how much the change should be applied
+	 */
+	UPROPERTY(meta = (Input, UIMin = "0.0", UIMax = "1.0"))
+	float Weight;
 
 	/**
 	 * If set to true all of the global transforms of the children 

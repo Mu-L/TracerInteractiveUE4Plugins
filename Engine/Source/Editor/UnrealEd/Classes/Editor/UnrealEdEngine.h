@@ -27,6 +27,8 @@ class ITargetPlatform;
 class UPrimitiveComponent;
 class UTexture2D;
 class UUnrealEdOptions;
+class FName;
+typedef FName FEditorModeID;
 
 UENUM()
 enum EPackageNotifyState
@@ -107,6 +109,22 @@ struct FTemplateMapInfo
 };
 
 class FPerformanceMonitor;
+
+
+/** Struct used in filtering allowed references between assets. Passes context about the referencers to game-level filters */
+struct FAssetReferenceFilterContext
+{
+	TArray<FAssetData> ReferencingAssets;
+};
+
+/** Used in filtering allowed references between assets. Implement a subclass of this and return it in OnMakeAssetReferenceFilter */
+class IAssetReferenceFilter
+{
+public:
+	virtual ~IAssetReferenceFilter() { }
+	/** Filter function to pass/fail an asset. Called in some situations that are performance-sensitive so is expected to be fast. */
+	virtual bool PassesFilter(const FAssetData& AssetData, FText* OutOptionalFailureReason = nullptr) const = 0;
+};
 
 UCLASS(config=Engine, transient)
 class UNREALED_API UUnrealEdEngine : public UEditorEngine, public FNotifyHook
@@ -812,16 +830,24 @@ public:
 	bool HandleDisasmScriptCommand( const TCHAR* Str, FOutputDevice& Ar );	
 
 	/** OnEditorModeChanged delegate which looks for Matinee editor closing */
+	UE_DEPRECATED(4.24, "Use UpdateEdModeOnMatineeClose() instead")
 	void OnMatineeEditorClosed( class FEdMode* Mode, bool IsEntering );
+	void UpdateEdModeOnMatineeClose(const FEditorModeID& EditorModeID, bool IsEntering);
 
 	bool IsComponentSelected(const UPrimitiveComponent* PrimComponent);
+
+	/** Returns a filter to restruct what assets show up in asset pickers based on what the selection is used for (i.e. what will reference the assets) */
+	DECLARE_DELEGATE_RetVal_OneParam(TSharedPtr<IAssetReferenceFilter>, FOnMakeAssetReferenceFilter, const FAssetReferenceFilterContext& /*Context*/);
+	FOnMakeAssetReferenceFilter& OnMakeAssetReferenceFilter() { return OnMakeAssetReferenceFilterDelegate; }
+	TSharedPtr<IAssetReferenceFilter> MakeAssetReferenceFilter(const FAssetReferenceFilterContext& Context) { return OnMakeAssetReferenceFilterDelegate.IsBound() ? OnMakeAssetReferenceFilterDelegate.Execute(Context) : nullptr; }
 	
 protected:
+
+	/** Returns a filter to restruct what assets show up in asset pickers based on what the selection is used for (i.e. what will reference the assets) */
+	FOnMakeAssetReferenceFilter OnMakeAssetReferenceFilterDelegate;
+
 	/** Called when global editor selection changes */
 	void OnEditorSelectionChanged(UObject* SelectionThatChanged);
-
-	/** Called when blueprint objects are replaced so that we can update the cached visualizer selection */
-	void ReplaceCachedVisualizerObjects(const TMap<UObject*, UObject*>& ReplacementMap);
 
 	EWriteDisallowedWarningState GetWarningStateForWritePermission(const FString& PackageName) const;
 	
@@ -841,6 +867,8 @@ protected:
 
 	/** Handle to the registered OnMatineeEditorClosed delegate. */
 	FDelegateHandle OnMatineeEditorClosedDelegateHandle;
+	/** Handle to the registered UpdateEdModeOnMatineeClose delegate. */
+	FDelegateHandle UpdateEdModeOnMatineeCloseDelegateHandle;
 
 	/** Whether the pivot has been moved independently */
 	bool bPivotMovedIndependently;

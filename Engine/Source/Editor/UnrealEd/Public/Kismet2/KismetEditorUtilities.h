@@ -10,6 +10,7 @@
 #include "Engine/Blueprint.h"
 #include "Engine/BlueprintGeneratedClass.h"
 
+class UToolMenu;
 class IBlueprintEditor;
 class UEdGraph;
 struct Rect;
@@ -105,20 +106,10 @@ public:
 
 	/** 
 	 * Event that's broadcast anytime a blueprint is unloaded, and becomes 
-	 * invalid (with calls to ReloadBlueprint(), for example).
+	 * invalid (with calls to ReplaceBlueprint(), for example).
 	 */
 	DECLARE_MULTICAST_DELEGATE_OneParam(FOnBlueprintUnloaded, UBlueprint*);
 	static FOnBlueprintUnloaded OnBlueprintUnloaded;
-
-	/** 
-	 * Unloads the supplied Blueprint (marking it pending-kill, and removing it 
-	 * from its outer package). Then proceeds to reload from disk.
-	 * This will generally not transfer object references over as there is a garbage collect in the middle.
-	 *
-	 * @param  TargetBlueprint	The Blueprint you want to unload and replace.
-	 * @return The freshly loaded Blueprint (replacing the, now invalid, input).
-	 */
-	static UBlueprint* ReloadBlueprint(UBlueprint* TargetBlueprint);
 
 	/** 
 	 * Unloads the specified Blueprint (marking it pending-kill, and removing it 
@@ -148,9 +139,6 @@ public:
 
 	/** Generates a blueprint skeleton only.  Minimal compile, no notifications will be sent, no GC, etc.  Only successful if there isn't already a skeleton generated */
 	static bool GenerateBlueprintSkeleton(UBlueprint* BlueprintObj, bool bForceRegeneration = false);
-
-	/** Recompiles the bytecode of a blueprint only.  Should only be run for recompiling dependencies during compile on load */
-	static void RecompileBlueprintBytecode(UBlueprint* BlueprintObj, EBlueprintBytecodeRecompileOptions Flags = EBlueprintBytecodeRecompileOptions::None);
 
 	/** Tries to make sure that a data-only blueprint is conformed to its native parent, in case any native class flags have changed */
 	static void ConformBlueprintFlagsAndComponents(UBlueprint* BlueprintObj);
@@ -276,7 +264,7 @@ public:
 	static bool AnyBoundLevelScriptEventForActor(AActor* Actor, bool bCouldAddAny);
 
 	/** It lists bounded LevelScriptEvents for given actor */
-	static void AddLevelScriptEventOptionsForActor(class FMenuBuilder& MenuBuilder, TWeakObjectPtr<AActor> ActorPtr, bool bExistingEvents, bool bNewEvents, bool bOnlyEventName);
+	static void AddLevelScriptEventOptionsForActor(UToolMenu* Menu, TWeakObjectPtr<AActor> ActorPtr, bool bExistingEvents, bool bNewEvents, bool bOnlyEventName);
 	
 	/** Return information about the given macro graph */
 	static void GetInformationOnMacro(UEdGraph* MacroGraph, /*out*/ class UK2Node_Tunnel*& EntryNode, /*out*/ class UK2Node_Tunnel*& ExitNode, bool& bIsPure);

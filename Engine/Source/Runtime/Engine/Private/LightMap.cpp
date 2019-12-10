@@ -2756,7 +2756,7 @@ int32 FLightMap2D::EncodeShadowTexture(ULevel* LightingScenario, struct FLightMa
 							ExtrapolatedFilterableComponents[i] = 0;
 						}
 
-						for (int32 NeighborIndex = 0; NeighborIndex < ARRAY_COUNT(Neighbors); NeighborIndex++)
+						for (int32 NeighborIndex = 0; NeighborIndex < UE_ARRAY_COUNT(Neighbors); NeighborIndex++)
 						{
 							if (static_cast<int32>(DestY) + Neighbors[NeighborIndex].Y >= 0
 								&& DestY + Neighbors[NeighborIndex].Y < MipSizeY
@@ -2975,7 +2975,7 @@ void FLightMap2D::Serialize(FArchive& Ar)
 
 	if (RenderCustomVersion >= FRenderingObjectVersion::LightmapHasShadowmapData)
 	{
-		for (int Channel = 0; Channel < ARRAY_COUNT(bShadowChannelValid); Channel++)
+		for (int Channel = 0; Channel < UE_ARRAY_COUNT(bShadowChannelValid); Channel++)
 		{
 			Ar << bShadowChannelValid[Channel];
 		}
@@ -3105,12 +3105,18 @@ void FLegacyLightMap1D::Serialize(FArchive& Ar)
 	check(Ar.IsLoading());
 
 	UObject* Owner;
+
+#if !USE_NEW_BULKDATA
 	TQuantizedLightSampleBulkData<FQuantizedDirectionalLightSample> DirectionalSamples;
 	TQuantizedLightSampleBulkData<FQuantizedSimpleLightSample> SimpleSamples;
+#else
+	FUntypedBulkData2<FQuantizedDirectionalLightSample> DirectionalSamples;
+	FUntypedBulkData2<FQuantizedSimpleLightSample> SimpleSamples;
+#endif
 
 	Ar << Owner;
 
-	DirectionalSamples.Serialize( Ar, Owner );
+	DirectionalSamples.Serialize( Ar, Owner, INDEX_NONE, false );
 
 	for (int32 ElementIndex = 0; ElementIndex < 5; ElementIndex++)
 	{
@@ -3118,7 +3124,7 @@ void FLegacyLightMap1D::Serialize(FArchive& Ar)
 		Ar << Dummy;
 	}
 
-	SimpleSamples.Serialize( Ar, Owner );
+	SimpleSamples.Serialize( Ar, Owner, INDEX_NONE, false );
 }
 
 /*-----------------------------------------------------------------------------
@@ -3257,7 +3263,7 @@ bool FQuantizedLightmapData::HasNonZeroData() const
 
 			if (bHasSkyShadowing)
 			{
-				for (int32 Index = 0; Index < ARRAY_COUNT(LightmapSample.SkyOcclusion); Index++)
+				for (int32 Index = 0; Index < UE_ARRAY_COUNT(LightmapSample.SkyOcclusion); Index++)
 				{
 					if (LightmapSample.SkyOcclusion[Index] != 0)
 					{
@@ -3333,16 +3339,16 @@ IAllocatedVirtualTexture* FLightmapResourceCluster::AcquireAllocatedVT() const
 		VTDesc.Dimensions = 2;
 		VTDesc.TileSize = Resource->GetTileSize();
 		VTDesc.TileBorderSize = Resource->GetBorderSize();
-		VTDesc.NumLayers = 0u;
+		VTDesc.NumTextureLayers = 0u;
 
 		for (uint32 TypeIndex = 0u; TypeIndex < (uint32)ELightMapVirtualTextureType::Count; ++TypeIndex)
 		{
 			const uint32 LayerIndex = VirtualTexture->GetLayerForType((ELightMapVirtualTextureType)TypeIndex);
 			if (LayerIndex != ~0u)
 			{
-				VTDesc.NumLayers = TypeIndex + 1u;
+				VTDesc.NumTextureLayers = TypeIndex + 1u;
 				VTDesc.ProducerHandle[TypeIndex] = ProducerHandle; // use the same producer for each layer
-				VTDesc.LocalLayerToProduce[TypeIndex] = LayerIndex;
+				VTDesc.ProducerLayerIndex[TypeIndex] = LayerIndex;
 			}
 			else
 			{
@@ -3350,8 +3356,8 @@ IAllocatedVirtualTexture* FLightmapResourceCluster::AcquireAllocatedVT() const
 			}
 		}
 
-		check(VTDesc.NumLayers > 0u);
-		for (uint32 LayerIndex = 0u; LayerIndex < VTDesc.NumLayers; ++LayerIndex)
+		check(VTDesc.NumTextureLayers > 0u);
+		for (uint32 LayerIndex = 0u; LayerIndex < VTDesc.NumTextureLayers; ++LayerIndex)
 		{
 			if (VTDesc.ProducerHandle[LayerIndex].PackedValue == 0u)
 			{
@@ -3360,7 +3366,7 @@ IAllocatedVirtualTexture* FLightmapResourceCluster::AcquireAllocatedVT() const
 				// and attempt to do some extra work before determining there's nothing else to do...this wastes CPU time
 				// By mapping to layer0, we ensure that every layer has a valid mapping, and the overhead of mapping the empty layer to layer0 is very small, since layer0 will already be resident
 				VTDesc.ProducerHandle[LayerIndex] = ProducerHandle;
-				VTDesc.LocalLayerToProduce[LayerIndex] = 0u;
+				VTDesc.ProducerLayerIndex[LayerIndex] = 0u;
 			}
 		}
 

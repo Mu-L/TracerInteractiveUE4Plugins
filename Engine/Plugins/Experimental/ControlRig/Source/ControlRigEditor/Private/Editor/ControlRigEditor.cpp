@@ -18,6 +18,7 @@
 #include "IPersonaToolkit.h"
 #include "PersonaModule.h"
 #include "ControlRigEditorEditMode.h"
+#include "ControlRigEditModeSettings.h"
 #include "AssetEditorModeManager.h"
 #include "ControlRigBlueprintGeneratedClass.h"
 #include "Sequencer/ControlRigSequencerAnimInstance.h"
@@ -28,7 +29,6 @@
 #include "ControlRigSkeletalMeshComponent.h"
 #include "ControlRigSkeletalMeshBinding.h"
 #include "ControlRigBlueprintUtils.h"
-#include "IPersonaViewport.h"
 #include "EditorViewportClient.h"
 #include "AnimationEditorPreviewActor.h"
 #include "Misc/MessageDialog.h"
@@ -36,6 +36,7 @@
 #include "ControlRigEditorStyle.h"
 #include "EditorFontGlyphs.h"
 #include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SNumericEntryBox.h"
 #include "Widgets/Notifications/SNotificationList.h"
 #include "Framework/Notifications/NotificationManager.h"
 #include "SRigHierarchy.h"
@@ -53,6 +54,8 @@
 #include "ControlRig/Private/Units/Hierarchy/RigUnit_GetInitialBoneTransform.h"
 #include "ControlRig/Private/Units/Hierarchy/RigUnit_AddBoneTransform.h"
 #include "ControlRig/Private/Units/Execution/RigUnit_BeginExecution.h"
+#include "ControlRig/Private/Units/Hierarchy/RigUnit_GetControlTransform.h"
+#include "ControlRig/Private/Units/Hierarchy/RigUnit_GetSpaceTransform.h"
 #include "Graph/NodeSpawners/ControlRigUnitNodeSpawner.h"
 #include "Graph/ControlRigGraphSchema.h"
 #include "ControlRigObjectVersion.h"
@@ -81,11 +84,24 @@ FControlRigEditor::FControlRigEditor()
 	, bControlRigEditorInitialized(false)
 	, bIsSelecting(false)
 	, bIsSettingObjectBeingDebugged(false)
+	, bExecutionControlRig(true)
 {
 }
 
 FControlRigEditor::~FControlRigEditor()
 {
+	UControlRigBlueprint* RigBlueprint = GetControlRigBlueprint();
+	if (RigBlueprint)
+	{
+		RigBlueprint->HierarchyContainer.OnElementChanged.Clear();
+		RigBlueprint->HierarchyContainer.OnElementAdded.Clear();
+		RigBlueprint->HierarchyContainer.OnElementRemoved.Clear();
+		RigBlueprint->HierarchyContainer.OnElementRenamed.Clear();
+		RigBlueprint->HierarchyContainer.OnElementReparented.Clear();
+		RigBlueprint->HierarchyContainer.OnElementSelected.Clear();
+		RigBlueprint->HierarchyContainer.OnElementChanged.Clear();
+		RigBlueprint->HierarchyContainer.ControlHierarchy.OnControlUISettingsChanged.Clear();
+ 	}
 }
 
 UControlRigBlueprint* FControlRigEditor::GetControlRigBlueprint() const
@@ -112,6 +128,8 @@ void FControlRigEditor::ExtendMenu()
 
 void FControlRigEditor::InitControlRigEditor(const EToolkitMode::Type Mode, const TSharedPtr< class IToolkitHost >& InitToolkitHost, UControlRigBlueprint* InControlRigBlueprint)
 {
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
+
 	FPersonaModule& PersonaModule = FModuleManager::GetModuleChecked<FPersonaModule>("Persona");
 
 	FPersonaToolkitArgs PersonaToolkitArgs;
@@ -121,6 +139,7 @@ void FControlRigEditor::InitControlRigEditor(const EToolkitMode::Type Mode, cons
 	// set delegate prior to setting mesh
 	// otherwise, you don't get delegate
 	PersonaToolkit->GetPreviewScene()->RegisterOnPreviewMeshChanged(FOnPreviewMeshChanged::CreateSP(this, &FControlRigEditor::HandlePreviewMeshChanged));
+
 	// Set a default preview mesh, if any
 	PersonaToolkit->SetPreviewMesh(InControlRigBlueprint->GetPreviewMesh(), false);
 
@@ -189,11 +208,19 @@ void FControlRigEditor::InitControlRigEditor(const EToolkitMode::Type Mode, cons
 
 	// Activate our edit mode
 //	GetAssetEditorModeManager()->SetToolkitHost(GetToolkitHost());
-	GetAssetEditorModeManager()->SetDefaultMode(FControlRigEditorEditMode::ModeName);
-	GetAssetEditorModeManager()->ActivateMode(FControlRigEditorEditMode::ModeName);
-	GetEditMode().OnGetBoneTransform() = FOnGetBoneTransform::CreateSP(this, &FControlRigEditor::GetBoneTransform);
-	GetEditMode().OnSetBoneTransform() = FOnSetBoneTransform::CreateSP(this, &FControlRigEditor::SetBoneTransform);
-	InControlRigBlueprint->OnModified().AddSP(&GetEditMode(), &FControlRigEditMode::HandleModelModified);
+	if (GetAssetEditorModeManager() != nullptr)
+	{
+		GetAssetEditorModeManager()->SetDefaultMode(FControlRigEditorEditMode::ModeName);
+		GetAssetEditorModeManager()->ActivateMode(FControlRigEditorEditMode::ModeName);
+	}
+
+	if (FControlRigEditMode* EditMode = GetEditMode())
+	{
+		EditMode->OnGetRigElementTransform() = FOnGetRigElementTransform::CreateSP(this, &FControlRigEditor::GetRigElementTransform);
+		EditMode->OnSetRigElementTransform() = FOnSetRigElementTransform::CreateSP(this, &FControlRigEditor::SetRigElementTransform);
+		EditMode->OnContextMenu() = FNewMenuDelegate::CreateSP(this, &FControlRigEditor::HandleOnViewportContextMenuDelegate);
+		EditMode->OnContextMenuCommands() = FNewMenuCommandsDelegate::CreateSP(this, &FControlRigEditor::HandleOnViewportContextMenuCommandsDelegate);
+	}
 
 	UpdateControlRig();
 
@@ -206,7 +233,7 @@ void FControlRigEditor::InitControlRigEditor(const EToolkitMode::Type Mode, cons
 		{
 			if (Graph->GetFName().IsEqual(UControlRigGraphSchema::GraphName_ControlRig))
 			{
-				OpenGraphAndBringToFront(Graph);
+				OpenGraphAndBringToFront(Graph, false);
 				break;
 			}
 		}
@@ -226,8 +253,39 @@ void FControlRigEditor::InitControlRigEditor(const EToolkitMode::Type Mode, cons
 			}
 			else
 			{
+				bool bWasDirty = false;
+				UPackage* Package = InControlRigBlueprint->GetOutermost();
+				if (Package)
+				{
+					bWasDirty = Package->IsDirty();
+				}
 				InControlRigBlueprint->RebuildGraphFromModel();
+				if (Package)
+				{
+					if (Package->IsDirty() != bWasDirty)
+					{
+						Package->SetDirtyFlag(bWasDirty);
+					}
+				}
 			}
+		}
+
+		InControlRigBlueprint->HierarchyContainer.OnElementAdded.AddSP(this, &FControlRigEditor::OnRigElementAdded);
+		InControlRigBlueprint->HierarchyContainer.OnElementRemoved.AddSP(this, &FControlRigEditor::OnRigElementRemoved);
+		InControlRigBlueprint->HierarchyContainer.OnElementRenamed.AddSP(this, &FControlRigEditor::OnRigElementRenamed);
+		InControlRigBlueprint->HierarchyContainer.OnElementReparented.AddSP(this, &FControlRigEditor::OnRigElementReparented);
+		InControlRigBlueprint->HierarchyContainer.OnElementSelected.AddSP(this, &FControlRigEditor::OnRigElementSelected);
+		InControlRigBlueprint->HierarchyContainer.ControlHierarchy.OnControlUISettingsChanged.AddSP(this, &FControlRigEditor::OnControlUISettingChanged);
+
+		if (FControlRigEditMode* EditMode = GetEditMode())
+		{
+			InControlRigBlueprint->HierarchyContainer.OnElementAdded.AddSP(EditMode, &FControlRigEditMode::OnRigElementAdded);
+			InControlRigBlueprint->HierarchyContainer.OnElementRemoved.AddSP(EditMode, &FControlRigEditMode::OnRigElementRemoved);
+			InControlRigBlueprint->HierarchyContainer.OnElementRenamed.AddSP(EditMode, &FControlRigEditMode::OnRigElementRenamed);
+			InControlRigBlueprint->HierarchyContainer.OnElementReparented.AddSP(EditMode, &FControlRigEditMode::OnRigElementReparented);
+			InControlRigBlueprint->HierarchyContainer.OnElementSelected.AddSP(EditMode, &FControlRigEditMode::OnRigElementSelected);
+			InControlRigBlueprint->HierarchyContainer.OnElementChanged.AddSP(EditMode, &FControlRigEditMode::OnRigElementChanged);
+			InControlRigBlueprint->HierarchyContainer.ControlHierarchy.OnControlUISettingsChanged.AddSP(EditMode, &FControlRigEditMode::OnControlUISettingChanged);
 		}
 	}
 
@@ -236,6 +294,8 @@ void FControlRigEditor::InitControlRigEditor(const EToolkitMode::Type Mode, cons
 
 void FControlRigEditor::BindCommands()
 {
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
+
 	GetToolkitCommands()->MapAction(
 		FControlRigBlueprintCommands::Get().ExecuteGraph,
 		FExecuteAction::CreateSP(this, &FControlRigEditor::ToggleExecuteGraph), 
@@ -247,17 +307,30 @@ void FControlRigEditor::ToggleExecuteGraph()
 {
 	if (ControlRig)
 	{
-		ControlRig->bExecutionOn = !ControlRig->bExecutionOn;
+		bExecutionControlRig = !bExecutionControlRig;
+
+		// enable rig element init pose change, if not executing, we allow rig element change
+		if (FControlRigEditMode* EditMode = GetEditMode())
+		{
+			EditMode->EnableRigElementEditing(!bExecutionControlRig);
+		}
+
+		// This is required now since we update execution/input flag on update controlrig
+		// @fixme: change this to just change flag instead of updating whole control rig
+		// I'll do this before first check-in
+		UpdateControlRig();
 	}
 }
 
 bool FControlRigEditor::IsExecuteGraphOn() const
 {
-	return (ControlRig)? ControlRig->bExecutionOn : false;
+	return bExecutionControlRig;
 }
 
 void FControlRigEditor::ExtendToolbar()
 {
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
+
 	// If the ToolbarExtender is valid, remove it before rebuilding it
 	if(ToolbarExtender.IsValid())
 	{
@@ -431,7 +504,8 @@ void FControlRigEditor::HandleSetObjectBeingDebugged(UObject* InObject)
 	if (DebuggedControlRig)
 	{
 		bool bIsExternalControlRig = DebuggedControlRig != ControlRig;
-		DebuggedControlRig->DrawInterface = &DrawInterface;
+		// @fixme: I'll also change the "execute" button to be not toggleable during debugging external control rig
+		bool bShouldExecute = bIsExternalControlRig && bExecutionControlRig;
 		DebuggedControlRig->ControlRigLog = &ControlRigLog;
 
 		UControlRigSkeletalMeshComponent* EditorSkelComp = Cast<UControlRigSkeletalMeshComponent>(GetPersonaToolkit()->GetPreviewScene()->GetPreviewMeshComponent());
@@ -442,18 +516,24 @@ void FControlRigEditor::HandleSetObjectBeingDebugged(UObject* InObject)
 			{
 				// we might want to move this into another method
 				FInputBlendPose Filter;
-				AnimInstance->UpdateControlRig(DebuggedControlRig, 0, false, false, Filter, 1.0f, bIsExternalControlRig);
+				AnimInstance->UpdateControlRig(DebuggedControlRig, 0, false, false, Filter, 1.0f, bShouldExecute, bShouldExecute);
 				AnimInstance->RecalcRequiredBones();
 
 				// since rig has changed, rebuild draw skeleton
 				EditorSkelComp->RebuildDebugDrawSkeleton();
-				GetEditMode().SetObjects(DebuggedControlRig, FGuid());
+				if (FControlRigEditMode* EditMode = GetEditMode())
+				{
+					EditMode->SetObjects(DebuggedControlRig, FGuid(), EditorSkelComp);
+				}
 			}
 		}
 	}
 	else
 	{
-		GetEditMode().SetObjects(nullptr, FGuid());
+		if (FControlRigEditMode* EditMode = GetEditMode())
+		{
+			EditMode->SetObjects(nullptr, FGuid(), nullptr);
+		}
 	}
 }
 
@@ -492,11 +572,15 @@ UBlueprint* FControlRigEditor::GetBlueprintObj() const
 
 void FControlRigEditor::SetDetailObjects(const TArray<UObject*>& InObjects)
 {
+	RigElementInDetailPanel = FRigElementKey();
+	SKismetInspector::FShowDetailsOptions Options;
+	Options.bForceRefresh = true;
 	Inspector->ShowDetailsForObjects(InObjects);
 }
 
 void FControlRigEditor::SetDetailObject(UObject* Obj)
 {
+	RigElementInDetailPanel = FRigElementKey();
 	TArray<UObject*> Objects;
 	if (Obj)
 	{
@@ -505,13 +589,23 @@ void FControlRigEditor::SetDetailObject(UObject* Obj)
 	SetDetailObjects(Objects);
 }
 
-void FControlRigEditor::SetDetailStruct(TSharedPtr<FStructOnScope> StructToDisplay)
+void FControlRigEditor::SetDetailStruct(const FRigElementKey& InElement, TSharedPtr<FStructOnScope> StructToDisplay)
 {
+	if (RigElementInDetailPanel == InElement)
+	{
+		return;
+	}
+	RigElementInDetailPanel = InElement;
+	if (StructToDisplay.IsValid())
+	{
+		StructToDisplay->SetPackage(GetControlRigBlueprint()->GetOutermost());
+	}
 	Inspector->ShowSingleStruct(StructToDisplay);
 }
 
 void FControlRigEditor::ClearDetailObject()
 {
+	RigElementInDetailPanel = FRigElementKey();
 	Inspector->ShowDetailsForObjects(TArray<UObject*>());
 	Inspector->ShowSingleStruct(TSharedPtr<FStructOnScope>());
 }
@@ -539,52 +633,60 @@ void FControlRigEditor::OnCreateGraphEditorCommands(TSharedPtr<FUICommandList> G
 
 void FControlRigEditor::Compile()
 {
-	FString LastDebuggedObjectName = GetCustomDebugObjectLabel(GetBlueprintObj()->GetObjectBeingDebugged());
-
-	GetBlueprintObj()->SetObjectBeingDebugged(nullptr);
-	ClearDetailObject();
-
-	if (ControlRig)
 	{
-		ControlRig->OnInitialized().Clear();
-		ControlRig->OnExecuted().Clear();
-	}
+		DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
 
-	FBlueprintEditor::Compile();
+		FString LastDebuggedObjectName = GetCustomDebugObjectLabel(GetBlueprintObj()->GetObjectBeingDebugged());
+		GetBlueprintObj()->SetObjectBeingDebugged(nullptr);
+		ClearDetailObject();
 
-	if (ControlRig)
-	{
-		ControlRig->ControlRigLog = &ControlRigLog;
-		ControlRig->DrawInterface = &DrawInterface;
-
-		UControlRigBlueprintGeneratedClass* GeneratedClass = Cast<UControlRigBlueprintGeneratedClass>(ControlRig->GetClass());
-		if (GeneratedClass)
+		if (ControlRig)
 		{
-			if (GeneratedClass->Operators.Num() == 1) // just the "done" operator
+			ControlRig->OnInitialized().Clear();
+			ControlRig->OnExecuted().Clear();
+		}
+
+		{
+			FBlueprintEditor::Compile();
+		}
+
+		if (ControlRig)
+		{
+			ControlRig->ControlRigLog = &ControlRigLog;
+
+			UControlRigBlueprintGeneratedClass* GeneratedClass = Cast<UControlRigBlueprintGeneratedClass>(ControlRig->GetClass());
+			if (GeneratedClass)
 			{
-				FNotificationInfo Info(LOCTEXT("ControlRigBlueprintCompilerEmptyRigMessage", "The Control Rig you compiled doesn't do anything. Did you forget to add a Begin_Execution node?"));
-				Info.bFireAndForget = true;
-				Info.FadeOutDuration = 10.0f;
-				Info.ExpireDuration = 0.0f;
-				TSharedPtr<SNotificationItem> NotificationPtr = FSlateNotificationManager::Get().AddNotification(Info);
-				NotificationPtr->SetCompletionState(SNotificationItem::CS_Success);
+				if (GeneratedClass->Operators.Num() == 1) // just the "done" operator
+				{
+					FNotificationInfo Info(LOCTEXT("ControlRigBlueprintCompilerEmptyRigMessage", "The Control Rig you compiled doesn't do anything. Did you forget to add a Begin_Execution node?"));
+					Info.bFireAndForget = true;
+					Info.FadeOutDuration = 10.0f;
+					Info.ExpireDuration = 0.0f;
+					TSharedPtr<SNotificationItem> NotificationPtr = FSlateNotificationManager::Get().AddNotification(Info);
+					NotificationPtr->SetCompletionState(SNotificationItem::CS_Success);
+				}
 			}
 		}
-	}
 
-	TArray<FCustomDebugObject> DebugList;
-	GetCustomDebugObjects(DebugList);
+		TArray<FCustomDebugObject> DebugList;
+		GetCustomDebugObjects(DebugList);
 
-	for (const FCustomDebugObject& DebugObject : DebugList)
-	{
-		if (DebugObject.NameOverride == LastDebuggedObjectName)
+		for (const FCustomDebugObject& DebugObject : DebugList)
 		{
-			GetBlueprintObj()->SetObjectBeingDebugged(DebugObject.Object);
+			if (DebugObject.NameOverride == LastDebuggedObjectName)
+			{
+				GetBlueprintObj()->SetObjectBeingDebugged(DebugObject.Object);
+			}
 		}
 	}
 
 	// enable this for creating a new unit test
 	// DumpUnitTestCode();
+
+	// FStatsHierarchical::EndMeasurements();
+	// FMessageLog LogForMeasurements("ControlRigLog");
+	// FStatsHierarchical::DumpMeasurements(LogForMeasurements);
 }
 
 FName FControlRigEditor::GetToolkitFName() const
@@ -614,6 +716,8 @@ FLinearColor FControlRigEditor::GetWorldCentricTabColorScale() const
 
 void FControlRigEditor::DeleteSelectedNodes()
 {
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
+
 	UControlRigBlueprint* RigBlueprint = Cast<UControlRigBlueprint>(GetBlueprintObj());
 	if (RigBlueprint == nullptr)
 	{
@@ -649,6 +753,8 @@ void FControlRigEditor::DeleteSelectedNodes()
 
 void FControlRigEditor::PasteNodesHere(class UEdGraph* DestinationGraph, const FVector2D& GraphLocation)
 {
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
+
 	UControlRigBlueprint* RigBlueprint = Cast<UControlRigBlueprint>(GetBlueprintObj());
 	if (RigBlueprint == nullptr)
 	{
@@ -897,6 +1003,14 @@ void FControlRigEditor::NotifyPostChange(const FPropertyChangedEvent& PropertyCh
 
 void FControlRigEditor::HandleModelModified(const UControlRigModel* InModel, EControlRigModelNotifType InType, const void* InPayload)
 {
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
+
+	UControlRigBlueprint* RigBlueprint = Cast<UControlRigBlueprint>(GetBlueprintObj());
+	if (RigBlueprint == nullptr)
+	{
+		return;
+	}
+
 	switch (InType)
 	{
 		case EControlRigModelNotifType::NodeSelected:
@@ -905,26 +1019,79 @@ void FControlRigEditor::HandleModelModified(const UControlRigModel* InModel, ECo
 			const FControlRigModelNode* Node = (const FControlRigModelNode*)InPayload;
 			if (Node != nullptr)
 			{
-				if (!bIsSelecting)
+				if (FocusedGraphEdPtr.IsValid())
 				{
-					TGuardValue<bool> SelectingGuard(bIsSelecting, true);
-					if (FocusedGraphEdPtr.IsValid())
+					TSharedPtr<SGraphEditor> FocusedGraphEd = FocusedGraphEdPtr.Pin();
+					if (UControlRigGraph* RigGraph = Cast<UControlRigGraph>(FocusedGraphEd->GetCurrentGraph()))
 					{
-						TSharedPtr<SGraphEditor> FocusedGraphEd = FocusedGraphEdPtr.Pin();
-						if (UControlRigGraph* RigGraph = Cast<UControlRigGraph>(FocusedGraphEd->GetCurrentGraph()))
+						TArray<FControlRigModelNode> Selection;
+						bool bSelect = InType == EControlRigModelNotifType::NodeSelected;
+						if (bSelect)
 						{
+							Selection = InModel->SelectedNodes();
+						}
+						else
+						{
+							Selection.Add(*Node);
+						}
+
+						TArray<FRigElementKey> RigElementsToSelect;
+						for (const FControlRigModelNode& SelectedNode : Selection)
+						{
+							if (UControlRigGraphNode* RigNode = Cast<UControlRigGraphNode>(RigGraph->FindNodeFromPropertyName(SelectedNode.Name)))
+							{
+								for (const FControlRigModelPin& Pin : Node->Pins)
+								{
+									if (Pin.Type.PinCategory == UEdGraphSchema_K2::PC_Name)
+									{
+										if (Pin.CustomWidgetName == TEXT("BoneName"))
+										{
+											RigElementsToSelect.Add(FRigElementKey(*Pin.DefaultValue, ERigElementType::Bone));
+										}
+										else if (Pin.CustomWidgetName == TEXT("ControlName"))
+										{
+											RigElementsToSelect.Add(FRigElementKey(*Pin.DefaultValue, ERigElementType::Control));
+										}
+										else if (Pin.CustomWidgetName == TEXT("SpaceName"))
+										{
+											RigElementsToSelect.Add(FRigElementKey(*Pin.DefaultValue, ERigElementType::Space));
+										}
+										else if (Pin.CustomWidgetName == TEXT("CurveName"))
+										{
+											RigElementsToSelect.Add(FRigElementKey(*Pin.DefaultValue, ERigElementType::Curve));
+										}
+									}
+								}
+							}
+						}
+
+						if (RigElementsToSelect.Num() > 0)
+						{
+							if (bSelect)
+							{
+								RigBlueprint->HierarchyContainer.ClearSelection();
+							}
+							for (const FRigElementKey& RigElementToSelect : RigElementsToSelect)
+							{
+								RigBlueprint->HierarchyContainer.Select(RigElementToSelect, bSelect);
+							}
+						}
+
+						if (!bIsSelecting)
+						{
+							TGuardValue<bool> SelectingGuard(bIsSelecting, true);
 							if (UEdGraphNode* EdNode = RigGraph->FindNodeFromPropertyName(Node->Name))
 							{
 								FocusedGraphEd->SetNodeSelection(EdNode, InType == EControlRigModelNotifType::NodeSelected);
 							}
+							break;
 						}
 					}
-					break;
 				}
 
 				if (InType == EControlRigModelNotifType::NodeSelected)
 				{
-					UClass* Class = GetBlueprintObj()->GeneratedClass.Get();
+					UClass* Class = RigBlueprint->GeneratedClass.Get();
 					if (Class)
 					{
 						if (UProperty* Property = Class->FindPropertyByName(Node->Name))
@@ -985,6 +1152,8 @@ TStatId FControlRigEditor::GetStatId() const
 
 void FControlRigEditor::OnSelectedNodesChangedImpl(const TSet<class UObject*>& NewSelection)
 {
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
+
 	if (bIsSelecting)
 	{
 		return;
@@ -1016,6 +1185,8 @@ void FControlRigEditor::OnSelectedNodesChangedImpl(const TSet<class UObject*>& N
 
 void FControlRigEditor::HandleHideItem()
 {
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
+
 	UControlRigBlueprint* ControlRigBlueprint = CastChecked<UControlRigBlueprint>(GetBlueprintObj());
 
 	TSet<UObject*> SelectedNodes = GetSelectedNodes();
@@ -1042,6 +1213,8 @@ bool FControlRigEditor::CanHideItem() const
 
 void FControlRigEditor::OnBlueprintChangedImpl(UBlueprint* InBlueprint, bool bIsJustBeingCompiled)
 {
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
+
 	if (!bControlRigEditorInitialized)
 	{
 		return;
@@ -1088,6 +1261,8 @@ void FControlRigEditor::OnBlueprintChangedImpl(UBlueprint* InBlueprint, bool bIs
 
 void FControlRigEditor::HandleViewportCreated(const TSharedRef<class IPersonaViewport>& InViewport)
 {
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
+
 	// TODO: this is duplicated code from FAnimBlueprintEditor, would be nice to consolidate. 
 	auto GetCompilationStateText = [this]()
 	{
@@ -1227,10 +1402,68 @@ void FControlRigEditor::HandleViewportCreated(const TSharedRef<class IPersonaVie
 			]
 		]
 	);
+
+	InViewport->AddToolbarExtender(TEXT("AnimViewportDefaultCamera"), FMenuExtensionDelegate::CreateLambda(
+		[&](FMenuBuilder& InMenuBuilder)
+		{
+			InMenuBuilder.AddMenuSeparator(TEXT("Control Rig"));
+			InMenuBuilder.BeginSection("ControlRig", LOCTEXT("ControlRig_Label", "Control Rig"));
+			{
+				InMenuBuilder.AddWidget(
+					SNew(SBox)
+					.HAlign(HAlign_Right)
+					[
+						SNew(SBox)
+						.Padding(FMargin(4.0f, 0.0f, 0.0f, 0.0f))
+						.WidthOverride(100.0f)
+						[
+							SNew(SNumericEntryBox<float>)
+							.Font(FEditorStyle::GetFontStyle(TEXT("MenuItem.Font")))
+							.AllowSpin(true)
+							.MinSliderValue(0.0f)
+							.MaxSliderValue(100.0f)
+							.Value(this, &FControlRigEditor::GetToolbarAxesScale)
+							.OnValueChanged(this, &FControlRigEditor::OnToolbarAxesScaleChanged)
+							.ToolTipText(LOCTEXT("ControlRigAxesScaleToolTip", "Scale of axes drawn for selected rig elements"))
+						]
+					], 
+					LOCTEXT("ControlRigAxesScale", "Axes Scale")
+				);
+			}
+			InMenuBuilder.EndSection();
+		}
+	));
+
+	InViewport->GetKeyDownDelegate().BindLambda([&](const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent) -> FReply {
+		if (OnKeyDownDelegate.IsBound())
+		{
+			return OnKeyDownDelegate.Execute(MyGeometry, InKeyEvent);
+		}
+		return FReply::Unhandled();
+	});
+}
+
+TOptional<float> FControlRigEditor::GetToolbarAxesScale() const
+{
+	if (FControlRigEditMode* EditMode = GetEditMode())
+	{
+		return EditMode->Settings->AxisScale;
+	}
+	return 0.f;
+}
+
+void FControlRigEditor::OnToolbarAxesScaleChanged(float InValue)
+{
+	if (FControlRigEditMode* EditMode = GetEditMode())
+	{
+		EditMode->Settings->AxisScale = InValue;
+	}
 }
 
 void FControlRigEditor::HandlePreviewSceneCreated(const TSharedRef<IPersonaPreviewScene>& InPersonaPreviewScene)
 {
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
+
 	AAnimationEditorPreviewActor* Actor = InPersonaPreviewScene->GetWorld()->SpawnActor<AAnimationEditorPreviewActor>(AAnimationEditorPreviewActor::StaticClass(), FTransform::Identity);
 	InPersonaPreviewScene->SetActor(Actor);
 
@@ -1251,6 +1484,8 @@ void FControlRigEditor::HandlePreviewSceneCreated(const TSharedRef<IPersonaPrevi
 
 void FControlRigEditor::UpdateControlRig()
 {
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
+
 	if(UClass* Class = GetBlueprintObj()->GeneratedClass)
 	{
 		UControlRigSkeletalMeshComponent* EditorSkelComp = Cast<UControlRigSkeletalMeshComponent>(GetPersonaToolkit()->GetPreviewScene()->GetPreviewMeshComponent());
@@ -1263,12 +1498,18 @@ void FControlRigEditor::UpdateControlRig()
 				ControlRig = NewObject<UControlRig>(EditorSkelComp, Class);
 				// this is editing time rig
 				ControlRig->ExecutionType = ERigExecutionType::Editing;
-
 				ControlRig->ControlRigLog = &ControlRigLog;
-				ControlRig->DrawInterface = &DrawInterface;
+
+				ControlRig->InitializeFromCDO();
+				ControlRig->InstantiateOperatorsFromGeneratedClass();
  			}
 
-			CacheBoneNameList();
+			if (UControlRig* CDO = Cast<UControlRig>(Class->GetDefaultObject()))
+			{
+				CDO->GizmoLibrary = GetControlRigBlueprint()->GizmoLibrary;
+			}
+
+			CacheNameLists();
 
 			// When the control rig is re-instanced on compile, it loses its binding, so we refresh it here if needed
 			if (!ControlRig->GetObjectBinding().IsValid())
@@ -1281,12 +1522,15 @@ void FControlRigEditor::UpdateControlRig()
 
 			// initialize is moved post reinstance
 			FInputBlendPose Filter;
-			AnimInstance->UpdateControlRig(ControlRig, 0, false, false, Filter, 1.0f);
+			AnimInstance->UpdateControlRig(ControlRig, 0, false, false, Filter, 1.0f, true, bExecutionControlRig);
 			AnimInstance->RecalcRequiredBones();
 
 			// since rig has changed, rebuild draw skeleton
 			EditorSkelComp->RebuildDebugDrawSkeleton();
-			GetEditMode().SetObjects(ControlRig, FGuid());
+			if (FControlRigEditMode* EditMode = GetEditMode())
+			{
+				EditMode->SetObjects(ControlRig, FGuid(), EditorSkelComp);
+			}
 
 			// update the graph with the compiler errors
 			UpdateGraphCompilerErrors();
@@ -1294,12 +1538,14 @@ void FControlRigEditor::UpdateControlRig()
 	}
 }
 
-void FControlRigEditor::CacheBoneNameList()
+void FControlRigEditor::CacheNameLists()
 {
-	if (ControlRig)
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
+
+	if (UControlRigBlueprint* ControlRigBP = GetControlRigBlueprint())
 	{
 		// make sure the bone name list is up 2 date for the editor graph
-		for (UEdGraph* Graph : GetBlueprintObj()->UbergraphPages)
+		for (UEdGraph* Graph : ControlRigBP->UbergraphPages)
 		{
 			UControlRigGraph* RigGraph = Cast<UControlRigGraph>(Graph);
 			if (RigGraph == nullptr)
@@ -1307,7 +1553,7 @@ void FControlRigEditor::CacheBoneNameList()
 				continue;
 			}
 
-			RigGraph->CacheBoneNameList(ControlRig->GetBaseHierarchy());
+			RigGraph->CacheNameLists(&ControlRigBP->HierarchyContainer);
 		}
 	}
 }
@@ -1326,6 +1572,8 @@ void FControlRigEditor::HandlePreviewMeshChanged(USkeletalMesh* InOldSkeletalMes
 
 void FControlRigEditor::RebindToSkeletalMeshComponent()
 {
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
+
 	UDebugSkelMeshComponent* MeshComponent = GetPersonaToolkit()->GetPreviewScene()->GetPreviewMeshComponent();
 	if (MeshComponent)
 	{
@@ -1336,6 +1584,8 @@ void FControlRigEditor::RebindToSkeletalMeshComponent()
 
 void FControlRigEditor::SetupGraphEditorEvents(UEdGraph* InGraph, SGraphEditor::FGraphEditorEvents& InEvents)
 {
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
+
 	FBlueprintEditor::SetupGraphEditorEvents(InGraph, InEvents);
 
 	InEvents.OnCreateActionMenu = SGraphEditor::FOnCreateActionMenu::CreateSP(this, &FControlRigEditor::HandleCreateGraphActionMenu);
@@ -1349,6 +1599,8 @@ FActionMenuContent FControlRigEditor::HandleCreateGraphActionMenu(UEdGraph* InGr
 
 void FControlRigEditor::OnNodeTitleCommitted(const FText& NewText, ETextCommit::Type CommitInfo, UEdGraphNode* NodeBeingChanged)
 {
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
+
 	if (UEdGraphNode_Comment* CommentBeingChanged = Cast<UEdGraphNode_Comment>(NodeBeingChanged))
 	{
 		if (UControlRigBlueprint* ControlRigBP = GetControlRigBlueprint())
@@ -1361,131 +1613,206 @@ void FControlRigEditor::OnNodeTitleCommitted(const FText& NewText, ETextCommit::
 	}
 }
 
-
-void FControlRigEditor::SelectBone(const FName& InBone)
+FTransform FControlRigEditor::GetRigElementTransform(const FRigElementKey& InElement, bool bLocal) const
 {
-	// edit mode has to know
-	GetEditMode().SelectBone(InBone);
-	// copy locally, we use this for copying back to template when modified
-
-	SelectedBone = InBone;
-	UControlRigSkeletalMeshComponent* EditorSkelComp = Cast<UControlRigSkeletalMeshComponent>(GetPersonaToolkit()->GetPreviewScene()->GetPreviewMeshComponent());
-	if (EditorSkelComp)
-	{
-		EditorSkelComp->BonesOfInterest.Reset();
-
-		int32 Index = ControlRig->Hierarchy.BaseHierarchy.GetIndex(InBone);
-		if (Index != INDEX_NONE)
-		{
-			EditorSkelComp->BonesOfInterest.Add(Index);
-		}
-	}
-}
-
-FTransform FControlRigEditor::GetBoneTransform(const FName& InBone, bool bLocal) const
-{
-	// @todo: think about transform mode
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
 	if (bLocal)
 	{
-		return ControlRig->Hierarchy.BaseHierarchy.GetLocalTransform(InBone);
+		return GetControlRigBlueprint()->HierarchyContainer.GetLocalTransform(InElement);
 	}
-
-	return ControlRig->Hierarchy.BaseHierarchy.GetGlobalTransform(InBone);
+	return GetControlRigBlueprint()->HierarchyContainer.GetGlobalTransform(InElement);
 }
 
-void FControlRigEditor::SetBoneTransform(const FName& InBone, const FTransform& InTransform)
+void FControlRigEditor::SetRigElementTransform(const FRigElementKey& InElement, const FTransform& InTransform, bool bLocal)
 {
-	// execution should be off
-	ensure(!ControlRig->bExecutionOn);
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
 
 	FScopedTransaction Transaction(LOCTEXT("Move Bone", "Move Bone transform"));
 	UControlRigBlueprint* ControlRigBP = GetControlRigBlueprint();
 	ControlRigBP->Modify();
 
-	// moving ref pose warning
-	// update init/global transform
-	// @todo: this needs revision once we decide how we allow users to modify init/global transform
-	// for now, updating init/global of the Bone from instances, but only modify init transform for archetype
-	// get local transform of current
-	// apply init based on parent init * current local 
+	switch (InElement.Type)
+	{
+		case ERigElementType::Bone:
+		{
+			FTransform Transform = InTransform;
+			if (bLocal)
+			{
+				FTransform ParentTransform = FTransform::Identity;
+				FRigElementKey ParentKey = ControlRigBP->HierarchyContainer.BoneHierarchy[InElement.Name].GetParentElementKey();
+				if (ParentKey.IsValid())
+				{
+					ParentTransform = GetRigElementTransform(ParentKey, false);
+				}
+				Transform = Transform * ParentTransform;
+				Transform.NormalizeRotation();
+			}
 
-	ControlRig->Hierarchy.BaseHierarchy.SetInitialTransform(InBone, InTransform);
-	ControlRig->Hierarchy.BaseHierarchy.SetGlobalTransform(InBone, InTransform);
+			ControlRigBP->HierarchyContainer.BoneHierarchy.SetInitialTransform(InElement.Name, Transform);
+			ControlRigBP->HierarchyContainer.BoneHierarchy.SetGlobalTransform(InElement.Name, Transform);
+			OnHierarchyChanged();
+			break;
+		}
+		case ERigElementType::Control:
+		{
+			FTransform LocalTransform = InTransform;
+			FTransform GlobalTransform = InTransform;
+			if (!bLocal)
+			{
+				ControlRigBP->HierarchyContainer.ControlHierarchy.SetGlobalTransform(InElement.Name, InTransform);
+				LocalTransform = ControlRigBP->HierarchyContainer.ControlHierarchy.GetLocalTransform(InElement.Name);
+			}
+			else
+			{
+				ControlRigBP->HierarchyContainer.ControlHierarchy.SetLocalTransform(InElement.Name, InTransform);
+				GlobalTransform = ControlRigBP->HierarchyContainer.ControlHierarchy.GetGlobalTransform(InElement.Name);
+			}
 
-	ControlRigBP->Hierarchy.SetInitialTransform(InBone, InTransform);
+			ControlRigBP->HierarchyContainer.ControlHierarchy.SetInitialValue<FTransform>(InElement.Name, LocalTransform);
+			ControlRigBP->HierarchyContainer.ControlHierarchy.SetGlobalTransform(InElement.Name, GlobalTransform);
+			OnHierarchyChanged();
+			break;
+		}
+		case ERigElementType::Space:
+		{
+			FTransform LocalTransform = InTransform;
+			FTransform GlobalTransform = InTransform;
+			if (!bLocal)
+			{
+				ControlRigBP->HierarchyContainer.SpaceHierarchy.SetGlobalTransform(InElement.Name, InTransform);
+				LocalTransform = ControlRigBP->HierarchyContainer.SpaceHierarchy.GetLocalTransform(InElement.Name);
+			}
+			else
+			{
+				ControlRigBP->HierarchyContainer.SpaceHierarchy.SetLocalTransform(InElement.Name, InTransform);
+				GlobalTransform = ControlRigBP->HierarchyContainer.SpaceHierarchy.GetGlobalTransform(InElement.Name);
+			}
+
+			ControlRigBP->HierarchyContainer.SpaceHierarchy.SetInitialTransform(InElement.Name, LocalTransform);
+			ControlRigBP->HierarchyContainer.SpaceHierarchy.SetGlobalTransform(InElement.Name, GlobalTransform);
+			OnHierarchyChanged();
+			break;
+		}
+		default:
+		{
+			ensureMsgf(false, TEXT("Unsupported RigElement Type : %d"), InElement.Type);
+			break;
+		}
+	}
 	
 	UControlRigSkeletalMeshComponent* EditorSkelComp = Cast<UControlRigSkeletalMeshComponent>(GetPersonaToolkit()->GetPreviewScene()->GetPreviewMeshComponent());
 	if (EditorSkelComp)
 	{
 		EditorSkelComp->RebuildDebugDrawSkeleton();
 	}
-
-	// I don't think I have to mark dirty here. 
-	// FBlueprintEditorUtils::MarkBlueprintAsModified(GetControlRigBlueprint());
-
-	// I don't think I have to mark dirty here. 
-	// FBlueprintEditorUtils::MarkBlueprintAsModified(GetControlRigBlueprint());
-	{
-		EditorSkelComp->RebuildDebugDrawSkeleton();
-	}
-
-	// I don't think I have to mark dirty here. 
-	// FBlueprintEditorUtils::MarkBlueprintAsModified(GetControlRigBlueprint());
 }
 
 void FControlRigEditor::OnFinishedChangingProperties(const FPropertyChangedEvent& PropertyChangedEvent)
 {
-//	UE_LOG(LogControlRigEditor, Warning, TEXT("Current Property being modified : %s"), *GetNameSafe(PropertyChangedEvent.Property));
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
 
-	FName PropertyName = (PropertyChangedEvent.Property != NULL) ? PropertyChangedEvent.Property->GetFName() : NAME_None;
-	if (PropertyName == GET_MEMBER_NAME_CHECKED(FRigBone, InitialTransform))
+	UControlRigBlueprint* ControlRigBP = GetControlRigBlueprint();
+	if (ControlRig && ControlRigBP && RigElementInDetailPanel)
 	{
-		// if init transform changes, it updates to the base
-		UControlRigBlueprint* ControlRigBP = GetControlRigBlueprint();
-		if (ControlRig && ControlRigBP)
+		UControlRig* DebuggedControlRig = Cast<UControlRig>(GetBlueprintObj()->GetObjectBeingDebugged());
+
+		if (DebuggedControlRig && DebuggedControlRig->GetHierarchy()->GetIndex(RigElementInDetailPanel) == INDEX_NONE)
 		{
-			if (SelectedBone != NAME_None)
+			return;
+		}
+
+		UScriptStruct* ScriptStruct = Cast< UScriptStruct>(PropertyChangedEvent.Property->GetOuter());
+		if (ScriptStruct)
+		{
+			if (ScriptStruct == FRigBone::StaticStruct() && RigElementInDetailPanel.Type == ERigElementType::Bone)
 			{
-				const int32 BoneIndex = ControlRig->Hierarchy.BaseHierarchy.GetIndex(SelectedBone);
-				if (BoneIndex != INDEX_NONE)
+				ControlRig->Hierarchy.BoneHierarchy[RigElementInDetailPanel.Name] = ControlRigBP->HierarchyContainer.BoneHierarchy[RigElementInDetailPanel.Name];
+				if (DebuggedControlRig && DebuggedControlRig != ControlRig)
 				{
-					FTransform InitialTransform = ControlRig->Hierarchy.BaseHierarchy.GetInitialTransform(BoneIndex);
-					// update CDO  @todo - re-think about how we wrap around this nicer
-					// copy currently selected Bone to base hierarchy			
-					ControlRigBP->Hierarchy.SetInitialTransform(BoneIndex, InitialTransform);
+					DebuggedControlRig->Hierarchy.BoneHierarchy[RigElementInDetailPanel.Name] = ControlRigBP->HierarchyContainer.BoneHierarchy[RigElementInDetailPanel.Name];
 				}
 			}
+			else if (ScriptStruct == FRigSpace::StaticStruct() && RigElementInDetailPanel.Type == ERigElementType::Space)
+			{
+				ControlRig->Hierarchy.SpaceHierarchy[RigElementInDetailPanel.Name] = ControlRigBP->HierarchyContainer.SpaceHierarchy[RigElementInDetailPanel.Name];
+				if (DebuggedControlRig && DebuggedControlRig != ControlRig)
+				{
+					DebuggedControlRig->Hierarchy.SpaceHierarchy[RigElementInDetailPanel.Name] = ControlRigBP->HierarchyContainer.SpaceHierarchy[RigElementInDetailPanel.Name];
+				}
+			}
+			else if (ScriptStruct == FRigControl::StaticStruct() && RigElementInDetailPanel.Type == ERigElementType::Control)
+			{
+				ControlRig->Hierarchy.ControlHierarchy[RigElementInDetailPanel.Name] = ControlRigBP->HierarchyContainer.ControlHierarchy[RigElementInDetailPanel.Name];
+				if (DebuggedControlRig && DebuggedControlRig != ControlRig)
+				{
+					DebuggedControlRig->Hierarchy.ControlHierarchy[RigElementInDetailPanel.Name] = ControlRigBP->HierarchyContainer.ControlHierarchy[RigElementInDetailPanel.Name];
+				}
+			}
+			else if (ScriptStruct == FRigCurve::StaticStruct() && RigElementInDetailPanel.Type == ERigElementType::Curve)
+			{
+				ControlRig->Hierarchy.CurveContainer[RigElementInDetailPanel.Name] = ControlRigBP->HierarchyContainer.CurveContainer[RigElementInDetailPanel.Name];
+				if (DebuggedControlRig && DebuggedControlRig != ControlRig)
+				{
+					DebuggedControlRig->Hierarchy.CurveContainer[RigElementInDetailPanel.Name] = ControlRigBP->HierarchyContainer.CurveContainer[RigElementInDetailPanel.Name];
+				}
+			}
+
+			ControlRigBP->MarkPackageDirty();
+		}
+
+		if (PropertyChangedEvent.Property->GetName().StartsWith(TEXT("Gizmo")) && RigElementInDetailPanel.Type == ERigElementType::Control)
+		{
+			ControlRig->Hierarchy.ControlHierarchy[RigElementInDetailPanel.Name] = ControlRigBP->HierarchyContainer.ControlHierarchy[RigElementInDetailPanel.Name];
+			if (DebuggedControlRig && DebuggedControlRig != ControlRig)
+			{
+				DebuggedControlRig->Hierarchy.ControlHierarchy[RigElementInDetailPanel.Name] = ControlRigBP->HierarchyContainer.ControlHierarchy[RigElementInDetailPanel.Name];
+			}
+			ControlRigBP->HierarchyContainer.ControlHierarchy.OnControlUISettingsChanged.Broadcast(&ControlRigBP->HierarchyContainer, FRigElementKey(RigElementInDetailPanel.Name, ERigElementType::Control));
+			ControlRigBP->MarkPackageDirty();
 		}
 	}
 }
 
 void FControlRigEditor::OnHierarchyChanged()
 {
-	ClearDetailObject();
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
 
-	FBlueprintEditorUtils::MarkBlueprintAsModified(GetControlRigBlueprint());
-
-	UControlRigSkeletalMeshComponent* EditorSkelComp = Cast<UControlRigSkeletalMeshComponent>(GetPersonaToolkit()->GetPreviewScene()->GetPreviewMeshComponent());
-	if (EditorSkelComp)
+	CacheNameLists();
+	if (UControlRigBlueprint* ControlRigBP = GetControlRigBlueprint())
 	{
-		// restart animation 
-		EditorSkelComp->InitAnim(true);
-		UpdateControlRig();
+		ControlRigBP->PropagateHierarchyFromBPToInstances();
+
+		TArray<FRigElementKey> SelectedElements = ControlRigBP->HierarchyContainer.CurrentSelection();
+		for(const FRigElementKey& SelectedElement : SelectedElements)
+		{
+			ControlRigBP->HierarchyContainer.OnElementSelected.Broadcast(&ControlRigBP->HierarchyContainer, SelectedElement, true);
+		}
+
+		if (ControlRigBP->HierarchyContainer.GetIndex(RigElementInDetailPanel) == INDEX_NONE)
+		{
+			ClearDetailObject();
+		}
 	}
-	CacheBoneNameList();
-
-	// notification
-	FNotificationInfo Info(LOCTEXT("HierarchyChangeHelpMessage", "Hierarchy has been successfully modified. If you want to move the Bone, compile and turn off execution mode."));
-	Info.bFireAndForget = true;
-	Info.FadeOutDuration = 10.0f;
-	Info.ExpireDuration = 0.0f;
-
-	TSharedPtr<SNotificationItem> NotificationPtr = FSlateNotificationManager::Get().AddNotification(Info);
-	NotificationPtr->SetCompletionState(SNotificationItem::CS_Success);
+	else
+	{
+		ClearDetailObject();
+	}
 }
 
-void FControlRigEditor::OnBoneRenamed(const FName& OldName, const FName& NewName)
+void FControlRigEditor::OnRigElementAdded(FRigHierarchyContainer* Container, const FRigElementKey& InKey)
 {
+	OnHierarchyChanged();
+}
+
+void FControlRigEditor::OnRigElementRemoved(FRigHierarchyContainer* Container, const FRigElementKey& InKey)
+{
+	OnHierarchyChanged();
+}
+
+void FControlRigEditor::OnRigElementRenamed(FRigHierarchyContainer* Container, ERigElementType ElementType, const FName& InOldName, const FName& InNewName)
+{
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
+
 	UControlRigBlueprint* Blueprint = GetControlRigBlueprint();
 	for (UEdGraph* Graph : Blueprint->UbergraphPages)
 	{
@@ -1494,6 +1821,8 @@ void FControlRigEditor::OnBoneRenamed(const FName& OldName, const FName& NewName
 		{
 			continue;
 		}
+
+		CacheNameLists();
 
 		for (UEdGraphNode* Node : RigGraph->Nodes)
 		{
@@ -1509,18 +1838,55 @@ void FControlRigEditor::OnBoneRenamed(const FName& OldName, const FName& NewName
 			{
 				for (TFieldIterator<UNameProperty> It(UnitStruct); It; ++It)
 				{
-					if (It->HasMetaData(UControlRig::BoneNameMetaName))
+					if (It->HasMetaData(UControlRig::BoneNameMetaName) && ElementType == ERigElementType::Bone)
 					{
 						FString PinName = FString::Printf(TEXT("%s.%s"), *UnitProperty->GetName(), *It->GetName());
 						UEdGraphPin* Pin = Node->FindPin(PinName, EEdGraphPinDirection::EGPD_Input);
 						if (Pin)
 						{
 							FName CurrentBone = FName(*Pin->GetDefaultAsString());
-							if (CurrentBone == OldName)
+							if (CurrentBone == InOldName)
 							{
-								const FScopedTransaction Transaction(NSLOCTEXT("ControlRigEditor", "ChangeBoneNamePinValue", "Change Bone Name Pin Value"));
-								Pin->Modify();
-								Pin->GetSchema()->TrySetDefaultValue(*Pin, NewName.ToString());
+								Pin->GetSchema()->TrySetDefaultValue(*Pin, InNewName.ToString());
+							}
+						}
+					}
+					if (It->HasMetaData(UControlRig::ControlNameMetaName) && ElementType == ERigElementType::Control)
+					{
+						FString PinName = FString::Printf(TEXT("%s.%s"), *UnitProperty->GetName(), *It->GetName());
+						UEdGraphPin* Pin = Node->FindPin(PinName, EEdGraphPinDirection::EGPD_Input);
+						if (Pin)
+						{
+							FName CurrentControl = FName(*Pin->GetDefaultAsString());
+							if (CurrentControl == InOldName)
+							{
+								Pin->GetSchema()->TrySetDefaultValue(*Pin, InNewName.ToString());
+							}
+						}
+					}
+					if (It->HasMetaData(UControlRig::SpaceNameMetaName) && ElementType == ERigElementType::Space)
+					{
+						FString PinName = FString::Printf(TEXT("%s.%s"), *UnitProperty->GetName(), *It->GetName());
+						UEdGraphPin* Pin = Node->FindPin(PinName, EEdGraphPinDirection::EGPD_Input);
+						if (Pin)
+						{
+							FName CurrentSpace = FName(*Pin->GetDefaultAsString());
+							if (CurrentSpace == InOldName)
+							{
+								Pin->GetSchema()->TrySetDefaultValue(*Pin, InNewName.ToString());
+							}
+						}
+					}
+					if (It->HasMetaData(UControlRig::CurveNameMetaName) && ElementType == ERigElementType::Curve)
+					{
+						FString PinName = FString::Printf(TEXT("%s.%s"), *UnitProperty->GetName(), *It->GetName());
+						UEdGraphPin* Pin = Node->FindPin(PinName, EEdGraphPinDirection::EGPD_Input);
+						if (Pin)
+						{
+							FName CurrentCurve = FName(*Pin->GetDefaultAsString());
+							if (CurrentCurve == InOldName)
+							{
+								Pin->GetSchema()->TrySetDefaultValue(*Pin, InNewName.ToString());
 							}
 						}
 					}
@@ -1528,120 +1894,276 @@ void FControlRigEditor::OnBoneRenamed(const FName& OldName, const FName& NewName
 			}
 		}
 
-		CacheBoneNameList();
+		CacheNameLists();
 	}
+}
+
+void FControlRigEditor::OnRigElementReparented(FRigHierarchyContainer* Container, const FRigElementKey& InKey, const FName& InOldParentName, const FName& InNewParentName)
+{
+	OnHierarchyChanged();
+}
+
+void FControlRigEditor::OnRigElementSelected(FRigHierarchyContainer* Container, const FRigElementKey& InKey, bool bSelected)
+{
+	UControlRigBlueprint* RigBlueprint = GetControlRigBlueprint();
+	if (RigBlueprint == nullptr)
+	{
+		return;
+	}
+
+	switch (InKey.Type)
+	{
+		case ERigElementType::Bone:
+		{
+			FRigBoneHierarchy& BoneHierarchy = RigBlueprint->HierarchyContainer.BoneHierarchy;
+			if (bSelected)
+			{
+				SetDetailStruct(InKey, MakeShareable(new FStructOnScope(FRigBone::StaticStruct(), (uint8*)&(BoneHierarchy[InKey.Name]))));
+			}
+			else
+			{
+				ClearDetailObject();
+			}
+
+			UControlRigSkeletalMeshComponent* EditorSkelComp = Cast<UControlRigSkeletalMeshComponent>(GetPersonaToolkit()->GetPreviewScene()->GetPreviewMeshComponent());
+			if (EditorSkelComp)
+			{
+				int32 Index = ControlRig->Hierarchy.BoneHierarchy.GetIndex(InKey.Name);
+				if (Index != INDEX_NONE)
+				{
+					if (bSelected)
+					{
+						EditorSkelComp->BonesOfInterest.Add(Index);
+					}
+					else
+					{
+						EditorSkelComp->BonesOfInterest.Remove(Index);
+					}
+				}
+			}
+
+			break;
+		}
+		case ERigElementType::Space:
+		{
+			if (bSelected)
+			{
+				FRigSpaceHierarchy& SpaceHierarchy = RigBlueprint->HierarchyContainer.SpaceHierarchy;
+				SetDetailStruct(InKey, MakeShareable(new FStructOnScope(FRigSpace::StaticStruct(), (uint8*)&(SpaceHierarchy[InKey.Name]))));
+			}
+			else
+			{
+				ClearDetailObject();
+			}
+			break;
+		}
+		case ERigElementType::Control:
+		{
+			if (bSelected)
+			{
+				FRigControlHierarchy& ControlHierarchy = RigBlueprint->HierarchyContainer.ControlHierarchy;
+				SetDetailStruct(InKey, MakeShareable(new FStructOnScope(FRigControl::StaticStruct(), (uint8*)&(ControlHierarchy[InKey.Name]))));
+			}
+			else
+			{
+				ClearDetailObject();
+			}
+			break;
+		}
+		case ERigElementType::Curve:
+		{
+			if (bSelected)
+			{
+				FRigCurveContainer& CurveContainer = RigBlueprint->HierarchyContainer.CurveContainer;
+				SetDetailStruct(InKey, MakeShareable(new FStructOnScope(FRigCurve::StaticStruct(), (uint8*)&(CurveContainer[InKey.Name]))));
+			}
+			else
+			{
+				ClearDetailObject();
+			}
+			break;
+		}
+	}
+}
+
+void FControlRigEditor::OnControlUISettingChanged(FRigHierarchyContainer* Container, const FRigElementKey& InKey)
+{
+	OnHierarchyChanged();
+}
+
+FControlRigEditorEditMode* FControlRigEditor::GetEditMode() const
+{
+	if (GetAssetEditorModeManager() == nullptr)
+	{
+		return nullptr;
+	}
+	return static_cast<FControlRigEditorEditMode*>(GetAssetEditorModeManager()->GetActiveMode(FControlRigEditorEditMode::ModeName));
+}
+
+
+void FControlRigEditor::OnCurveContainerChanged()
+{
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
+
+	ClearDetailObject();
+
+	FBlueprintEditorUtils::MarkBlueprintAsModified(GetControlRigBlueprint());
+
+	UControlRigSkeletalMeshComponent* EditorSkelComp = Cast<UControlRigSkeletalMeshComponent>(GetPersonaToolkit()->GetPreviewScene()->GetPreviewMeshComponent());
+	if (EditorSkelComp)
+	{
+		// restart animation 
+		EditorSkelComp->InitAnim(true);
+		UpdateControlRig();
+	}
+	CacheNameLists();
+
+	// notification
+	FNotificationInfo Info(LOCTEXT("CurveContainerChangeHelpMessage", "CurveContainer has been successfully modified."));
+	Info.bFireAndForget = true;
+	Info.FadeOutDuration = 10.0f;
+	Info.ExpireDuration = 0.0f;
+
+	TSharedPtr<SNotificationItem> NotificationPtr = FSlateNotificationManager::Get().AddNotification(Info);
+	NotificationPtr->SetCompletionState(SNotificationItem::CS_Success);
 }
 
 void FControlRigEditor::OnGraphNodeDropToPerform(TSharedPtr<FGraphNodeDragDropOp> DragDropOp, UEdGraph* Graph, const FVector2D& NodePosition, const FVector2D& ScreenPosition)
 {
-	if (DragDropOp->IsOfType<FRigHierarchyDragDropOp>())
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
+
+	if (DragDropOp->IsOfType<FRigElementHierarchyDragDropOp>())
 	{
-		TSharedPtr<FRigHierarchyDragDropOp> RigHierarchyOp = StaticCastSharedPtr<FRigHierarchyDragDropOp>(DragDropOp);
-		TArray<FName> BoneNames = RigHierarchyOp->GetBoneNames();
-		if (BoneNames.Num() > 0 && FocusedGraphEdPtr.IsValid())
+		TSharedPtr<FRigElementHierarchyDragDropOp> RigHierarchyOp = StaticCastSharedPtr<FRigElementHierarchyDragDropOp>(DragDropOp);
+
+		TArray<FRigElementKey> DraggedKeys = RigHierarchyOp->GetElements();
+		uint8 DraggedTypes = 0;
+		for (const FRigElementKey& DraggedKey : DraggedKeys)
+		{
+			DraggedTypes = DraggedTypes | (uint8)DraggedKey.Type;
+		}
+
+		if (DraggedTypes != 0 && FocusedGraphEdPtr.IsValid())
 		{
 			FMenuBuilder MenuBuilder(true, NULL);
-			const FText BoneNameText = FText::FromString(RigHierarchyOp->GetJoinedBoneNames());
+			const FText SectionText = FText::FromString(RigHierarchyOp->GetJoinedElementNames());
 
-			MenuBuilder.BeginSection("RigHierarchyDroppedOn", BoneNameText);
+			MenuBuilder.BeginSection("RigHierarchyDroppedOn", SectionText);
 
-			MenuBuilder.AddMenuEntry(
-				LOCTEXT("CreateGetBoneTransform", "Get Transform"),
-				LOCTEXT("CreateGetBoneTransformTooltip", "Getter for bone transform\n"),
-				FSlateIcon(),
-				FUIAction(
-					FExecuteAction::CreateSP(this, &FControlRigEditor::HandleMakeBoneGetterSetter, EBoneGetterSetterType_Transform, true, BoneNames, Graph, NodePosition),
-					FCanExecuteAction()
-				)
-			);
-			MenuBuilder.AddMenuEntry(
-				LOCTEXT("CreateSetBoneTransform", "Set Transform"),
-				LOCTEXT("CreateSetBoneTransformTooltip", "Setter for bone transform\n"),
-				FSlateIcon(),
-				FUIAction(
-					FExecuteAction::CreateSP(this, &FControlRigEditor::HandleMakeBoneGetterSetter, EBoneGetterSetterType_Transform, false, BoneNames, Graph, NodePosition),
-					FCanExecuteAction()
-				)
-			);
+			if ((DraggedTypes & (uint8)ERigElementType::Bone) != 0)
+			{
+				MenuBuilder.AddMenuEntry(
+					LOCTEXT("CreateGetBoneTransform", "Get Bone Transform"),
+					LOCTEXT("CreateGetBoneTransformTooltip", "Getter for bone transform\n"),
+					FSlateIcon(),
+					FUIAction(
+						FExecuteAction::CreateSP(this, &FControlRigEditor::HandleMakeElementGetterSetter, ERigElementGetterSetterType_Transform, true, DraggedKeys, Graph, NodePosition),
+						FCanExecuteAction()
+					)
+				);
+				MenuBuilder.AddMenuEntry(
+					LOCTEXT("CreateSetBoneTransform", "Set Bone Transform"),
+					LOCTEXT("CreateSetBoneTransformTooltip", "Setter for bone transform\n"),
+					FSlateIcon(),
+					FUIAction(
+						FExecuteAction::CreateSP(this, &FControlRigEditor::HandleMakeElementGetterSetter, ERigElementGetterSetterType_Transform, false, DraggedKeys, Graph, NodePosition),
+						FCanExecuteAction()
+					)
+				);
 
-			MenuBuilder.AddMenuSeparator();
+				MenuBuilder.AddMenuSeparator();
 
-			MenuBuilder.AddMenuEntry(
-				LOCTEXT("CreateSetBoneRotation", "Set Rotation"),
-				LOCTEXT("CreateSetBoneRotationTooltip", "Setter for bone Rotation\n"),
-				FSlateIcon(),
-				FUIAction(
-					FExecuteAction::CreateSP(this, &FControlRigEditor::HandleMakeBoneGetterSetter, EBoneGetterSetterType_Rotation, false, BoneNames, Graph, NodePosition),
-					FCanExecuteAction()
-				)
-			);
+				MenuBuilder.AddMenuEntry(
+					LOCTEXT("CreateSetBoneRotation", "Set Bone Rotation"),
+					LOCTEXT("CreateSetBoneRotationTooltip", "Setter for bone Rotation\n"),
+					FSlateIcon(),
+					FUIAction(
+						FExecuteAction::CreateSP(this, &FControlRigEditor::HandleMakeElementGetterSetter, ERigElementGetterSetterType_Rotation, false, DraggedKeys, Graph, NodePosition),
+						FCanExecuteAction()
+					)
+				);
 
-			MenuBuilder.AddMenuEntry(
-				LOCTEXT("CreateSetBoneTranslation", "Set Translation"),
-				LOCTEXT("CreateSetBoneTranslationTooltip", "Setter for bone translation\n"),
-				FSlateIcon(),
-				FUIAction(
-					FExecuteAction::CreateSP(this, &FControlRigEditor::HandleMakeBoneGetterSetter, EBoneGetterSetterType_Translation, false, BoneNames, Graph, NodePosition),
-					FCanExecuteAction()
-				)
-			);
+				MenuBuilder.AddMenuEntry(
+					LOCTEXT("CreateSetBoneTranslation", "Set Bone Translation"),
+					LOCTEXT("CreateSetBoneTranslationTooltip", "Setter for bone translation\n"),
+					FSlateIcon(),
+					FUIAction(
+						FExecuteAction::CreateSP(this, &FControlRigEditor::HandleMakeElementGetterSetter, ERigElementGetterSetterType_Translation, false, DraggedKeys, Graph, NodePosition),
+						FCanExecuteAction()
+					)
+				);
 
-			MenuBuilder.AddMenuEntry(
-				LOCTEXT("CreateSetBoneOffset", "Set Offset"),
-				LOCTEXT("CreateSetBoneOffsetTooltip", "Setter for bone offset\n"),
-				FSlateIcon(),
-				FUIAction(
-					FExecuteAction::CreateSP(this, &FControlRigEditor::HandleMakeBoneGetterSetter, EBoneGetterSetterType_Offset, false, BoneNames, Graph, NodePosition),
-					FCanExecuteAction()
-				)
-			);
+				MenuBuilder.AddMenuEntry(
+					LOCTEXT("CreateSetBoneOffset", "Set Bone Offset"),
+					LOCTEXT("CreateSetBoneOffsetTooltip", "Setter for bone offset\n"),
+					FSlateIcon(),
+					FUIAction(
+						FExecuteAction::CreateSP(this, &FControlRigEditor::HandleMakeElementGetterSetter, ERigElementGetterSetterType_Offset, false, DraggedKeys, Graph, NodePosition),
+						FCanExecuteAction()
+					)
+				);
 
-			MenuBuilder.AddMenuEntry(
-				LOCTEXT("CreateGetInitialBoneTransform", "Get Initial Bone Transform"),
-				LOCTEXT("CreateGetInitialBoneTransformTooltip", "Getter for initial bone transform\n"),
-				FSlateIcon(),
-				FUIAction(
-					FExecuteAction::CreateSP(this, &FControlRigEditor::HandleMakeBoneGetterSetter, EBoneGetterSetterType_Initial, true, BoneNames, Graph, NodePosition),
-					FCanExecuteAction()
-				)
-			);
+				MenuBuilder.AddMenuEntry(
+					LOCTEXT("CreateGetInitialBoneTransform", "Get Initial Bone Transform"),
+					LOCTEXT("CreateGetInitialBoneTransformTooltip", "Getter for initial bone transform\n"),
+					FSlateIcon(),
+					FUIAction(
+						FExecuteAction::CreateSP(this, &FControlRigEditor::HandleMakeElementGetterSetter, ERigElementGetterSetterType_Initial, true, DraggedKeys, Graph, NodePosition),
+						FCanExecuteAction()
+					)
+				);
 
-			MenuBuilder.AddMenuSeparator();
+				MenuBuilder.AddMenuSeparator();
 
-			MenuBuilder.AddMenuEntry(
-				LOCTEXT("CreateGetBoneRelativeTransform", "Get Relative Transform"),
-				LOCTEXT("CreateGetBoneRelativeTransformTooltip", "Getter for bone relative transform\n"),
-				FSlateIcon(),
-				FUIAction(
-					FExecuteAction::CreateSP(this, &FControlRigEditor::HandleMakeBoneGetterSetter, EBoneGetterSetterType_Relative, true, BoneNames, Graph, NodePosition),
-					FCanExecuteAction()
-				)
-			);
-			MenuBuilder.AddMenuEntry(
-				LOCTEXT("CreateSetBoneRelativeTransform", "Set Relative Transform"),
-				LOCTEXT("CreateSetBoneRelativeTransformTooltip", "Setter for bone relative transform\n"),
-				FSlateIcon(),
-				FUIAction(
-					FExecuteAction::CreateSP(this, &FControlRigEditor::HandleMakeBoneGetterSetter, EBoneGetterSetterType_Relative, false, BoneNames, Graph, NodePosition),
-					FCanExecuteAction()
-				)
-			);
+				MenuBuilder.AddMenuEntry(
+					LOCTEXT("CreateGetBoneRelativeTransform", "Get Bone Relative Transform"),
+					LOCTEXT("CreateGetBoneRelativeTransformTooltip", "Getter for bone relative transform\n"),
+					FSlateIcon(),
+					FUIAction(
+						FExecuteAction::CreateSP(this, &FControlRigEditor::HandleMakeElementGetterSetter, ERigElementGetterSetterType_Relative, true, DraggedKeys, Graph, NodePosition),
+						FCanExecuteAction()
+					)
+				);
+				MenuBuilder.AddMenuEntry(
+					LOCTEXT("CreateSetBoneRelativeTransform", "Set Bone Relative Transform"),
+					LOCTEXT("CreateSetBoneRelativeTransformTooltip", "Setter for bone relative transform\n"),
+					FSlateIcon(),
+					FUIAction(
+						FExecuteAction::CreateSP(this, &FControlRigEditor::HandleMakeElementGetterSetter, ERigElementGetterSetterType_Relative, false, DraggedKeys, Graph, NodePosition),
+						FCanExecuteAction()
+					)
+				);
 
-			MenuBuilder.AddMenuSeparator();
+			}
 
-			MenuBuilder.AddMenuEntry(
-				LOCTEXT("CreateGetBoneName", "Get Bone Name"),
-				LOCTEXT("CreateGetBoneNameTooltip", "Getter for bone name\n"),
-				FSlateIcon(),
-				FUIAction(
-					FExecuteAction::CreateSP(this, &FControlRigEditor::HandleMakeBoneGetterSetter, EBoneGetterSetterType_Name, true, BoneNames, Graph, NodePosition),
-					FCanExecuteAction()
-				)
-			);
+			if ((DraggedTypes & (uint8)ERigElementType::Control) != 0)
+			{
+				MenuBuilder.AddMenuEntry(
+					LOCTEXT("CreateGetControlTransform", "Get Control Transform"),
+					LOCTEXT("CreateGetControlTransformTooltip", "Getter for control transform\n"),
+					FSlateIcon(),
+					FUIAction(
+						FExecuteAction::CreateSP(this, &FControlRigEditor::HandleMakeElementGetterSetter, ERigElementGetterSetterType_Transform, true, DraggedKeys, Graph, NodePosition),
+						FCanExecuteAction()
+					)
+				);
+			}
 
+			if ((DraggedTypes & (uint8)ERigElementType::Space) != 0)
+			{
+				MenuBuilder.AddMenuEntry(
+					LOCTEXT("CreateGetSpaceTransform", "Get Space Transform"),
+					LOCTEXT("CreateGetSpaceTransformTooltip", "Getter for space transform\n"),
+					FSlateIcon(),
+					FUIAction(
+						FExecuteAction::CreateSP(this, &FControlRigEditor::HandleMakeElementGetterSetter, ERigElementGetterSetterType_Transform, true, DraggedKeys, Graph, NodePosition),
+						FCanExecuteAction()
+					)
+				);
+			}
 
 			TSharedRef<SWidget> GraphEditorPanel = FocusedGraphEdPtr.Pin().ToSharedRef();
-			
+
 			// Show dialog to choose getter vs setter
 			FSlateApplication::Get().PushMenu(
 				GraphEditorPanel,
@@ -1656,77 +2178,11 @@ void FControlRigEditor::OnGraphNodeDropToPerform(TSharedPtr<FGraphNodeDragDropOp
 	}
 }
 
-void FControlRigEditor::HandleMakeBoneGetterSetter(EBoneGetterSetterType Type, bool bIsGetter, TArray<FName> BoneNames, UEdGraph* Graph, FVector2D NodePosition)
+void FControlRigEditor::HandleMakeElementGetterSetter(ERigElementGetterSetterType Type, bool bIsGetter, TArray<FRigElementKey> Keys, UEdGraph* Graph, FVector2D NodePosition)
 {
-	UStruct* StructTemplate = nullptr;
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
 
-	if (bIsGetter)
-	{
-		switch (Type)
-		{
-			case EBoneGetterSetterType_Transform:
-			{
-				StructTemplate = FRigUnit_GetBoneTransform::StaticStruct();
-				break;
-			}
-			case EBoneGetterSetterType_Initial:
-			{
-				StructTemplate = FRigUnit_GetInitialBoneTransform::StaticStruct();
-				break;
-			}
-			case EBoneGetterSetterType_Relative:
-			{
-				StructTemplate = FRigUnit_GetRelativeBoneTransform::StaticStruct();
-				break;
-			}
-			case EBoneGetterSetterType_Name:
-			{
-				StructTemplate = FRigUnit_BoneName::StaticStruct();
-				break;
-			}
-			default:
-			{
-				break;
-			}
-		}
-	}
-	else
-	{
-		switch (Type)
-		{
-			case EBoneGetterSetterType_Transform:
-			{
-				StructTemplate = FRigUnit_SetBoneTransform::StaticStruct();
-				break;
-			}
-			case EBoneGetterSetterType_Relative:
-			{
-				StructTemplate = FRigUnit_SetRelativeBoneTransform::StaticStruct();
-				break;
-			}
-			case EBoneGetterSetterType_Rotation:
-			{
-				StructTemplate = FRigUnit_SetBoneRotation::StaticStruct();
-				break;
-			}
-			case EBoneGetterSetterType_Translation:
-			{
-				StructTemplate = FRigUnit_SetBoneTranslation::StaticStruct();
-				break;
-			}
-			case EBoneGetterSetterType_Offset:
-			{
-				StructTemplate = FRigUnit_AddBoneTransform::StaticStruct();
-				break;
-			}
-			default:
-			{
-				break;
-			}
-		}
-	}
-
-	if (StructTemplate == nullptr)
+	if (Keys.Num() == 0)
 	{
 		return;
 	}
@@ -1744,10 +2200,116 @@ void FControlRigEditor::HandleMakeBoneGetterSetter(EBoneGetterSetterType Type, b
 	Blueprint->ModelController->OpenUndoBracket(TEXT("Adding Nodes from Hierarchy"));
 
 	TArray<FName> NewNodeNames;
-	for (const FName& BoneName : BoneNames)
+
+	for (const FRigElementKey& Key : Keys)
 	{
+		UStruct* StructTemplate = nullptr;
+
+		FName PinName;
+		switch (Key.Type)
+		{
+			case ERigElementType::Bone:
+			{
+				PinName = TEXT("Bone");
+
+				if (bIsGetter)
+				{
+					switch (Type)
+					{
+						case ERigElementGetterSetterType_Transform:
+						{
+							StructTemplate = FRigUnit_GetBoneTransform::StaticStruct();
+							break;
+						}
+						case ERigElementGetterSetterType_Initial:
+						{
+							StructTemplate = FRigUnit_GetInitialBoneTransform::StaticStruct();
+							break;
+						}
+						case ERigElementGetterSetterType_Relative:
+						{
+							StructTemplate = FRigUnit_GetRelativeBoneTransform::StaticStruct();
+							break;
+						}
+						case ERigElementGetterSetterType_Name:
+						{
+							StructTemplate = FRigUnit_BoneName::StaticStruct();
+							break;
+						}
+						default:
+						{
+							break;
+						}
+					}
+				}
+				else
+				{
+					switch (Type)
+					{
+						case ERigElementGetterSetterType_Transform:
+						{
+							StructTemplate = FRigUnit_SetBoneTransform::StaticStruct();
+							break;
+						}
+						case ERigElementGetterSetterType_Relative:
+						{
+							StructTemplate = FRigUnit_SetRelativeBoneTransform::StaticStruct();
+							break;
+						}
+						case ERigElementGetterSetterType_Rotation:
+						{
+							StructTemplate = FRigUnit_SetBoneRotation::StaticStruct();
+							break;
+						}
+						case ERigElementGetterSetterType_Translation:
+						{
+							StructTemplate = FRigUnit_SetBoneTranslation::StaticStruct();
+							break;
+						}
+						case ERigElementGetterSetterType_Offset:
+						{
+							StructTemplate = FRigUnit_AddBoneTransform::StaticStruct();
+							break;
+						}
+						default:
+						{
+							break;
+						}
+					}
+				}
+				break;
+			}
+			case ERigElementType::Control:
+			{
+				PinName = TEXT("Control");
+				if (bIsGetter)
+				{
+					StructTemplate = FRigUnit_GetControlTransform::StaticStruct();
+				}
+				break;
+			}
+			case ERigElementType::Space:
+			{
+				PinName = TEXT("Space");
+				if (bIsGetter)
+				{
+					StructTemplate = FRigUnit_GetSpaceTransform::StaticStruct();
+				}
+				break;
+			}
+			default:
+			{
+				break;
+			}
+		}
+
+		if (StructTemplate == nullptr)
+		{
+			continue;
+		}
+
 		FVector2D NodePositionIncrement(0.f, 120.f);
-		if(!bIsGetter)
+		if (!bIsGetter)
 		{
 			NodePositionIncrement = FVector2D(380.f, 0.f);
 		}
@@ -1759,23 +2321,28 @@ void FControlRigEditor::HandleMakeBoneGetterSetter(EBoneGetterSetterType Type, b
 			if (Node)
 			{
 				NewNodeNames.Add(Node->Name);
-				Blueprint->ModelController->SetPinDefaultValueName(Node->Name, TEXT("Bone"), BoneName, true);
+				Blueprint->ModelController->SetPinDefaultValueName(Node->Name, PinName, Key.Name, true);
 			}
 		}
 
 		NodePosition += NodePositionIncrement;
 	}
 
-	Blueprint->ModelController->CloseUndoBracket();
-
 	if (NewNodeNames.Num() > 0)
 	{
+		Blueprint->ModelController->CloseUndoBracket();
 		Blueprint->ModelController->SetSelection(NewNodeNames);
+	}
+	else
+	{
+		Blueprint->ModelController->CancelUndoBracket();
 	}
 }
 
 void FControlRigEditor::UpdateGraphCompilerErrors()
 {
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
+
 	UControlRigBlueprint* Blueprint = Cast<UControlRigBlueprint>(GetBlueprintObj());
 	if (Blueprint)
 	{
@@ -1903,10 +2470,10 @@ void FControlRigEditor::DumpUnitTestCode()
 		// dump the hierarchy
 		if (ControlRig)
 		{
-			const FRigHierarchy& Hierarchy = ControlRig->GetBaseHierarchy();
+			const FRigBoneHierarchy& Hierarchy = ControlRig->GetBoneHierarchy();
 			if (Hierarchy.Bones.Num() > 0)
 			{
-				Code.Add(TEXT("FRigHierarchy& Hierarchy = Rig->GetBaseHierarchy();"));
+				Code.Add(TEXT("FRigBoneHierarchy& Hierarchy = Rig->GetBoneHierarchy();"));
 			}
 			for (const FRigBone& Bone : Hierarchy.Bones)
 			{
@@ -2001,6 +2568,23 @@ void FControlRigEditor::DumpUnitTestCode()
 		UE_LOG(LogControlRigEditor, Display, TEXT("\n%s\n"), *FString::Join(Code, TEXT("\n")));
 	}
 	*/
+}
+
+void FControlRigEditor::HandleOnViewportContextMenuDelegate(class FMenuBuilder& MenuBuilder)
+{
+	if (OnViewportContextMenuDelegate.IsBound())
+	{
+		OnViewportContextMenuDelegate.Execute(MenuBuilder);
+	}
+}
+
+TSharedPtr<FUICommandList> FControlRigEditor::HandleOnViewportContextMenuCommandsDelegate()
+{
+	if (OnViewportContextMenuCommandsDelegate.IsBound())
+	{
+		return OnViewportContextMenuCommandsDelegate.Execute();
+	}
+	return TSharedPtr<FUICommandList>();
 }
 
 #undef LOCTEXT_NAMESPACE

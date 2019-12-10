@@ -120,7 +120,8 @@ namespace Gauntlet
 			if (bHasExited)
 			{
 				ActivityExited = true;
-				// Make sure entire activity log has been captured
+				// The activity has exited, make sure entire activity log has been captured, sleep to allow time for the log to flush
+				Thread.Sleep(5000);
 				UpdateCachedLog(true);
 				Log.VeryVerbose("{0}: process exited, Activity running={1}, Activity in foreground={2} ", ToString(), bActivityPresent.ToString(), bActivityInForeground.ToString());
 			}
@@ -212,9 +213,13 @@ namespace Gauntlet
 
 		protected void SaveArtifacts()
 		{
+
 			// copy remote artifacts to local
 			if (Directory.Exists(Install.AndroidDevice.LocalCachePath))
 			{
+
+				Log.Verbose("Deleting {0}", Install.AndroidDevice.LocalCachePath);
+
 				try
 				{
 					// don't consider this fatal, people often have the directory or a file open
@@ -227,14 +232,26 @@ namespace Gauntlet
 			}
 
 			// mark it as a temp dir (will also create it)
-			Utils.SystemHelpers.MarkDirectoryForCleanup(Install.AndroidDevice.LocalCachePath);
+			try
+			{
+				Utils.SystemHelpers.MarkDirectoryForCleanup(Install.AndroidDevice.LocalCachePath);
+			}
+			catch (Exception Ex)
+			{
+				Log.Warning("Exception marking directory for cleanup {0}", Ex.Message);
+			}			
 
 			string LocalSaved = Path.Combine(Install.AndroidDevice.LocalCachePath, "Saved");
+			Log.Verbose("Creating {0}", LocalSaved);
 			Directory.CreateDirectory(LocalSaved);
+
+
+			
+
 
 			// pull all the artifacts
 			string ArtifactPullCommand = string.Format("pull {0} {1}", Install.AndroidDevice.DeviceArtifactPath, Install.AndroidDevice.LocalCachePath);
-			IProcessResult PullCmd = Install.AndroidDevice.RunAdbDeviceCommand(ArtifactPullCommand);
+			IProcessResult PullCmd = Install.AndroidDevice.RunAdbDeviceCommand(ArtifactPullCommand, bShouldLogCommand: Log.IsVerbose);
 
 			if (PullCmd.ExitCode != 0)
 			{
@@ -253,7 +270,7 @@ namespace Gauntlet
 			}
 
 			// pull the logcat over from device.
-			IProcessResult LogcatResult = Install.AndroidDevice.RunAdbDeviceCommand("logcat -d");
+			IProcessResult LogcatResult = Install.AndroidDevice.RunAdbDeviceCommand("logcat -d", bShouldLogCommand: Log.IsVerbose);
 
 			string LogcatFilename = "Logcat.log";
 			// Save logcat dump to local artifact path.
@@ -830,14 +847,7 @@ namespace Gauntlet
 				string StorageLocation = StorageQueryResult.Output.Trim(); // "/mnt/sdcard";
 
 				// remote dir used to save things
-				string RemoteDir = StorageLocation + "/UE4Game/" + AppConfig.ProjectName;
-
-				// if not a bulk/dev build, remote dir will be under /{StorageLocation}/Android/data/{PackageName}
-				if ((Build.Flags & ( BuildFlags.Bulk | BuildFlags.CanReplaceExecutable)) == 0)
-				{
-					RemoteDir = StorageLocation + "/Android/data/" + Build.AndroidPackageName + "/files/UE4Game/" + AppConfig.ProjectName;
-				}
-				
+				string RemoteDir = StorageLocation + "/UE4Game/" + AppConfig.ProjectName;				
 				string DependencyDir = RemoteDir + "/deps";
 
 				// device artifact path, always clear between runs
@@ -964,7 +974,13 @@ namespace Gauntlet
 				// if != 0 then no folder exists
 				if (AdbResult.ExitCode == 0)
 				{
-					IEnumerable<string> CurrentRemoteFileList = AdbResult.Output.Replace("\r\n", "\n").Split('\n');
+					string[] Delimiters = { "\r\n", "\n" };
+					string[] CurrentRemoteFileList = AdbResult.Output.Split(Delimiters, StringSplitOptions.RemoveEmptyEntries);
+					for (int i = 0; i < CurrentRemoteFileList.Length; ++i)
+					{
+						CurrentRemoteFileList[i] = CurrentRemoteFileList[i].Trim();
+					}
+
 					IEnumerable<string> NewRemoteFileList = FilesToInstall.Values.Select(F => Path.GetFileName(F));
 
 					// delete any files that should not be there

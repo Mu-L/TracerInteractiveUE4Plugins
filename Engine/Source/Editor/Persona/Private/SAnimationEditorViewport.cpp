@@ -33,9 +33,10 @@
 #include "Editor/EditorPerProjectUserSettings.h"
 #include "Materials/Material.h"
 #include "EditorFontGlyphs.h"
-#include "Toolkits/AssetEditorManager.h"
+
 #include "SkeletalMeshTypes.h"
 #include "IPersonaToolkit.h"
+#include "Subsystems/AssetEditorSubsystem.h"
 
 #define LOCTEXT_NAMESPACE "PersonaViewportToolbar"
 
@@ -410,6 +411,11 @@ TWeakPtr<SWidget> SAnimationEditorViewportTabBody::AddNotification(TAttribute<EM
 	return ContainingWidget;
 }
 
+void SAnimationEditorViewportTabBody::AddToolbarExtender(FName MenuToExtend, FMenuExtensionDelegate MenuBuilderDelegate)
+{
+	return ViewportWidget->ViewportToolbar->AddMenuExtender(MenuToExtend, MenuBuilderDelegate);
+}
+
 void SAnimationEditorViewportTabBody::RemoveNotification(const TWeakPtr<SWidget>& InContainingWidget)
 {
 	if(InContainingWidget.IsValid())
@@ -434,9 +440,14 @@ FReply SAnimationEditorViewportTabBody::OnKeyDown(const FGeometry& MyGeometry, c
 	{
 		return FReply::Handled();
 	}
+
+	if (OnKeyDownDelegate.IsBound())
+	{
+		return OnKeyDownDelegate.Execute(MyGeometry, InKeyEvent);
+	}
+
 	return FReply::Unhandled();
 }
-
 
 void SAnimationEditorViewportTabBody::Construct(const FArguments& InArgs, const TSharedRef<class IPersonaPreviewScene>& InPreviewScene, const TSharedRef<class FAssetEditorToolkit>& InAssetEditorToolkit, int32 InViewportIndex)
 {
@@ -848,7 +859,7 @@ void SAnimationEditorViewportTabBody::BindCommands()
 
 	CommandList.EndGroup();
 
-#if WITH_APEX_CLOTHING
+#if WITH_APEX_CLOTHING || WITH_CHAOS_CLOTHING
 
 	//Clothing show options
 	CommandList.MapAction( 
@@ -896,7 +907,7 @@ void SAnimationEditorViewportTabBody::BindCommands()
 
 	CommandList.EndGroup();
 
-#endif// #if WITH_APEX_CLOTHING		
+#endif// #if WITH_APEX_CLOTHING || WITH_CHAOS_CLOTHING
 
 	GetPreviewScene()->RegisterOnSelectedLODChanged(FOnSelectedLODChanged::CreateSP(this, &SAnimationEditorViewportTabBody::OnLODModelChanged));
 	//Bind LOD preview menu commands
@@ -1526,7 +1537,7 @@ void SAnimationEditorViewportTabBody::PopulateUVChoices()
 	
 	if (UDebugSkelMeshComponent* PreviewComponent = GetPreviewScene()->GetPreviewMeshComponent())
 	{
-		int32 CurrentLOD = FMath::Clamp(PreviewComponent->ForcedLodModel - 1, 0, NumUVChannels.Num() - 1);
+		int32 CurrentLOD = FMath::Clamp(PreviewComponent->GetForcedLOD() - 1, 0, NumUVChannels.Num() - 1);
 
 		if (NumUVChannels.IsValidIndex(CurrentLOD))
 		{
@@ -1683,13 +1694,13 @@ int32 SAnimationEditorViewportTabBody::GetLODSelection() const
 	{
 		// If we are forcing a LOD level, report the actual LOD level we are displaying
 		// as the mesh can potentially change LOD count under the viewport.
-		if(PreviewComponent->ForcedLodModel > 0)
+		if(PreviewComponent->GetForcedLOD() > 0)
 		{
 			return PreviewComponent->PredictedLODLevel + 1;
 		}
 		else
 		{
-			return PreviewComponent->ForcedLodModel;
+			return PreviewComponent->GetForcedLOD();
 		}
 	}
 	return 0;
@@ -1707,7 +1718,7 @@ void SAnimationEditorViewportTabBody::OnSetLODModel(int32 LODSelectionType)
 	if( PreviewComponent )
 	{
 		LODSelection = LODSelectionType;
-		PreviewComponent->ForcedLodModel = LODSelectionType;
+		PreviewComponent->SetForcedLOD(LODSelectionType);
 		PopulateUVChoices();
 		GetPreviewScene()->BroadcastOnSelectedLODChanged();
 	}
@@ -1717,9 +1728,9 @@ void SAnimationEditorViewportTabBody::OnLODModelChanged()
 {
 	UDebugSkelMeshComponent* PreviewComponent = GetPreviewScene()->GetPreviewMeshComponent();
 
-	if (PreviewComponent && LODSelection != PreviewComponent->ForcedLodModel)
+	if (PreviewComponent && LODSelection != PreviewComponent->GetForcedLOD())
 	{
-		LODSelection = PreviewComponent->ForcedLodModel;
+		LODSelection = PreviewComponent->GetForcedLOD();
 		PopulateUVChoices();
 	}
 }
@@ -1829,7 +1840,7 @@ bool SAnimationEditorViewportTabBody::IsPreviewingRootMotion() const
 	return false;
 }
 
-#if WITH_APEX_CLOTHING
+#if WITH_APEX_CLOTHING || WITH_CHAOS_CLOTHING
 bool SAnimationEditorViewportTabBody::IsClothSimulationEnabled() const
 {
 	UDebugSkelMeshComponent* PreviewComponent = GetPreviewScene()->GetPreviewMeshComponent();
@@ -2009,7 +2020,7 @@ bool SAnimationEditorViewportTabBody::IsSectionsDisplayMode(ESectionDisplayMode 
 {
 	return SectionsDisplayMode == DisplayMode;
 }
-#endif // #if WITH_APEX_CLOTHING
+#endif // #if WITH_APEX_CLOTHING || WITH_CHAOS_CLOTHING
 
 void SAnimationEditorViewportTabBody::AddRecordingNotification()
 {
@@ -2187,7 +2198,7 @@ void SAnimationEditorViewportTabBody::AddPostProcessNotification()
 		{
 			if(PreviewComponent->SkeletalMesh && PreviewComponent->SkeletalMesh->PostProcessAnimBlueprint)
 			{
-				FAssetEditorManager::Get().OpenEditorForAssets(TArray<UObject*>({ PreviewComponent->SkeletalMesh->PostProcessAnimBlueprint->ClassGeneratedBy }));
+				GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAssets(TArray<UObject*>({ PreviewComponent->SkeletalMesh->PostProcessAnimBlueprint->ClassGeneratedBy }));
 			}
 		}
 

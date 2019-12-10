@@ -15,7 +15,7 @@
 
 #define LOCTEXT_NAMESPACE "FileHelper"
 
-static const FString InvalidFilenames[] = {
+static const TCHAR* InvalidFilenames[] = {
 	TEXT("CON"), TEXT("PRN"), TEXT("AUX"), TEXT("CLOCK$"), TEXT("NUL"), TEXT("NONE"),
 	TEXT("COM1"), TEXT("COM2"), TEXT("COM3"), TEXT("COM4"), TEXT("COM5"), TEXT("COM6"), TEXT("COM7"), TEXT("COM8"), TEXT("COM9"),
 	TEXT("LPT1"), TEXT("LPT2"), TEXT("LPT3"), TEXT("LPT4"), TEXT("LPT5"), TEXT("LPT6"), TEXT("LPT7"), TEXT("LPT8"), TEXT("LPT9")
@@ -60,6 +60,7 @@ void FFileHelper::BufferToString( FString& Result, const uint8* Buffer, int32 Si
 	TArray<TCHAR>& ResultArray = Result.GetCharArray();
 	ResultArray.Empty();
 
+	bool bIsUnicode = false;
 	if( Size >= 2 && !( Size & 1 ) && Buffer[0] == 0xff && Buffer[1] == 0xfe )
 	{
 		// Unicode Intel byte order. Less 1 for the FFFE header, additional 1 for null terminator.
@@ -68,6 +69,7 @@ void FFileHelper::BufferToString( FString& Result, const uint8* Buffer, int32 Si
 		{
 			ResultArray[ i ] = CharCast<TCHAR>( (UCS2CHAR)(( uint16 )Buffer[i * 2 + 2] + ( uint16 )Buffer[i * 2 + 3] * 256) );
 		}
+		bIsUnicode = true;
 	}
 	else if( Size >= 2 && !( Size & 1 ) && Buffer[0] == 0xfe && Buffer[1] == 0xff )
 	{
@@ -77,6 +79,7 @@ void FFileHelper::BufferToString( FString& Result, const uint8* Buffer, int32 Si
 		{
 			ResultArray[ i ] = CharCast<TCHAR>( (UCS2CHAR)(( uint16 )Buffer[i * 2 + 3] + ( uint16 )Buffer[i * 2 + 2] * 256) );
 		}
+		bIsUnicode = true;
 	}
 	else
 	{
@@ -102,6 +105,12 @@ void FFileHelper::BufferToString( FString& Result, const uint8* Buffer, int32 Si
 	{
 		// Else ensure null terminator is present
 		ResultArray.Last() = 0;
+
+		if (bIsUnicode)
+		{
+			// Inline combine any surrogate pairs in the data when loading into a UTF-32 string
+			StringConv::InlineCombineSurrogates(Result);
+		}
 	}
 }
 
@@ -112,11 +121,11 @@ void FFileHelper::BufferToString( FString& Result, const uint8* Buffer, int32 Si
  * @param Filename name of the file to load
  * @param VerifyFlags flags controlling the hash verification behavior ( see EHashOptions )
  */
-bool FFileHelper::LoadFileToString( FString& Result, const TCHAR* Filename, EHashOptions VerifyFlags )
+bool FFileHelper::LoadFileToString( FString& Result, const TCHAR* Filename, EHashOptions VerifyFlags, uint32 ReadFlags)
 {
 	FScopedLoadingState ScopedLoadingState(Filename);
 
-	TUniquePtr<FArchive> Reader( IFileManager::Get().CreateFileReader( Filename ) );
+	TUniquePtr<FArchive> Reader( IFileManager::Get().CreateFileReader( Filename, ReadFlags) );
 	if( !Reader )
 	{
 		return false;
@@ -211,33 +220,32 @@ bool FFileHelper::SaveStringToFile( const FString& String, const TCHAR* Filename
 	if( String.IsEmpty() )
 		return true;
 
-	const TCHAR* StrPtr = *String;
-
-	bool SaveAsUnicode = EncodingOptions == EEncodingOptions::ForceUnicode || ( EncodingOptions == EEncodingOptions::AutoDetect && !FCString::IsPureAnsi(StrPtr) );
+	bool SaveAsUnicode = EncodingOptions == EEncodingOptions::ForceUnicode || ( EncodingOptions == EEncodingOptions::AutoDetect && !FCString::IsPureAnsi(*String) );
 	if( EncodingOptions == EEncodingOptions::ForceUTF8 )
 	{
 		UTF8CHAR UTF8BOM[] = { 0xEF, 0xBB, 0xBF };
-		Ar->Serialize( &UTF8BOM, ARRAY_COUNT(UTF8BOM) * sizeof(UTF8CHAR) );
+		Ar->Serialize( &UTF8BOM, UE_ARRAY_COUNT(UTF8BOM) * sizeof(UTF8CHAR) );
 
-		FTCHARToUTF8 UTF8String(StrPtr);
+		FTCHARToUTF8 UTF8String(*String, String.Len());
 		Ar->Serialize( (UTF8CHAR*)UTF8String.Get(), UTF8String.Length() * sizeof(UTF8CHAR) );
 	}
 	else if ( EncodingOptions == EEncodingOptions::ForceUTF8WithoutBOM )
 	{
-		FTCHARToUTF8 UTF8String(StrPtr);
+		FTCHARToUTF8 UTF8String(*String, String.Len());
 		Ar->Serialize((UTF8CHAR*)UTF8String.Get(), UTF8String.Length() * sizeof(UTF8CHAR));
 	}
 	else if (SaveAsUnicode)
 	{
-		UCS2CHAR BOM = UNICODE_BOM;
-		Ar->Serialize( &BOM, sizeof(UCS2CHAR) );
+		UTF16CHAR BOM = UNICODE_BOM;
+		Ar->Serialize( &BOM, sizeof(UTF16CHAR) );
 
-		auto Src = StringCast<UCS2CHAR>(StrPtr, String.Len());
-		Ar->Serialize( (UCS2CHAR*)Src.Get(), Src.Length() * sizeof(UCS2CHAR) );
+		// Note: This is a no-op on platforms that are using a 16-bit TCHAR
+		FTCHARToUTF16 UTF16String(*String, String.Len());
+		Ar->Serialize((UTF16CHAR*)UTF16String.Get(), UTF16String.Length() * sizeof(UTF16CHAR));
 	}
 	else
 	{
-		auto Src = StringCast<ANSICHAR>(StrPtr, String.Len());
+		auto Src = StringCast<ANSICHAR>(*String, String.Len());
 		Ar->Serialize( (ANSICHAR*)Src.Get(), Src.Length() * sizeof(ANSICHAR) );
 	}
 
@@ -249,7 +257,7 @@ bool FFileHelper::SaveStringArrayToFile( const TArray<FString>& Lines, const TCH
 	int32 Length = 10;
 	for(const FString& Line : Lines)
 	{
-		Length += Line.Len() + ARRAY_COUNT(LINE_TERMINATOR);
+		Length += Line.Len() + UE_ARRAY_COUNT(LINE_TERMINATOR);
 	}
 	
 	FString CombinedString;
@@ -309,6 +317,28 @@ bool FFileHelper::GenerateNextBitmapFilename( const FString& Pattern, const FStr
 	}
 
 	return bSuccess;
+}
+
+/**
+ * Generates the next unique bitmap filename with a specified extension
+ *
+ * @param Pattern		Filename with path, but without extension.
+ * @oaran Extension		File extension to be appended
+ * @param OutFilename	Reference to an FString where the newly generated filename will be placed
+ *
+ * @return true if success
+ */
+void FFileHelper::GenerateDateTimeBasedBitmapFilename(const FString& Pattern, const FString& Extension, FString& OutFilename)
+{
+	// Use current date & time to obtain more organized screenshot libraries
+	// There is no need to check for file duplicate, as two certian moments, can't occure twice in the world!
+	
+	OutFilename = "";
+
+	static int32 LastScreenShotIndex = 0;
+	int32 SearchIndex = 0;
+
+	OutFilename = FString::Printf(TEXT("%s_%s.%s"), *Pattern, *FDateTime::Now().ToString(), *Extension);
 }
 
 /**
@@ -605,7 +635,7 @@ bool FFileHelper::IsFilenameValidForSaving(const FString& Filename, FText& OutEr
 			}
 			*/
 
-			for (const FString& InvalidFilename : InvalidFilenames)
+			for (const TCHAR* InvalidFilename : InvalidFilenames)
 			{
 				if (BaseFilename.Equals(InvalidFilename, ESearchCase::IgnoreCase))
 				{

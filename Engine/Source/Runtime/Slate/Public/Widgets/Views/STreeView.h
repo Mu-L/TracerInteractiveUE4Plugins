@@ -100,6 +100,7 @@ public:
 	using FOnSetExpansionRecursive  = typename TSlateDelegates< ItemType >::FOnSetExpansionRecursive;
 	using FOnItemScrolledIntoView   = typename TSlateDelegates< ItemType >::FOnItemScrolledIntoView;
 	using FOnSelectionChanged       = typename TSlateDelegates< NullableItemType >::FOnSelectionChanged;
+	using FIsSelectableOrNavigable	= typename TSlateDelegates< ItemType >::FIsSelectableOrNavigable;
 	using FOnMouseButtonClick       = typename TSlateDelegates< ItemType >::FOnMouseButtonClick;
 	using FOnMouseButtonDoubleClick = typename TSlateDelegates< ItemType >::FOnMouseButtonDoubleClick;
 	using FOnExpansionChanged       = typename TSlateDelegates< ItemType >::FOnExpansionChanged;
@@ -121,9 +122,11 @@ public:
 		, _OnMouseButtonDoubleClick()
 		, _OnSelectionChanged()
 		, _OnExpansionChanged()
+		, _OnIsSelectableOrNavigable()
 		, _SelectionMode(ESelectionMode::Multi)
 		, _ClearSelectionOnClick(true)
 		, _ExternalScrollbar()
+		, _EnableAnimatedScrolling(false)
 		, _ScrollbarDragFocusCause(EFocusCause::Mouse)
 		, _ConsumeMouseWheel( EConsumeMouseWheel::WhenScrollingPossible )
 		, _AllowOverscroll(EAllowOverscroll::Yes)
@@ -164,6 +167,8 @@ public:
 
 		SLATE_EVENT( FOnExpansionChanged, OnExpansionChanged )
 
+		SLATE_EVENT(FIsSelectableOrNavigable, OnIsSelectableOrNavigable)
+
 		SLATE_ATTRIBUTE( ESelectionMode::Type, SelectionMode )
 
 		SLATE_ARGUMENT( TSharedPtr<SHeaderRow>, HeaderRow )
@@ -171,6 +176,10 @@ public:
 		SLATE_ARGUMENT ( bool, ClearSelectionOnClick )
 
 		SLATE_ARGUMENT( TSharedPtr<SScrollBar>, ExternalScrollbar )
+
+		SLATE_ARGUMENT( bool, EnableAnimatedScrolling)
+
+		SLATE_ARGUMENT( TOptional<double>, FixedLineScrollOffset )
 
 		SLATE_ARGUMENT( EFocusCause, ScrollbarDragFocusCause )
 
@@ -215,6 +224,7 @@ public:
 		this->OnDoubleClick = InArgs._OnMouseButtonDoubleClick;
 		this->OnSelectionChanged = InArgs._OnSelectionChanged;
 		this->OnExpansionChanged = InArgs._OnExpansionChanged;
+		this->OnIsSelectableOrNavigable = InArgs._OnIsSelectableOrNavigable;
 		this->SelectionMode = InArgs._SelectionMode;
 
 		this->bClearSelectionOnClick = InArgs._ClearSelectionOnClick;
@@ -222,6 +232,9 @@ public:
 		this->AllowOverscroll = InArgs._AllowOverscroll;
 
 		this->WheelScrollMultiplier = InArgs._WheelScrollMultiplier;
+
+		this->bEnableAnimatedScrolling = InArgs._EnableAnimatedScrolling;
+		this->FixedLineScrollOffset = InArgs._FixedLineScrollOffset;
 
 		this->OnItemToString_Debug = InArgs._OnItemToString_Debug.IsBound()
 			? InArgs._OnItemToString_Debug
@@ -266,7 +279,7 @@ public:
 		else
 		{
 			// Make the TableView
-			this->ConstructChildren( 0, InArgs._ItemHeight, EListItemAlignment::LeftAligned, InArgs._HeaderRow, InArgs._ExternalScrollbar, InArgs._OnTreeViewScrolled );
+			this->ConstructChildren( 0, InArgs._ItemHeight, EListItemAlignment::LeftAligned, InArgs._HeaderRow, InArgs._ExternalScrollbar, Orient_Vertical, InArgs._OnTreeViewScrolled );
 			if (this->ScrollBar.IsValid())
 			{
 				this->ScrollBar->SetDragFocusCause(InArgs._ScrollbarDragFocusCause);
@@ -540,8 +553,8 @@ public:
 					// series of calls, Private_SignalSelectionChanged() could end up in a child
 					// that indexes into either of these arrays (the index wouldn't be updated yet,
 					// and could be invalid)
-					SparseItemInfos = TempSparseItemInfo;
-					DenseItemInfos  = TempDenseItemInfos;
+					SparseItemInfos = MoveTemp(TempSparseItemInfo);
+					DenseItemInfos  = MoveTemp(TempDenseItemInfos);
 
 					// Once the selection changed events have gone through we can update the parent highlight statuses, which are based on your current selection.
 					if (bHighlightParentNodesForSelection)
@@ -684,7 +697,13 @@ public:
 	{
 		RequestListRefresh();
 	}
-		
+
+	virtual void RebuildList() override
+	{
+		LinearizedItems.Empty();
+		SListView<ItemType>::RebuildList();
+	}
+
 	/**
 	 * Set whether some data item is expanded or not.
 	 * 

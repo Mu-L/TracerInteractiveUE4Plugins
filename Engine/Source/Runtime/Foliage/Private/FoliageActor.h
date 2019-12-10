@@ -11,9 +11,11 @@ struct FFoliageActor : public FFoliageImpl
 
 	TArray<AActor*> ActorInstances;
 	UClass* ActorClass;
+	bool bShouldAttachToBaseComponent;
 	
 	FFoliageActor()
 		: ActorClass(nullptr)
+		, bShouldAttachToBaseComponent(true)
 	{
 	}
 
@@ -35,17 +37,21 @@ struct FFoliageActor : public FFoliageImpl
 	int32 FindIndex(const AActor* InActor) const;
 	virtual int32 FindIndex(const UPrimitiveComponent* HitComponent) const override;
 
-	virtual void SelectInstances(bool bSelect, int32 InstanceIndex, int32 Count) override;
+	virtual void SelectAllInstances(bool bSelect) override;
+	virtual void SelectInstance(bool bSelect, int32 Index) override;
+	virtual void SelectInstances(bool bSelect, const TSet<int32>& SelectedIndices) override;
 	virtual void ApplySelection(bool bApply, const TSet<int32>& SelectedIndices) override;
 	virtual void ClearSelection(const TSet<int32>& SelectedIndices) override;
 	virtual void Refresh(AInstancedFoliageActor* IFA, const TArray<FFoliageInstance>& Instances, bool Async, bool Force) override;
 	virtual void OnHiddenEditorViewMaskChanged(uint64 InHiddenEditorViews) override;
 	virtual void PostEditUndo(AInstancedFoliageActor* IFA, UFoliageType* FoliageType, const TArray<FFoliageInstance>& Instances, const TSet<int32>& SelectedIndices) override;
-	virtual void PostApplyLevelTransform(const FTransform& InTransform, const TArray<FFoliageInstance>& Instances) override;
 	virtual void NotifyFoliageTypeChanged(AInstancedFoliageActor* IFA, UFoliageType* FoliageType, const TArray<FFoliageInstance>& Instances, const TSet<int32>& SelectedIndices, bool bSourceChanged) override;
 	void Reapply(AInstancedFoliageActor* IFA, const UFoliageType* FoliageType, const TArray<FFoliageInstance>& Instances, bool bPostLoad = false);
 	AActor* Spawn(AInstancedFoliageActor* IFA, const FFoliageInstance& Instance);
 	TArray<AActor*> GetActorsFromSelectedIndices(const TSet<int32>& SelectedIndices) const;
+	virtual bool ShouldAttachToBaseComponent() const override { return bShouldAttachToBaseComponent; }
+	bool UpdateInstanceFromActor(AInstancedFoliageActor* IFA, AActor* InActor, FFoliageInfo& FoliageInfo);
+	void GetInvalidInstances(TArray<int32>& InvalidInstances);
 
 private:
 	void UpdateActorTransforms(const TArray<FFoliageInstance>& Instances);

@@ -16,7 +16,7 @@
 #include "Misc/FrameRate.h"
 #include "Subsystems/SubsystemCollection.h"
 #include "Subsystems/EngineSubsystem.h"
-
+#include "RHI.h"
 #include "Engine.generated.h"
 
 #define WITH_DYNAMIC_RESOLUTION (!UE_SERVER)
@@ -99,15 +99,6 @@ enum class ETransitionType : uint8
 	Connecting,
 	Precaching,
 	WaitingToConnect,
-	MAX
-};
-
-
-UENUM()
-enum class EConsoleType : uint8
-{
-	Any,
-	Mobile,
 	MAX
 };
 
@@ -626,7 +617,7 @@ class IAnalyticsProvider;
 DECLARE_DELEGATE_OneParam(FBeginStreamingPauseDelegate, FViewport*);
 DECLARE_DELEGATE(FEndStreamingPauseDelegate);
 
-enum class EFrameHitchType: uint8;
+enum class EFrameHitchType : uint8;
 
 DECLARE_MULTICAST_DELEGATE_TwoParams(FEngineHitchDetectedDelegate, EFrameHitchType /*HitchType*/, float /*HitchDurationInSeconds*/);
 
@@ -866,10 +857,26 @@ public:
 	/** The material used to render wireframe meshes. */
 	UPROPERTY()
 	class UMaterial* WireframeMaterial;
-
+	
 	/** @todo document */
 	UPROPERTY(globalconfig)
 	FString WireframeMaterialName;
+
+	/** The material used to default hair meshes. */
+	UPROPERTY()
+	class UMaterial* HairDefaultMaterial;
+
+	/** @todo document */
+	UPROPERTY(globalconfig)
+	FString HairDefaultMaterialName;
+
+	/** The material used to debug hair meshes. */
+	UPROPERTY()
+	class UMaterial* HairDebugMaterial;
+
+	/** @todo document */
+	UPROPERTY(globalconfig)
+	FString HairDebugMaterialName;
 
 #if WITH_EDITORONLY_DATA
 	/** A translucent material used to render things in geometry mode. */
@@ -1388,14 +1395,6 @@ public:
 	UPROPERTY(globalconfig)
 	uint32 bShouldGenerateLowQualityLightmaps_DEPRECATED :1;
 
-	/**
-	 * Bool that indicates that 'console' input is desired. This flag is mis named as it is used for a lot of gameplay related things
-	 * (e.g. increasing collision size, changing vehicle turning behavior, modifying put down/up weapon speed, bot behavior)
-	 *
-	 * currently set when you are running a console build (implicitly or explicitly via ?param on the commandline)
-	 */
-	uint32 bUseConsoleInput:1;
-
 	// Color preferences.
 	UPROPERTY()
 	FColor C_WorldBox;
@@ -1827,6 +1826,9 @@ public:
 	virtual void			WorldDestroyed( UWorld* InWorld );
 
 	virtual bool IsInitialized() const { return bIsInitialized; }
+
+	/** The feature used to create new worlds, by default. Overridden for feature level preview in the editor */
+	virtual ERHIFeatureLevel::Type GetDefaultWorldFeatureLevel() const { return GMaxRHIFeatureLevel;  }
 
 #if WITH_EDITOR
 
@@ -2336,14 +2338,6 @@ public:
 	 * Returns the current desired time between garbage collection passes (not the time remaining)
 	 */
 	float GetTimeBetweenGarbageCollectionPasses() const;
-
-	/**
-	 * Returns whether we are running on a console platform or on the PC.
-	 * @param ConsoleType - if specified, only returns true if we're running on the specified platform
-	 *
-	 * @return true if we're on a console, false if we're running on a PC
-	 */
-	bool IsConsoleBuild(EConsoleType ConsoleType = EConsoleType::Any) const;
 
 	/** Add a FString to the On-screen debug message system. bNewerOnTop only works with Key == INDEX_NONE */
 	void AddOnScreenDebugMessage(uint64 Key,float TimeToDisplay,FColor DisplayColor,const FString& DebugMessage, bool bNewerOnTop = true, const FVector2D& TextScale = FVector2D::UnitVector);
@@ -3397,6 +3391,7 @@ private:
 	bool ToggleStatSoundWaves(UWorld* World, FCommonViewportClient* ViewportClient, const TCHAR* Stream = nullptr);
 	bool ToggleStatSoundCues(UWorld* World, FCommonViewportClient* ViewportClient, const TCHAR* Stream = nullptr);
 	bool ToggleStatSounds(UWorld* World, FCommonViewportClient* ViewportClient, const TCHAR* Stream = nullptr);
+	bool ToggleStatAudioStreaming(UWorld* World, FCommonViewportClient* ViewportClient, const TCHAR* Stream = nullptr);
 	bool ToggleStatSoundMixes(UWorld* World, FCommonViewportClient* ViewportClient, const TCHAR* Stream = nullptr);
 	bool ToggleStatSoundModulators(UWorld* World, FCommonViewportClient* ViewportClient, const TCHAR* Stream = nullptr);
 #endif
@@ -3428,6 +3423,7 @@ private:
  	int32 RenderStatSoundMixes(UWorld* World, FViewport* Viewport, FCanvas* Canvas, int32 X, int32 Y, const FVector* ViewLocation = nullptr, const FRotator* ViewRotation = nullptr);
 	int32 RenderStatSoundModulators(UWorld* World, FViewport* Viewport, FCanvas* Canvas, int32 X, int32 Y, const FVector* ViewLocation = nullptr, const FRotator* ViewRotation = nullptr);
 	int32 RenderStatSoundWaves(UWorld* World, FViewport* Viewport, FCanvas* Canvas, int32 X, int32 Y, const FVector* ViewLocation = nullptr, const FRotator* ViewRotation = nullptr);
+	int32 RenderStatAudioStreaming(UWorld* World, FViewport* Viewport, FCanvas* Canvas, int32 X, int32 Y, const FVector* ViewLocation = nullptr, const FRotator* ViewRotation = nullptr);
 	int32 RenderStatSoundCues(UWorld* World, FViewport* Viewport, FCanvas* Canvas, int32 X, int32 Y, const FVector* ViewLocation = nullptr, const FRotator* ViewRotation = nullptr);
 	int32 RenderStatSounds(UWorld* World, FViewport* Viewport, FCanvas* Canvas, int32 X, int32 Y, const FVector* ViewLocation = nullptr, const FRotator* ViewRotation = nullptr);
 #endif // !UE_BUILD_SHIPPING

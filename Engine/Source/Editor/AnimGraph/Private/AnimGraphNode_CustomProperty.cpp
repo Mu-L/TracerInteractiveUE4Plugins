@@ -31,7 +31,7 @@ void UAnimGraphNode_CustomProperty::ValidateAnimNodeDuringCompilation(USkeleton*
 		UClass* TargetClass = GetTargetClass();
 		if(!TargetClass)
 		{
-			MessageLog.Error(TEXT("Sub instance node @@ has no valid instance class to spawn."), this);
+			MessageLog.Error(TEXT("Linked graph node @@ has no valid instance class to spawn."), this);
 		}
 	}
 }
@@ -240,6 +240,22 @@ bool UAnimGraphNode_CustomProperty::HasExternalDependencies(TArray<class UStruct
 
 	bool bSuperResult = Super::HasExternalDependencies(OptionalOutput);
 	return InstanceClassToUse || bSuperResult;
+}
+
+void UAnimGraphNode_CustomProperty::CustomizeDetails(IDetailLayoutBuilder& DetailBuilder)
+{
+	Super::CustomizeDetails(DetailBuilder);
+
+	IDetailCategoryBuilder& CategoryBuilder = DetailBuilder.EditCategory(FName(TEXT("Settings")));
+
+	// Customize InstanceClass
+	{
+		TSharedRef<IPropertyHandle> ClassHandle = DetailBuilder.GetProperty(TEXT("Node.InstanceClass"), GetClass());
+		if (ClassHandle->IsValidHandle())
+		{
+			ClassHandle->SetOnPropertyValueChanged(FSimpleDelegate::CreateUObject(this, &UAnimGraphNode_CustomProperty::OnStructuralPropertyChanged, &DetailBuilder));
+		}
+	}
 }
 
 void UAnimGraphNode_CustomProperty::GetExposableProperties( TArray<UProperty*>& OutExposableProperties) const

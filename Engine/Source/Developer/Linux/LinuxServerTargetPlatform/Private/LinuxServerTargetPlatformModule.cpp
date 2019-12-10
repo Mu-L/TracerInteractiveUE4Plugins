@@ -1,7 +1,7 @@
 // Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
-	LinuxTargetPlatformModule.cpp: Implements the FAndroidTargetPlatformModule class.
+	LinuxTargetPlatformModule.cpp: Implements the FLinuxServerTargetPlatformModule class.
 =============================================================================*/
 
 #include "CoreMinimal.h"
@@ -33,9 +33,9 @@ public:
 
 	virtual ITargetPlatform* GetTargetPlatform( )
 	{
-		if (Singleton == NULL && TLinuxTargetPlatform<FLinuxPlatformProperties<false, false, false> >::IsUsable())
+		if (Singleton == NULL && TLinuxTargetPlatform<FLinuxPlatformProperties<false, false, false, false> >::IsUsable())
 		{
-			Singleton = new TLinuxTargetPlatform<FLinuxPlatformProperties<false, true, false> >();
+			Singleton = new TLinuxTargetPlatform<FLinuxPlatformProperties<false, true, false, false> >();
 		}
 		
 		return Singleton;

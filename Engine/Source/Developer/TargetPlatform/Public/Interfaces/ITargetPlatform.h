@@ -166,14 +166,26 @@ public:
 	/**
 	 * Checks whether the platform's build requirements are met so that we can do things like package for the platform.
 	 *
-	 * @param ProjectPath Path to the project.
 	 * @param bProjectHasCode true if the project has code, and therefore any compilation based SDK requirements should be checked.
+	 * @param Configuration The configuration being built
+	 * @param bRequiresAssetNativization Whether asset nativization is required
 	 * @param OutTutorialPath Let's the platform tell the editor a path to show some information about how to fix any problem.
 	 * @param OutDocumentationPath Let's the platform tell the editor a documentation path.
 	 * @param CustomizedLogMessage Let's the platform return a customized log message instead of the default for the returned status.
 	 * @return A mask of ETargetPlatformReadyStatus flags to indicate missing requirements, or 0 if all requirements are met.
 	 */
-	virtual int32 CheckRequirements(const FString& ProjectPath, bool bProjectHasCode, FString& OutTutorialPath, FString& OutDocumentationPath, FText& CustomizedLogMessage) const = 0;
+	virtual int32 CheckRequirements(bool bProjectHasCode, EBuildConfiguration Configuration, bool bRequiresAssetNativization, FString& OutTutorialPath, FString& OutDocumentationPath, FText& CustomizedLogMessage) const = 0;
+
+	/**
+	 * Checks whether the current project needs a temporary .target.cs file to be packaged as a code project.
+	 *
+	 * @param bProjectHasCode Whether the project has code
+	 * @param Configuration The configuration being built
+	 * @param bRequiresAssetNativization Whether asset nativization is enabled
+	 * @param OutReason On success, includes a description of the reason why a target is required
+	 * @return True if a temporary target is required
+	 */
+	virtual bool RequiresTempTarget(bool bProjectHasCode, EBuildConfiguration Configuration, bool bRequiresAssetNativization, FText& OutReason) const = 0;
 
 	/**
 	 * Returns the information about this platform
@@ -323,10 +335,10 @@ public:
 	/**
 	 * Checks whether this platform supports the specified build target, i.e. Game or Editor.
 	 *
-	 * @param BuildTarget The build target to check.
+	 * @param TargetType The target type to check.
 	 * @return true if the build target is supported, false otherwise.
 	 */
-	virtual bool SupportsBuildTarget( EBuildTargets::Type BuildTarget ) const = 0;
+	virtual bool SupportsBuildTarget( EBuildTargetType TargetType ) const = 0;
 
 	/**
 	 * Checks whether the target platform supports the specified feature.
@@ -335,6 +347,15 @@ public:
 	 * @return true if the feature is supported, false otherwise.
 	 */
 	virtual bool SupportsFeature( ETargetPlatformFeatures Feature ) const = 0;
+
+	/**
+	 * Checks whether the target platform supports the specified value for the specified type of support
+	 *
+	 * @param SupportedType The type of support being queried
+	 * @param RequiredSupportedValue The value of support needed
+	 * @return true if the feature is supported, false otherwise.
+	 */
+	virtual bool SupportsValueForType(FName SupportedType, FName RequiredSupportedValue) const = 0;
 
 	/**
 	 * Gets whether the platform should use forward shading or not.

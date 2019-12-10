@@ -306,23 +306,30 @@ FName FActorFolders::GetFolderName(UWorld& InWorld, FName ParentPath, FName InLe
 	// This is potentially very slow but necessary to find a unique name
 	const auto& ExistingFolders = GetFolderPropertiesForWorld(InWorld);
 
-	// Trim any numeric suffix
-	uint32 SuffixLen = 0;
-	for (; InLeafName.ToString().Right(SuffixLen + 1).IsNumeric(); SuffixLen++) {}
+	const FString LeafNameString = InLeafName.ToString();
 
+	// Find the last non-numeric character
+	int32 LastDigit = LeafNameString.FindLastCharByPredicate([](TCHAR Ch) { return !FChar::IsDigit(Ch); });
+	uint32 SuffixLen = (LeafNameString.Len() - LastDigit) - 1;
+
+	if (LastDigit == INDEX_NONE)
+	{
+		// Name is entirely numeric, eg. "123", so no suffix exists
+		SuffixLen = 0;
+	}
+
+	// Trim any numeric suffix
 	uint32 Suffix = 1;
 	FString LeafNameRoot;
-	bool bHasSuffix = true;
 	if (SuffixLen > 0)
 	{
-		LeafNameRoot = InLeafName.ToString().LeftChop(SuffixLen);
-		FString LeafSuffix = InLeafName.ToString().RightChop(InLeafName.ToString().Len() - SuffixLen);
+		LeafNameRoot = LeafNameString.LeftChop(SuffixLen);
+		FString LeafSuffix = LeafNameString.RightChop(LeafNameString.Len() - SuffixLen);
 		Suffix = LeafSuffix.IsNumeric() ? FCString::Atoi(*LeafSuffix) : 1;
 	}
 	else
 	{
-		LeafNameRoot = InLeafName.ToString();
-		bHasSuffix = false;
+		LeafNameRoot = LeafNameString;
 	}
 
 	// Create a valid base name for this folder
@@ -330,7 +337,7 @@ FName FActorFolders::GetFolderName(UWorld& InWorld, FName ParentPath, FName InLe
 	NumberFormat.SetUseGrouping(false);
 	NumberFormat.SetMinimumIntegralDigits(SuffixLen);
 
-	FText LeafName = FText::Format(LOCTEXT("FolderNamePattern", "{0}{1}"), FText::FromString(LeafNameRoot), bHasSuffix ? FText::AsNumber(Suffix++, &NumberFormat) : FText::GetEmpty());
+	FText LeafName = FText::Format(LOCTEXT("FolderNamePattern", "{0}{1}"), FText::FromString(LeafNameRoot), SuffixLen > 0 ? FText::AsNumber(Suffix++, &NumberFormat) : FText::GetEmpty());
 
 	FString ParentFolderPath = ParentPath.IsNone() ? TEXT("") : ParentPath.ToString();
 	if (!ParentFolderPath.IsEmpty())
@@ -440,17 +447,18 @@ void FActorFolders::DeleteFolder(UWorld& InWorld, FName FolderToDelete)
 
 bool FActorFolders::RenameFolderInWorld(UWorld& World, FName OldPath, FName NewPath)
 {
-	if (OldPath.IsNone() || OldPath == NewPath || PathIsChildOf(NewPath.ToString(), OldPath.ToString()))
+	const FString OldPathString = OldPath.ToString();
+	const FString NewPathString = NewPath.ToString();
+
+	if (OldPath.IsNone() || OldPathString.Equals(NewPathString) || PathIsChildOf(NewPathString, OldPathString))
 	{
 		return false;
 	}
 
 	const FScopedTransaction Transaction(LOCTEXT("UndoAction_RenameFolder", "Rename Folder"));
 
-	const FString OldPathString = OldPath.ToString();
-	const FString NewPathString = NewPath.ToString();
-
 	TSet<FName> RenamedFolders;
+	bool RenamedFolder = false;
 
 	// Move any folders we currently hold - old ones will be deleted later
 	UEditorActorFolders& FoldersInWorld = GetOrCreateFoldersForWorld(World);
@@ -465,7 +473,19 @@ bool FActorFolders::RenameFolderInWorld(UWorld& World, FName OldPath, FName NewP
 		if (OldPath == Path || PathIsChildOf(FolderPath, OldPathString))
 		{
 			const FName NewFolder = OldPathToNewPath(OldPathString, NewPathString, FolderPath);
-			if (!FoldersInWorld.Folders.Contains(NewFolder))
+			
+			// Needs to be done this way otherwise case insensitive comparison is used.
+			bool ContainsFolder = false;
+			for (const auto& FolderPair : FoldersInWorld.Folders)
+			{
+				if (FolderPair.Key.IsEqual(NewFolder, ENameCase::CaseSensitive))
+				{
+					ContainsFolder = true;
+					break;
+				}
+			}
+
+			if (!ContainsFolder)
 			{
 				// Use the existing properties for the folder if we have them
 				if (FActorFolderProps* ExistingProperties = FoldersInWorld.Folders.Find(Path))
@@ -480,26 +500,39 @@ bool FActorFolders::RenameFolderInWorld(UWorld& World, FName OldPath, FName NewP
 				OnFolderMove.Broadcast(World, Path, NewFolder);
 				OnFolderCreate.Broadcast(World, NewFolder);
 			}
-			RenamedFolders.Add(Path);
+
+			// case insensive compare as we don't want to remove the folder if it has the same name
+			if (Path != NewFolder)
+			{
+				RenamedFolders.Add(Path);
+			}
+
+			RenamedFolder = true;
 		}
 	}
 
 	// Now that we have folders created, move any actors that ultimately reside in that folder too
 	for (auto ActorIt = FActorIterator(&World); ActorIt; ++ActorIt)
 	{
-		const FName& OldActorPath = ActorIt->GetFolderPath();
-		
-		AActor* Actor = *ActorIt;
+		// copy, otherwise it returns the new value when set later
+		const FName OldActorPath = ActorIt->GetFolderPath();
 		if (OldActorPath.IsNone())
 		{
 			continue;
 		}
 
-		if (Actor->GetFolderPath() == OldPath || PathIsChildOf(OldActorPath.ToString(), OldPathString))
+		if (OldActorPath == OldPath || PathIsChildOf(OldActorPath.ToString(), OldPathString))
 		{
-			RenamedFolders.Add(OldActorPath);
-
 			ActorIt->SetFolderPath_Recursively(OldPathToNewPath(OldPathString, NewPathString, OldActorPath.ToString()));
+			const FName& NewActorPath = ActorIt->GetFolderPath();
+
+			// case insensive compare as we don't want to remove the folder if it has the same name
+			if (OldActorPath != NewActorPath)
+			{
+				RenamedFolders.Add(OldActorPath);
+			}
+
+			RenamedFolder = true;
 		}
 	}
 
@@ -510,7 +543,7 @@ bool FActorFolders::RenameFolderInWorld(UWorld& World, FName OldPath, FName NewP
 		OnFolderDelete.Broadcast(World, Path);
 	}
 
-	return RenamedFolders.Num() != 0;
+	return RenamedFolder;
 }
 
 bool FActorFolders::AddFolderToWorld(UWorld& InWorld, FName Path)

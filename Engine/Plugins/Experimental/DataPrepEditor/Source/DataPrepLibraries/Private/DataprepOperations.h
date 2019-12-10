@@ -58,8 +58,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = MeshOperation, Meta = (ToolTip = "Array of LOD reduction settings") )
 	TArray<FDataprepSetLODsReductionSettings> ReductionSettings;
 
-	// #ueent_todo: Limit size of array to MAX_STATIC_MESH_LODS
-
 	//~ Begin UDataprepOperation Interface
 public:
 	virtual FText GetCategory_Implementation() const override
@@ -163,35 +161,7 @@ protected:
 	//~ End UDataprepOperation Interface
 };
 
-UCLASS(Experimental, Category = MeshOperation, Meta = (DisplayName="Enable Lightmap UVs", ToolTip = "For each static mesh to process, enable or disable the generation of lightmap UVs") )
-class UDataprepSetGenerateLightmapUVsOperation : public UDataprepOperation
-{
-	GENERATED_BODY()
-
-	UDataprepSetGenerateLightmapUVsOperation()
-		: bGenerateLightmapUVs(true)
-	{
-	}
-
-public:
-	// The value to set for the generate lightmap uvs flag on each static mesh
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = MeshOperation, meta = (ToolTip = "Maximum number of convex pieces that will be created"))
-	bool bGenerateLightmapUVs;
-
-protected:
-	//~ Begin UDataprepOperation Interface
-public:
-	virtual FText GetCategory_Implementation() const override
-	{
-		return FDataprepOperationCategories::MeshOperation;
-	}
-
-protected:
-	virtual void OnExecution_Implementation(const FDataprepContext& InContext) override;
-	//~ End UDataprepOperation Interface
-};
-
-UCLASS(Experimental, Category = ActorOperation, Meta = (DisplayName="Set Mobility", ToolTip = "For each mesh actor to process, update its mobilty with the selected value") )
+UCLASS(Experimental, Category = ActorOperation, Meta = (DisplayName="Set Mobility", ToolTip = "For each actor to process, update its mobilty with the selected value") )
 class UDataprepSetMobilityOperation : public UDataprepOperation
 {
 	GENERATED_BODY()
@@ -203,14 +173,14 @@ class UDataprepSetMobilityOperation : public UDataprepOperation
 
 public:
 	// Type of mobility to set on mesh actors
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = MeshOperation, meta = (ToolTip = "Type of mobility to set on mesh actors"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = ActorOperation, meta = (ToolTip = "Type of mobility to set on actors"))
 	TEnumAsByte<EComponentMobility::Type> MobilityType;
 
 	//~ Begin UDataprepOperation Interface
 public:
 	virtual FText GetCategory_Implementation() const override
 	{
-		return FDataprepOperationCategories::MeshOperation;
+		return FDataprepOperationCategories::ActorOperation;
 	}
 
 protected:
@@ -224,14 +194,14 @@ class UDataprepSetMaterialOperation : public UDataprepOperation
 	GENERATED_BODY()
 
 	UDataprepSetMaterialOperation()
-		: MaterialSubstitute(nullptr)
+		: Material(nullptr)
 	{
 	}
 
 public:
 	// Material to use as a substitute
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = MeshOperation, meta = (ToolTip = "Material to use as a substitute"))
-	UMaterialInterface* MaterialSubstitute;
+	UMaterialInterface* Material;
 
 	//~ Begin UDataprepOperation Interface
 public:
@@ -309,23 +279,6 @@ protected:
 	//~ End UDataprepOperation Interface
 };
 
-UCLASS(Experimental, Category = ObjectOperation, Meta = (DisplayName="Remove Objects", ToolTip = "Remove any asset or actor to process") )
-class UDataprepRemoveObjectsOperation : public UDataprepOperation
-{
-	GENERATED_BODY()
-
-		//~ Begin UDataprepOperation Interface
-public:
-	virtual FText GetCategory_Implementation() const override
-	{
-		return FDataprepOperationCategories::ObjectOperation;
-	}
-
-protected:
-	virtual void OnExecution_Implementation(const FDataprepContext& InContext) override;
-	//~ End UDataprepOperation Interface
-};
-
 // Customization of the details of the Datasmith Scene for the data prep editor.
 class FDataprepSetLOGGroupDetails : public IDetailCustomization
 {
@@ -349,4 +302,32 @@ private:
 	TArray<FName>					LODGroupNames;
 
 	TSharedPtr<IPropertyHandle> LodGroupPropertyHandle;
+};
+
+
+UCLASS(Experimental, Category = ActorOperation, Meta = (DisplayName="Set Mesh", ToolTip = "On each actor to process, replace any meshes used with the specified one") )
+class UDataprepSetMeshOperation : public UDataprepOperation
+{
+	GENERATED_BODY()
+
+	UDataprepSetMeshOperation()
+	: StaticMesh(nullptr)
+	{
+	}
+
+public:
+	// Mesh to use as a substitute
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = ActorOperation, meta = (ToolTip = "Mesh to use as a substitute"))
+	UStaticMesh* StaticMesh;
+
+	//~ Begin UDataprepOperation Interface
+public:
+	virtual FText GetCategory_Implementation() const override
+	{
+		return FDataprepOperationCategories::ActorOperation;
+	}
+
+protected:
+	virtual void OnExecution_Implementation(const FDataprepContext& InContext) override;
+	//~ End UDataprepOperation Interface
 };

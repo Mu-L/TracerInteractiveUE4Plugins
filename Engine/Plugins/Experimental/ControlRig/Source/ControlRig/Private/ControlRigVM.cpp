@@ -26,8 +26,10 @@ namespace ControlRigVM
 		switch (InOperator.OpCode)
 		{
 		case EControlRigOpCode::Copy:
+		{
 			PropertyPathHelpers::CopyPropertyValueFast(OuterObject, InOperator.CachedPropertyPath2, InOperator.CachedPropertyPath1);
 			return true;
+		}
 		case EControlRigOpCode::Exec:
 		{
 			FRigUnit* RigUnit = static_cast<FRigUnit*>(InOperator.CachedPropertyPath1.GetCachedAddress());

@@ -3,6 +3,7 @@
 #include "Tools/EditToolDragOperations.h"
 #include "ISequencer.h"
 #include "MovieSceneTrack.h"
+#include "MovieSceneSequence.h"
 #include "Sequencer.h"
 #include "SequencerSettings.h"
 #include "SequencerCommonHelpers.h"
@@ -563,10 +564,28 @@ FMoveKeysAndSections::FMoveKeysAndSections(FSequencer& InSequencer, const TSet<F
 	// We support partially infinite (infinite on one side) sections however.
 	for (const TWeakObjectPtr<UMovieSceneSection>& WeakSection : InSelectedSections)
 	{
-		const UMovieSceneSection* Section = WeakSection.Get();
-		if (Section->HasStartFrame() || Section->HasEndFrame())
+		const UMovieSceneSection* SelectedSection = WeakSection.Get();
+		if (SelectedSection->HasStartFrame() || SelectedSection->HasEndFrame())
 		{
-			Sections.Add(WeakSection);
+			Sections.AddUnique(WeakSection);
+
+			UMovieScene* MovieScene = InSequencer.GetFocusedMovieSceneSequence()->GetMovieScene();
+			if (MovieScene)
+			{
+				// If the section is in a group, we also want to add the sections it is grouped with
+				const FMovieSceneSectionGroup* SectionGroup = MovieScene->GetSectionGroup(*SelectedSection);
+				if (SectionGroup)
+				{
+					for (TWeakObjectPtr<UMovieSceneSection> WeakGroupedSection : *SectionGroup)
+					{
+						// Verify sections are still valid, and are not infinite.
+						if (WeakGroupedSection.IsValid() && (WeakGroupedSection->HasStartFrame() || WeakGroupedSection->HasEndFrame()))
+						{
+							Sections.AddUnique(WeakGroupedSection);
+						}
+					}
+				}
+			}
 		}
 	}
 }
@@ -1058,9 +1077,6 @@ bool FMoveKeysAndSections::HandleSectionMovement(FFrameTime MouseTime, FVector2D
 				{
 					TargetRowIndex = -1;
 				}
-
-				// Ensure the track path is expanded
-				TrackNode->SetExpansionState(true);
 			}
 			else if (TrackNode->GetSubTrackMode() == FSequencerTrackNode::ESubTrackMode::SubTrack)
 			{
@@ -1074,7 +1090,20 @@ bool FMoveKeysAndSections::HandleSectionMovement(FFrameTime MouseTime, FVector2D
 						float VirtualSectionBottom = 0.f;
 						ChildNode->TraverseVisible_ParentFirst([&](FSequencerDisplayNode& Node) { VirtualSectionBottom = Node.GetVirtualBottom(); return true; }, true);
 
-						if (VirtualMousePos.Y < VirtualSectionBottom)
+						if (ChildIndex == 0 && (VirtualMousePos.Y <= VirtualSectionTop || LocalMousePos.Y <= 0))
+						{
+							TargetRowIndex = 0;
+							for (TSharedRef<ISequencerSection> TrackSection : TrackNode->GetSections())
+							{
+								if (!Sections.Contains(TrackSection->GetSectionObject()))
+								{
+									TargetRowIndex = -1;
+									break;
+								}
+							}
+							break;
+						}
+						else if (VirtualMousePos.Y < VirtualSectionBottom)
 						{
 							TargetRowIndex = ChildIndex;
 							break;
@@ -1084,18 +1113,52 @@ bool FMoveKeysAndSections::HandleSectionMovement(FFrameTime MouseTime, FVector2D
 							TargetRowIndex = ChildIndex + 1;
 						}
 					}
+				
+					// Track if we're expanding a parent track so we can unexpand it if we stop targeting it
+					if (TargetRowIndex > 0)
+					{
+						if (!ParentTrack->IsExpanded() && ParentTrack != ExpandedParentTrack)
+						{
+							if (ExpandedParentTrack.IsValid())
+							{
+								ExpandedParentTrack->SetExpansionState(false);
+								ExpandedParentTrack = nullptr;
+							}
+							ExpandedParentTrack = ParentTrack;
+							ParentTrack->SetExpansionState(true);
+						}
+					}
+					else if (ExpandedParentTrack.IsValid())
+					{
+						ExpandedParentTrack->SetExpansionState(false);
+						ExpandedParentTrack = nullptr;
+					}				
 				}
 			}
 		}
 
 		bool bDeltaX = DesiredDeltaX != 0;
 		bool bDeltaY = TargetRowIndex != Section->GetRowIndex();
+		const int32 TargetRowDelta = TargetRowIndex - Section->GetRowIndex();
+
+		// Prevent flickering by only moving sections if the user has actually made an effort to do so
+		if (bDeltaY && PrevMousePosY.IsSet())
+		{
+			// Check mouse has been moved in the direction of intended move
+			if ((TargetRowDelta < 0 && LocalMousePos.Y - PrevMousePosY.GetValue() > 1.0f) || (TargetRowDelta > 0 && LocalMousePos.Y - PrevMousePosY.GetValue() < 1.0f))
+			{
+				// Mouse was not moved in the direction the section wants to swap
+				// Assume offset is due to UI relayout and block moving the section
+				bDeltaY = false;
+			}
+		}
 
 		// Horizontal movement
 		if (bDeltaX)
 		{
 			Section->MoveSection(MaxDeltaX.Get(DesiredDeltaX));
 		}
+
 
 		// Vertical movement
 		if (bDeltaY && !bSectionsAreOnDifferentRows &&
@@ -1145,6 +1208,11 @@ bool FMoveKeysAndSections::HandleSectionMovement(FFrameTime MouseTime, FVector2D
 				bRowIndexChanged = true;
 			}
 		}
+	}
+
+	if (bRowIndexChanged)
+	{
+		PrevMousePosY = LocalMousePos.Y;
 	}
 
 	return bRowIndexChanged;

@@ -11,6 +11,8 @@
 #include "IStatsViewer.h"
 #include "IStatsPage.h"
 
+class FStatsPageManager;
+
 /**
  * Stats Viewer widget
  */
@@ -19,7 +21,7 @@ class SStatsViewer : public IStatsViewer
 public:
 
 	SLATE_BEGIN_ARGS( SStatsViewer ){}
-
+	SLATE_ARGUMENT(TSharedPtr< FStatsPageManager >, StatsPageManager)
 	SLATE_END_ARGS()
 
 	/**
@@ -129,6 +131,9 @@ private:
 	/** We just clicked the export button */
 	FReply OnExportClicked();
 
+	/** Get a valid stats page manager */
+	FStatsPageManager& GetStatsPageManager() const;
+
 private:
 
 	/** Flag to refresh the table next tick */
@@ -172,5 +177,8 @@ private:
 
 	/** Container for custom filters supplied by stats pages */
 	TSharedPtr< SBorder > CustomFilter;
+
+	/** The page manager that is managing our pages. Can be invalid, in which case the global one will be used */
+	TSharedPtr < FStatsPageManager > StatsPageManagerPtr;
 };
 

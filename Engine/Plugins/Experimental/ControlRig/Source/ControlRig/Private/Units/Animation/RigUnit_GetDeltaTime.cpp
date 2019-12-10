@@ -3,8 +3,9 @@
 #include "Units/Animation/RigUnit_GetDeltaTime.h"
 #include "Units/RigUnitContext.h"
 
-void FRigUnit_GetDeltaTime::Execute(const FRigUnitContext& Context)
+FRigUnit_GetDeltaTime_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result = Context.DeltaTime;
 }
 

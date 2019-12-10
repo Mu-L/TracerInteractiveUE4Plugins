@@ -13,7 +13,7 @@ public class ChaosCloth : ModuleRules
             new string[] {
                 "Core",
                 "CoreUObject",
-                "ClothingSystemRuntime",
+                "ClothingSystemRuntimeCommon",
                 "ClothingSystemRuntimeInterface",
                 "Engine",
                 "Chaos"

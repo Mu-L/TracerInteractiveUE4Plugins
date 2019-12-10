@@ -58,8 +58,9 @@ public:
 	using FOnGenerateRow            = typename TSlateDelegates< ItemType >::FOnGenerateRow;
 	using FOnItemScrolledIntoView   = typename TSlateDelegates< ItemType >::FOnItemScrolledIntoView;
 	using FOnSelectionChanged       = typename TSlateDelegates< NullableItemType >::FOnSelectionChanged;
-	using FOnMouseButtonClick       = typename TSlateDelegates< ItemType >::FOnMouseButtonClick ;
-	using FOnMouseButtonDoubleClick = typename TSlateDelegates< ItemType >::FOnMouseButtonDoubleClick ;
+	using FIsSelectableOrNavigable	= typename TSlateDelegates< ItemType >::FIsSelectableOrNavigable;
+	using FOnMouseButtonClick       = typename TSlateDelegates< ItemType >::FOnMouseButtonClick;
+	using FOnMouseButtonDoubleClick = typename TSlateDelegates< ItemType >::FOnMouseButtonDoubleClick;
 
 	typedef typename TSlateDelegates< ItemType >::FOnItemToString_Debug FOnItemToString_Debug;
 
@@ -78,9 +79,12 @@ public:
 		, _OnMouseButtonClick()
 		, _OnMouseButtonDoubleClick()
 		, _OnSelectionChanged()
+		, _OnIsSelectableOrNavigable()
 		, _SelectionMode(ESelectionMode::Multi)
 		, _ClearSelectionOnClick(true)
 		, _ExternalScrollbar()
+		, _Orientation(Orient_Vertical)
+		, _EnableAnimatedScrolling(false)
 		, _ScrollbarDragFocusCause(EFocusCause::Mouse)
 		, _AllowOverscroll(EAllowOverscroll::Yes)
 		, _ConsumeMouseWheel(EConsumeMouseWheel::WhenScrollingPossible)
@@ -117,6 +121,8 @@ public:
 
 		SLATE_EVENT( FOnSelectionChanged, OnSelectionChanged )
 
+		SLATE_EVENT( FIsSelectableOrNavigable, OnIsSelectableOrNavigable)
+
 		SLATE_ATTRIBUTE( ESelectionMode::Type, SelectionMode )
 
 		SLATE_ARGUMENT( TSharedPtr<SHeaderRow>, HeaderRow )
@@ -124,6 +130,12 @@ public:
 		SLATE_ARGUMENT ( bool, ClearSelectionOnClick )
 
 		SLATE_ARGUMENT( TSharedPtr<SScrollBar>, ExternalScrollbar )
+
+		SLATE_ARGUMENT( EOrientation, Orientation )
+
+		SLATE_ARGUMENT( bool, EnableAnimatedScrolling)
+
+		SLATE_ARGUMENT( TOptional<double>, FixedLineScrollOffset )
 
 		SLATE_ATTRIBUTE( EVisibility, ScrollbarVisibility)
 		
@@ -169,6 +181,7 @@ public:
 		this->OnClick = InArgs._OnMouseButtonClick;
 		this->OnDoubleClick = InArgs._OnMouseButtonDoubleClick;
 		this->OnSelectionChanged = InArgs._OnSelectionChanged;
+		this->OnIsSelectableOrNavigable = InArgs._OnIsSelectableOrNavigable;
 		this->SelectionMode = InArgs._SelectionMode;
 
 		this->bClearSelectionOnClick = InArgs._ClearSelectionOnClick;
@@ -183,6 +196,9 @@ public:
 		this->IsFocusable = InArgs._IsFocusable;
 
 		this->bReturnFocusToSelection = InArgs._ReturnFocusToSelection;
+
+		this->bEnableAnimatedScrolling = InArgs._EnableAnimatedScrolling;
+		this->FixedLineScrollOffset = InArgs._FixedLineScrollOffset;
 
 		this->OnItemToString_Debug =
 			InArgs._OnItemToString_Debug.IsBound()
@@ -218,7 +234,7 @@ public:
 		else
 		{
 			// Make the TableView
-			ConstructChildren( 0, InArgs._ItemHeight, EListItemAlignment::LeftAligned, InArgs._HeaderRow, InArgs._ExternalScrollbar, InArgs._OnListViewScrolled );
+			ConstructChildren( 0, InArgs._ItemHeight, EListItemAlignment::LeftAligned, InArgs._HeaderRow, InArgs._ExternalScrollbar, InArgs._Orientation, InArgs._OnListViewScrolled );
 			if(ScrollBar.IsValid())
 			{
 				ScrollBar->SetDragFocusCause(InArgs._ScrollbarDragFocusCause);
@@ -281,7 +297,7 @@ public:
 				}
 
 				int32 NumItemsInAPage = GetNumLiveWidgets();
-				int32 Remainder = NumItemsInAPage % GetNumItemsWide();
+				int32 Remainder = NumItemsInAPage % GetNumItemsPerLine();
 				NumItemsInAPage -= Remainder;
 
 				if ( SelectionIndex >= NumItemsInAPage )
@@ -305,7 +321,7 @@ public:
 				}
 
 				int32 NumItemsInAPage = GetNumLiveWidgets();
-				int32 Remainder = NumItemsInAPage % GetNumItemsWide();
+				int32 Remainder = NumItemsInAPage % GetNumItemsPerLine();
 				NumItemsInAPage -= Remainder;
 
 				if ( SelectionIndex < ItemsSourceRef.Num() - NumItemsInAPage )
@@ -396,23 +412,42 @@ public:
 		{
 			const TArray<ItemType>& ItemsSourceRef = (*this->ItemsSource);
 
-			const int32 NumItemsWide = GetNumItemsWide();
+			const int32 NumItemsPerLine = GetNumItemsPerLine();
 			const int32 CurSelectionIndex = (!TListTypeTraits<ItemType>::IsPtrValid(SelectorItem)) ? 0 : ItemsSourceRef.Find(TListTypeTraits<ItemType>::NullableItemTypeConvertToItemType(SelectorItem));
 			int32 AttemptSelectIndex = -1;
 
 			const EUINavigation NavType = InNavigationEvent.GetNavigationType();
-			switch (NavType)
+			if ((Orientation == Orient_Vertical && NavType == EUINavigation::Up) ||
+				(Orientation == Orient_Horizontal && NavType == EUINavigation::Left))
 			{
-			case EUINavigation::Up:
-				AttemptSelectIndex = CurSelectionIndex - NumItemsWide;
-				break;
+				// Nav backward by a line
+				AttemptSelectIndex = CurSelectionIndex - NumItemsPerLine;
+			}
+			else if ((Orientation == Orient_Vertical && NavType == EUINavigation::Down) ||
+					 (Orientation == Orient_Horizontal && NavType == EUINavigation::Right))
+			{
+				AttemptSelectIndex = CurSelectionIndex + NumItemsPerLine;
 
-			case EUINavigation::Down:
-				AttemptSelectIndex = CurSelectionIndex + NumItemsWide;
-				break;
+				// The list might be jagged so attempt to determine if there's a partially filled row we can move to
+				if (!ItemsSourceRef.IsValidIndex(AttemptSelectIndex))
+				{
+					const int32 NumItems = ItemsSourceRef.Num();
+					if (NumItems > 0)
+					{
+						// NumItemsWide should never be 0, ensuring for sanity
+						ensure(NumItemsPerLine > 0);
 
-			default:
-				break;
+						// calculate total number of rows and row of current index (1 index)
+						const int32 NumLines = FMath::CeilToInt(NumItems / (float)NumItemsPerLine);
+						const int32 CurLine = FMath::CeilToInt((CurSelectionIndex + 1) / (float)NumItemsPerLine);
+
+						// if not on final row, assume a jagged list and select the final item
+						if (CurLine < NumLines)
+						{
+							AttemptSelectIndex = NumItems - 1;
+						}
+					}
+				}
 			}
 
 			// If it's valid we'll scroll it into view and return an explicit widget in the FNavigationReply
@@ -961,124 +996,120 @@ public:
 		this->ClearWidgets();
 
 		// Ensure that we always begin and clean up a generation pass.
-		
 		FGenerationPassGuard GenerationPassGuard(WidgetGenerator);
 
-		const TArray<ItemType>* SourceItems = ItemsSource;
-		if ( SourceItems != nullptr && SourceItems->Num() > 0 )
+		if (ItemsSource && ItemsSource->Num() > 0)
 		{
 			// Items in view, including fractional items
 			float ItemsInView = 0.0f;
 
-			// Height of generated widgets that is landing in the bounds of the view.
-			float ViewHeightUsedSoFar = 0.0f;
+			// Total length of widgets generated so far (height for vertical lists, width for horizontal)
+			float LengthGeneratedSoFar = 0.0f;
 
-			// Total height of widgets generated so far.
-			float HeightGeneratedSoFar = 0.0f;
+			// Length of generated widgets that in the bounds of the view.
+			float ViewLengthUsedSoFar = 0.0f;
 
 			// Index of the item at which we start generating based on how far scrolled down we are
 			// Note that we must generate at LEAST one item.
-			int32 StartIndex = FMath::Clamp( FMath::FloorToInt(ScrollOffset), 0, SourceItems->Num()-1 );
+			int32 StartIndex = FMath::Clamp( FMath::FloorToInt(CurrentScrollOffset), 0, ItemsSource->Num() - 1 );
 
-			// Height of the first item that is generated. This item is at the location where the user requested we scroll
-			float FirstItemHeight = 0.0f;
+			// Length of the first item that is generated. This item is at the location where the user requested we scroll
+			float FirstItemLength = 0.0f;
 
 			// Generate widgets assuming scenario a.
-			bool bGeneratedEnoughForSmoothScrolling = false;
+			bool bHasFilledAvailableArea = false;
 			bool bAtEndOfList = false;
 
 			const float LayoutScaleMultiplier = MyGeometry.GetAccumulatedLayoutTransform().GetScale();
-			for( int32 ItemIndex = StartIndex; !bGeneratedEnoughForSmoothScrolling && ItemIndex < SourceItems->Num(); ++ItemIndex )
+			FTableViewDimensions MyDimensions(this->Orientation, MyGeometry.GetLocalSize());
+			
+			for( int32 ItemIndex = StartIndex; !bHasFilledAvailableArea && ItemIndex < ItemsSource->Num(); ++ItemIndex )
 			{
-				const ItemType& CurItem = (*SourceItems)[ItemIndex];
+				const ItemType& CurItem = (*ItemsSource)[ItemIndex];
 
-				// We do not generatie a new widget if the CurItem is an invalid object.
 				if (!TListTypeTraits<ItemType>::IsPtrValid(CurItem))
 				{
+					// Don't bother generating widgets for invalid items
 					continue;
 				}
 
-				const float ItemHeight = GenerateWidgetForItem(CurItem, ItemIndex, StartIndex, LayoutScaleMultiplier);
+				const float ItemLength = GenerateWidgetForItem(CurItem, ItemIndex, StartIndex, LayoutScaleMultiplier);
 
 				const bool bIsFirstItem = ItemIndex == StartIndex;
 
 				if (bIsFirstItem)
 				{
-					FirstItemHeight = ItemHeight;
+					FirstItemLength = ItemLength;
 				}
 
 				// Track the number of items in the view, including fractions.
 				if (bIsFirstItem)
 				{
 					// The first item may not be fully visible (but cannot exceed 1)
-					// FirstItemFractionScrolledIntoView is the fraction of the item that is visible after taking into account anything that may be scrolled off the top of the list view
-					// FirstItemHeightScrolledIntoView is the height of the item, ignoring anything that is scrolled off the top of the list view
-					// FirstItemVisibleFraction is either: The visible item height as a fraction of the available list view height (if the item size is larger than the available size, otherwise this will be >1), or just FirstItemFractionScrolledIntoView (which can never be >1)
-					const float FirstItemFractionScrolledIntoView = 1.0f - FMath::Max(FMath::Fractional(ScrollOffset), 0.0f);
-					const float FirstItemHeightScrolledIntoView = ItemHeight * FirstItemFractionScrolledIntoView;
-					const float FirstItemVisibleFraction = FMath::Min(MyGeometry.GetLocalSize().Y / FirstItemHeightScrolledIntoView, FirstItemFractionScrolledIntoView);
+					// FirstItemFractionScrolledIntoView is the fraction of the item that is visible after taking into account anything that may be scrolled off the top/left of the list view
+					const float FirstItemFractionScrolledIntoView = 1.0f - FMath::Max(FMath::Fractional(CurrentScrollOffset), 0.0f);
+					
+					// FirstItemLengthScrolledIntoView is the length of the item, ignoring anything that is scrolled off the top/left of the list view
+					const float FirstItemLengthScrolledIntoView = ItemLength * FirstItemFractionScrolledIntoView;
+					
+					// FirstItemVisibleFraction is either: The visible item length as a fraction of the available list view length (if the item size is larger than the available size, otherwise this will be >1), or just FirstItemFractionScrolledIntoView (which can never be >1)
+					const float FirstItemVisibleFraction = FMath::Min(MyDimensions.ScrollAxis / FirstItemLengthScrolledIntoView, FirstItemFractionScrolledIntoView);
+					
 					ItemsInView += FirstItemVisibleFraction;
 				}
-				else if (ViewHeightUsedSoFar + ItemHeight > MyGeometry.GetLocalSize().Y)
+				else if (ViewLengthUsedSoFar + ItemLength > MyDimensions.ScrollAxis)
 				{
 					// The last item may not be fully visible either
-					ItemsInView += (MyGeometry.GetLocalSize().Y - ViewHeightUsedSoFar) / ItemHeight;
+					ItemsInView += (MyDimensions.ScrollAxis - ViewLengthUsedSoFar) / ItemLength;
 				}
 				else
 				{
 					ItemsInView += 1;
 				}
 
-				HeightGeneratedSoFar += ItemHeight;
+				LengthGeneratedSoFar += ItemLength;
 
-				ViewHeightUsedSoFar += (bIsFirstItem)
-					? ItemHeight * ItemsInView	// For the first item, ItemsInView <= 1.0f
-					: ItemHeight;
+				ViewLengthUsedSoFar += (bIsFirstItem)
+					? ItemLength * ItemsInView	// For the first item, ItemsInView <= 1.0f
+					: ItemLength;
 
-				if (ItemIndex >= SourceItems->Num()-1)
-				{
-					bAtEndOfList = true;
-				}
+				bAtEndOfList = ItemIndex >= ItemsSource->Num() - 1;
 
-				if (ViewHeightUsedSoFar > MyGeometry.GetLocalSize().Y )
-				{
-					bGeneratedEnoughForSmoothScrolling = true;
-				}
+				// Note: To account for accrued error from floating point truncation and addition in our sum of dimensions used, 
+				//	we pad the allotted axis just a little to be sure we have filled the available space.
+				const float FloatPrecisionOffset = 0.001f;
+				bHasFilledAvailableArea = ViewLengthUsedSoFar >= MyDimensions.ScrollAxis + FloatPrecisionOffset;
 			}
 
 			// Handle scenario b.
-			// We may have stopped because we got to the end of the items.
-			// But we may still have space to fill!
-			if (bAtEndOfList && ViewHeightUsedSoFar < MyGeometry.GetLocalSize().Y)
+			// We may have stopped because we got to the end of the items, but we may still have space to fill!
+			if (bAtEndOfList && !bHasFilledAvailableArea)
 			{
-				double NewScrollOffsetForBackfill = static_cast<double>(StartIndex) + (HeightGeneratedSoFar - MyGeometry.GetLocalSize().Y) / FirstItemHeight;
+				double NewScrollOffsetForBackfill = static_cast<double>(StartIndex) + (LengthGeneratedSoFar - MyDimensions.ScrollAxis) / FirstItemLength;
 
-				for( int32 ItemIndex = StartIndex-1; HeightGeneratedSoFar < MyGeometry.GetLocalSize().Y && ItemIndex >= 0; --ItemIndex )
+				for (int32 ItemIndex = StartIndex - 1; LengthGeneratedSoFar < MyDimensions.ScrollAxis && ItemIndex >= 0; --ItemIndex)
 				{
-					const ItemType& CurItem = (*SourceItems)[ItemIndex];
-					// When the item is not valid, we do not generate a widget for it.
-					if (!TListTypeTraits<ItemType>::IsPtrValid(CurItem))
+					const ItemType& CurItem = (*ItemsSource)[ItemIndex];
+					if (TListTypeTraits<ItemType>::IsPtrValid(CurItem))
 					{
-						continue;
+						const float ItemLength = GenerateWidgetForItem(CurItem, ItemIndex, StartIndex, LayoutScaleMultiplier);
+
+						if (LengthGeneratedSoFar + ItemLength > MyDimensions.ScrollAxis && ItemLength > 0.f)
+						{
+							// Generated the item that puts us over the top.
+							// Count the fraction of this item that will stick out beyond the list
+							NewScrollOffsetForBackfill = static_cast<double>(ItemIndex) + (LengthGeneratedSoFar + ItemLength - MyDimensions.ScrollAxis) / ItemLength;
+						}
+
+						// The widget used up some of the available vertical space.
+						LengthGeneratedSoFar += ItemLength;
 					}
-
-					const float ItemHeight = GenerateWidgetForItem(CurItem, ItemIndex, StartIndex, LayoutScaleMultiplier);
-
-					if (HeightGeneratedSoFar + ItemHeight > MyGeometry.GetLocalSize().Y && ItemHeight > 0.f)
-					{
-						// Generated the item that puts us over the top.
-						// Count the fraction of this item that will stick out above the list
-						NewScrollOffsetForBackfill = static_cast<double>(ItemIndex) + (HeightGeneratedSoFar + ItemHeight - MyGeometry.GetLocalSize().Y) / ItemHeight;
-					}
-
-					// The widget used up some of the available vertical space.
-					HeightGeneratedSoFar += ItemHeight;
 				}
 
-				return FReGenerateResults(NewScrollOffsetForBackfill, HeightGeneratedSoFar, ItemsSource->Num() - NewScrollOffsetForBackfill, bAtEndOfList);
+				return FReGenerateResults(NewScrollOffsetForBackfill, LengthGeneratedSoFar, ItemsSource->Num() - NewScrollOffsetForBackfill, true);
 			}
 
-			return FReGenerateResults(ScrollOffset, HeightGeneratedSoFar, ItemsInView, bAtEndOfList);
+			return FReGenerateResults(CurrentScrollOffset, LengthGeneratedSoFar, ItemsInView, false);
 		}
 
 		return FReGenerateResults(0.0f, 0.0f, 0.0f, false);
@@ -1105,11 +1136,8 @@ public:
 
 		// We rely on the widgets desired size in order to determine how many will fit on screen.
 		const TSharedRef<SWidget> NewlyGeneratedWidget = WidgetForItem->AsWidget();
+		NewlyGeneratedWidget->InvalidatePrepass();
 		NewlyGeneratedWidget->SlatePrepass(LayoutScaleMultiplier);
-
-		const bool IsFirstWidgetOnScreen = (ItemIndex == StartIndex);
-		const bool IsVisible = NewlyGeneratedWidget->GetVisibility().IsVisible();
-		const float ItemHeight = IsVisible ? NewlyGeneratedWidget->GetDesiredSize().Y : 0;
 
 		// We have a widget for this item; add it to the panel so that it is part of the UI.
 		if (ItemIndex >= StartIndex)
@@ -1123,7 +1151,9 @@ public:
 			this->InsertWidget( WidgetForItem.ToSharedRef() );
 		}
 
-		return ItemHeight;
+		const bool bIsVisible = NewlyGeneratedWidget->GetVisibility().IsVisible();
+		FTableViewDimensions GeneratedWidgetDimensions(this->Orientation, bIsVisible ? NewlyGeneratedWidget->GetDesiredSize() : FVector2D::ZeroVector);
+		return GeneratedWidgetDimensions.ScrollAxis;
 	}
 
 	/** @return how many items there are in the TArray being observed */
@@ -1219,7 +1249,7 @@ public:
 			return;
 		}
 
-		Private_SetItemSelection( InItem, bSelected, SelectInfo != ESelectInfo::Direct);
+		Private_SetItemSelection(InItem, bSelected, SelectInfo != ESelectInfo::Direct);
 		Private_SignalSelectionChanged(SelectInfo);
 	}
 
@@ -1373,9 +1403,18 @@ public:
 	 */
 	void RequestNavigateToItem(ItemType Item, const uint32 UserIndex = 0)
 	{
+		Item = Private_FindNextSelectableOrNavigable(Item);
+		Private_RequestNavigateToItem(Item, UserIndex);
+	}
+
+private:
+	void Private_RequestNavigateToItem(ItemType Item, const uint32 UserIndex)
+	{
 		bNavigateOnScrollIntoView = true;
 		RequestScrollIntoView(Item, UserIndex);
 	}
+
+public:
 
 	/**
 	 * Cancels a previous request to scroll an item into view (cancels navigation requests as well).
@@ -1393,11 +1432,20 @@ public:
 	 * @param SoleSelectedItem   Sole item that should be selected.
 	 * @param SelectInfo Provides context on how the selection changed
 	 */
-	void SetSelection( ItemType SoleSelectedItem, ESelectInfo::Type SelectInfo = ESelectInfo::Direct  )
+	void SetSelection(ItemType SoleSelectedItem, ESelectInfo::Type SelectInfo = ESelectInfo::Direct)
+	{
+		SoleSelectedItem = Private_FindNextSelectableOrNavigable(SoleSelectedItem);
+		Private_SetSelection(SoleSelectedItem, SelectInfo);
+	}
+
+private:
+	void Private_SetSelection(ItemType SoleSelectedItem, ESelectInfo::Type SelectInfo)
 	{
 		SelectedItems.Empty();
 		SetItemSelection( SoleSelectedItem, true, SelectInfo );
 	}
+
+public:
 
 	/** 
 	 * Set the current selection mode of the list.
@@ -1459,11 +1507,11 @@ public:
 	* Will determine the max row size for the specified column id
 	*
 	* @param ColumnId  Column Id
-	* @param Orientation  Orientation that is main axis you want to query
+	* @param ColumnOrientation  Orientation that is main axis you want to query
 	*
 	* @return The max size for a column Id.
 	*/
-	FVector2D GetMaxRowSizeForColumn(const FName& ColumnId, EOrientation Orientation)
+	FVector2D GetMaxRowSizeForColumn(const FName& ColumnId, EOrientation ColumnOrientation)
 	{
 		FVector2D MaxSize = FVector2D::ZeroVector;
 
@@ -1473,7 +1521,7 @@ public:
 			FVector2D NewMaxSize = TableRow->GetRowSizeForColumn(ColumnId);
 
 			// We'll return the full size, but we only take into consideration the asked axis for the calculation of the size
-			if (NewMaxSize.Component(Orientation) > MaxSize.Component(Orientation))
+			if (NewMaxSize.Component(ColumnOrientation) > MaxSize.Component(ColumnOrientation))
 			{
 				MaxSize = NewMaxSize;
 			}
@@ -1496,16 +1544,16 @@ protected:
 	 */
 	virtual EScrollIntoViewResult ScrollIntoView( const FGeometry& ListViewGeometry ) override
 	{
-		if ( TListTypeTraits<ItemType>::IsPtrValid(ItemToScrollIntoView) && ItemsSource != nullptr )
+		if (ItemsSource && TListTypeTraits<ItemType>::IsPtrValid(ItemToScrollIntoView))
 		{
 			const int32 IndexOfItem = ItemsSource->Find( TListTypeTraits<ItemType>::NullableItemTypeConvertToItemType( ItemToScrollIntoView ) );
 			if (IndexOfItem != INDEX_NONE)
 			{
 				double NumLiveWidgets = GetNumLiveWidgets();
-				if (NumLiveWidgets == 0 && IsPendingRefresh())
+				if (NumLiveWidgets == 0. && IsPendingRefresh())
 				{
 					// Use the last number of widgets on screen to estimate if we actually need to scroll.
-					NumLiveWidgets = LastGenerateResults.ExactNumRowsOnScreen;
+					NumLiveWidgets = LastGenerateResults.ExactNumLinesOnScreen;
 
 					// If we still don't have any widgets, we're not in a situation where we can scroll an item into view
 					// (probably as nothing has been generated yet), so we'll defer this again until the next frame
@@ -1517,11 +1565,13 @@ protected:
 
 				EndInertialScrolling();
 				
+				const int32 NumFullEntriesInView = FMath::FloorToInt(CurrentScrollOffset + NumLiveWidgets) - FMath::CeilToInt(CurrentScrollOffset);
+
 				// Only scroll the item into view if it's not already in the visible range
-				// When navigating, we don't want to scroll partially visible existing rows all the way to the center
-				const double MinDisplayedIndex = bNavigateOnScrollIntoView ? ScrollOffset - 1 : ScrollOffset;
-				const double MaxDisplayedIndex = FMath::Max(ScrollOffset + NumLiveWidgets + (bNavigateOnScrollIntoView ? 0 : -1), MinDisplayedIndex);
-				if (IndexOfItem <= MinDisplayedIndex || IndexOfItem > MaxDisplayedIndex)
+				// When navigating, we don't want to scroll partially visible existing rows all the way to the center, so we count partially displayed indices in the displayed range
+				const double MinDisplayedIndex = bNavigateOnScrollIntoView ? FMath::FloorToDouble(CurrentScrollOffset) : FMath::CeilToDouble(CurrentScrollOffset);
+				const double MaxDisplayedIndex = bNavigateOnScrollIntoView ? FMath::CeilToDouble(CurrentScrollOffset + NumFullEntriesInView) : FMath::FloorToDouble(CurrentScrollOffset + NumFullEntriesInView);
+				if (IndexOfItem < MinDisplayedIndex || IndexOfItem > MaxDisplayedIndex)
 				{
 					// Scroll the top of the listview to the item in question
 					double NewScrollOffset = IndexOfItem;
@@ -1539,47 +1589,51 @@ protected:
 				{
 					if (TSharedPtr<ITableRow> TableRow = WidgetFromItem((*ItemsSource)[IndexOfItem]))
 					{
-						// Make sure the existing row for this item is fully in view
-						const FGeometry& RowGeometry = TableRow->AsWidget()->GetCachedGeometry();
-						if (RowGeometry.GetAbsolutePositionAtCoordinates(FVector2D::ZeroVector).Y < ListViewGeometry.GetAbsolutePositionAtCoordinates(FVector2D::ZeroVector).Y)
+						const FGeometry& WidgetGeometry = TableRow->AsWidget()->GetCachedGeometry();
+						const FTableViewDimensions WidgetTopLeft(this->Orientation, WidgetGeometry.GetAbsolutePositionAtCoordinates(FVector2D::ZeroVector));
+						const FTableViewDimensions ListViewTopLeft(this->Orientation, ListViewGeometry.GetAbsolutePositionAtCoordinates(FVector2D::ZeroVector));
+
+						double NewScrollOffset = DesiredScrollOffset;
+						// Make sure the existing entry for this item is fully in view
+						if (WidgetTopLeft.ScrollAxis < ListViewTopLeft.ScrollAxis)
 						{
-							// This row is clipped on the top, so simply set it as the new scroll offset target to bump it down a bit
-							const double MaxScrollOffset = FMath::Max(0.0, static_cast<double>(ItemsSource->Num()) - NumLiveWidgets);
-							double NewScrollOffset = FMath::Clamp<double>(static_cast<double>(IndexOfItem - NavigationScrollOffset), 0.0, MaxScrollOffset);
-							SetScrollOffset(NewScrollOffset);
+							// This entry is clipped at the top/left, so simply set it as the new scroll offset target to bump it down into view
+							NewScrollOffset = static_cast<double>(IndexOfItem - NavigationScrollOffset);
 						}
 						else
 						{
 							const FVector2D BottomRight(1.f, 1.f);
-							const float RowBottomY = RowGeometry.GetAbsolutePositionAtCoordinates(BottomRight).Y;
-							const float PanelBottomY = ListViewGeometry.GetAbsolutePositionAtCoordinates(BottomRight).Y;
-							if (RowBottomY > PanelBottomY)
+							const FTableViewDimensions WidgetBottomRight(this->Orientation, WidgetGeometry.GetAbsolutePositionAtCoordinates(BottomRight));
+							const FTableViewDimensions ListViewBottomRight(this->Orientation, ListViewGeometry.GetAbsolutePositionAtCoordinates(BottomRight));
+							
+							if (WidgetBottomRight.ScrollAxis > ListViewBottomRight.ScrollAxis)
 							{
-								// This row is clipped on the bottom, so we need to determine the exact item offset required to get the bottom of this entry into view
-								// To do so, we need to push the current offset down by the clipped amount translated into number of rows
-								float DistanceRemaining = RowBottomY - PanelBottomY;
+								// This entry is clipped at the end, so we need to determine the exact item offset required to get it fully into view
+								// To do so, we need to push the current offset down by the clipped amount translated into number of items
+								float DistanceRemaining = WidgetBottomRight.ScrollAxis - ListViewBottomRight.ScrollAxis;
 								float AdditionalOffset = 0.f;
 								for (const ItemType& ItemWithWidget : WidgetGenerator.ItemsWithGeneratedWidgets)
 								{
-									const float ExistingRowSizeY = WidgetGenerator.GetWidgetForItem(ItemWithWidget)->AsWidget()->GetCachedGeometry().GetAbsoluteSize().Y;
-									if (ExistingRowSizeY < DistanceRemaining)
+									FTableViewDimensions WidgetAbsoluteDimensions(this->Orientation, WidgetGenerator.GetWidgetForItem(ItemWithWidget)->AsWidget()->GetCachedGeometry().GetAbsoluteSize());
+									if (WidgetAbsoluteDimensions.ScrollAxis < DistanceRemaining)
 									{
-										DistanceRemaining -= ExistingRowSizeY;
+										DistanceRemaining -= WidgetAbsoluteDimensions.ScrollAxis;
 										AdditionalOffset += 1.f;
 									}
 									else
 									{
-										AdditionalOffset += DistanceRemaining / ExistingRowSizeY;
+										AdditionalOffset += DistanceRemaining / WidgetAbsoluteDimensions.ScrollAxis;
 										DistanceRemaining = 0.f;
 										break;
 									}
 								}
 
-								const double MaxScrollOffset = FMath::Max(0.0, static_cast<double>(ItemsSource->Num()) - NumLiveWidgets);
-								double NewScrollOffset = FMath::Clamp<double>(ScrollOffset + AdditionalOffset + NavigationScrollOffset, 0.0, MaxScrollOffset);
-								SetScrollOffset(NewScrollOffset);
+								NewScrollOffset = DesiredScrollOffset + AdditionalOffset + (FixedLineScrollOffset.IsSet() ? 0.f : NavigationScrollOffset);
 							}
 						}
+
+						const double MaxScrollOffset = FMath::Max(0.0, static_cast<double>(ItemsSource->Num()) - NumLiveWidgets);
+						SetScrollOffset(FMath::Min(NewScrollOffset, MaxScrollOffset));
 					}
 				}
 
@@ -1591,6 +1645,12 @@ protected:
 			TListTypeTraits<ItemType>::ResetPtr(ItemToScrollIntoView);
 		}
 
+		if (this->bEnableAnimatedScrolling && TListTypeTraits<ItemType>::IsPtrValid(ItemToNotifyWhenInView))
+		{
+			// When we have a target item we're shooting for, we haven't succeeded with the scroll until a widget for it exists
+			const bool bHasWidgetForItem = WidgetFromItem(TListTypeTraits<ItemType>::NullableItemTypeConvertToItemType(ItemToNotifyWhenInView)).IsValid();
+			return bHasWidgetForItem ? EScrollIntoViewResult::Success : EScrollIntoViewResult::Deferred;
+		}
 		return EScrollIntoViewResult::Success;
 	}
 
@@ -1620,7 +1680,7 @@ protected:
 		if (InAllowOverscroll == EAllowOverscroll::No)
 		{
 			//check if we are on the top of the list and want to scroll up
-			if (ScrollOffset < KINDA_SMALL_NUMBER && ScrollByAmountInSlateUnits < 0)
+			if (DesiredScrollOffset < KINDA_SMALL_NUMBER && ScrollByAmountInSlateUnits < 0)
 			{
 				return 0.0f;
 			}
@@ -1633,11 +1693,11 @@ protected:
 		}
 
 		float AbsScrollByAmount = FMath::Abs( ScrollByAmountInSlateUnits );
-		int32 StartingItemIndex = (int32)ScrollOffset;
-		double NewScrollOffset = ScrollOffset;
+		int32 StartingItemIndex = (int32)CurrentScrollOffset;
+		double NewScrollOffset = DesiredScrollOffset;
 
-		const bool bWholeListVisible = ScrollOffset == 0 && bWasAtEndOfList;
-		if ( InAllowOverscroll == EAllowOverscroll::Yes && Overscroll.ShouldApplyOverscroll( ScrollOffset == 0, bWasAtEndOfList, ScrollByAmountInSlateUnits ) )
+		const bool bWholeListVisible = DesiredScrollOffset == 0 && bWasAtEndOfList;
+		if ( InAllowOverscroll == EAllowOverscroll::Yes && Overscroll.ShouldApplyOverscroll(DesiredScrollOffset == 0, bWasAtEndOfList, ScrollByAmountInSlateUnits ) )
 		{
 			const float UnclampedScrollDelta = FMath::Sign(ScrollByAmountInSlateUnits) * AbsScrollByAmount;				
 			const float ActuallyScrolledBy = Overscroll.ScrollBy(MyGeometry, UnclampedScrollDelta);
@@ -1650,28 +1710,27 @@ protected:
 		else if (!bWholeListVisible)
 		{
 			// We know how far we want to scroll in SlateUnits, but we store scroll offset in "number of widgets".
-			// Challenge: each widget can be a different height.
+			// Challenge: each widget can be a different height/width.
 			// Strategy:
-			//           Scroll "one widget's height" at a time until we've scrolled as far as the user asked us to.
-			//           Generate widgets on demand so we can figure out how tall they are.
+			//           Scroll "one widget's length" at a time until we've scrolled as far as the user asked us to.
+			//           Generate widgets on demand so we can figure out how big they are.
 
-			const TArray<ItemType>* SourceItems = ItemsSource;
-			if ( SourceItems != nullptr && SourceItems->Num() > 0 )
+			if (ItemsSource && ItemsSource->Num() > 0)
 			{
-				int ItemIndex = StartingItemIndex;
+				int32 ItemIndex = StartingItemIndex;
 				const float LayoutScaleMultiplier = MyGeometry.GetAccumulatedLayoutTransform().GetScale();
-				while( AbsScrollByAmount != 0 && ItemIndex < SourceItems->Num() && ItemIndex >= 0 )
+				while( AbsScrollByAmount != 0 && ItemIndex < ItemsSource->Num() && ItemIndex >= 0 )
 				{
-					const ItemType CurItem = (*SourceItems)[ ItemIndex ];
-					// If the CurItem is not valid, we do not generate a new widget for it, we skip it.
+					const ItemType& CurItem = (*ItemsSource)[ItemIndex];
 					if (!TListTypeTraits<ItemType>::IsPtrValid(CurItem))
 					{
+						// If the CurItem is not valid, we do not generate a new widget for it, we skip it.
 						++ItemIndex;
 						continue;
 					}
 
 					TSharedPtr<ITableRow> RowWidget = WidgetGenerator.GetWidgetForItem( CurItem );
-					if ( !RowWidget.IsValid() )
+					if (!RowWidget.IsValid())
 					{
 						// We couldn't find an existing widgets, meaning that this data item was not visible before.
 						// Make a new widget for it.
@@ -1687,40 +1746,38 @@ protected:
 						RowWidget->AsWidget()->SlatePrepass(LayoutScaleMultiplier);
 					}
 
-					if ( ScrollByAmountInSlateUnits > 0 )
+					const FTableViewDimensions WidgetDimensions(this->Orientation, RowWidget->AsWidget()->GetDesiredSize());
+					if (ScrollByAmountInSlateUnits > 0)
 					{
-						FVector2D WidgetDesiredSize = RowWidget->AsWidget()->GetDesiredSize();
-						const float RemainingHeight = WidgetDesiredSize.Y * ( 1.0 - FMath::Fractional( NewScrollOffset ) );
+						const float RemainingDistance = WidgetDimensions.ScrollAxis * (1.0 - FMath::Fractional(NewScrollOffset));
 
-						if ( AbsScrollByAmount > RemainingHeight )
+						if (AbsScrollByAmount > RemainingDistance)
 						{
-							if ( ItemIndex != SourceItems->Num() )
+							if (ItemIndex != ItemsSource->Num())
 							{
-								AbsScrollByAmount -= RemainingHeight;
+								AbsScrollByAmount -= RemainingDistance;
 								NewScrollOffset = 1.0f + (int32)NewScrollOffset;
 								++ItemIndex;
 							}
 							else
 							{
-								NewScrollOffset = SourceItems->Num();
+								NewScrollOffset = ItemsSource->Num();
 								break;
 							}
 						} 
-						else if ( AbsScrollByAmount == RemainingHeight )
+						else if ( AbsScrollByAmount == RemainingDistance)
 						{
 							NewScrollOffset = 1.0f + (int32)NewScrollOffset;
 							break;
 						}
 						else
 						{
-							NewScrollOffset = (int32)NewScrollOffset + ( 1.0f - ( ( RemainingHeight - AbsScrollByAmount ) / WidgetDesiredSize.Y ) );
+							NewScrollOffset = (int32)NewScrollOffset + (1.0f - ((RemainingDistance - AbsScrollByAmount) / WidgetDimensions.ScrollAxis));
 							break;
 						}
 					}
 					else
 					{
-						FVector2D WidgetDesiredSize = RowWidget->AsWidget()->GetDesiredSize();
-
 						float Fractional = FMath::Fractional( NewScrollOffset );
 						if ( Fractional == 0 )
 						{
@@ -1728,13 +1785,13 @@ protected:
 							--NewScrollOffset;
 						}
 
-						const float PrecedingHeight = WidgetDesiredSize.Y * Fractional;
+						const float PrecedingDistance = WidgetDimensions.ScrollAxis * Fractional;
 
-						if ( AbsScrollByAmount > PrecedingHeight )
+						if ( AbsScrollByAmount > PrecedingDistance)
 						{
 							if ( ItemIndex != 0 )
 							{
-								AbsScrollByAmount -= PrecedingHeight;
+								AbsScrollByAmount -= PrecedingDistance;
 								NewScrollOffset -= FMath::Fractional( NewScrollOffset );
 								--ItemIndex;
 							}
@@ -1744,14 +1801,14 @@ protected:
 								break;
 							}
 						} 
-						else if ( AbsScrollByAmount == PrecedingHeight )
+						else if ( AbsScrollByAmount == PrecedingDistance)
 						{
 							NewScrollOffset -= FMath::Fractional( NewScrollOffset );
 							break;
 						}
 						else
 						{
-							NewScrollOffset = (int32)NewScrollOffset + ( ( PrecedingHeight - AbsScrollByAmount ) / WidgetDesiredSize.Y );
+							NewScrollOffset = (int32)NewScrollOffset + ((PrecedingDistance - AbsScrollByAmount) / WidgetDimensions.ScrollAxis);
 							break;
 						}
 					}
@@ -1767,14 +1824,57 @@ protected:
 
 protected:
 
+	ItemType Private_FindNextSelectableOrNavigable(const ItemType& InItemToSelect)
+	{
+		ItemType ItemToSelect = InItemToSelect;
+
+		if (OnIsSelectableOrNavigable.IsBound())
+		{
+			NullableItemType LastSelectedItem = nullptr;
+			if (SelectedItems.Num() == 1)
+			{
+				LastSelectedItem = *SelectedItems.CreateIterator();
+			}
+
+			bool bSelectNextItem = true;
+			while (!OnIsSelectableOrNavigable.Execute(ItemToSelect))
+			{
+				const int32 PendingItemIndex = ItemsSource->Find(ItemToSelect);
+				if (TListTypeTraits<ItemType>::IsPtrValid(LastSelectedItem) && PendingItemIndex > 0)
+				{
+					ItemType NonNullLastSelectedItem = TListTypeTraits<ItemType>::NullableItemTypeConvertToItemType(LastSelectedItem);
+					const int32 LastSelectedItemIdx = ItemsSource->Find(NonNullLastSelectedItem);
+
+					// If the previously selected item was before the header, assume we're navigating down and want to select the next item
+					// Otherwise, assume the opposite and navigate to the previous item
+					bSelectNextItem = LastSelectedItemIdx < PendingItemIndex;
+				}
+
+				const int32 NewSelectionIdx = PendingItemIndex + (bSelectNextItem ? 1 : -1);
+				if (ItemsSource->IsValidIndex(NewSelectionIdx))
+				{
+					ItemToSelect = (*ItemsSource)[NewSelectionIdx];
+				}
+				else
+				{
+					break;
+				}
+			}
+		}
+
+		return ItemToSelect;
+	}
+
 	/**
 	 * Selects the specified item and scrolls it into view. If shift is held, it will be a range select.
 	 * 
 	 * @param ItemToSelect		The item that was selected by a keystroke
 	 * @param InInputEvent	The key event that caused this selection
 	 */
-	virtual void NavigationSelect(const ItemType& ItemToSelect, const FInputEvent& InInputEvent)
+	virtual void NavigationSelect(const ItemType& InItemToSelect, const FInputEvent& InInputEvent)
 	{
+		ItemType ItemToSelect = Private_FindNextSelectableOrNavigable(InItemToSelect);
+
 		const ESelectionMode::Type CurrentSelectionMode = SelectionMode.Get();
 
 		if (CurrentSelectionMode != ESelectionMode::None)
@@ -1783,7 +1883,7 @@ protected:
 			SelectorItem = ItemToSelect;
 
 			// Always request scroll into view, otherwise partially visible items will be selected - also do this before signaling selection for similar stomp-allowing reasons
-			RequestNavigateToItem(ItemToSelect, InInputEvent.GetUserIndex());
+			Private_RequestNavigateToItem(ItemToSelect, InInputEvent.GetUserIndex());
 
 			if (CurrentSelectionMode == ESelectionMode::Multi && (InInputEvent.IsShiftDown() || InInputEvent.IsControlDown()))
 			{
@@ -1804,7 +1904,7 @@ protected:
 			else
 			{
 				// Single select.
-				this->SetSelection(ItemToSelect, ESelectInfo::OnNavigation);;
+				this->Private_SetSelection(ItemToSelect, ESelectInfo::OnNavigation);
 			}
 		}
 	}
@@ -1858,6 +1958,9 @@ protected:
 	/** Delegate to invoke when selection changes. */
 	FOnSelectionChanged OnSelectionChanged;
 
+	/** Delegate to invoke to see if we can navigate or select item. */
+	FIsSelectableOrNavigable OnIsSelectableOrNavigable;
+
 	/** Called when the user clicks on an element int he list view with the left mouse button */
 	FOnMouseButtonClick OnClick;
 
@@ -1882,10 +1985,10 @@ protected:
 	/** If true, the focus will be returned to the last selected object in a list when navigated to. */
 	bool bReturnFocusToSelection;
 
-private:
-
+	/** If true, the item currently slated to be scrolled into view will also be navigated to after being scrolled in */
 	bool bNavigateOnScrollIntoView = false;
 
+private:
 	struct FGenerationPassGuard
 	{
 		FWidgetGenerator& Generator;

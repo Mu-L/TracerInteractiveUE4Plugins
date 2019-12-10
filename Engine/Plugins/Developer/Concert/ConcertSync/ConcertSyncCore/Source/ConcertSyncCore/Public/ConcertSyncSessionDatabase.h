@@ -149,10 +149,11 @@ public:
 	 * @note This function is expected to be called on the client to populate its version of the session database from data synced from the server.
 	 *
 	 * @param InTransactionActivity		The transaction activity to set.
+	 * @param bMetaDataOnly				True to store the meta data only, omitting the transaction data required to replay the transaction.
 	 *
 	 * @return True if the transaction activity was set, false otherwise.
 	 */
-	bool SetTransactionActivity(const FConcertSyncTransactionActivity& InTransactionActivity);
+	bool SetTransactionActivity(const FConcertSyncTransactionActivity& InTransactionActivity, const bool bMetaDataOnly = false);
 
 	/**
 	 * Set a package activity in this database, creating or replacing it.
@@ -160,10 +161,11 @@ public:
 	 * @note This function is expected to be called on the client to populate its version of the session database from data synced from the server.
 	 *
 	 * @param InPackageActivity		The package activity to set.
+	 * @param bMetaDataOnly			True to store the meta data only, omitting the package data itself.
 	 *
 	 * @return True if the package activity was set, false otherwise.
 	 */
-	bool SetPackageActivity(const FConcertSyncPackageActivity& InPackageActivity);
+	bool SetPackageActivity(const FConcertSyncPackageActivity& InPackageActivity, const bool bMetaDataOnly = false);
 
 	/**
 	 * Get the generic part of an activity from this database.
@@ -479,6 +481,16 @@ public:
 	bool GetLiveTransactionEventIdsForPackage(const FName InPackageName, TArray<int64>& OutTransactionEventIds) const;
 
 	/**
+	 * Get if a Package has any live transactions
+	 *
+	 * @param InPackageName				The name of the package to check if it has live transactions.
+	 * @param OutHasLiveTransaction		Bool to populate with the result.
+	 *
+	 * @return True if query was resolved correctly, false otherwise.
+	 */
+	bool PackageHasLiveTransactions(const FName InPackageName, bool& OutHasLiveTransaction) const;
+
+	/**
 	 * Enumerate the IDs of any live transaction events for the given package name.
 	 *
 	 * @param InPackageName				The name of the package to get the live transaction event IDs for.
@@ -527,6 +539,26 @@ public:
 	 * @return True if the package event was found, false otherwise.
 	 */
 	bool GetPackageEvent(const int64 InPackageEventId, FConcertSyncPackageEvent& OutPackageEvent, const bool InMetaDataOnly = false) const;
+
+	/**
+	 * Get package names for packages with a head revision (at least one package event)
+	 *
+	 * @param OutPackageNames			The array of names to populate with the result.
+	 * @param IgnorePersisted			Will ignore packages which head revision have been persisted.
+	 *
+	 * @return True if the package names were resolved, false otherwise.
+	 */
+	bool GetPackageNamesWithHeadRevision(TArray<FName>& OutPackageNames, bool IgnorePersisted) const;
+
+	/**
+	 * Enumerate package names for packages with a head revision (at least one package event)
+	 *
+	 * @param InCallback				Callback invoked for each package name; return true to continue enumeration, or false to stop.
+	 * @param IgnorePersisted			Will skip enumeration of packages which head revision have been persisted.
+	 *
+	 * @return True if the package data was enumerated without error, false otherwise.
+	 */
+	bool EnumeratePackageNamesWithHeadRevision(TFunctionRef<bool(FName)> InCallback, bool IgnorePersisted) const;
 
 	/**
 	 * Enumerate the head revision package data for all packages in this database.
@@ -581,7 +613,45 @@ public:
 	 */
 	bool IsHeadRevisionPackageEvent(const int64 InPackageEventId, bool& OutIsHeadRevision) const;
 
+	/**
+	 * Add a package event ID for the head revision to the persist events in this database, if not already existing.
+	 *
+	 * @param PackageName				The package name to add an event for.
+	 * @param OutPersistEventId			Populated with the ID of the persist event in the database.
+	 *
+	 * @return True if the persist event was added, false otherwise.
+	 */
+	bool AddPersistEventForHeadRevision(FName InPackageName, int64& OutPersistEventId);
+
+	/**
+	 * Update the specified transaction event.
+	 * @note The function is meant to update a transaction event that was partially synced to store the corresponding transaction data.
+	 * @param InTransactionEventId		The ID of the event to update.
+	 * @param InTransactionEvent		The event to store.
+	 * @return True if the transaction was updated.
+	 */
+	bool UpdateTransactionEvent(const int64 InTransactionEventId, const FConcertSyncTransactionEvent& InTransactionEvent);
+
+	/**
+	 * Update the specified package event.
+	 * @note The function is meant to be update a partially synced package event to store the corresponding package data.
+	 * @param InPackageEventId			The ID of the event to update.
+	 * @param InTransactionEvent		The event to store.
+	 * @return True if the transaction was updated.
+	 */
+	bool UpdatePackageEvent(const int64 InPackageEventId, const FConcertSyncPackageEvent& InPackageEvent);
+
 private:
+	/**
+	 * Set the active ignored state for the given activity.
+	 *
+	 * @param InActivityId				The ID of the activity to update.
+	 * @param InIsIgnored				True if this activity should be ignored, false otherwise.
+	 *
+	 * @return True if the ignored state was set, false otherwise.
+	 */
+	bool SetActivityIgnoredState(const int64 InActivityId, const bool InIsIgnored);
+
 	/**
 	 * Add a new connection event to this database, assigning it a connection event ID.
 	 *
@@ -637,10 +707,11 @@ private:
 	 *
 	 * @param InTransactionEventId		The ID of the transaction event to set.
 	 * @param InTransactionEvent		The transaction event to set.
+	 * @param bMetaDataOnly				True to store the meta data only, omitting the transaction data.
 	 *
 	 * @return True if the transaction event was set, false otherwise.
 	 */
-	bool SetTransactionEvent(const int64 InTransactionEventId, const FConcertSyncTransactionEvent& InTransactionEvent);
+	bool SetTransactionEvent(const int64 InTransactionEventId, const FConcertSyncTransactionEvent& InTransactionEvent, const bool bMetaDataOnly = false);
 
 	/**
 	 * Enumerate the IDs of any live transaction events for the given package name ID.
@@ -667,10 +738,11 @@ private:
 	 *
 	 * @param InPackageEventId			The ID of the package event to set.
 	 * @param InPackageEvent			The package event to set.
+	 * @param bMetaDataOnly				True to store the meta data only, omitting the package data.
 	 *
 	 * @return True if the package event was set, false otherwise.
 	 */
-	bool SetPackageEvent(const int64 InPackageEventId, const FConcertSyncPackageEvent& InPackageEvent);
+	bool SetPackageEvent(const int64 InPackageEventId, const FConcertSyncPackageEvent& InPackageEvent, const bool bMetaDataOnly = false);
 
 	/**
 	 * Set a package event in this database, creating or replacing it.
@@ -678,10 +750,11 @@ private:
 	 * @param InPackageEventId			The ID of the package event to set.
 	 * @param InPackageRevision			The package revision to set.
 	 * @param InPackage					The package to set.
+	 * @param bMetaDataOnly				True to store the meta data only, omitting the package data.
 	 *
 	 * @return True if the package event was set, false otherwise.
 	 */
-	bool SetPackageEvent(const int64 InPackageEventId, const int64 InPackageRevision, const FConcertPackage& InPackage);
+	bool SetPackageEvent(const int64 InPackageEventId, const int64 InPackageRevision, const FConcertPackage& InPackage, const bool bMetaDataOnly = false);
 
 	/**
 	 * Get the maximum ID of the package events in this database.

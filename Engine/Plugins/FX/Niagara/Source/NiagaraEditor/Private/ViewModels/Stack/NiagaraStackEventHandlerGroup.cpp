@@ -9,7 +9,6 @@
 #include "NiagaraEmitter.h"
 #include "NiagaraGraph.h"
 #include "NiagaraScriptSource.h"
-#include "ViewModels/Stack/NiagaraStackSpacer.h"
 #include "ViewModels/Stack/INiagaraStackItemGroupAddUtilities.h"
 #include "ViewModels/Stack/NiagaraStackGraphUtilities.h"
 
@@ -54,7 +53,9 @@ public:
 
 		// Set the emitter here so that the internal state of the view model is updated.
 		// TODO: Move the logic for managing event handlers into the emitter view model or script view model.
-		EmitterViewModelPinned->SetEmitter(Emitter);
+		TWeakPtr<FNiagaraEmitterInstance, ESPMode::ThreadSafe> Simulation = EmitterViewModelPinned->GetSimulation();
+		EmitterViewModelPinned->Reset();
+		EmitterViewModelPinned->Initialize(Emitter, Simulation);
 
 		OnItemAdded.ExecuteIfBound(EventScriptProperties);
 	}
@@ -70,7 +71,7 @@ void UNiagaraStackEventHandlerGroup::Initialize(FRequiredEntryData InRequiredEnt
 {
 	FText DisplayName = LOCTEXT("EventGroupName", "Add Event Handler");
 	FText ToolTip = LOCTEXT("EventGroupTooltip", "Determines how this Emitter responds to incoming events. There can be more than one event handler script stack per Emitter.");
-	AddUtilities = MakeShared<FEventHandlerGroupAddUtilities>(InRequiredEntryData.EmitterViewModel, 
+	AddUtilities = MakeShared<FEventHandlerGroupAddUtilities>(InRequiredEntryData.EmitterViewModel.ToSharedRef(), 
 		TNiagaraStackItemGroupAddUtilities<FNiagaraEventScriptProperties>::FOnItemAdded::CreateUObject(this, &UNiagaraStackEventHandlerGroup::ItemAddedFromUtilties));
 	Super::Initialize(InRequiredEntryData, DisplayName, ToolTip, AddUtilities.Get());
 }

@@ -30,6 +30,8 @@ extern ONLINESUBSYSTEM_API bool IsUniqueIdLocal(const FUniqueNetId& UniqueId);
 #define MAX_LOCAL_PLAYERS 4
 #elif PLATFORM_SWITCH
 #define MAX_LOCAL_PLAYERS 8
+#elif PLATFORM_WINDOWS
+#define MAX_LOCAL_PLAYERS 4
 #else
 #define MAX_LOCAL_PLAYERS 1
 #endif
@@ -1165,6 +1167,7 @@ struct FCloudFile
 #define USER_ATTR_PREFERRED_DISPLAYNAME TEXT("prefDisplayName")
 #define USER_ATTR_ID TEXT("id")
 #define USER_ATTR_EMAIL TEXT("email")
+#define USER_ATTR_ALIAS TEXT("alias")
 
 /**
  * Base for all online user info

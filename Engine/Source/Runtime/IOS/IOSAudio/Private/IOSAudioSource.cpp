@@ -104,6 +104,17 @@ FIOSAudioSoundSource::~FIOSAudioSoundSource(void)
 	Buffer = NULL;
 }
 
+void FIOSAudioSoundSource::CleanupAudioBuffer()
+{
+	// Always enure we have a unique FIOSAudioSoundBuffer and that we delete the old one if it exists
+	if (IOSBuffer != NULL)
+	{
+		delete IOSBuffer;
+		IOSBuffer = NULL;
+	}
+}
+
+
 bool FIOSAudioSoundSource::Init(FWaveInstance* InWaveInstance)
 {
 	// Wait for the render callback to finish and then prevent it from being entered again in case this object is deleted after being stopped
@@ -123,11 +134,7 @@ bool FIOSAudioSoundSource::Init(FWaveInstance* InWaveInstance)
 		return false;
 	}
 	
-	// Always enure we have a unique FIOSAudioSoundBuffer and that we delete the old one if it exists
-	if(IOSBuffer != NULL)
-	{
-		delete IOSBuffer;
-	}
+	CleanupAudioBuffer();
 	
 	IOSBuffer = FIOSAudioSoundBuffer::Init(IOSAudioDevice, InWaveInstance->WaveData);
 	Buffer = IOSBuffer;
@@ -183,7 +190,7 @@ bool FIOSAudioSoundSource::Init(FWaveInstance* InWaveInstance)
 	}
 
 	// Seek into the file if we've been given a non-zero start time.
-	if (WaveInstance->StartTime > 0.0f)
+	if (WaveInstance->IsSeekable() && WaveInstance->StartTime > 0.0f)
 	{
 		IOSBuffer->DecompressionState->SeekToTime(WaveInstance->StartTime);
 	}
@@ -330,13 +337,12 @@ void FIOSAudioSoundSource::Stop(void)
 
 	// Call parent class version regardless of if there's a wave instance
 	FSoundSource::Stop();
-		
-	if (WaveInstance)
+
+	if (IOSBuffer != NULL)
 	{
-		if(IOSBuffer != NULL)
-		{
-			IOSBuffer->DecompressionState->SeekToTime(0.0f);
-		}
+		// Release the current stream chunk:
+		bool bChunkReleased = IOSBuffer->ReleaseCurrentChunk();
+		check(bChunkReleased);
 	}
 
 	// It's now safe to unlock the callback
@@ -483,7 +489,7 @@ OSStatus FIOSAudioSoundSource::IOSAudioRenderCallback(void* RefCon, AudioUnitRen
 		}
 		else
 		{
-			Source->IOSBuffer->RenderCallbackBufferSize = NumFrames * sizeof(uint16) * Source->IOSBuffer->DecompressionState->NumChannels;
+			Source->IOSBuffer->RenderCallbackBufferSize = NumFrames * sizeof(uint16) * Source->IOSBuffer->DecompressionState->GetNumChannels();
 
 			// Since StreamCompressedData returns interlaced samples we need to decompress all frames(samples) for all channels here so we don't end up decompressing multiple times
 			// Ensure we have enough memory to do this. If needed we could realloc here but that is bad practice inside the audio callback since it has a hard deadline

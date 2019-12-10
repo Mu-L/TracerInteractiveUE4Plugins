@@ -87,6 +87,8 @@ struct FTextureBuildSettings
 	uint8 MipGenSettings; // TextureMipGenSettings, opaque to avoid dependencies on engine headers.
 	/** Whether the texture being built is a cubemap. */
 	uint32 bCubemap : 1;
+	/** Whether the texture being built is a texture array. */
+	uint32 bTextureArray : 1;
 	/** Whether the texture being built is a volume. */
 	uint32 bVolume : 1;
 	/** Whether the texture being built from long/lat source to cubemap. */
@@ -113,6 +115,8 @@ struct FTextureBuildSettings
 	uint32 bBorderColorBlack : 1;
 	/** Whether the green channel should be flipped. Typically only done on normal maps. */
 	uint32 bFlipGreenChannel : 1;
+	/** Calculate and apply a scale for YCoCg textures. This calculates a scale for each 4x4 block, applies it to the red and green channels and stores the scale in the blue channel. */
+	uint32 bApplyYCoCgBlockScale : 1;
 	/** 1:apply mip sharpening/blurring kernel to top mip as well (at half the kernel size), 0:don't */
 	uint32 bApplyKernelToTopMip : 1;
 	/** 1: renormalizes the top mip (only useful for normal maps, prevents artists errors and adds quality) 0:don't */
@@ -129,6 +133,8 @@ struct FTextureBuildSettings
 	mutable FIntPoint TopMipSize;
 	/** The volume texture's top mip size Z without LODBias applied */
 	mutable int32 VolumeSizeZ;
+	/** The array texture's top mip size Z without LODBias applied */
+	mutable int32 ArraySlices;
 	/** Can the texture be streamed */
 	uint32 bStreamable : 1;
 	/** Is the texture streamed using the VT system */
@@ -169,6 +175,7 @@ struct FTextureBuildSettings
 		, bHDRSource(false)
 		, MipGenSettings(1 /*TMGS_SimpleAverage*/)
 		, bCubemap(false)
+		, bTextureArray(false)
 		, bVolume(false)
 		, bLongLatSource(false)
 		, bSRGB(false)
@@ -182,6 +189,7 @@ struct FTextureBuildSettings
 		, bSharpenWithoutColorShift(false)
 		, bBorderColorBlack(false)
 		, bFlipGreenChannel(false)
+		, bApplyYCoCgBlockScale(false)
 		, bApplyKernelToTopMip(false)
 		, bRenormalizeTopMip(false)
 		, CompositeTextureMode(0 /*CTM_Disabled*/)
@@ -190,6 +198,7 @@ struct FTextureBuildSettings
 		, LODBiasWithCinematicMips(0)
 		, TopMipSize(0, 0)
 		, VolumeSizeZ(0)
+		, ArraySlices(0)
 		, bStreamable(false)
 		, bVirtualStreamable(false)
 		, bChromaKeyTexture(false)
@@ -226,13 +235,17 @@ public:
 	 * @param SourceMips - The input mips.
 	 * @param BuildSettings - Build settings.
 	 * @param OutCompressedMips - The compressed mips built by the compressor.
+	 * @param OutNumMipsInTail - The number of mips that are joined into a single mip tail mip
+	 * @param OutCompressedMips - Extra data that the runtime may need
 	 * @returns true on success
 	 */
 	virtual bool BuildTexture(
 		const TArray<struct FImage>& SourceMips,
 		const TArray<struct FImage>& AssociatedNormalSourceMips,
 		const FTextureBuildSettings& BuildSettings,
-		TArray<FCompressedImage2D>& OutTextureMips
+		TArray<FCompressedImage2D>& OutTextureMips,
+		uint32& OutNumMipsInTail,
+		uint32& OutExtData
 		) = 0;
 
 	
@@ -257,4 +270,20 @@ public:
      * @param	InBuildSettings	Image build settings
      */
 	TEXTURECOMPRESSOR_API static void AdjustImageColors(FImage& Image, const FTextureBuildSettings& InBuildSettings);
+
+	/**
+	 * Generates the base cubemap mip from a longitude-latitude 2D image.
+	 * @param OutMip - The output mip.
+	 * @param SrcImage - The source longlat image.
+	 */
+	TEXTURECOMPRESSOR_API static void GenerateBaseCubeMipFromLongitudeLatitude2D(FImage* OutMip, const FImage& SrcImage, const int32 MaxCubemapTextureResolution);
+
+
+	/**
+	 * Generates angularly filtered mips.
+	 * @param InOutMipChain - The mip chain to angularly filter.
+	 * @param NumMips - The number of mips the chain should have.
+	 * @param DiffuseConvolveMipLevel - The mip level that contains the diffuse convolution.
+	 */
+	TEXTURECOMPRESSOR_API static void GenerateAngularFilteredMips(TArray<FImage>& InOutMipChain, int32 NumMips, uint32 DiffuseConvolveMipLevel);
 };

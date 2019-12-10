@@ -35,6 +35,12 @@ private:
 	/** Delegate handler to set the path to start picking from */
 	bool HandlePostExternalIconCopy(const FString& InChosenImage);
 
+	/** Handles when Stream Caching is toggled. */
+	void HandleAudioStreamCachingToggled(ECheckBoxState bEnableStreamCaching, TSharedPtr<IPropertyHandle> PropertyHandle);
+
+	/** This gets the current value of the audio stream caching bool property. */
+	ECheckBoxState GetAudioStreamCachingToggled(TSharedPtr<IPropertyHandle> PropertyHandle) const;
+
 protected:
 
 

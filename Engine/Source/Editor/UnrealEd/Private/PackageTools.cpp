@@ -27,7 +27,7 @@
 #include "SourceControlHelpers.h"
 #include "Editor.h"
 #include "Dialogs/Dialogs.h"
-#include "Toolkits/AssetEditorManager.h"
+
 
 #include "ObjectTools.h"
 #include "Kismet2/KismetEditorUtilities.h"
@@ -43,14 +43,16 @@
 #include "Logging/MessageLog.h"
 #include "UObject/UObjectIterator.h"
 #include "ComponentReregisterContext.h"
-#include "Engine/Selection.h"
+#include "Engine/BlueprintGeneratedClass.h"
 #include "Engine/GameEngine.h"
 #include "Engine/LevelStreaming.h"
 #include "Engine/MapBuildDataRegistry.h"
+#include "Engine/Selection.h"
 
 #include "ShaderCompiler.h"
 #include "DistanceFieldAtlas.h"
 #include "AssetToolsModule.h"
+#include "Subsystems/AssetEditorSubsystem.h"
 
 #define LOCTEXT_NAMESPACE "PackageTools"
 
@@ -379,7 +381,7 @@ UPackageTools::UPackageTools(const FObjectInitializer& ObjectInitializer)
 				{
 					if (Obj->IsAsset())
 					{
-						FAssetEditorManager::Get().CloseAllEditorsForAsset(Obj);
+						GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->CloseAllEditorsForAsset(Obj);
 					}
 				}, false);
 
@@ -621,6 +623,7 @@ UPackageTools::UPackageTools(const FObjectInitializer& ObjectInitializer)
 		// Check to see if we need to reload the current world.
 		FName WorldNameToReload;
 		TMap<FName, const UMapBuildDataRegistry*> LevelsToMapBuildData;
+		bool bReloadingLightingScenario = false; 
 		TArray<ULevelStreaming*> RemovedStreamingLevels;
 		if (UWorld* CurrentWorldPtr = CurrentWorld.Get())
 		{
@@ -672,6 +675,8 @@ UPackageTools::UPackageTools(const FObjectInitializer& ObjectInitializer)
 			// Cache the current map build data for the levels of the current world so we can see if they change due to a reload (we can skip this if reloading the current world).
 			else
 			{
+				bReloadingLightingScenario = CurrentWorldPtr->GetActiveLightingScenario() && CurrentWorldPtr->GetActiveLightingScenario()->MapBuildData && PackagesToReload.Contains(CurrentWorldPtr->GetActiveLightingScenario()->MapBuildData->GetOutermost());
+
 				const TArray<ULevel*>& Levels = CurrentWorldPtr->GetLevels();
 				for (int32 i = Levels.Num() - 1; i >= 0; --i)
 				{
@@ -691,7 +696,13 @@ UPackageTools::UPackageTools(const FObjectInitializer& ObjectInitializer)
 					}
 					else
 					{
-						LevelsToMapBuildData.Add(Level->GetFName(), Level->MapBuildData);
+						if ((Level->MapBuildData && PackagesToReload.Contains(Level->MapBuildData->GetOutermost())) || bReloadingLightingScenario)
+						{
+							// Remove any VLM here so FPrecomputedVolumetricLightmapData::RemoveFromSceneData() has the necessary resources to perform GPU brick unplugging before destruction
+							Level->ReleaseRenderingResources();
+
+							LevelsToMapBuildData.Add(Level->GetFName(), Level->MapBuildData);
+						}
 					}
 				}
 			}
@@ -775,7 +786,7 @@ UPackageTools::UPackageTools(const FObjectInitializer& ObjectInitializer)
 			{
 				TArray<FName> WorldNamesToReload;
 				WorldNamesToReload.Add(WorldNameToReload);
-				FAssetEditorManager::Get().OpenEditorsForAssets(WorldNamesToReload);
+				GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorsForAssets(WorldNamesToReload);
 			}
 			else if (UGameEngine* GameEngine = Cast<UGameEngine>(GEngine))
 			{
@@ -794,9 +805,8 @@ UPackageTools::UPackageTools(const FObjectInitializer& ObjectInitializer)
 				for (int32 LevelIndex = 0; LevelIndex < CurrentWorldPtr->GetNumLevels(); ++LevelIndex)
 				{
 					ULevel* Level = CurrentWorldPtr->GetLevel(LevelIndex);
-					const UMapBuildDataRegistry* OldMapBuildData = LevelsToMapBuildData.FindRef(Level->GetFName());
 
-					if (OldMapBuildData && OldMapBuildData != Level->MapBuildData)
+					if (LevelsToMapBuildData.Contains(Level->GetFName()) || bReloadingLightingScenario)
 					{
 						Level->ReleaseRenderingResources();
 						Level->InitializeRenderingResources();
@@ -832,16 +842,12 @@ UPackageTools::UPackageTools(const FObjectInitializer& ObjectInitializer)
 		{
 			GEngine->NotifyToolsOfObjectReplacement(InPackageReloadedEvent->GetRepointedObjects());
 
-			// Notify any Blueprint assets that are about to be unloaded.
+			// Notify any Blueprints that are about to be unloaded.
 			ForEachObjectWithOuter(InPackageReloadedEvent->GetOldPackage(), [&](UObject* InObject)
 			{
-				if (InObject->IsAsset())
+				if (UBlueprint* BP = Cast<UBlueprint>(InObject))
 				{
-					// Notify about any BP assets that are about to be unloaded
-					if (UBlueprint* BP = Cast<UBlueprint>(InObject))
-					{
-						BP->ClearEditorReferences();
-					}
+					BP->ClearEditorReferences();
 				}
 			}, false, RF_Transient, EInternalObjectFlags::PendingKill);
 		}
@@ -856,7 +862,8 @@ UPackageTools::UPackageTools(const FObjectInitializer& ObjectInitializer)
 
 				if(OldObject && NewObject)
 				{
-					UClass* OldObjectAsClass = Cast<UClass>(OldObject);
+					// Only the blueprint generated class are supported by the FBlueprintCompilationManager so we only reparent those
+					UClass* OldObjectAsClass = Cast<UBlueprintGeneratedClass>(OldObject);
 					if(OldObjectAsClass)
 					{
 						UClass* NewObjectAsClass = Cast<UClass>(NewObject);
@@ -1168,26 +1175,9 @@ UPackageTools::UPackageTools(const FObjectInitializer& ObjectInitializer)
 		return true;
 	}
 
-	FString UPackageTools::SanitizePackageName (const FString& InPackageName)
+	FString UPackageTools::SanitizePackageName(const FString& InPackageName)
 	{
-		FString SanitizedName;
-		FString InvalidChars = INVALID_LONGPACKAGE_CHARACTERS;
-
-		// See if the name contains invalid characters.
-		FString Char;
-		for( int32 CharIdx = 0; CharIdx < InPackageName.Len(); ++CharIdx )
-		{
-			Char = InPackageName.Mid(CharIdx, 1);
-
-			if ( InvalidChars.Contains(*Char) )
-			{
-				SanitizedName += TEXT("_");
-			}
-			else
-			{
-				SanitizedName += Char;
-			}
-		}
+		FString SanitizedName = ObjectTools::SanitizeInvalidChars(InPackageName, INVALID_LONGPACKAGE_CHARACTERS);
 
 		// Remove double-slashes
 		SanitizedName.ReplaceInline(TEXT("//"), TEXT("/"));

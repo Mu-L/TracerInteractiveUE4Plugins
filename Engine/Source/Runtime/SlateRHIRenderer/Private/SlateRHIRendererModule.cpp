@@ -21,18 +21,25 @@ class FSlateRHIFontAtlasFactory : public ISlateFontAtlasFactory
 public:
 	FSlateRHIFontAtlasFactory()
 	{
-		if (GIsEditor)
+		auto GetAtlasSizeFromConfig = [](const TCHAR* InConfigKey, const FString& InConfigFilename, int32& OutAtlasSize)
 		{
-			AtlasSize = 2048;
-		}
-		else
-		{
-			AtlasSize = 1024;
 			if (GConfig)
 			{
-				GConfig->GetInt(TEXT("SlateRenderer"), TEXT("FontAtlasSize"), AtlasSize, GEngineIni);
-				AtlasSize = FMath::Clamp(AtlasSize, 0, 2048);
+				GConfig->GetInt(TEXT("SlateRenderer"), InConfigKey, OutAtlasSize, InConfigFilename);
+				if (GConfig->GetInt(TEXT("SlateRenderer"), TEXT("FontAtlasSize"), OutAtlasSize, InConfigFilename))
+				{
+					UE_LOG(LogCore, Warning, TEXT("The 'FontAtlasSize' setting for 'SlateRenderer' is deprecated. Use '%s' instead."), InConfigKey);
+				}
 			}
+			OutAtlasSize = FMath::Clamp(OutAtlasSize, 128, 2048);
+		};
+
+		GrayscaleAtlasSize = GIsEditor ? 2048 : 1024;
+		ColorAtlasSize = 512;
+		{
+			const FString& ConfigFilename = GIsEditor ? GEditorIni : GEngineIni;
+			GetAtlasSizeFromConfig(TEXT("GrayscaleFontAtlasSize"), ConfigFilename, GrayscaleAtlasSize);
+			GetAtlasSizeFromConfig(TEXT("ColorFontAtlasSize"), ConfigFilename, ColorAtlasSize);
 		}
 	}
 
@@ -40,24 +47,28 @@ public:
 	{
 	}
 
-	virtual FIntPoint GetAtlasSize() const override
+	virtual FIntPoint GetAtlasSize(const bool InIsGrayscale) const override
 	{
-		return FIntPoint(AtlasSize, AtlasSize);
+		return InIsGrayscale
+			? FIntPoint(GrayscaleAtlasSize, GrayscaleAtlasSize)
+			: FIntPoint(ColorAtlasSize, ColorAtlasSize);
 	}
 
-	virtual TSharedRef<FSlateFontAtlas> CreateFontAtlas() const override
+	virtual TSharedRef<FSlateFontAtlas> CreateFontAtlas(const bool InIsGrayscale) const override
 	{
-		return MakeShareable(new FSlateFontAtlasRHI(AtlasSize, AtlasSize));
+		const FIntPoint AtlasSize = GetAtlasSize(InIsGrayscale);
+		return MakeShareable(new FSlateFontAtlasRHI(AtlasSize.X, AtlasSize.Y, InIsGrayscale));
 	}
 
-	virtual TSharedPtr<ISlateFontTexture> CreateNonAtlasedTexture(const uint32 InWidth, const uint32 InHeight, const TArray<uint8>& InRawData) const override
+	virtual TSharedPtr<ISlateFontTexture> CreateNonAtlasedTexture(const uint32 InWidth, const uint32 InHeight, const bool InIsGrayscale, const TArray<uint8>& InRawData) const override
 	{
 		if (GIsEditor)
 		{
-			const uint32 MaxFontTextureDimension = FMath::Min(AtlasSize * 4u, GetMax2DTextureDimension()); // Don't allow textures greater than 4x our atlas size, but still honor the platform limit
+			const FIntPoint AtlasSize = GetAtlasSize(InIsGrayscale);
+			const uint32 MaxFontTextureDimension = FMath::Min(AtlasSize.Y * 4u, GetMax2DTextureDimension()); // Don't allow textures greater than 4x our atlas size, but still honor the platform limit
 			if (InWidth <= MaxFontTextureDimension && InHeight <= MaxFontTextureDimension)
 			{
-				return MakeShareable(new FSlateFontTextureRHI(InWidth, InHeight, InRawData));
+				return MakeShareable(new FSlateFontTextureRHI(InWidth, InHeight, InIsGrayscale, InRawData));
 			}
 		}
 		return nullptr;
@@ -65,7 +76,8 @@ public:
 
 private:
 	/** Size of each font texture, width and height */
-	int32 AtlasSize;
+	int32 GrayscaleAtlasSize;
+	int32 ColorAtlasSize;
 };
 
 
@@ -114,7 +126,6 @@ private:
 		if( !ResourceManager.IsValid() )
 		{
 			ResourceManager = MakeShareable( new FSlateRHIResourceManager );
-			FSlateDataPayload::ResourceManager = ResourceManager.Get();
 		}
 
 		if( !SlateFontServices.IsValid() )

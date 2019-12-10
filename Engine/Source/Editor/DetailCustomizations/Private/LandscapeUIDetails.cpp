@@ -23,10 +23,6 @@ FLandscapeUIDetails::FLandscapeUIDetails()
 
 FLandscapeUIDetails::~FLandscapeUIDetails()
 {
-	if (DetailLayoutBuilder)
-	{
-		GetMutableDefault<UEditorExperimentalSettings>()->OnSettingChanged().RemoveAll(this);
-	}
 }
 
 TSharedRef<IDetailCustomization> FLandscapeUIDetails::MakeInstance()
@@ -52,50 +48,34 @@ void FLandscapeUIDetails::CustomizeDetails( IDetailLayoutBuilder& DetailBuilder 
 			TSharedRef<IPropertyHandle> ComponentScreenSizeToUseSubSectionsProp = DetailBuilder.GetProperty(GET_MEMBER_NAME_CHECKED(ALandscapeProxy, ComponentScreenSizeToUseSubSections));
 			DetailBuilder.HideProperty(ComponentScreenSizeToUseSubSectionsProp);
 		}
-
-		if (!DetailLayoutBuilder)
-		{
-			DetailLayoutBuilder = &DetailBuilder;
-			GetMutableDefault<UEditorExperimentalSettings>()->OnSettingChanged().AddSP(this, &FLandscapeUIDetails::OnEditorExperimentalSettingsChanged);
-		}
 							   
 		TSharedRef<IPropertyHandle> PropertyHandle = DetailBuilder.GetProperty(GET_MEMBER_NAME_CHECKED(ALandscape, bCanHaveLayersContent));
 		DetailBuilder.HideProperty(PropertyHandle);
-		if (GetMutableDefault<UEditorExperimentalSettings>()->bLandscapeLayerSystem)
-		{
-			const FText DisplayAndFilterText(LOCTEXT("LandscapeToggleLayerName", "Enable Layer System"));
-			DetailBuilder.AddCustomRowToCategory(PropertyHandle, DisplayAndFilterText)
-			.NameContent()
-			[
-				PropertyHandle->CreatePropertyNameWidget(DisplayAndFilterText)
-			]
-			.ValueContent()
-			[
-				SNew(SCheckBox)
-				.ToolTipText(LOCTEXT("LandscapeToggleLayerToolTip", "Toggle whether or not to support layers on this Landscape and its streaming proxies. Toggling this will clear the undo stack."))
-				.Type(ESlateCheckBoxType::CheckBox)
-				.IsChecked_Lambda([=]()
+		const FText DisplayAndFilterText(LOCTEXT("LandscapeToggleLayerName", "Enable Edit Layers"));
+		const FText ToolTipText(LOCTEXT("LandscapeToggleLayerToolTip", "Toggle whether or not to support edit layers on this Landscape. Toggling this will clear the undo stack."));
+		DetailBuilder.AddCustomRowToCategory(PropertyHandle, DisplayAndFilterText)
+		.NameContent()
+		[
+			PropertyHandle->CreatePropertyNameWidget(DisplayAndFilterText, ToolTipText)
+		]
+		.ValueContent()
+		[
+			SNew(SCheckBox)
+			.ToolTipText(ToolTipText)
+			.Type(ESlateCheckBoxType::CheckBox)
+			.IsChecked_Lambda([=]()
+			{
+				return Landscape->CanHaveLayersContent() ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+			})
+			.OnCheckStateChanged_Lambda([=](ECheckBoxState NewState)
+			{
+				bool bChecked = (NewState == ECheckBoxState::Checked);
+				if (Landscape->CanHaveLayersContent() != bChecked)
 				{
-					return Landscape->CanHaveLayersContent() ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
-				})
-				.OnCheckStateChanged_Lambda([=](ECheckBoxState NewState)
-				{
-					bool bChecked = (NewState == ECheckBoxState::Checked);
-					if (Landscape->CanHaveLayersContent() != bChecked)
-					{
-						ToggleCanHaveLayersContent(Landscape);
-					}
-				})
-			];
-		}
-	}
-}
-
-void FLandscapeUIDetails::OnEditorExperimentalSettingsChanged(FName PropertyName)
-{
-	if (DetailLayoutBuilder && PropertyName == GET_MEMBER_NAME_CHECKED(UEditorExperimentalSettings, bLandscapeLayerSystem))
-	{
-		DetailLayoutBuilder->ForceRefreshDetails();
+					ToggleCanHaveLayersContent(Landscape);
+				}
+			})
+		];
 	}
 }
 
@@ -122,11 +102,11 @@ void FLandscapeUIDetails::ToggleCanHaveLayersContent(ALandscape* Landscape)
 
 		if (bHasHiddenLayers)
 		{
-			Reason = LOCTEXT("LandscapeDisableLayers_HiddenLayers", "Are you sure you want to disable the layers system?\n\nDoing so, will result in losing the data stored for each layers, but the current visual output will be kept. Be aware that some layers are currently hidden, continuing will result in their data being lost. Undo/redo buffer will also be cleared.");
+			Reason = LOCTEXT("LandscapeDisableLayers_HiddenLayers", "Are you sure you want to disable the edit layers on this Landscape?\n\nDoing so, will result in losing the data stored for each edit layer, but the current visual output will be kept. Be aware that some edit layers are currently hidden, continuing will result in their data being lost. Undo/redo buffer will also be cleared.");
 		}
 		else
 		{
-			Reason = LOCTEXT("LandscapeDisableLayers", "Are you sure you want to disable the layers system?\n\nDoing so, will result in losing the data stored for each layers, but the current visual output will be kept. Undo/redo buffer will also be cleared.");
+			Reason = LOCTEXT("LandscapeDisableLayers", "Are you sure you want to disable the edit layers on this Landscape?\n\nDoing so, will result in losing the data stored for each edit layers, but the current visual output will be kept. Undo/redo buffer will also be cleared.");
 		}
 
 		bToggled = FMessageDialog::Open(EAppMsgType::YesNo, Reason) == EAppReturnType::Yes;
@@ -134,7 +114,7 @@ void FLandscapeUIDetails::ToggleCanHaveLayersContent(ALandscape* Landscape)
 	else
 	{
 		
-		bToggled = FMessageDialog::Open(EAppMsgType::YesNo, LOCTEXT("LandscapeEnableLayers", "Are you sure you want to enable the layer system on this landscape and streaming proxies? Doing so will clear the undo/redo buffer.")) == EAppReturnType::Yes;
+		bToggled = FMessageDialog::Open(EAppMsgType::YesNo, LOCTEXT("LandscapeEnableLayers", "Are you sure you want to enable edit layers on this landscape? Doing so will clear the undo/redo buffer.")) == EAppReturnType::Yes;
 	}
 
 	if (bToggled)
@@ -142,7 +122,7 @@ void FLandscapeUIDetails::ToggleCanHaveLayersContent(ALandscape* Landscape)
 		Landscape->ToggleCanHaveLayersContent();
 		if (GEditor)
 		{
-			GEditor->ResetTransaction(LOCTEXT("ToggleLanscapeLayers", "Toggling Landscape Layers"));
+			GEditor->ResetTransaction(LOCTEXT("ToggleLanscapeLayers", "Toggling Landscape Edit Layers"));
 		}
 	}
 }

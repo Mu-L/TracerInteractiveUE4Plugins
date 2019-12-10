@@ -560,12 +560,8 @@ void FOnlineVoiceImpl::ProcessMuteChangeNotification()
 				ULocalPlayer* LP = GEngine->FindFirstLocalPlayerFromControllerId(Index);
 				if (LP && LP->PlayerController)
 				{
-					// If there is a player controller, we can mute/unmute people
-					if (LocalTalkers[Index].bIsRegistered)
-					{
-						// Use the common method of checking muting
-						UpdateMuteListForLocalTalker(Index, LP->PlayerController);
-					}
+					// Use the common method of checking muting
+					UpdateMuteListForLocalTalker(Index, LP->PlayerController);
 				}
 			}
 		}
@@ -885,4 +881,60 @@ FString FOnlineVoiceImpl::GetVoiceDebugState() const
 	}
 
 	return Output;
+}
+
+Audio::FPatchOutputStrongPtr FOnlineVoiceImpl::GetMicrophoneOutput()
+{
+	if (VoiceEngine.IsValid())
+	{
+		return VoiceEngine->GetMicrophoneOutput();
+	}
+	else
+	{
+		return nullptr;
+	}
+}
+
+Audio::FPatchOutputStrongPtr FOnlineVoiceImpl::GetRemoteTalkerOutput()
+{
+	if (VoiceEngine.IsValid())
+	{
+		return VoiceEngine->GetRemoteTalkerOutput();
+	}
+	else
+	{
+		return nullptr;
+	}
+}
+
+bool FOnlineVoiceImpl::PatchRemoteTalkerOutputToEndpoint(const FString& InDeviceName, bool bMuteInGameOutput /*= true*/)
+{
+	if (VoiceEngine.IsValid())
+	{
+		return VoiceEngine->PatchRemoteTalkerOutputToEndpoint(InDeviceName, bMuteInGameOutput);
+	}
+	else
+	{
+		return false;
+	}
+}
+
+bool FOnlineVoiceImpl::PatchLocalTalkerOutputToEndpoint(const FString& InDeviceName)
+{
+	if (VoiceEngine.IsValid())
+	{
+		return VoiceEngine->PatchLocalTalkerOutputToEndpoint(InDeviceName);
+	}
+	else
+	{
+		return false;
+	}
+}
+
+void FOnlineVoiceImpl::DisconnectAllEndpoints()
+{
+	if (VoiceEngine.IsValid())
+	{
+		return VoiceEngine->DisconnectAllEndpoints();
+	}
 }

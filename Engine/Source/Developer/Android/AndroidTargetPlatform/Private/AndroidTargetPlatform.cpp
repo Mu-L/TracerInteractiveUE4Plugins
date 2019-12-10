@@ -307,7 +307,7 @@ bool FAndroidTargetPlatform::IsSdkInstalled(bool bProjectHasCode, FString& OutDo
 	return true;
 }
 
-int32 FAndroidTargetPlatform::CheckRequirements(const FString& ProjectPath, bool bProjectHasCode, FString& OutTutorialPath, FString& OutDocumentationPath, FText& CustomizedLogMessage) const
+int32 FAndroidTargetPlatform::CheckRequirements(bool bProjectHasCode, EBuildConfiguration Configuration, bool bRequiresAssetNativization, FString& OutTutorialPath, FString& OutDocumentationPath, FText& CustomizedLogMessage) const
 {
 	OutDocumentationPath = TEXT("Platforms/Android/GettingStarted");
 
@@ -656,11 +656,32 @@ void FAndroidTargetPlatform::GetAllWaveFormats(TArray<FName>& OutFormats) const
 	OutFormats.Add(NAME_ADPCM);
 }
 
-namespace
+namespace Android
 {
 	void CachePlatformAudioCookOverrides(FPlatformAudioCookOverrides& OutOverrides)
 	{
 		const TCHAR* CategoryName = TEXT("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings");
+
+		int32 SoundCueQualityIndex = INDEX_NONE;
+		if (GConfig->GetInt(CategoryName, TEXT("SoundCueCookQualityIndex"), SoundCueQualityIndex, GEngineIni))
+		{
+			OutOverrides.SoundCueCookQualityIndex = SoundCueQualityIndex;
+		}
+
+		int32 RetrievedChunkSizeKB = 256;
+		GConfig->GetInt(CategoryName, TEXT("ChunkSizeKB"), RetrievedChunkSizeKB, GEngineIni);
+		OutOverrides.StreamChunkSizeKB = RetrievedChunkSizeKB;
+
+		GConfig->GetBool(CategoryName, TEXT("bUseAudioStreamCaching"), OutOverrides.bUseStreamCaching, GEngineIni);
+
+		/** Memory Load On Demand Settings */
+		if (OutOverrides.bUseStreamCaching)
+		{
+			// Cache size:
+			int32 RetrievedCacheSize = 32 * 1024;
+			GConfig->GetInt(CategoryName, TEXT("CacheSizeKB"), RetrievedCacheSize, GEngineIni);
+			OutOverrides.StreamCachingSettings.CacheSizeKB = RetrievedCacheSize;
+		}
 
 		GConfig->GetBool(CategoryName, TEXT("bResampleForDevice"), OutOverrides.bResampleForDevice, GEngineIni);
 
@@ -763,17 +784,13 @@ FPlatformAudioCookOverrides* FAndroidTargetPlatform::GetAudioCompressionSettings
 {
 	static FPlatformAudioCookOverrides Settings;
 
-#if !WITH_EDITOR
 	static bool bCachedPlatformSettings = false;
 
 	if (!bCachedPlatformSettings)
 	{
-		CachePlatformAudioCookOverrides(Settings);
+		Android::CachePlatformAudioCookOverrides(Settings);
 		bCachedPlatformSettings = true;
 	}
-#else
-	CachePlatformAudioCookOverrides(Settings);
-#endif
 
 	return &Settings;
 }

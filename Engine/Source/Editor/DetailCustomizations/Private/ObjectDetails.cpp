@@ -37,16 +37,15 @@ void FObjectDetails::AddExperimentalWarningCategory(IDetailLayoutBuilder& Detail
 {
 	bool bBaseClassIsExperimental = false;
 	bool bBaseClassIsEarlyAccess = false;
-
-	FObjectEditorUtils::GetClassDevelopmentStatus(DetailBuilder.GetBaseClass(), bBaseClassIsExperimental, bBaseClassIsEarlyAccess);
+	FString MostDerivedDevelopmentClassName;
+	FObjectEditorUtils::GetClassDevelopmentStatus(DetailBuilder.GetBaseClass(), bBaseClassIsExperimental, bBaseClassIsEarlyAccess, MostDerivedDevelopmentClassName);
 
 	if (bBaseClassIsExperimental || bBaseClassIsEarlyAccess)
 	{
 		const FName CategoryName(TEXT("Warning"));
 		const FText CategoryDisplayName = LOCTEXT("WarningCategoryDisplayName", "Warning");
-		FString ClassUsed = DetailBuilder.GetTopLevelProperty().ToString();
-		const FText WarningText = bBaseClassIsExperimental ? FText::Format( LOCTEXT("ExperimentalClassWarning", "Uses experimental class: {0}") , FText::FromString(ClassUsed) )
-			: FText::Format( LOCTEXT("EarlyAccessClassWarning", "Uses beta class {0}"), FText::FromString(*ClassUsed) );
+		const FText WarningText = bBaseClassIsExperimental ? FText::Format( LOCTEXT("ExperimentalClassWarning", "Uses experimental class: {0}") , FText::FromString(MostDerivedDevelopmentClassName) )
+			: FText::Format( LOCTEXT("EarlyAccessClassWarning", "Uses beta class {0}"), FText::FromString(MostDerivedDevelopmentClassName) );
 		const FText SearchString = WarningText;
 		const FText Tooltip = bBaseClassIsExperimental ? LOCTEXT("ExperimentalClassTooltip", "Here be dragons!  Uses one or more unsupported 'experimental' classes") : LOCTEXT("EarlyAccessClassTooltip", "Uses one or more 'beta' classes");
 		const FString ExcerptName = bBaseClassIsExperimental ? TEXT("ObjectUsesExperimentalClass") : TEXT("ObjectUsesEarlyAccessClass");
@@ -90,6 +89,9 @@ void FObjectDetails::AddExperimentalWarningCategory(IDetailLayoutBuilder& Detail
 
 void FObjectDetails::AddCallInEditorMethods(IDetailLayoutBuilder& DetailBuilder)
 {
+	// metadata tag for defining sort order of function buttons within a Category
+	static const FName NAME_DisplayPriority("DisplayPriority");
+
 	// Get all of the functions we need to display (done ahead of time so we can sort them)
 	TArray<UFunction*, TInlineAllocator<8>> CallInEditorFunctions;
 	for (TFieldIterator<UFunction> FunctionIter(DetailBuilder.GetBaseClass(), EFieldIteratorFlags::IncludeSuper); FunctionIter; ++FunctionIter)
@@ -128,11 +130,32 @@ void FObjectDetails::AddCallInEditorMethods(IDetailLayoutBuilder& DetailBuilder)
 			return;
 		}
 
-		// Sort the functions by category and then by name
+		// Sort the functions by category and then by DisplayPriority meta tag, and then by name
 		CallInEditorFunctions.Sort([](UFunction& A, UFunction& B)
 		{
 			const int32 CategorySort = A.GetMetaData(FBlueprintMetadata::MD_FunctionCategory).Compare(B.GetMetaData(FBlueprintMetadata::MD_FunctionCategory));
-			return (CategorySort == 0) ? (A.GetName() <= B.GetName()) : (CategorySort <= 0);
+			if (CategorySort != 0)
+			{
+				return (CategorySort <= 0);
+			}
+			else 
+			{
+				FString DisplayPriorityAStr = A.GetMetaData(NAME_DisplayPriority);
+				int32 DisplayPriorityA = (DisplayPriorityAStr.IsEmpty() ? MAX_int32 : FCString::Atoi(*DisplayPriorityAStr));
+				if (DisplayPriorityA == 0 && !FCString::IsNumeric(*DisplayPriorityAStr))
+				{
+					DisplayPriorityA = MAX_int32;
+				}
+
+				FString DisplayPriorityBStr = B.GetMetaData(NAME_DisplayPriority);
+				int32 DisplayPriorityB = (DisplayPriorityBStr.IsEmpty() ? MAX_int32 : FCString::Atoi(*DisplayPriorityBStr));
+				if (DisplayPriorityB == 0 && !FCString::IsNumeric(*DisplayPriorityBStr))
+				{
+					DisplayPriorityB = MAX_int32;
+				}
+
+				return (DisplayPriorityA == DisplayPriorityB) ? (A.GetName() <= B.GetName()) : (DisplayPriorityA <= DisplayPriorityB);
+			}
 		});
 
 		struct FCategoryEntry

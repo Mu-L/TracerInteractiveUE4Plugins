@@ -3,6 +3,7 @@
 
 #include "Audio/AudioDebug.h"
 #include "AudioDevice.h"
+#include "AudioMixerDevice.h"
 #include "Sound/AudioSettings.h"
 #include "Sound/SoundWave.h"
 #include "GameFramework/GameUserSettings.h"
@@ -79,12 +80,17 @@ FAudioDeviceManager::FAudioDeviceManager()
 	, bOnlyToggleAudioMixerOnce(false)
 	, bToggledAudioMixer(false)
 {
+
+#if ENABLE_AUDIO_DEBUG
+
 	// Check for a command line debug sound argument.
 	FString DebugSound;
 	if (FParse::Value(FCommandLine::Get(), TEXT("DebugSound="), DebugSound))
 	{
-		SetAudioDebugSound(*DebugSound);
+		GetDebugger().SetAudioDebugSound(*DebugSound);
 	}
+
+#endif //ENABLE_AUDIO_DEBUG
 }
 
 FAudioDeviceManager::~FAudioDeviceManager()
@@ -185,6 +191,15 @@ void FAudioDeviceManager::ToggleAudioMixer()
 					// Make a new audio device using the new audio device module
 					AudioDevice = AudioDeviceModule->CreateAudioDevice();
 
+					// Some AudioDeviceModules override CreteAudioMixerPlatformInterface, which means we can create a Audio::FMixerDevice.
+					if (AudioDevice == nullptr)
+					{
+						checkf(AudioDeviceModule->IsAudioMixerModule(), TEXT("Please override AudioDeviceModule->CreateAudioDevice()"))
+						AudioDevice = new Audio::FMixerDevice(AudioDeviceModule->CreateAudioMixerPlatformInterface());
+					}
+
+					check(AudioDevice);
+
 					// Set the new audio device into the slot of the old audio device in the manager
 					Devices[DeviceIndex] = AudioDevice;
 
@@ -236,6 +251,11 @@ void FAudioDeviceManager::ToggleAudioMixer()
 bool FAudioDeviceManager::IsUsingAudioMixer() const
 {
 	return bUsingAudioMixer;
+}
+
+IAudioDeviceModule* FAudioDeviceManager::GetAudioDeviceModule()
+{
+	return AudioDeviceModule;
 }
 
 bool FAudioDeviceManager::Initialize()
@@ -405,6 +425,14 @@ bool FAudioDeviceManager::CreateAudioDevice(bool bCreateNewDevice, FCreateAudioD
 		{
 			// Create the new audio device and make sure it succeeded
 			OutResults.AudioDevice = AudioDeviceModule->CreateAudioDevice();
+
+			// Some AudioDeviceModules override CreteAudioMixerPlatformInterface, which means we can create a Audio::FMixerDevice.
+			if (OutResults.AudioDevice == nullptr)
+			{
+				checkf(AudioDeviceModule->IsAudioMixerModule(), TEXT("Please override AudioDeviceModule->CreateAudioDevice()"))
+					OutResults.AudioDevice = new Audio::FMixerDevice(AudioDeviceModule->CreateAudioMixerPlatformInterface());
+			}
+
 			if (OutResults.AudioDevice == nullptr)
 			{
 				return false;
@@ -458,10 +486,15 @@ bool FAudioDeviceManager::CreateAudioDevice(bool bCreateNewDevice, FCreateAudioD
 
 	if (bRequiresInit)
 	{
+		// Set to highest max channels initially provided by any quality setting, so that
+		// setting to lower quality but potentially returning to higher quality later at
+		// runtime is supported.
 		const UAudioSettings* AudioSettings = GetDefault<UAudioSettings>();
-		if (OutResults.AudioDevice->Init(AudioSettings->GetHighestMaxChannels())) //-V595
+		const int32 HighestMaxChannels = AudioSettings ? AudioSettings->GetHighestMaxChannels() : 0;
+		if (OutResults.AudioDevice && OutResults.AudioDevice->Init(HighestMaxChannels))
 		{
-			OutResults.AudioDevice->SetMaxChannels(AudioSettings->GetQualityLevelSettings(GEngine->GetGameUserSettings()->GetAudioQualityLevel()).MaxChannels); //-V595
+			const FAudioQualitySettings& QualitySettings = OutResults.AudioDevice->GetQualityLevelSettings();
+			OutResults.AudioDevice->SetMaxChannels(QualitySettings.MaxChannels);
 		}
 		else
 		{
@@ -479,7 +512,7 @@ bool FAudioDeviceManager::CreateAudioDevice(bool bCreateNewDevice, FCreateAudioD
 	return (OutResults.AudioDevice != nullptr);
 }
 
-bool FAudioDeviceManager::IsValidAudioDeviceHandle(uint32 Handle) const
+bool FAudioDeviceManager::IsValidAudioDeviceHandle(Audio::FDeviceId Handle) const
 {
 	if (AudioDeviceModule == nullptr || Handle == INDEX_NONE)
 	{
@@ -496,7 +529,7 @@ bool FAudioDeviceManager::IsValidAudioDeviceHandle(uint32 Handle) const
 	return Generations[Index] == Generation;
 }
 
-bool FAudioDeviceManager::ShutdownAudioDevice(uint32 Handle)
+bool FAudioDeviceManager::ShutdownAudioDevice(Audio::FDeviceId Handle)
 {
 	if (!IsValidAudioDeviceHandle(Handle))
 	{
@@ -574,7 +607,7 @@ bool FAudioDeviceManager::ShutdownAllAudioDevices()
 	return true;
 }
 
-FAudioDevice* FAudioDeviceManager::GetAudioDevice(uint32 Handle)
+FAudioDevice* FAudioDeviceManager::GetAudioDevice(Audio::FDeviceId Handle)
 {
 	if (!IsValidAudioDeviceHandle(Handle))
 	{
@@ -780,7 +813,7 @@ void FAudioDeviceManager::SetActiveDevice(uint32 InAudioDeviceHandle)
 	}
 }
 
-void FAudioDeviceManager::SetSoloDevice(uint32 InAudioDeviceHandle)
+void FAudioDeviceManager::SetSoloDevice(Audio::FDeviceId InAudioDeviceHandle)
 {
 	SoloDeviceHandle = InAudioDeviceHandle;
 	if (SoloDeviceHandle != INDEX_NONE)
@@ -973,103 +1006,10 @@ void FAudioDeviceManager::ToggleVisualize3dDebug()
 #endif // ENABLE_AUDIO_DEBUG
 }
 
-void FAudioDeviceManager::SetDebugSoloSoundClass(const TCHAR* SoundClassName)
-{
-	if (!IsInAudioThread())
-	{
-		DECLARE_CYCLE_STAT(TEXT("FAudioThreadTask.SetDebugSoloSoundClass"), STAT_SetDebugSoloSoundClass, STATGROUP_AudioThreadCommands);
-
-		FAudioDeviceManager* AudioDeviceManager = this;
-		FAudioThread::RunCommandOnAudioThread([AudioDeviceManager, SoundClassName]()
-		{
-			AudioDeviceManager->SetDebugSoloSoundClass(SoundClassName);
-
-		}, GET_STATID(STAT_SetDebugSoloSoundClass));
-		return;
-	}
-
-	DebugNames.DebugSoloSoundClass = SoundClassName;
-}
-
-const FString& FAudioDeviceManager::GetDebugSoloSoundClass() const
-{
-	return DebugNames.DebugSoloSoundClass;
-}
-
-void FAudioDeviceManager::SetDebugSoloSoundWave(const TCHAR* SoundWave)
-{
-	if (!IsInAudioThread())
-	{
-		DECLARE_CYCLE_STAT(TEXT("FAudioThreadTask.SetDebugSoloSoundWave"), STAT_SetDebugSoloSoundWave, STATGROUP_AudioThreadCommands);
-
-		FAudioDeviceManager* AudioDeviceManager = this;
-		FAudioThread::RunCommandOnAudioThread([AudioDeviceManager, SoundWave]()
-		{
-			AudioDeviceManager->SetDebugSoloSoundWave(SoundWave);
-
-		}, GET_STATID(STAT_SetDebugSoloSoundWave));
-		return;
-	}
-
-	DebugNames.DebugSoloSoundWave = SoundWave;
-}
-
-const FString& FAudioDeviceManager::GetDebugSoloSoundWave() const
-{
-	return DebugNames.DebugSoloSoundWave;
-}
-
-void FAudioDeviceManager::SetDebugSoloSoundCue(const TCHAR* SoundCue)
-{
-	if (!IsInAudioThread())
-	{
-		DECLARE_CYCLE_STAT(TEXT("FAudioThreadTask.SetDebugSoloSoundCue"), STAT_SetDebugSoloSoundCue, STATGROUP_AudioThreadCommands);
-
-		FAudioDeviceManager* AudioDeviceManager = this;
-		FAudioThread::RunCommandOnAudioThread([AudioDeviceManager, SoundCue]()
-		{
-			AudioDeviceManager->SetDebugSoloSoundCue(SoundCue);
-
-		}, GET_STATID(STAT_SetDebugSoloSoundCue));
-		return;
-	}
-
-	DebugNames.DebugSoloSoundCue = SoundCue;
-}
-
-const FString& FAudioDeviceManager::GetDebugSoloSoundCue() const
-{
-	return DebugNames.DebugSoloSoundCue;
-}
-
-void FAudioDeviceManager::SetAudioMixerDebugSound(const TCHAR* SoundName)
-{
-	DebugNames.DebugAudioMixerSoundName = SoundName;
-}
-
-void FAudioDeviceManager::SetAudioDebugSound(const TCHAR* SoundName)
-{
-	DebugNames.DebugSoundName = SoundName;
-	DebugNames.bDebugSoundName = DebugNames.DebugSoundName != TEXT("");
-}
-
-const FString& FAudioDeviceManager::GetAudioMixerDebugSoundName() const
-{
-	return DebugNames.DebugAudioMixerSoundName;
-}
-
-bool FAudioDeviceManager::GetAudioDebugSound(FString& OutDebugSound)
-{
-	if (DebugNames.bDebugSoundName)
-	{
-		OutDebugSound = DebugNames.DebugSoundName;
-		return true;
-	}
-	return false;
-}
-
 float FAudioDeviceManager::GetDynamicSoundVolume(ESoundType SoundType, const FName& SoundName) const
 {
+	check(IsInAudioThread());
+
 	TTuple<ESoundType, FName> SoundKey(SoundType, SoundName);
 	if (const float* Volume = DynamicSoundVolumes.Find(SoundKey))
 	{

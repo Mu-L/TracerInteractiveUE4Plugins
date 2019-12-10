@@ -174,6 +174,33 @@ struct FRenderingCompositePassContext
 		return SceneColorViewRect;
 	}
 
+	FIntRect GetSceneColorDestRect(FRenderingCompositePass* InPass) const;
+
+	FIntPoint GetSceneColorDownscaleFactor(FIntPoint InputExtent) const
+	{
+		const uint32 ScaleFactorX = FMath::RoundUpToPowerOfTwo(FMath::DivideAndRoundUp(ReferenceBufferSize.X, InputExtent.X));
+		const uint32 ScaleFactorY = FMath::RoundUpToPowerOfTwo(FMath::DivideAndRoundUp(ReferenceBufferSize.Y, InputExtent.Y));
+		return FIntPoint(ScaleFactorX, ScaleFactorY);
+	}
+
+	FIntRect GetDownsampledSceneColorViewRect(FIntPoint DownsampleFactor) const
+	{
+		FIntRect Rect = FIntRect::DivideAndRoundUp(SceneColorViewRect, DownsampleFactor);
+		Rect.Max.X = FMath::Max(Rect.Max.X, 1);
+		Rect.Max.Y = FMath::Max(Rect.Max.Y, 1);
+		return Rect;
+	}
+
+	FIntRect GetDownsampledSceneColorViewRect(uint32 DownsampleFactor) const
+	{
+		return GetDownsampledSceneColorViewRect(FIntPoint(DownsampleFactor, DownsampleFactor));
+	}
+
+	FIntRect GetDownsampledSceneColorViewRectFromInputExtent(FIntPoint InputExtent) const
+	{
+		return GetDownsampledSceneColorViewRect(GetSceneColorDownscaleFactor(InputExtent));
+	}
+
 	/** Returns the LoadAction that should be use for a given render target. */
 	ERenderTargetLoadAction GetLoadActionForRenderTarget(const FSceneRenderTargetItem& DestRenderTarget) const;
 
@@ -356,6 +383,12 @@ struct FRenderingCompositePass
 		const FRDGTextureDesc& TextureDesc,
 		const TCHAR* TextureName);
 
+	/** Finds an allocated output texture if one exists. Otherwise, returns null */
+	FRDGTextureRef FindRDGTextureForOutput(
+		FRDGBuilder& GraphBuilder,
+		EPassOutputId OutputId,
+		const TCHAR* TextureName);
+
 	/**
 	 * Registers a RDG texture to be extracted to the assigned output during graph execution.
 	 */
@@ -368,7 +401,7 @@ struct FRenderingCompositePass
 	 * Convenience method, is using other virtual methods.
 	 * @return 0 if there is an error
 	 */
-	const FPooledRenderTargetDesc* GetInputDesc(EPassInputId InPassInputId) const;
+	RENDERER_API const FPooledRenderTargetDesc* GetInputDesc(EPassInputId InPassInputId) const;
 
 	/** */
 	virtual void Release() = 0;
@@ -413,7 +446,7 @@ struct FRenderingCompositeOutputRef
 	}
 
 	/** @return can be 0 */
-	FRenderingCompositeOutput* GetOutput() const;
+	RENDERER_API FRenderingCompositeOutput* GetOutput() const;
 
 	EPassOutputId GetOutputId() const { return PassOutputId; }
 
@@ -435,6 +468,16 @@ struct FRenderingCompositeOutputRef
 	FRHIComputeFence* GetComputePassEndFence() const
 	{
 		return IsValid() ? Source->GetComputePassEndFence() : nullptr;
+	}
+
+	bool operator==(const FRenderingCompositeOutputRef& Other) const
+	{
+		return Source == Other.Source && PassOutputId == Other.PassOutputId;
+	}
+
+	bool operator!=(const FRenderingCompositeOutputRef& Other) const
+	{
+		return !(*this == Other);
 	}
 
 private:
@@ -495,7 +538,7 @@ struct FRenderingCompositeOutput
 	 * get the surface to write to
 	 * @param DebugName must not be 0
 	 */
-	const FSceneRenderTargetItem& RequestSurface(const FRenderingCompositePassContext& Context);
+	RENDERER_API const FSceneRenderTargetItem& RequestSurface(const FRenderingCompositePassContext& Context);
 
 	// private:
 	FPooledRenderTargetDesc RenderTargetDesc; 

@@ -4,7 +4,7 @@
 
 // Include
 #include "CoreMinimal.h"
-#include "NetAnalytics.h"
+#include "Net/Core/Analytics/NetAnalytics.h"
 
 
 /**
@@ -86,10 +86,17 @@ public:
 
 	/** The length of all outgoing packets, where compression was skipped. */
 	uint64 OutNotCompressedSkippedLengthTotal;
+
+
+	/** The number of OodleHandlerComponent's running during the lifetime of the analytics aggregator (i.e. NetDriver lifetime). */
+	uint32 NumOodleHandlers;
+
+	/** The number of OodleHandlerComponent's that had packet compression enabled. */
+	uint32 NumOodleHandlersCompressionEnabled;
 };
 
 /**
- * Oodle implementation for threaded net analytics data - the threading is taken care of, just need to send off the analytics
+ * Oodle implementation for (serverside) threaded net analytics data - threading is taken care of, just need to send off the analytics
  */
 struct FOodleNetAnalyticsData :
 #if NET_ANALYTICS_MULTITHREADING
@@ -108,5 +115,21 @@ public:
 		return this;
 	}
 #endif
+
+protected:
+	/**
+	 * Returns the analytics event name to use - to be overridden in subclasses
+	 */
+	virtual const TCHAR* GetAnalyticsEventName() const;
 };
+
+/**
+ * Clientside version of the above net analytics data (typically only used for debugging)
+ */
+struct FClientOodleNetAnalyticsData : public FOodleNetAnalyticsData
+{
+	virtual const TCHAR* GetAnalyticsEventName() const override;
+};
+
+
 

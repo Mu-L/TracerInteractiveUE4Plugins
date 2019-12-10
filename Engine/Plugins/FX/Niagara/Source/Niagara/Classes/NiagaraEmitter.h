@@ -9,6 +9,7 @@
 #include "NiagaraScript.h"
 #include "NiagaraCollision.h"
 #include "INiagaraMergeManager.h"
+#include "NiagaraSystemFastPath.h"
 #include "NiagaraEmitter.generated.h"
 
 class UMaterial;
@@ -69,9 +70,11 @@ struct FNiagaraEventGeneratorProperties
 
 	FNiagaraEventGeneratorProperties(FNiagaraDataSetProperties &Props, FName InEventGenerator)
 		: ID(Props.ID.Name)
-		, SetProps(Props)		
 	{
-
+		DataSetCompiledData.Variables = Props.Variables;
+		DataSetCompiledData.ID = Props.ID;
+		DataSetCompiledData.SimTarget = ENiagaraSimTarget::CPUSim;
+		DataSetCompiledData.BuildLayout();
 	}
 
 	/** Max Number of Events that can be generated per frame. */
@@ -82,7 +85,7 @@ struct FNiagaraEventGeneratorProperties
 	FName ID;
 
 	UPROPERTY()
-	FNiagaraDataSetProperties SetProps;
+	FNiagaraDataSetCompiledData DataSetCompiledData;
 };
 
 
@@ -164,6 +167,34 @@ struct FNiagaraEventScriptProperties : public FNiagaraEmitterScriptProperties
 	uint32 MinSpawnNumber;
 };
 
+USTRUCT()
+struct FNiagaraDetailsLevelScaleOverrides 
+{
+	GENERATED_BODY()
+
+	FNiagaraDetailsLevelScaleOverrides();
+
+	/** The Scalability spawn count scale used when Effects Quality level is set to Low instead of fx.NiagaraGlobalSpawnCountScale. */
+	UPROPERTY(EditAnywhere, Category = "Scalability")
+	float Low;
+
+	/** The Scalability spawn count scale used when Effects Quality level is set to Medium instead of fx.NiagaraGlobalSpawnCountScale. */
+	UPROPERTY(EditAnywhere, Category = "Scalability")
+	float Medium;
+
+	/** The Scalability spawn count scale used when Effects Quality level is set to High instead of fx.NiagaraGlobalSpawnCountScale. */
+	UPROPERTY(EditAnywhere, Category = "Scalability")
+	float High;
+
+	/** The Scalability spawn count scale used when Effects Quality level is set to Epic instead of fx.NiagaraGlobalSpawnCountScale. */
+	UPROPERTY(EditAnywhere, Category = "Scalability")
+	float Epic;
+
+	/** The Scalability spawn count scale used when Effects Quality level is set to Cine instead of fx.NiagaraGlobalSpawnCountScale. */
+	UPROPERTY(EditAnywhere, Category = "Scalability")
+	float Cine;
+};
+
 /** 
  *	UNiagaraEmitter stores the attributes of an FNiagaraEmitterInstance
  *	that need to be serialized and are used for its initialization 
@@ -178,6 +209,7 @@ class UNiagaraEmitter : public UObject
 public:
 #if WITH_EDITOR
 	DECLARE_MULTICAST_DELEGATE(FOnPropertiesChanged);
+	DECLARE_MULTICAST_DELEGATE(FOnRenderersChanged);
 	DECLARE_MULTICAST_DELEGATE_OneParam(FOnEmitterCompiled, UNiagaraEmitter*);
 
 	struct NIAGARA_API PrivateMemberNames
@@ -197,6 +229,7 @@ public:
 	//Begin UObject Interface
 	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;
 	NIAGARA_API FOnPropertiesChanged& OnPropertiesChanged();
+	NIAGARA_API FOnRenderersChanged& OnRenderersChanged();
 #endif
 	void Serialize(FArchive& Ar)override;
 	virtual void PostInitProperties() override;
@@ -214,6 +247,13 @@ public:
 	/** An emitter-based seed for the deterministic random number generator. */
 	UPROPERTY(EditAnywhere, Category = "Emitter", meta = (EditCondition = "bDeterminism"))
 	int32 RandomSeed;
+	
+	/** 
+	The emitter will allocate at least this many particles on it's first tick.
+	This can aid performance by avoiding many allocations as an emitter ramps up to it's max size.
+	*/
+	UPROPERTY(EditAnywhere, Category = "Emitter")
+	int32 PreAllocationCount;
 
 	UPROPERTY()
 	FNiagaraEmitterScriptProperties UpdateScriptProps;
@@ -243,6 +283,10 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Scalability", meta=(EditCondition = "bUseMaxDetailLevel"))
 	int32 MaxDetailLevel;
 
+	/** Custom Scalability spawn count scales to override the ones defined by fx.NiagaraGlobalSpawnCountScale in the GScalabilityIni config hierarchy. */
+	UPROPERTY(EditAnywhere, Category = "Scalability", meta = (EditCondition = "bOverrideGlobalSpawnCountScale"))
+	FNiagaraDetailsLevelScaleOverrides GlobalSpawnCountScaleOverrides;
+
 	/** When enabled, this will spawn using interpolated parameter values and perform a partial update at spawn time. This adds significant additional cost for spawning but will produce much smoother spawning for high spawn rates, erratic frame rates and fast moving emitters. */
 	UPROPERTY(EditAnywhere, Category = "Emitter")
 	uint32 bInterpolatedSpawning : 1;
@@ -259,6 +303,10 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Scalability", meta = (InlineEditConditionToggle))
 	uint32 bUseMaxDetailLevel : 1;
 
+	/** Whether or not to override the global spawn count scale based on Effects Quality levels, as defined by fx.NiagaraGlobalSpawnCountScale in the GScalabilityIni config hierarchy. */
+	UPROPERTY(EditAnywhere, Category = "Scalability", meta = (InlineEditConditionToggle))
+	uint32 bOverrideGlobalSpawnCountScale : 1;
+
 	/** Do particles in this emitter require a persistent ID? */
 	UPROPERTY(EditAnywhere, Category = "Emitter")
 	uint32 bRequiresPersistentIDs : 1;
@@ -266,6 +314,14 @@ public:
 	/** Limits the delta time per tick to prevent simulation spikes due to frame lags. */
 	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "Emitter", meta = (EditCondition = "bLimitDeltaTime"))
 	float MaxDeltaTimePerTick;
+
+	/** Get the max number of iteration that the CS is going to be launched. */
+	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "Emitter")
+	uint32 MaxUpdateIterations;
+
+	/** Get the max number of iteration that the CS is going to be launched. */
+	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "Emitter")
+	TSet<uint32> SpawnStages;
 
 	/** Whether to limit the max tick delta time or not. */
 	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "Emitter", meta = (InlineEditConditionToggle))
@@ -282,11 +338,16 @@ public:
 	UPROPERTY()
 	class UNiagaraScriptSourceBase*	GraphSource;
 
+	/** Should we enable rapid iteration removal if the system is also set to remove rapid iteration parameters on compile? This value defaults to true.*/
+	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "Emitter")
+	uint32 bBakeOutRapidIteration : 1;
+
 	bool NIAGARA_API AreAllScriptAndSourcesSynchronized() const;
 	void NIAGARA_API OnPostCompile();
 
 	UNiagaraEmitter* MakeRecursiveDeepCopy(UObject* DestOuter) const;
 	UNiagaraEmitter* MakeRecursiveDeepCopy(UObject* DestOuter, TMap<const UObject*, UObject*>& ExistingConversions) const;
+	void NIAGARA_API InvalidateCompileResults();
 
 	/* Gets a Guid which is updated any time data in this emitter is changed. */
 	FGuid NIAGARA_API GetChangeId() const;
@@ -327,8 +388,10 @@ public:
 	NIAGARA_API UNiagaraEmitter* DuplicateWithoutMerging(UObject* InOuter);
 #endif
 
+	float GetSpawnCountScale(int EffectsQuality = -1); 
+
 	/** Is this emitter allowed to be enabled by the current system detail level. */
-	bool IsAllowedByDetailLevel(int32 DetailLevel)const;
+	NIAGARA_API bool IsAllowedByDetailLevel(int32 DetailLevel)const;
 	NIAGARA_API bool RequiresPersistantIDs()const;
 
 	NIAGARA_API bool IsValid()const;
@@ -340,10 +403,8 @@ public:
 	FString NIAGARA_API GetUniqueEmitterName()const;
 	bool NIAGARA_API SetUniqueEmitterName(const FString& InName);
 
-	/** Converts an emitter paramter "Emitter.XXXX" into it's real parameter name. */
-	FNiagaraVariable ToEmitterParameter(const FNiagaraVariable& EmitterVar)const;
-
 	const TArray<UNiagaraRendererProperties*>& GetRenderers() const { return RendererProperties; }
+	TArray<UNiagaraRendererProperties*> GetEnabledRenderers() const;
 
 	void NIAGARA_API AddRenderer(UNiagaraRendererProperties* Renderer);
 
@@ -364,9 +425,34 @@ public:
 
 	TStatId GetStatID(bool bGameThread, bool bConcurrent)const;
 
+#if WITH_EDITORONLY_DATA
 	NIAGARA_API UNiagaraEmitter* GetParent() const;
 
 	NIAGARA_API void RemoveParent();
+#endif
+
+	void InitFastPathAttributeNames();
+
+	UPROPERTY(EditAnywhere, Category = "Script Fast Path")
+	FNiagaraFastPath_Module_EmitterScalability EmitterScalability;
+
+	UPROPERTY(EditAnywhere, Category = "Script Fast Path")
+	FNiagaraFastPath_Module_EmitterLifeCycle EmitterLifeCycle;
+
+	UPROPERTY(EditAnywhere, Category = "Script Fast Path")
+	TArray<FNiagaraFastPath_Module_SpawnRate> SpawnRate;
+
+	UPROPERTY(EditAnywhere, Category = "Script Fast Path")
+	TArray<FNiagaraFastPath_Module_SpawnPerUnit> SpawnPerUnit;
+
+	UPROPERTY(EditAnywhere, Category = "Script Fast Path")
+	TArray<FNiagaraFastPath_Module_SpawnBurstInstantaneous> SpawnBurstInstantaneous;
+
+	UPROPERTY()
+	FNiagaraFastPathAttributeNames SpawnFastPathAttributeNames;
+
+	UPROPERTY()
+	FNiagaraFastPathAttributeNames UpdateFastPathAttributeNames;
 
 protected:
 	virtual void BeginDestroy() override;
@@ -409,22 +495,25 @@ private:
 	UPROPERTY()
 	TArray<FName> SharedEventGeneratorIds;
 
+#if WITH_EDITORONLY_DATA
 	UPROPERTY()
 	UNiagaraEmitter* Parent;
 
 	UPROPERTY()
 	UNiagaraEmitter* ParentAtLastMerge;
+#endif
 
 #if WITH_EDITOR
 	FOnPropertiesChanged OnPropertiesChangedDelegate;
+	FOnRenderersChanged OnRenderersChangedDelegate;
 #endif
 
-	void GenerateStatID();
+	void GenerateStatID()const;
 #if STATS
-	TStatId StatID_GT;
-	TStatId StatID_GT_CNC;
-	TStatId StatID_RT;
-	TStatId StatID_RT_CNC;
+	mutable TStatId StatID_GT;
+	mutable TStatId StatID_GT_CNC;
+	mutable TStatId StatID_RT;
+	mutable TStatId StatID_RT_CNC;
 #endif
 };
 

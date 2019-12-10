@@ -7,7 +7,7 @@
 #include "Misc/CommandLine.h"
 #include "HAL/PlatformProcess.h"
 #include "Lumin/LuminPlatformMisc.h"
-#include <ml_lifecycle.h>
+#include "Lumin/CAPIShims/LuminAPI.h"
 
 #include <locale.h>
 #include <sys/resource.h>
@@ -55,7 +55,7 @@ static void InitCommandLine()
 	{
 		char CommandLine[CMD_LINE_MAX];
 		FMemory::Memzero(CommandLine, CMD_LINE_MAX * sizeof(char));
-		fgets(CommandLine, ARRAY_COUNT(CommandLine) - 1, CommandLineFile);
+		fgets(CommandLine, UE_ARRAY_COUNT(CommandLine) - 1, CommandLineFile);
 		
 		fclose(CommandLineFile);
 		
@@ -217,7 +217,7 @@ int main(int argc, char *argv[])
 #endif
 
 	// tick until done
-	while (!GIsRequestingExit)
+	while (!IsEngineExitRequested())
 	{
 // 		FAppEventManager::GetInstance()->Tick();
 // 		if(!FAppEventManager::GetInstance()->IsGamePaused())

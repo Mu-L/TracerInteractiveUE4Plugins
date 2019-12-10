@@ -132,16 +132,17 @@ namespace Chaos
 		TArray<TVector<T, 3>> GetFaceNormals(const TParticles<T, 3>& InParticles, const bool ReturnEmptyOnError = true) const
 		{ return GetFaceNormals(InParticles.X(), ReturnEmptyOnError); }
 
-		TArray<TVector<T, 3>> GetPointNormals(const TArrayView<const TVector<T, 3>>& points, const bool ReturnEmptyOnError = false);
-		void GetPointNormals(TArray<TVector<T, 3>>& PointNormals, const TArray<TVector<T, 3>>& FaceNormals, const bool ReturnEmptyOnError = false);
+		TArray<TVector<T, 3>> GetPointNormals(const TArrayView<const TVector<T, 3>>& points, const bool bReturnEmptyOnError = false, const bool bUseGlobalArray = true);
+		void GetPointNormals(TArray<TVector<T, 3>>& PointNormals, const TArray<TVector<T, 3>>& FaceNormals, const bool ReturnEmptyOnError = false, const bool bUseGlobalArray = true);
 		/** \brief Get per-point normals. 
 		 * This const version of this function requires \c GetPointToTriangleMap() 
 		 * to be called prior to invoking this function. 
+		 * @param bUseGlobalArray When true, fill the array from the StartIdx to StartIdx + NumIndices - 1 positions, otherwise fill the array from the 0 to NumIndices - 1 positions.
 		 */
-		void GetPointNormals(TArray<TVector<T, 3>>& PointNormals, const TArray<TVector<T, 3>>& FaceNormals, const bool ReturnEmptyOnError) const;
+		void GetPointNormals(TArray<TVector<T, 3>>& PointNormals, const TArray<TVector<T, 3>>& FaceNormals, const bool bReturnEmptyOnError, const bool bUseGlobalArray) const;
 		/** Deprecated. Use TArrayView version. */
-		TArray<TVector<T, 3>> GetPointNormals(const TParticles<T, 3>& InParticles, const bool ReturnEmptyOnError = false)
-		{ return GetPointNormals(InParticles.X(), ReturnEmptyOnError); }
+		TArray<TVector<T, 3>> GetPointNormals(const TParticles<T, 3>& InParticles, const bool bReturnEmptyOnError = false, const bool bUseGlobalArray = true)
+		{ return GetPointNormals(InParticles.X(), bReturnEmptyOnError, bUseGlobalArray); }
 
 		static TTriangleMesh<T> GetConvexHullFromParticles(const TArrayView<const TVector<T, 3>>& points);
 		/** Deprecated. Use TArrayView version. */
@@ -200,7 +201,7 @@ namespace Chaos
 		static void InitEquilateralTriangleXY(TTriangleMesh<T>& TriMesh, TParticles<T, 3>& Particles)
 		{
 			const int32 Idx = Particles.Size();
-			Particles.AddElements(3);
+			Particles.AddParticles(3);
 			// Left handed
 			Particles.X(Idx + 0) = TVector<T, 3>(0., 0.8083, 0.);
 			Particles.X(Idx + 1) = TVector<T, 3>(0.7, -0.4041, 0.);
@@ -215,7 +216,7 @@ namespace Chaos
 		static void InitEquilateralTriangleYZ(TTriangleMesh<T>& TriMesh, TParticles<T, 3>& Particles)
 		{
 			const int32 Idx = Particles.Size();
-			Particles.AddElements(3);
+			Particles.AddParticles(3);
 			// Left handed
 			Particles.X(Idx + 0) = TVector<T, 3>(0., 0., 0.8083);
 			Particles.X(Idx + 1) = TVector<T, 3>(0., 0.7, -0.4041);
@@ -231,9 +232,9 @@ namespace Chaos
 	private:
 		void InitHelper(const int32 StartIdx, const int32 EndIdx);
 
-		int32 GlobalToLocal(int32 GlobalIdx)
+		int32 GlobalToLocal(int32 GlobalIdx) const
 		{
-			int32 LocalIdx = GlobalIdx - MStartIdx;
+			const int32 LocalIdx = GlobalIdx - MStartIdx;
 			check(LocalIdx >= 0 && LocalIdx < MNumIndices);
 			return LocalIdx;
 		}

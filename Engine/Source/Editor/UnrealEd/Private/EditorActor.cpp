@@ -49,7 +49,7 @@
 #include "EditorLevelUtils.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "LevelEditorViewport.h"
-#include "Layers/ILayers.h"
+#include "Layers/LayersSubsystem.h"
 #include "Editor/GeometryMode/Public/GeometryEdMode.h"
 #include "Editor/GeometryMode/Public/EditorGeometry.h"
 #include "ActorEditorUtils.h"
@@ -65,6 +65,8 @@
 #include "AssetToolsModule.h"
 #include "AssetSelection.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Misc/ScopedSlowTask.h"
+#include "Subsystems/AssetEditorSubsystem.h"
 
 #define LOCTEXT_NAMESPACE "UnrealEd.EditorActor"
 
@@ -231,14 +233,16 @@ static FVector CreateLocationOffset(bool bDuplicate, bool bOffsetLocations)
 
 bool UUnrealEdEngine::WarnIfDestinationLevelIsHidden( UWorld* InWorld )
 {
-	bool result = false;
+	bool bShouldLoadHiddenLevels = true;
+	bool bShowPasteHiddenWarning = true;
+	TArray<ULevel*> Levels;
+	TArray<bool> bTheyShouldBeVisible;
 	//prepare the warning dialog
 	FSuppressableWarningDialog::FSetupInfo Info( LOCTEXT( "Warning_PasteWarningBody","You are trying to paste to a hidden level.\nSuppressing this will default to Do Not Paste" ), LOCTEXT( "Warning_PasteWarningHeader","Pasting To Hidden Level" ), "PasteHiddenWarning" );
 	Info.ConfirmText = LOCTEXT( "Warning_PasteContinue","Unhide Level and paste" );
 	Info.CancelText = LOCTEXT( "Warning_PasteCancel","Do not paste" );
-	FSuppressableWarningDialog PasteHiddenWarning( Info );
 
-	//check streaming levels first	
+	//check streaming levels first
 	for (ULevelStreaming* StreamedLevel : InWorld->GetStreamingLevels())
 	{
 		//this is the active level - check if it is visible
@@ -247,39 +251,48 @@ bool UUnrealEdEngine::WarnIfDestinationLevelIsHidden( UWorld* InWorld )
 			ULevel* Level = StreamedLevel->GetLoadedLevel();
 			if( Level && Level->IsCurrentLevel() )
 			{
-				//the streamed level is not visible - check what the user wants to do
-				FSuppressableWarningDialog::EResult DialogResult = PasteHiddenWarning.ShowModal();
-				if( ( DialogResult == FSuppressableWarningDialog::Cancel )  || ( DialogResult == FSuppressableWarningDialog::Suppressed ) )
+				if (bShowPasteHiddenWarning)
 				{
-					result = true;
+					bShowPasteHiddenWarning = false;
+					//the streamed level is not visible - check what the user wants to do
+					bShouldLoadHiddenLevels = (FSuppressableWarningDialog(Info).ShowModal() == FSuppressableWarningDialog::Confirm);
 				}
-				else
+				
+				if (bShouldLoadHiddenLevels)
 				{
-					EditorLevelUtils::SetLevelVisibility( Level, true, true );					
+					Levels.Add(Level);
+					bTheyShouldBeVisible.Add(true);
 				}
 			}
 		}
 	}
 
 	//now check the active level (this handles the persistent level also)
-	if( result == false )
+	if (bShouldLoadHiddenLevels)
 	{
 		if( FLevelUtils::IsLevelVisible( InWorld->GetCurrentLevel() ) == false )
 		{	
-			//the level is not visible - check what the user wants to do
-			FSuppressableWarningDialog::EResult DialogResult = PasteHiddenWarning.ShowModal();
-			if( ( DialogResult == FSuppressableWarningDialog::Cancel )  || ( DialogResult == FSuppressableWarningDialog::Suppressed ) )
+			if (bShowPasteHiddenWarning)
 			{
-				result = true;
+				bShowPasteHiddenWarning = false;
+				//the streamed level is not visible - check what the user wants to do
+				bShouldLoadHiddenLevels = (FSuppressableWarningDialog(Info).ShowModal() == FSuppressableWarningDialog::Confirm);
 			}
-			else 
+
+			if (bShouldLoadHiddenLevels)
 			{
-				EditorLevelUtils::SetLevelVisibility( InWorld->GetCurrentLevel(), true, true );
+				Levels.Add(InWorld->GetCurrentLevel());
+				bTheyShouldBeVisible.Add(true);
 			}
 
 		}
 	}
-	return result;
+	// For efficiency, set visibility of all levels at once
+	if (Levels.Num() > 0)
+	{
+		EditorLevelUtils::SetLevelsVisibility(Levels, bTheyShouldBeVisible, true);
+	}
+	return !bShouldLoadHiddenLevels;
 }
 
 void UUnrealEdEngine::edactPasteSelected(UWorld* InWorld, bool bDuplicate, bool bOffsetLocations, bool bWarnIfHidden, FString* SourceData)
@@ -358,6 +371,7 @@ void UUnrealEdEngine::edactPasteSelected(UWorld* InWorld, bool bDuplicate, bool 
 		FScopedLevelDirtied			LevelDirtyCallback;
 
 		// Update the actors' locations and update the global list of visible layers.
+		ULayersSubsystem* LayersSubsystem = GEditor->GetEditorSubsystem<ULayersSubsystem>();
 		for (FSelectionIterator It(GetSelectedActorIterator()); It; ++It)
 		{
 			AActor* Actor = static_cast<AActor*>( *It );
@@ -376,10 +390,10 @@ void UUnrealEdEngine::edactPasteSelected(UWorld* InWorld, bool bDuplicate, bool 
 			FActorLabelUtilities::SetActorLabelUnique(Actor, Actor->GetActorLabel(), &ActorLabels);
 			ActorLabels.Add(Actor->GetActorLabel());
 
-			GEditor->Layers->InitializeNewActorLayers(Actor);
+			LayersSubsystem->InitializeNewActorLayers(Actor);
 
 			// Ensure any layers this actor belongs to are visible
-			GEditor->Layers->SetLayersVisibility(Actor->Layers, true);
+			LayersSubsystem->SetLayersVisibility(Actor->Layers, true);
 
 			Actor->CheckDefaultSubobjects();
 			Actor->InvalidateLightingCache();
@@ -609,14 +623,7 @@ void UUnrealEdEngine::edactDuplicateSelected( ULevel* InLevel, bool bOffsetLocat
 			PostDuplicateSelection.Add(Actor);
 		}
 
-		TArray<FEdMode*> ActiveModes;
-		GLevelEditorModeTools().GetActiveModes(ActiveModes);
-
-		for (int32 ModeIndex = 0; ModeIndex < ActiveModes.Num(); ++ModeIndex)
-		{
-			// Tell the tools about the duplication
-			ActiveModes[ModeIndex]->ActorsDuplicatedNotify(PreDuplicateSelection, PostDuplicateSelection, bOffsetLocations);
-		}
+		GLevelEditorModeTools().ActorsDuplicatedNotify(PreDuplicateSelection, PostDuplicateSelection, bOffsetLocations);
 	}
 }
 
@@ -797,10 +804,15 @@ bool UUnrealEdEngine::edactDeleteSelected( UWorld* InWorld, bool bVerifyDeletion
 
 		if (bWarnAboutSoftReferences)
 		{
+			FScopedSlowTask SlowTask(ActorsToDelete.Num(), LOCTEXT("ComputeActorSoftReferences", "Computing References"));
+			SlowTask.MakeDialogDelayed(1.0f);
+
 			FAssetToolsModule& AssetToolsModule = FModuleManager::GetModuleChecked<FAssetToolsModule>(TEXT("AssetTools"));
 
 			for (int32 ActorIndex = 0; ActorIndex < ActorsToDelete.Num(); ++ActorIndex)
 			{
+				SlowTask.EnterProgressFrame();
+
 				TArray<UObject*> SoftReferencingObjects;
 				AActor* Actor = ActorsToDelete[ActorIndex];
 
@@ -814,6 +826,7 @@ bool UUnrealEdEngine::edactDeleteSelected( UWorld* InWorld, bool bVerifyDeletion
 		}
 	}
 
+	ULayersSubsystem* LayersSubsystem = GEditor->GetEditorSubsystem<ULayersSubsystem>();
 	for ( int32 ActorIndex = 0 ; ActorIndex < ActorsToDelete.Num() ; ++ActorIndex )
 	{
 		AActor* Actor = ActorsToDelete[ ActorIndex ];
@@ -1022,7 +1035,7 @@ bool UUnrealEdEngine::edactDeleteSelected( UWorld* InWorld, bool bVerifyDeletion
 		}
 
 		// Remove actor from all asset editors
-		FAssetEditorManager::Get().RemoveAssetFromAllEditors(Actor);
+		GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->RemoveAssetFromAllEditors(Actor);
 
 		// Mark the actor's level as dirty.
 		Actor->MarkPackageDirty();
@@ -1043,7 +1056,7 @@ bool UUnrealEdEngine::edactDeleteSelected( UWorld* InWorld, bool bVerifyDeletion
 		UE_LOG(LogEditorActor, Log,  TEXT("Deleted Actor: %s"), *Actor->GetClass()->GetName() );
 
 		// Destroy actor and clear references.
-		GEditor->Layers->DisassociateActorFromLayers( Actor );
+		LayersSubsystem->DisassociateActorFromLayers( Actor );
 		bool WasDestroyed = Actor->GetWorld()->EditorDestroyActor( Actor, false );
 		checkf( WasDestroyed,TEXT( "Failed to destroy Actor %s (%s)"), *Actor->GetClass()->GetName(), *Actor->GetActorLabel() );
 
@@ -1145,6 +1158,7 @@ void UUnrealEdEngine::edactReplaceSelectedBrush( UWorld* InWorld )
 	SelectedActors->Modify();
 
 	// Replace brushes.
+	ULayersSubsystem* LayersSubsystem = GEditor->GetEditorSubsystem<ULayersSubsystem>();
 	for ( int32 BrushIndex = 0 ; BrushIndex < BrushesToReplace.Num() ; ++BrushIndex )
 	{
 		ABrush* SrcBrush = BrushesToReplace[BrushIndex];
@@ -1158,14 +1172,14 @@ void UUnrealEdEngine::edactReplaceSelectedBrush( UWorld* InWorld )
 
 			NewBrush->Modify();
 
-				NewBrush->Layers.Append( SrcBrush->Layers );
+			NewBrush->Layers.Append( SrcBrush->Layers );
 
 			NewBrush->CopyPosRotScaleFrom( SrcBrush );
 			NewBrush->PostEditMove( true );
 			SelectActor( SrcBrush, false, false );
 			SelectActor( NewBrush, true, false );
 
-			GEditor->Layers->DisassociateActorFromLayers( SrcBrush );
+			LayersSubsystem->DisassociateActorFromLayers( SrcBrush );
 			InWorld->EditorDestroyActor( SrcBrush, true );
 		}
 	}
@@ -1186,7 +1200,8 @@ AActor* UUnrealEdEngine::ReplaceActor( AActor* CurrentActor, UClass* NewActorCla
 	if( NewActor )
 	{
 		NewActor->Modify();
-		GEditor->Layers->InitializeNewActorLayers( NewActor );
+		ULayersSubsystem* LayersSubsystem = GEditor->GetEditorSubsystem<ULayersSubsystem>();
+		LayersSubsystem->InitializeNewActorLayers( NewActor );
 
 		const bool bCurrentActorSelected = GetSelectedActors()->IsSelected( CurrentActor );
 		if ( bCurrentActorSelected )
@@ -1198,10 +1213,10 @@ AActor* UUnrealEdEngine::ReplaceActor( AActor* CurrentActor, UClass* NewActorCla
 		}
 
 		{
-			GEditor->Layers->DisassociateActorFromLayers( NewActor );
+			LayersSubsystem->DisassociateActorFromLayers( NewActor );
 			NewActor->Layers.Empty();
 
-			GEditor->Layers->AddActorToLayers( NewActor, CurrentActor->Layers );
+			LayersSubsystem->AddActorToLayers( NewActor, CurrentActor->Layers );
 
 			NewActor->SetActorLabel( CurrentActor->GetActorLabel() );
 			NewActor->Tags = CurrentActor->Tags;
@@ -1209,7 +1224,7 @@ AActor* UUnrealEdEngine::ReplaceActor( AActor* CurrentActor, UClass* NewActorCla
 			NewActor->EditorReplacedActor( CurrentActor );
 		}
 
-		GEditor->Layers->DisassociateActorFromLayers( CurrentActor );
+		LayersSubsystem->DisassociateActorFromLayers( CurrentActor );
 		CurrentActor->GetWorld()->EditorDestroyActor( CurrentActor, true );
 
 		// Note selection change if necessary and requested.

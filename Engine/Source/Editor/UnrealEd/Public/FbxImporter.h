@@ -138,6 +138,7 @@ struct FBXImportOptions
 	float ImportUniformScale;
 	EFBXNormalImportMethod NormalImportMethod;
 	EFBXNormalGenerationMethod::Type NormalGenerationMethod;
+	bool bComputeWeightedNormals;
 	bool bTransformVertexToAbsolute;
 	bool bBakePivotInVertex;
 	EFBXImportType ImportType;
@@ -755,9 +756,9 @@ public:
 	void AddStaticMeshSourceModelGeneratedLOD(UStaticMesh* StaticMesh, int32 LODIndex);
 
 	/**
-	* Return the node that match the staticmesh name. Return nullptr in case there is no match
+	* Return the node that match the mesh name. Return nullptr in case there is no match
 	*/
-	FbxNode* GetMeshNodesFromName(UStaticMesh* StaticMesh, TArray<FbxNode*>& FbxMeshArray);
+	FbxNode* GetMeshNodesFromName(const FString& ReimportMeshName, TArray<FbxNode*>& FbxMeshArray);
 
 	/**
 	 * re-import Unreal static mesh from updated Fbx file
@@ -908,7 +909,7 @@ public:
 	 * @param BaseSkelMesh - base Skeletal Mesh
 	 * @param LODIndex - LOD index
 	 */
-	UNREALED_API void ImportFbxMorphTarget(TArray<FbxNode*> &SkelMeshNodeArray, USkeletalMesh* BaseSkelMesh, UObject* Parent, int32 LODIndex, const FSkeletalMeshImportData &BaseSkeletalMeshImportData);
+	UNREALED_API void ImportFbxMorphTarget(TArray<FbxNode*> &SkelMeshNodeArray, USkeletalMesh* BaseSkelMesh, int32 LODIndex, FSkeletalMeshImportData &BaseSkeletalMeshImportData);
 
 	/**
 	 * Import LOD object for skeletal mesh
@@ -916,11 +917,9 @@ public:
 	 * @param InSkeletalMesh - LOD mesh object
 	 * @param BaseSkeletalMesh - base mesh object
 	 * @param DesiredLOD - LOD level
-	 * @param bNeedToReregister - if true, re-register this skeletal mesh to shut down the skeletal mesh component that is previewing this mesh. 
-									But you can set this to false when in the first loading before rendering this mesh for a performance issue 
 	   @param ReregisterAssociatedComponents - if NULL, just re-registers all SkinnedMeshComponents but if you set the specific components, will only re-registers those components
 	 */
-	UNREALED_API bool ImportSkeletalMeshLOD(USkeletalMesh* InSkeletalMesh, USkeletalMesh* BaseSkeletalMesh, int32 DesiredLOD, bool bNeedToReregister = true, TArray<UActorComponent*>* ReregisterAssociatedComponents = NULL, UFbxSkeletalMeshImportData* TemplateImportData = nullptr);
+	UNREALED_API bool ImportSkeletalMeshLOD(USkeletalMesh* InSkeletalMesh, USkeletalMesh* BaseSkeletalMesh, int32 DesiredLOD, UFbxSkeletalMeshImportData* TemplateImportData = nullptr);
 
 	/**
 	 * Empties the FBX scene, releasing its memory.
@@ -947,8 +946,8 @@ public:
 	bool ImportCollisionModels(UStaticMesh* StaticMesh, const FbxString& NodeName);
 
 	//help
-	ANSICHAR* MakeName(const ANSICHAR* name);
-	FString MakeString(const ANSICHAR* Name);
+	ANSICHAR* MakeName(const ANSICHAR* name) const;
+	FString MakeString(const ANSICHAR* Name) const;
 	FName MakeNameForMesh(FString InName, FbxObject* FbxObject);
 
 	// meshes
@@ -1173,7 +1172,7 @@ private:
 	 * @param BaseSkelMesh - base Skeletal Mesh
 	 * @param LODIndex - LOD index of the skeletal mesh
 	 */
-	void ImportMorphTargetsInternal( TArray<FbxNode*>& SkelMeshNodeArray, USkeletalMesh* BaseSkelMesh, UObject* Parent, int32 LODIndex, const FSkeletalMeshImportData &BaseSkeletalMeshImportData);
+	void ImportMorphTargetsInternal( TArray<FbxNode*>& SkelMeshNodeArray, USkeletalMesh* BaseSkelMesh, int32 LODIndex, FSkeletalMeshImportData &BaseSkeletalMeshImportData);
 
 	/**
 	* sub-method called from ImportSkeletalMeshLOD method

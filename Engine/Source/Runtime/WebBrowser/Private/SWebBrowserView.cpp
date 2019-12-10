@@ -18,7 +18,7 @@
 #elif PLATFORM_IOS
 #	include "IOS/IOSPlatformWebBrowser.h"
 #elif PLATFORM_PS4
-#	include "PS4/PS4PlatformWebBrowser.h"
+#	include "PS4PlatformWebBrowser.h"
 #elif WITH_CEF3
 #	include "CEF/CEFWebBrowserWindow.h"
 #else
@@ -112,6 +112,7 @@ void SWebBrowserView::Construct(const FArguments& InArgs, const TSharedPtr<IWebB
 			Settings.ContentsToLoad = InArgs._ContentsToLoad;
 			Settings.bShowErrorMessage = InArgs._ShowErrorMessage;
 			Settings.BackgroundColor = InArgs._BackgroundColor;
+			Settings.BrowserFrameRate = InArgs._BrowserFrameRate;
 			Settings.Context = InArgs._ContextSettings;
 			Settings.AltRetryDomains = InArgs._AltRetryDomains;
 

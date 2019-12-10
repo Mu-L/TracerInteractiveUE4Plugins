@@ -118,10 +118,13 @@ void FFractureEditorMode::Render(const FSceneView* View, FViewport* Viewport, FP
 
 	FFractureEditorModeToolkit* FractureToolkit = (FFractureEditorModeToolkit*)Toolkit.Get();
  
-	UFractureTool* FractureTool = FractureToolkit->GetActiveTool();
+	if (UFractureTool* FractureTool = FractureToolkit->GetActiveTool())
+	{
+		auto Settings = FractureTool->GetSettingsObjects();
+		FractureTool->Render(View, Viewport, PDI);
+	}
 
-	auto Settings = FractureTool->GetSettingsObjects();
-	FractureTool->Render(View, Viewport, PDI);
+
 }
 
 bool FFractureEditorMode::UsesToolkits() const
@@ -198,7 +201,7 @@ bool FFractureEditorMode::FrustumSelect(const FConvexVolume& InFrustum, FEditorV
 
 				TMap<int32, FBox> BoundsToBone;
 			
-				GetActorGlobalBounds(MakeArrayView<UGeometryCollectionComponent*>(GeometryComponents), BoundsToBone);
+				GetActorGlobalBounds(MakeArrayView(GeometryComponents), BoundsToBone);
 
 				TArray<int32> SelectedBonesArray;
 
@@ -218,11 +221,11 @@ bool FFractureEditorMode::FrustumSelect(const FConvexVolume& InFrustum, FEditorV
 
 				if (SelectedBonesArray.Num() > 0)
 				{
-					TArray<UActorComponent*> Components = Actor->GetComponentsByClass(UPrimitiveComponent::StaticClass());
-					for (UActorComponent* Component : Components)
+					TInlineComponentArray<UGeometryCollectionComponent*> GeometryCollectionComponents;
+					Actor->GetComponents(GeometryCollectionComponents);
+
+					for (UGeometryCollectionComponent* GeometryCollectionComponent : GeometryCollectionComponents)
 					{
-						UPrimitiveComponent* PrimitiveComponent = CastChecked<UPrimitiveComponent>(Component);
-						UGeometryCollectionComponent* GeometryCollectionComponent = Cast<UGeometryCollectionComponent>(PrimitiveComponent);
 						FScopedColorEdit ColorEdit = GeometryCollectionComponent->EditBoneSelection();
 						ColorEdit.SelectBones(GeometryCollection::ESelectionMode::None);
 						ColorEdit.SetSelectedBones(SelectedBonesArray);

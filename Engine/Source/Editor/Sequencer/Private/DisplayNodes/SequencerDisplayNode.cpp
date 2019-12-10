@@ -62,8 +62,8 @@ namespace SequencerNodeConstants
 		5, // Anything else
 	};
 
-	static_assert(ARRAY_COUNT(DefaultSortBias) == (__underlying_type(EDisplayNodeSortType))EDisplayNodeSortType::NUM, "Mismatched type/bias count");
-	static_assert(ARRAY_COUNT(ObjectBindingSortBias) == (__underlying_type(EDisplayNodeSortType))EDisplayNodeSortType::NUM, "Mismatched type/bias count");
+	static_assert(UE_ARRAY_COUNT(DefaultSortBias) == (__underlying_type(EDisplayNodeSortType))EDisplayNodeSortType::NUM, "Mismatched type/bias count");
+	static_assert(UE_ARRAY_COUNT(ObjectBindingSortBias) == (__underlying_type(EDisplayNodeSortType))EDisplayNodeSortType::NUM, "Mismatched type/bias count");
 
 	inline bool SortChildrenWithBias(const TSharedRef<FSequencerDisplayNode>& A, const TSharedRef<FSequencerDisplayNode>& B, const uint8* SortBias)
 	{
@@ -73,7 +73,31 @@ namespace SequencerNodeConstants
 		// For nodes of the same bias, sort by name
 		if (BiasA == BiasB)
 		{
-			return A->GetDisplayName().CompareToCaseIgnored(B->GetDisplayName()) < 0;
+			const int32 Compare = A->GetDisplayName().CompareToCaseIgnored(B->GetDisplayName());
+
+			if (Compare != 0)
+			{
+				return Compare < 0;
+			}
+
+			// If the nodes have the same name, try to maintain current sorting order
+			const int32 SortA = A->GetSortingOrder();
+			const int32 SortB = B->GetSortingOrder();
+
+			if (SortA >= 0 && SortB >= 0)
+			{
+				// Both nodes have persistent sort orders, use those
+				return SortA < SortB;
+			}
+			else if (SortA >= 0 || SortB >= 0)
+			{
+				// Only one nodes has a persistent sort order, list it first
+				return SortA > SortB;
+			}
+			
+			// If same name and neither has a persistent sort order, then report them as equal
+			return false;
+
 		}
 		return BiasA < BiasB;
 	}
@@ -399,6 +423,8 @@ FSequencerDisplayNode::FSequencerDisplayNode( FName InNodeName, FSequencerNodeTr
 	, ParentTree( InParentTree )
 	, NodeName( InNodeName )
 	, bExpanded( false )
+	, bPinned( false )
+	, bInPinnedBranch( false )
 	, bHasBeenInitialized( false )
 {
 	SortType = EDisplayNodeSortType::Undefined;
@@ -445,6 +471,12 @@ void FSequencerDisplayNode::SetParent(TSharedPtr<FSequencerDisplayNode> InParent
 			}
 
 			bExpanded = ParentTree.GetSavedExpansionState( *this );
+
+			if (InParent != ParentTree.GetRootNode())
+			{
+				bPinned = false;
+				ParentTree.SavePinnedState(*this, false);
+			}
 		}
 	}
 
@@ -478,6 +510,10 @@ void FSequencerDisplayNode::OnTreeRefreshed(float InVirtualTop, float InVirtualB
 	{
 		// Assign the saved expansion state when this node is initialized for the first time
 		bExpanded = ParentTree.GetSavedExpansionState( *this );
+		if (IsRootNode())
+		{
+			bPinned = ParentTree.GetSavedPinnedState(*this);
+		}
 	}
 
 	VirtualTop = InVirtualTop;
@@ -631,14 +667,14 @@ bool FSequencerDisplayNode::TraverseVisible_ParentFirst(const TFunctionRef<bool(
 	return true;
 }
 
-FLinearColor FSequencerDisplayNode::GetDisplayNameColor() const
+bool FSequencerDisplayNode::IsDimmed() const
 {
 	auto FindInActiveSection = [](FSequencerDisplayNode& InNode, bool EmptyNotActive = true)
 	{
 		if (InNode.GetType() == ESequencerNode::KeyArea)
 		{
 			const FSequencerSectionKeyAreaNode& KeyAreaNode = static_cast<FSequencerSectionKeyAreaNode&>(InNode);
-			auto KeyAreaNodes=  KeyAreaNode.GetAllKeyAreas();
+			auto KeyAreaNodes = KeyAreaNode.GetAllKeyAreas();
 			if (KeyAreaNodes.Num() > 0)
 			{
 				for (const TSharedRef<IKeyArea>& KeyArea : KeyAreaNodes)
@@ -699,18 +735,59 @@ FLinearColor FSequencerDisplayNode::GetDisplayNameColor() const
 		return true;
 	};
 
+	if (GetSequencer().IsReadOnly())
+	{
+		return true;
+	}
+
 	FSequencerDisplayNode *This = const_cast<FSequencerDisplayNode*>(this);
 	//if empty with no key areas or sections then it's active, otherwise
 	//find first child with active section, then it's active, else inactive.
-	const bool bFoundInActiveSection = ChildNodes.Num() > 0 ? This->Traverse_ParentFirst(FindInActiveSection) :
+	bool bDimLabel = ChildNodes.Num() > 0 ? This->Traverse_ParentFirst(FindInActiveSection) :
 		((this->GetType() == ESequencerNode::Track || this->GetType() == ESequencerNode::KeyArea) && FindInActiveSection(*(This), false))
-		||false;
-	return bFoundInActiveSection ? FLinearColor(0.6f, 0.6f, 0.6f, 0.6f) : FLinearColor(1.0f, 1.0f, 1.0f, 1.0f);
+		|| false;
+
+	if (!bDimLabel)
+	{
+		// If the node is a track node, we can use the cached value in UMovieSceneTrack
+		if (GetType() == ESequencerNode::Track)
+		{
+			UMovieSceneTrack* Track = static_cast<const FSequencerTrackNode*>(this)->GetTrack();
+			if (Track && Track->IsEvalDisabled())
+			{
+				bDimLabel = true;
+			}
+		}
+		else
+		{
+			if (ParentTree.IsNodeMute(this) || (ParentTree.HasSoloNodes() && !ParentTree.IsNodeSolo(this)))
+			{
+				bDimLabel = true;
+			}
+		}
+	}
+
+	return bDimLabel;
+}
+
+FLinearColor FSequencerDisplayNode::GetDisplayNameColor() const
+{
+	return IsDimmed() ? FLinearColor(0.6f, 0.6f, 0.6f, 0.6f) : FLinearColor(1.0f, 1.0f, 1.0f, 1.0f);
 }
 
 FText FSequencerDisplayNode::GetDisplayNameToolTipText() const
 {
 	return FText();
+}
+
+bool FSequencerDisplayNode::ValidateDisplayName(const FText& NewDisplayName, FText& OutErrorMessage) const
+{
+	if (NewDisplayName.IsEmpty())
+	{
+		OutErrorMessage = NSLOCTEXT("Sequencer", "RenameFailed_LeftBlank", "Labels cannot be left blank");
+		return false;
+	}
+	return true;
 }
 
 TSharedRef<SWidget> FSequencerDisplayNode::GenerateContainerWidgetForOutliner(const TSharedRef<SSequencerTreeViewRow>& InRow)
@@ -745,7 +822,7 @@ const FSlateBrush* FSequencerDisplayNode::GetIconOverlayBrush() const
 
 FSlateColor FSequencerDisplayNode::GetIconColor() const
 {
-	return FSlateColor( FLinearColor::White );
+	return GetDisplayNameColor();
 }
 
 FText FSequencerDisplayNode::GetIconToolTipText() const
@@ -924,25 +1001,16 @@ namespace
 void FSequencerDisplayNode::BuildContextMenu(FMenuBuilder& MenuBuilder)
 {
 	TSharedRef<FSequencerDisplayNode> ThisNode = SharedThis(this);
+	FSequencerDisplayNode* BaseNode = GetBaseNode();
 
+	ESequencerNode::Type BaseNodeType = BaseNode->GetType();
+
+	bool bCanSolo = (BaseNodeType == ESequencerNode::Track || BaseNodeType == ESequencerNode::Object || BaseNodeType == ESequencerNode::Folder);
 	bool bIsReadOnly = !GetSequencer().IsReadOnly();
 	FCanExecuteAction CanExecute = FCanExecuteAction::CreateLambda([bIsReadOnly]{ return bIsReadOnly; });
 
 	MenuBuilder.BeginSection("Edit", LOCTEXT("EditContextMenuSectionName", "Edit"));
 	{
-		MenuBuilder.AddMenuEntry(
-			LOCTEXT("ToggleNodeActive", "Active"),
-			LOCTEXT("ToggleNodeActiveTooltip", "Set this track or selected tracks active/inactive"),
-			FSlateIcon(),
-			FUIAction(
-				FExecuteAction::CreateSP(&GetSequencer(), &FSequencer::ToggleNodeActive),
-				CanExecute,
-				FIsActionChecked::CreateSP(&GetSequencer(), &FSequencer::IsNodeActive)
-			),
-			NAME_None,
-			EUserInterfaceActionType::ToggleButton
-		);
-
 		MenuBuilder.AddMenuEntry(
 			LOCTEXT("ToggleNodeLock", "Locked"),
 			LOCTEXT("ToggleNodeLockTooltip", "Lock or unlock this node or selected tracks"),
@@ -956,6 +1024,51 @@ void FSequencerDisplayNode::BuildContextMenu(FMenuBuilder& MenuBuilder)
 			EUserInterfaceActionType::ToggleButton
 		);
 
+		// Only support pinning root nodes
+		if (BaseNode->IsRootNode())
+		{
+			MenuBuilder.AddMenuEntry(
+				LOCTEXT("ToggleNodePin", "Pinned"),
+				LOCTEXT("ToggleNodePinTooltip", "Pin or unpin this node or selected tracks"),
+				FSlateIcon(),
+				FUIAction(
+					FExecuteAction::CreateSP(this, &FSequencerDisplayNode::TogglePinned),
+					FCanExecuteAction(),
+					FIsActionChecked::CreateSP(this, &FSequencerDisplayNode::IsPinned)
+				),
+				NAME_None,
+				EUserInterfaceActionType::ToggleButton
+			);
+		}
+
+		if (bCanSolo)
+		{
+			MenuBuilder.AddMenuEntry(
+				LOCTEXT("ToggleNodeSolo", "Solo"),
+				LOCTEXT("ToggleNodeSoloTooltip", "Solo or unsolo this node or selected tracks"),
+				FSlateIcon(),
+				FUIAction(
+					FExecuteAction::CreateRaw(&ParentTree, &FSequencerNodeTree::ToggleSelectedNodesSolo),
+					CanExecute,
+					FIsActionChecked::CreateSP(&ParentTree, &FSequencerNodeTree::IsSelectedNodesSolo)
+				),
+				NAME_None,
+				EUserInterfaceActionType::ToggleButton
+			);
+
+			MenuBuilder.AddMenuEntry(
+				LOCTEXT("ToggleNodeMute", "Mute"),
+				LOCTEXT("ToggleNodeMuteTooltip", "Mute or unmute this node or selected tracks"),
+				FSlateIcon(),
+				FUIAction(
+					FExecuteAction::CreateRaw(&ParentTree, &FSequencerNodeTree::ToggleSelectedNodesMute),
+					CanExecute,
+					FIsActionChecked::CreateSP(&ParentTree, &FSequencerNodeTree::IsSelectedNodesMute)
+				),
+				NAME_None,
+				EUserInterfaceActionType::ToggleButton
+			);
+		}
 
 		// Add cut, copy and paste functions to the tracks
 		MenuBuilder.AddMenuEntry(FGenericCommands::Get().Cut);
@@ -970,8 +1083,18 @@ void FSequencerDisplayNode::BuildContextMenu(FMenuBuilder& MenuBuilder)
 			LOCTEXT("DeleteNode", "Delete"),
 			LOCTEXT("DeleteNodeTooltip", "Delete this or selected tracks"),
 			FSlateIcon(FEditorStyle::GetStyleSetName(), "ContentBrowser.AssetActions.Delete"),
-			FUIAction(FExecuteAction::CreateSP(&GetSequencer(), &FSequencer::DeleteNode, ThisNode), CanExecute)
+			FUIAction(FExecuteAction::CreateSP(&GetSequencer(), &FSequencer::DeleteNode, ThisNode, false), CanExecute)
 		);
+
+		if (ThisNode->GetType() == ESequencerNode::Object)
+		{
+			MenuBuilder.AddMenuEntry(
+				LOCTEXT("DeleteNodeAndKeepState", "Delete and Keep State"),
+				LOCTEXT("DeleteNodeAndKeepStateTooltip", "Delete this object's tracks and keep its current animated state"),
+				FSlateIcon(FEditorStyle::GetStyleSetName(), "ContentBrowser.AssetActions.Delete"),
+				FUIAction(FExecuteAction::CreateSP(&GetSequencer(), &FSequencer::DeleteNode, ThisNode, true), CanExecute)
+			);
+		}
 
 		MenuBuilder.AddMenuEntry(
 			LOCTEXT("RenameNode", "Rename"),
@@ -1086,6 +1209,58 @@ void FSequencerDisplayNode::SetExpansionState(bool bInExpanded)
 bool FSequencerDisplayNode::IsExpanded() const
 {
 	return bExpanded;
+}
+
+FSequencerDisplayNode* FSequencerDisplayNode::GetBaseNode() const
+{
+	ESequencerNode::Type Type = GetType();
+
+	if (IsRootNode() || Type == ESequencerNode::Folder || Type == ESequencerNode::Object
+		|| (Type == ESequencerNode::Track && static_cast<const FSequencerTrackNode*>(this)->GetSubTrackMode() != FSequencerTrackNode::ESubTrackMode::SubTrack))
+	{
+		return (FSequencerDisplayNode*)this;
+	}
+
+	return GetParentOrRoot()->GetBaseNode();
+}
+
+void FSequencerDisplayNode::UpdateCachedPinnedState(bool bParentIsPinned)
+{
+	bInPinnedBranch = bPinned || bParentIsPinned;
+
+	for (TSharedPtr<FSequencerDisplayNode> Child : ChildNodes)
+	{
+		Child->UpdateCachedPinnedState(bInPinnedBranch);
+	}
+}
+
+bool FSequencerDisplayNode::IsPinned() const
+{
+	return bInPinnedBranch;
+}
+
+void FSequencerDisplayNode::TogglePinned()
+{
+	FSequencerDisplayNode* BaseNode = GetBaseNode();
+	bool bShouldPin = !BaseNode->bPinned;
+	ParentTree.UnpinAllNodes();
+
+	BaseNode->bPinned = bShouldPin;
+	ParentTree.SavePinnedState(*this, bShouldPin);
+	
+	ParentTree.GetSequencer().RefreshTree();
+}
+
+void FSequencerDisplayNode::Unpin()
+{
+	FSequencerDisplayNode* BaseNode = GetBaseNode();
+	if (BaseNode->bPinned)
+	{
+		BaseNode->bPinned = false;
+		ParentTree.SavePinnedState(*this, false);
+	
+		ParentTree.GetSequencer().RefreshTree();
+	}
 }
 
 

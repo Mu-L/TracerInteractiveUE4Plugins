@@ -75,6 +75,21 @@ FAutoConsoleVariableRef CVarNetSkipReplicatorForDestructionInfos(
 extern TAutoConsoleVariable<int32> CVarFilterGuidRemapping;
 extern TAutoConsoleVariable<int32> CVarNetEnableDetailedScopeCounters;
 
+
+// Fairly large number, and probably a bad idea to even have a bunch this size, but want to be safe for now and not throw out legitimate data
+static int32 NetMaxConstructedPartialBunchSizeBytes = 1024 * 64;
+static FAutoConsoleVariableRef CVarNetMaxConstructedPartialBunchSizeBytes(
+	TEXT("net.MaxConstructedPartialBunchSizeBytes"),
+	NetMaxConstructedPartialBunchSizeBytes,
+	TEXT("The maximum size allowed for Partial Bunches.")
+);
+
+template<typename T>
+static const bool IsBunchTooLarge(UNetConnection* Connection, T* Bunch)
+{
+	return !Connection->InternalAck && Bunch != nullptr && Bunch->GetNumBytes() > NetMaxConstructedPartialBunchSizeBytes;
+}
+
 /*-----------------------------------------------------------------------------
 	UChannel implementation.
 -----------------------------------------------------------------------------*/
@@ -703,12 +718,9 @@ bool UChannel::ReceivedNextBunch( FInBunch & Bunch, bool & bOutSkipAck )
 			}
 		}
 
-		// Fairly large number, and probably a bad idea to even have a bunch this size, but want to be safe for now and not throw out legitimate data
-		static const int32 MAX_CONSTRUCTED_PARTIAL_SIZE_IN_BYTES = 1024 * 64;		
-
-		if ( !Connection->InternalAck && InPartialBunch != NULL && InPartialBunch->GetNumBytes() > MAX_CONSTRUCTED_PARTIAL_SIZE_IN_BYTES )
+		if (IsBunchTooLarge(Connection, InPartialBunch))
 		{
-			UE_LOG( LogNetPartialBunch, Error, TEXT( "Final partial bunch too large" ) );
+			UE_LOG(LogNetPartialBunch, Error, TEXT("Received a partial bunch exceeding max allowed size. BunchSize=%d, MaximumSize=%d"), InPartialBunch->GetNumBytes(), NetMaxConstructedPartialBunchSizeBytes);
 			Bunch.SetError();
 			return false;
 		}
@@ -908,6 +920,13 @@ FPacketIdRange UChannel::SendBunch( FOutBunch* Bunch, bool Merge )
 	if (!ensure(ChIndex != -1))
 	{
 		// Client "closing" but still processing bunches. Client->Server RPCs should avoid calling this, but perhaps more code needs to check this condition.
+		return FPacketIdRange(INDEX_NONE);
+	}
+
+	if (IsBunchTooLarge(Connection, Bunch))
+	{
+		UE_LOG(LogNetPartialBunch, Error, TEXT("Attempted to send bunch exceeding max allowed size. BunchSize=%d, MaximumSize=%d"), Bunch->GetNumBytes(), NetMaxConstructedPartialBunchSizeBytes);
+		Bunch->SetError();
 		return FPacketIdRange(INDEX_NONE);
 	}
 
@@ -1881,6 +1900,13 @@ void UActorChannel::DestroyActorAndComponents()
 	// Destroy the actor
 	if ( Actor != NULL )
 	{
+		// Unmap any components in this actor. This will make sure that once the Actor is remapped
+		// any references to components will be remapped as well.
+		for (UActorComponent* Component : Actor->GetComponents())
+		{
+			MoveMappedObjectToUnmapped(Component);
+		}
+
 		// Unmap this object so we can remap it if it becomes relevant again in the future
 		MoveMappedObjectToUnmapped( Actor );
 
@@ -1966,10 +1992,10 @@ bool UActorChannel::CleanUp(const bool bForDestroy, EChannelCloseReason CloseRea
 			{
 				if (!bTornOff)
 				{
-					Actor->Role = ROLE_Authority;
+					Actor->SetRole(ROLE_Authority);
 					Actor->SetReplicates(false);
 					bTornOff = true;
-					if (Actor->GetWorld() != NULL && !GIsRequestingExit)
+					if (Actor->GetWorld() != NULL && !IsEngineExitRequested())
 					{
 						Actor->TornOff();
 					}
@@ -1982,7 +2008,7 @@ bool UActorChannel::CleanUp(const bool bForDestroy, EChannelCloseReason CloseRea
 				Connection->Driver->NotifyActorFullyDormantForConnection(Actor, Connection);
 				bWasDormant = true;
 			}
-			else if (!Actor->bNetTemporary && Actor->GetWorld() != NULL && !GIsRequestingExit && Connection->Driver->ShouldClientDestroyActor(Actor))
+			else if (!Actor->bNetTemporary && Actor->GetWorld() != NULL && !IsEngineExitRequested() && Connection->Driver->ShouldClientDestroyActor(Actor))
 			{
 				UE_LOG(LogNetDormancy, Verbose, TEXT("UActorChannel::CleanUp: Destroying Actor. %s"), *Describe() );
 
@@ -2786,7 +2812,7 @@ int64 UActorChannel::ReplicateActor()
 			return 0;
 		}
 		bPausedUntilReliableACK = 0;
-		UE_LOG(LogNet, Log, TEXT("ReplicateActor: bPausedUntilReliableACK is ending now that reliables have been ACK'd. %s"), *Describe());
+		UE_LOG(LogNet, Verbose, TEXT("ReplicateActor: bPausedUntilReliableACK is ending now that reliables have been ACK'd. %s"), *Describe());
 	}
 
 	const TArray<FNetViewer>& NetViewers = ActorWorld->GetWorldSettings()->ReplicationViewers;
@@ -2911,7 +2937,7 @@ int64 UActorChannel::ReplicateActor()
 	FScopedRoleDowngrade ScopedRoleDowngrade( Actor, RepFlags );
 
 	RepFlags.bNetSimulated	= (Actor->GetRemoteRole() == ROLE_SimulatedProxy);
-	RepFlags.bRepPhysics	= Actor->ReplicatedMovement.bRepPhysics;
+	RepFlags.bRepPhysics	= Actor->GetReplicatedMovement().bRepPhysics;
 	RepFlags.bReplay		= bReplay;
 	//RepFlags.bNetInitial	= RepFlags.bNetInitial;
 
@@ -3064,7 +3090,7 @@ FString UActorChannel::Describe()
 	}
 	else
 	{
-		return FString::Printf(TEXT("[UActorChannel] Actor: %s, Role: %i, RemoteRole: %i %s"), *Actor->GetFullName(), ( int32 )Actor->Role, ( int32 )Actor->GetRemoteRole(), *UChannel::Describe());
+		return FString::Printf(TEXT("[UActorChannel] Actor: %s, Role: %i, RemoteRole: %i %s"), *Actor->GetFullName(), ( int32 )Actor->GetLocalRole(), ( int32 )Actor->GetRemoteRole(), *UChannel::Describe());
 	}
 }
 
@@ -3817,11 +3843,6 @@ TSharedRef< FObjectReplicator > & UActorChannel::FindOrCreateReplicator( UObject
 	}
 
 	return *ReplicatorRefPtr;
-}
-
-TSharedRef< FObjectReplicator > & UActorChannel::FindOrCreateReplicator(const TWeakObjectPtr<UObject>& Obj)
-{
-	return FindOrCreateReplicator(Obj.Get(), static_cast<bool*>(nullptr));
 }
 
 bool UActorChannel::ObjectHasReplicator(const TWeakObjectPtr<UObject>& Obj) const

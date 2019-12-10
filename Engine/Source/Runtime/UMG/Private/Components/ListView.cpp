@@ -14,6 +14,7 @@
 
 UListView::UListView(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
+	, Orientation(EOrientation::Orient_Vertical)
 {
 }
 
@@ -108,8 +109,7 @@ UObject* UListView::BP_GetSelectedItem() const
 
 void UListView::HandleOnEntryInitializedInternal(UObject* Item, const TSharedRef<ITableRow>& TableRow)
 {
-	UUserWidget* const RowWidget = GetEntryWidgetFromItem(Item);
-	BP_OnEntryInitialized.Broadcast(Item, RowWidget);
+	BP_OnEntryInitialized.Broadcast(Item, GetEntryWidgetFromItem(Item));
 }
 
 bool UListView::BP_GetSelectedItems(TArray<UObject*>& Items) const
@@ -225,9 +225,18 @@ FMargin UListView::GetDesiredEntryPadding(UObject* Item) const
 {
 	if (ListItems.Num() > 0 && ListItems[0] != Item)
 	{
-		// For all entries after the first one, add the spacing as top padding
-		return FMargin(0.f, EntrySpacing, 0.f, 0.f);
+		if (Orientation == EOrientation::Orient_Horizontal)
+		{
+			// For all entries after the first one, add the spacing as left padding
+			return FMargin(EntrySpacing, 0.f, 0.0f, 0.f);
+		}
+		else
+		{
+			// For all entries after the first one, add the spacing as top padding
+			return FMargin(0.f, EntrySpacing, 0.f, 0.f);
+		}
 	}
+
 	return FMargin(0.f);
 }
 

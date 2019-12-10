@@ -678,15 +678,11 @@ void FOpenXRHMD::AdjustViewRect(EStereoscopicPass StereoPass, int32& X, int32& Y
 
 	const XrViewConfigurationView& Config = Configs[ViewIndex];
 
-	FIntPoint ViewRectMin(EForceInit::ForceInitToZero);
 	for (uint32 i = 0; i < ViewIndex; ++i)
 	{
-		ViewRectMin.X += Configs[i].recommendedImageRectWidth;
+		X += Configs[i].recommendedImageRectWidth;
 	}
-	QuantizeSceneBufferSize(ViewRectMin, ViewRectMin);
 
-	X = ViewRectMin.X;
-	Y = ViewRectMin.Y;
 	SizeX = Config.recommendedImageRectWidth;
 	SizeY = Config.recommendedImageRectHeight;
 }
@@ -822,7 +818,6 @@ FOpenXRHMD::FOpenXRHMD(const FAutoRegister& AutoRegister, XrInstance InInstance,
 	, bIsReady(false)
 	, bIsRendering(false)
 	, bRunRequested(false)
-	, bNeedReAllocatedDepth(false)
 	, CurrentSessionState(XR_SESSION_STATE_UNKNOWN)
 	, Instance(InInstance)
 	, System(InSystem)
@@ -843,7 +838,7 @@ FOpenXRHMD::FOpenXRHMD(const FAutoRegister& AutoRegister, XrInstance InInstance,
 	ViewState.next = nullptr;
 	ViewState.viewStateFlags = 0;
 
-	bDepthExtensionSupported = Extensions.Contains(XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME);
+	bNeedReAllocatedDepth = bDepthExtensionSupported = Extensions.Contains(XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME);
 	bHiddenAreaMaskSupported = Extensions.Contains(XR_KHR_VISIBILITY_MASK_EXTENSION_NAME);
 
 	{
@@ -886,8 +881,7 @@ FOpenXRHMD::FOpenXRHMD(const FAutoRegister& AutoRegister, XrInstance InInstance,
 		View.pose = ToXrPose(FTransform::Identity);
 	}
 
-	// The HMD device does not have an action associated with it
-	ensure(ActionSpaces.Emplace(XR_NULL_HANDLE) == HMDDeviceId);
+	ResetActionDevices();
 }
 
 FOpenXRHMD::~FOpenXRHMD()
@@ -1143,6 +1137,14 @@ int32 FOpenXRHMD::AddActionDevice(XrAction Action)
 	return DeviceId;
 }
 
+void FOpenXRHMD::ResetActionDevices()
+{
+	ActionSpaces.Reset();
+
+	// The HMD device does not have an action associated with it
+	ensure(ActionSpaces.Emplace(XR_NULL_HANDLE) == HMDDeviceId);
+}
+
 bool FOpenXRHMD::IsInitialized() const
 {
 	return Instance != XR_NULL_HANDLE;
@@ -1208,26 +1210,26 @@ bool FOpenXRHMD::AllocateRenderTargetTexture(uint32 Index, uint32 SizeX, uint32 
 	// Grab the presentation texture out of the swapchain.
 	OutTargetableTexture = OutShaderResourceTexture = (FTexture2DRHIRef&)Swapchain->GetTextureRef();
 
-	bNeedReAllocatedDepth = bDepthExtensionSupported;
+	if (bDepthExtensionSupported)
+	{
+		// Allocate the depth buffer swapchain while we're here.
+		DepthSwapchain = RenderBridge->CreateSwapchain(Session, PF_DepthStencil, SizeX, SizeY, NumMips, NumSamples, 0, TexCreate_DepthStencilTargetable);
+		if (!DepthSwapchain)
+		{
+			return false;
+		}
+		bNeedReAllocatedDepth = false;
+	}
 
 	return true;
 }
 
 bool FOpenXRHMD::AllocateDepthTexture(uint32 Index, uint32 SizeX, uint32 SizeY, uint8 Format, uint32 NumMips, uint32 InTexFlags, uint32 TargetableTextureFlags, FTexture2DRHIRef& OutTargetableTexture, FTexture2DRHIRef& OutShaderResourceTexture, uint32 NumSamples)
 {
-	// FIXME: UE4 constantly calls this function even when there is no reason to reallocate the depth texture
-	if (!bDepthExtensionSupported || !bNeedReAllocatedDepth)
+	if (!DepthSwapchain.IsValid())
 	{
 		return false;
 	}
-
-	DepthSwapchain = RenderBridge->CreateSwapchain(Session, PF_DepthStencil, SizeX, SizeY, FMath::Max(NumMips, 1u), NumSamples, 0, TexCreate_DepthStencilTargetable);
-	if (!DepthSwapchain)
-	{
-		return false;
-	}
-
-	bNeedReAllocatedDepth = false;
 
 	OutTargetableTexture = OutShaderResourceTexture = (FTexture2DRHIRef&)DepthSwapchain->GetTextureRef();
 
@@ -1247,7 +1249,7 @@ void FOpenXRHMD::OnBeginRendering_RenderThread(FRHICommandListImmediate& RHICmdL
 			bIsRendering = true;
 
 			Swapchain->IncrementSwapChainIndex_RHIThread(FrameStateRHI.predictedDisplayPeriod);
-			if (bDepthExtensionSupported && !bNeedReAllocatedDepth)
+			if (bDepthExtensionSupported)
 			{
 				ensure(DepthSwapchain != nullptr);
 				DepthSwapchain->IncrementSwapChainIndex_RHIThread(FrameStateRHI.predictedDisplayPeriod);
@@ -1273,34 +1275,35 @@ void FOpenXRHMD::OnBeginRendering_RenderThread(FRHICommandListImmediate& RHICmdL
 	ViewsRHI.SetNum(Views.Num());
 	DepthLayersRHI.SetNum(Views.Num());
 
-	FIntPoint ViewRectMin(EForceInit::ForceInitToZero);
-	float NearZ = GNearClippingPlane / GetWorldToMetersScale();
+	int32 OffsetX = 0;
+
+	const float WorldScale = GetWorldToMetersScale() * (1.0 / 100.0f); // physical scale is 100 UUs/meter
+	float NearZ = GNearClippingPlane * WorldScale;
 
 	for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ViewIndex++)
 	{
 		const XrView& View = Views[ViewIndex];
 		const XrViewConfigurationView& Config = Configs[ViewIndex];
-
-		FIntRect ViewRect;
-		QuantizeSceneBufferSize(ViewRectMin, ViewRect.Min);
-		ViewRect.Max = ViewRect.Min + FIntPoint(Config.recommendedImageRectWidth, Config.recommendedImageRectHeight);
 		FTransform ViewTransform = ToFTransform(View.pose, GetWorldToMetersScale());
 
 		XrCompositionLayerProjectionView& Projection = ViewsRHI[ViewIndex];
 		XrCompositionLayerDepthInfoKHR& DepthLayer = DepthLayersRHI[ViewIndex];
 
 		Projection.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
-		Projection.next = nullptr;
+		Projection.next = bDepthExtensionSupported ? &DepthLayer : nullptr;
 		Projection.fov = View.fov;
 		Projection.pose = ToXrPose(ViewTransform * BaseTransform, GetWorldToMetersScale());
 		Projection.subImage.swapchain = static_cast<FOpenXRSwapchain*>(GetSwapchain())->GetHandle();
 		Projection.subImage.imageArrayIndex = 0;
 		Projection.subImage.imageRect = {
-			{ ViewRect.Min.X, ViewRect.Min.Y },
-			{ ViewRect.Width(), ViewRect.Height() }
+			{ OffsetX, 0 },
+			{
+				(int32)Config.recommendedImageRectWidth,
+				(int32)Config.recommendedImageRectHeight
+			}
 		};
 
-		if (bDepthExtensionSupported && !bNeedReAllocatedDepth)
+		if (bDepthExtensionSupported)
 		{
 			DepthLayer.type = XR_TYPE_COMPOSITION_LAYER_DEPTH_INFO_KHR;
 			DepthLayer.next = nullptr;
@@ -1311,11 +1314,9 @@ void FOpenXRHMD::OnBeginRendering_RenderThread(FRHICommandListImmediate& RHICmdL
 			DepthLayer.maxDepth = 1.0f;
 			DepthLayer.nearZ = FLT_MAX;
 			DepthLayer.farZ = NearZ;
-
-			Projection.next = &DepthLayer;
 		}
 
-		ViewRectMin.X += Config.recommendedImageRectWidth;
+		OffsetX += Config.recommendedImageRectWidth;
 	}
 
 	// Give the RHI thread its own copy of the frame state and tracking space
@@ -1509,11 +1510,11 @@ FIntPoint FOpenXRHMD::GetIdealRenderTargetSize() const
 	{
 		Size.X += (int)Config.recommendedImageRectWidth;
 		Size.Y = FMath::Max(Size.Y, (int)Config.recommendedImageRectHeight);
-
-		// We always prefer the nearest multiple of 4 for our buffer sizes. Make sure we round up here,
-		// so we're consistent with the rest of the engine in creating our buffers.
-		QuantizeSceneBufferSize(Size, Size);
 	}
+
+	// We always prefer the nearest multiple of 4 for our buffer sizes. Make sure we round up here,
+	// so we're consistent with the rest of the engine in creating our buffers.
+	QuantizeSceneBufferSize(Size, Size);
 
 	return Size;
 }

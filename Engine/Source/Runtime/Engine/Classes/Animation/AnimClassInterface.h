@@ -95,6 +95,43 @@ struct ENGINE_API FCachedPoseIndices
 	}
 };
 
+/** Contains indices for any Asset Player nodes found for a specific Name Anim Graph (only and specifically harvested for Anim Graph Layers and Implemented Anim Layer Graphs) */
+USTRUCT()
+struct FGraphAssetPlayerInformation
+{
+	GENERATED_USTRUCT_BODY()
+
+	UPROPERTY()
+	TArray<int32> PlayerNodeIndices;
+};
+
+/** Blending options for animation graphs in Linked Animation Blueprints. */
+USTRUCT()
+struct FAnimGraphBlendOptions
+{
+	GENERATED_USTRUCT_BODY()
+
+	/**
+	* Time to blend this graph in using Inertialization. Specify -1.0 to defer to the BlendOutTime of the previous graph.
+	* To blend this graph in you must place an Inertialization node after the Linked Anim Graph node or Linked Anim Layer node that uses this graph.
+	*/
+	UPROPERTY(EditAnywhere, Category = GraphBlending)
+	float BlendInTime;       
+
+	/**
+	* Time to blend this graph out using Inertialization. Specify -1.0 to defer to the BlendInTime of the next graph.
+	* To blend this graph out you must place an Inertialization node after the Linked Anim Graph node or Linked Anim Layer node that uses this graph.
+	*/
+	UPROPERTY(EditAnywhere, Category = GraphBlending)
+	float BlendOutTime;
+
+	FAnimGraphBlendOptions()
+		: BlendInTime(-1.0f)
+		, BlendOutTime(-1.0f)
+	{}
+};
+
+
 UINTERFACE()
 class ENGINE_API UAnimClassInterface : public UInterface
 {
@@ -108,13 +145,22 @@ public:
 	virtual const TArray<FBakedAnimationStateMachine>& GetBakedStateMachines() const = 0;
 	virtual const TArray<FAnimNotifyEvent>& GetAnimNotifies() const = 0;
 	virtual const TArray<UStructProperty*>& GetAnimNodeProperties() const = 0;
-	virtual const TArray<UStructProperty*>& GetSubInstanceNodeProperties() const = 0;
-	virtual const TArray<UStructProperty*>& GetLayerNodeProperties() const = 0;
+	UE_DEPRECATED(4.24, "Function has been renamed, please use GetLinkedAnimGraphNodeProperties")
+	virtual const TArray<UStructProperty*>& GetSubInstanceNodeProperties() const { return GetLinkedAnimGraphNodeProperties(); }
+	virtual const TArray<UStructProperty*>& GetLinkedAnimGraphNodeProperties() const = 0;
+	UE_DEPRECATED(4.24, "Function has been renamed, please use GetLinkedLayerNodeProperties")
+	virtual const TArray<UStructProperty*>& GetLayerNodeProperties() const { return GetLinkedAnimLayerNodeProperties(); }
+	virtual const TArray<UStructProperty*>& GetLinkedAnimLayerNodeProperties() const = 0;
+	virtual const TArray<UStructProperty*>& GetPreUpdateNodeProperties() const = 0;
+	virtual const TArray<UStructProperty*>& GetDynamicResetNodeProperties() const = 0;
+	virtual const TArray<UStructProperty*>& GetStateMachineNodeProperties() const = 0;
+	virtual const TArray<UStructProperty*>& GetInitializationNodeProperties() const = 0;
 	virtual const TArray<FExposedValueHandler>& GetExposedValueHandlers() const = 0;
 	virtual const TArray<FName>& GetSyncGroupNames() const = 0;
 	virtual const TMap<FName, FCachedPoseIndices>& GetOrderedSavedPoseNodeIndicesMap() const = 0;
 	virtual const TArray<FAnimBlueprintFunction>& GetAnimBlueprintFunctions() const = 0;
-
+	virtual const TMap<FName, FGraphAssetPlayerInformation>& GetGraphAssetPlayerInformation() const = 0;
+	virtual const TMap<FName, FAnimGraphBlendOptions>& GetGraphBlendOptions() const = 0;
 	virtual USkeleton* GetTargetSkeleton() const = 0;
 
 	virtual int32 GetSyncGroupIndex(FName SyncGroupName) const = 0;

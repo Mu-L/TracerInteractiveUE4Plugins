@@ -3,6 +3,8 @@
 #include "OnlineSessionAsyncLobbySteam.h"
 #include "SocketSubsystem.h"
 #include "OnlineSessionInterfaceSteam.h"
+#include "OnlineSubsystemSteam.h"
+#include "OnlinePingInterfaceSteam.h"
 #include "IPAddressSteam.h"
 #include "SteamSessionKeys.h"
 #include "SteamUtilities.h"
@@ -152,6 +154,7 @@ static void GetLobbyKeyValuePairsFromSessionSettings(const FOnlineSessionSetting
  */
 static void GetLobbyKeyValuePairsFromSessionInfo(const FOnlineSessionInfoSteam& SessionInfo, FSteamSessionKeyValuePairs& KeyValuePairs)
 {
+	// This should pretty much always be false.
 	if (SessionInfo.HostAddr.IsValid())
 	{
 		uint32 HostAddr;
@@ -160,11 +163,13 @@ static void GetLobbyKeyValuePairsFromSessionInfo(const FOnlineSessionInfoSteam& 
 		KeyValuePairs.Add(STEAMKEY_HOSTPORT, FString::FromInt(SessionInfo.HostAddr->GetPort()));
 	}
 
+	// Lobbies are exclusively P2P.
+	KeyValuePairs.Add(STEAMKEY_CONNECTIONMETHOD, FString::Printf(TEXT("%s"), *LexToString(FSteamConnectionMethod::P2P)));
+
 	if (SessionInfo.SteamP2PAddr.IsValid())
 	{
-		TSharedPtr<FInternetAddrSteam> SteamAddr = StaticCastSharedPtr<FInternetAddrSteam>(SessionInfo.SteamP2PAddr);
-		KeyValuePairs.Add(STEAMKEY_P2PADDR, SteamAddr->ToString(false));
-		KeyValuePairs.Add(STEAMKEY_P2PPORT, FString::FromInt(SteamAddr->GetPort()));
+		KeyValuePairs.Add(STEAMKEY_P2PADDR, SessionInfo.SteamP2PAddr->ToString(false));
+		KeyValuePairs.Add(STEAMKEY_P2PPORT, FString::FromInt(SessionInfo.SteamP2PAddr->GetPort()));
 	}
 }
 
@@ -191,6 +196,18 @@ static void GetLobbyKeyValuePairsFromSession(const FOnlineSession* Session, FSte
 		GetLobbyKeyValuePairsFromSessionInfo(*SessionInfo, KeyValuePairs);
 	}
 
+	// Write in the ping information if the host is using SteamSockets
+	FOnlineSubsystemSteam* SteamSubsystem = static_cast<FOnlineSubsystemSteam*>(IOnlineSubsystem::Get(STEAM_SUBSYSTEM));
+	if (SteamSubsystem && SteamSubsystem->GetPingInterface().IsValid() && SteamSubsystem->GetPingInterface()->IsUsingP2PRelays())
+	{
+		FString PingData = SteamSubsystem->GetPingInterface()->GetHostPingData();
+		// Don't bother writing empty data.
+		if (!PingData.IsEmpty())
+		{
+			KeyValuePairs.Add(STEAMKEY_P2PPING, PingData);
+		}
+	}
+
 	GetLobbyKeyValuePairsFromSessionSettings(Session->SessionSettings, KeyValuePairs);
 }
 
@@ -198,12 +215,14 @@ static void GetLobbyKeyValuePairsFromSession(const FOnlineSession* Session, FSte
  *	Populate an FSession data structure from the data stored with a lobby
  * Expects a certain number of keys to be present otherwise this will fail
  *
+ * @param SteamSubsystem the online subsystem to use
  * @param LobbyId the Steam lobby to fill data from
  * @param Session empty session structure to fill in
+ * @param SearchData if this is provided and the Steam session supports SteamSockets, the ping for the lobby will be written into the search result data.
  *
  * @return true if successful, false otherwise
  */
-bool FillSessionFromLobbyData(FUniqueNetIdSteam& LobbyId, FOnlineSession& Session)
+bool FillSessionFromLobbyData(FOnlineSubsystemSteam* SteamSubsystem, FUniqueNetIdSteam& LobbyId, FOnlineSession& Session, FOnlineSessionSearchResult* SearchData)
 {
 	bool bSuccess = true;
 
@@ -223,7 +242,7 @@ bool FillSessionFromLobbyData(FUniqueNetIdSteam& LobbyId, FOnlineSession& Sessio
 	int32 HostKeysFound = 0;
 	int32 SteamAddrKeysFound = 0;
 
-	const int32 LobbyDataBufferSize = 1024;
+	const int32 LobbyDataBufferSize = 2000; // The Limit on Steam is 8192, but we won't use that much.
 	ANSICHAR Key[LobbyDataBufferSize];
 	ANSICHAR Value[LobbyDataBufferSize];
 
@@ -296,6 +315,18 @@ bool FillSessionFromLobbyData(FUniqueNetIdSteam& LobbyId, FOnlineSession& Sessio
 			Session.NumOpenPublicConnections = FCString::Atoi(ANSI_TO_TCHAR(Value));
 			KeysFound++;
 		}
+		else if (FCStringAnsi::Strcmp(Key, STEAMKEY_P2PPING) == 0)
+		{
+			if (SteamSubsystem && SearchData != nullptr && SteamSubsystem->GetPingInterface().IsValid())
+			{
+				int32 PingResult = SteamSubsystem->GetPingInterface()->GetPingFromHostData(ANSI_TO_TCHAR(Value));
+				// If the ping was successful, we'll want to write the data. Otherwise let it stay at the default value (of 999)
+				if (PingResult >= 0)
+				{
+					SearchData->PingInMs = PingResult;
+				}
+			}
+		}
 		else if (FCStringAnsi::Stricmp(Key, STEAMKEY_HOSTIP) == 0)
 		{
 			uint32 HostIp = FCString::Atoi(ANSI_TO_TCHAR(Value));
@@ -314,9 +345,18 @@ bool FillSessionFromLobbyData(FUniqueNetIdSteam& LobbyId, FOnlineSession& Sessio
 				HostKeysFound++;
 			}
 		}
+		else if (FCStringAnsi::Stricmp(Key, STEAMKEY_CONNECTIONMETHOD) == 0)
+		{
+			SessionInfo->ConnectionMethod = ToConnectionMethod(ANSI_TO_TCHAR(Value));
+			++KeysFound;
+		}
 		else if (FCStringAnsi::Stricmp(Key, STEAMKEY_P2PADDR) == 0)
 		{
-			uint64 SteamAddr = FCString::Atoi64(ANSI_TO_TCHAR(Value));
+			FString KeyValue = ANSI_TO_TCHAR(Value);
+			// Remove any protocol flags from the start.
+			KeyValue.RemoveFromStart(STEAM_URL_PREFIX);
+
+			uint64 SteamAddr = FCString::Atoi64(*KeyValue);
 			if (SteamAddr != 0)
 			{
 				SteamP2PAddr->SteamId.UniqueNetId = SteamAddr;
@@ -884,7 +924,7 @@ void FOnlineAsyncTaskSteamFindLobbiesBase::CreateQuery()
 void FOnlineAsyncTaskSteamFindLobbiesBase::ParseSearchResult(FUniqueNetIdSteam& LobbyId)
 {
 	FOnlineSessionSearchResult* NewSearchResult = new (SearchSettings->SearchResults) FOnlineSessionSearchResult();
-	if (!FillSessionFromLobbyData(LobbyId, NewSearchResult->Session))
+	if (!FillSessionFromLobbyData(Subsystem, LobbyId, NewSearchResult->Session, NewSearchResult))
 	{
 		UE_LOG_ONLINE_SESSION(Warning, TEXT("Unable to parse search result for lobby '%s'"), *LobbyId.ToDebugString());
 		// Remove the failed element

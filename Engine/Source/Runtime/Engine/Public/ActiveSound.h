@@ -9,10 +9,11 @@
 #include "Audio.h"
 #include "Audio/AudioDebug.h"
 #include "AudioDynamicParameter.h"
-#include "Sound/SoundConcurrency.h"
 #include "Components/AudioComponent.h"
+#include "DSP/VolumeFader.h"
+#include "IAudioExtensionPlugin.h"
 #include "Sound/AudioVolume.h"
-#include "Sound/SoundSubmix.h"
+#include "Sound/SoundConcurrency.h"
 #include "Sound/SoundSourceBus.h"
 
 class FAudioDevice;
@@ -241,7 +242,7 @@ struct FSoundParseParameters
 	}
 };
 
-struct ENGINE_API FActiveSound
+struct ENGINE_API FActiveSound : public ISoundModulatable
 {
 public:
 
@@ -255,6 +256,7 @@ private:
 	uint32 WorldID;
 
 	USoundBase* Sound;
+	USoundEffectSourcePresetChain* SourceEffectChain;
 
 	uint64 AudioComponentID;
 	FName AudioComponentUserID;
@@ -265,6 +267,13 @@ private:
 
 
 public:
+	// ISoundModulatable Implementation
+	USoundModulationPluginSourceSettingsBase* FindModulationSettings() const override;
+	uint32 GetObjectId() const override { return Sound ? Sound->GetUniqueID() : INDEX_NONE; }
+	int32 GetPlayCount() const override;
+	bool IsPreviewSound() const override { return bIsPreviewSound; }
+	void Stop() override;
+
 
 	uint64 GetAudioComponentID() const { return AudioComponentID; }
 	FName GetAudioComponentUserID() const { return AudioComponentUserID; }
@@ -293,6 +302,9 @@ public:
 
 	USoundBase* GetSound() const { return Sound; }
 	void SetSound(USoundBase* InSound);
+
+	USoundEffectSourcePresetChain* GetSourceEffectChain() const { return SourceEffectChain ? SourceEffectChain : Sound->SourceEffectChain; }
+	void SetSourceEffectChain(USoundEffectSourcePresetChain* InSourceEffectChain);
 
 	void SetSoundClass(USoundClass* SoundClass);
 
@@ -467,15 +479,14 @@ public:
 	float MinCurrentPitch;
 	float RequestedStartTime;
 
-	float CurrentAdjustVolumeMultiplier;
-	float TargetAdjustVolumeMultiplier;
-	float TargetAdjustVolumeStopTime;
-
 	float VolumeMultiplier;
 	float PitchMultiplier;
 
 	/** The low-pass filter frequency to apply if bEnableLowPassFilter is true. */
 	float LowPassFilterFrequency;
+
+	/** Fader that tracks component volume */
+	Audio::FVolumeFader ComponentVolumeFader;
 
 	/** The interpolated parameter for the low-pass frequency due to occlusion. */
 	FDynamicParameter CurrentOcclusionFilterFrequency;
@@ -666,7 +677,7 @@ private:
 
 	struct FAsyncTraceDetails
 	{
-		uint32 AudioDeviceID;
+		Audio::FDeviceId AudioDeviceID;
 		FActiveSound* ActiveSound;
 	};
 
@@ -680,20 +691,17 @@ private:
 	/** This is a friend so the audio device can call Stop() on the active sound. */
 	friend class FAudioDevice;
 
-	/** Stops the active sound. Can only be called from the owning audio device. */
-	void Stop(bool bStopNow);
+	/**
+	  * Marks the active sound as pending delete and begins termination of internal resources.
+	  * Only to be called from the owning audio device.
+	  */
+	void MarkPendingDestroy (bool bDestroyNow);
 
 	/** Whether or not the active sound is stopping. */
 	bool IsStopping() const { return bIsStopping; }
 
-	/** Find the active modulation settings */
-	USoundModulationPluginSourceSettingsBase* FindModulationSettings() const;
-
 	/** Called when an active sound has been stopped but needs to update it's stopping sounds. Returns true when stopping sources have finished stopping. */
 	bool UpdateStoppingSources(uint64 CurrentTick, bool bEnsureStopped);
-
-	/** Sets the target volume multiplier to achieve over the specified time period */
-	void UpdateAdjustVolumeMultiplier(const float DeltaTime);
 
 	/** Updates ramping concurrency volume scalars */
 	void UpdateConcurrencyVolumeScalars(const float DeltaTime);

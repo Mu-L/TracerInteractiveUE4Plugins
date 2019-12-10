@@ -14,9 +14,14 @@ struct FNiagaraScriptExecutionPaddingInfo
 public:
 	FNiagaraScriptExecutionPaddingInfo() : SrcOffset(0), DestOffset(0), SrcSize(0), DestSize(0) {}
 	FNiagaraScriptExecutionPaddingInfo(uint32 InSrcOffset, uint32 InDestOffset, uint32 InSrcSize, uint32 InDestSize) : SrcOffset(InSrcOffset), DestOffset(InDestOffset), SrcSize(InSrcSize), DestSize(InDestSize) {}
+
+	UPROPERTY()
 	uint32 SrcOffset;
+	UPROPERTY()
 	uint32 DestOffset;
+	UPROPERTY()
 	uint32 SrcSize;
+	UPROPERTY()
 	uint32 DestSize;
 };
 
@@ -44,14 +49,19 @@ public:
 	void AddScriptParams(UNiagaraScript* Script, ENiagaraSimTarget SimTarget, bool bTriggerRebind);
 	void CopyCurrToPrev();
 
-	virtual bool AddParameter(const FNiagaraVariable& Param, bool bInitInterfaces = true, bool bTriggerRebind = true) override
+	virtual bool AddParameter(const FNiagaraVariable& Param, bool bInitInterfaces = true, bool bTriggerRebind = true, int32* OutOffset = nullptr) override
 	{
-		if (FNiagaraParameterStore::AddParameter(Param, bInitInterfaces, bTriggerRebind))
+		int32 NewParamOffset = INDEX_NONE;
+		const bool bAdded = FNiagaraParameterStore::AddParameter(Param, bInitInterfaces, bTriggerRebind, &NewParamOffset);
+		if (bAdded)
 		{
-			AddPaddedParamSize(Param.GetType(), IndexOf(Param));
-			return true;
+			AddPaddedParamSize(Param.GetType(), NewParamOffset);
 		}
-		return false;
+		if (OutOffset)
+		{
+			*OutOffset = NewParamOffset;
+		}
+		return bAdded;
 	}
 
 	virtual bool RemoveParameter(const FNiagaraVariable& Param) override
@@ -84,7 +94,7 @@ public:
 
 
 	bool IsInitialized() const {return bInitialized;}
-
+	void SetAsInitialized() { bInitialized = true; }
 protected:
 	void AddPaddedParamSize(const FNiagaraTypeDefinition& InParamType, uint32 InOffset);
 

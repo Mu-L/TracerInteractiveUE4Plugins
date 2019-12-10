@@ -9,7 +9,6 @@
 #include "Engine/Engine.h"
 #include "EngineGlobals.h"
 #include "IAudioExtensionPlugin.h"
-#include "Modules/ModuleInterface.h"
 #include "AudioDynamicParameter.h"
 #include "Sound/AudioSettings.h"
 #include "Sound/AudioVolume.h"
@@ -17,15 +16,17 @@
 #include "Sound/SoundClass.h"
 #include "Sound/SoundConcurrency.h"
 #include "Sound/SoundMix.h"
+#include "Sound/SoundSubmixSend.h"
 #include "Sound/SoundSourceBus.h"
 #include "AudioVirtualLoop.h"
-
+#include "AudioMixer.h"
 
 /**
  * Forward declares
  */
 
 class FArchive;
+class FAudioDebugger;
 class FAudioDevice;
 class FAudioEffectsManager;
 class FCanvas;
@@ -415,6 +416,10 @@ private:
 	bool HandleGetDynamicSoundVolumeCommand(const TCHAR* Cmd, FOutputDevice& Ar);
 	bool HandleSetDynamicSoundCommand(const TCHAR* Cmd, FOutputDevice& Ar);
 
+	/** Handles all argument parsing for the solo commands in one place */
+	using FToggleSoloPtr = void (FAudioDebugger::*)(FName InName, bool bExclusive);
+	void HandleAudioSoloCommon(const TCHAR* Cmd, FOutputDevice& Ar, FToggleSoloPtr Funct);
+
 	/**
 	* Lists a summary of loaded sound collated by class
 	*/
@@ -445,12 +450,12 @@ public:
 	}
 
 	/** Returns the quality settings used by the default audio settings. */
-	static FAudioQualitySettings GetQualityLevelSettings();
+	static const FAudioQualitySettings& GetQualityLevelSettings();
 
 	/**
 	 * Basic initialization of the platform agnostic layer of the audio system
 	 */
-	bool Init(int32 InMaxChannels);
+	bool Init(int32 InMaxSources);
 
 	/**
 	 * Tears down the audio device
@@ -535,6 +540,13 @@ public:
 	 */
 	virtual void Precache(USoundWave* SoundWave, bool bSynchronous = false, bool bTrackMemory = true, bool bForceFullDecompression = false);
 
+	float GetCompressionDurationThreshold(const FSoundGroup &SoundGroup);
+
+	/**
+	 * Returns true if a sound wave should be decompressed.
+	 */
+	bool ShouldUseRealtimeDecompression(bool bForceFullDecompression, const FSoundGroup &SoundGroup, USoundWave* SoundWave, float CompressedDurationThreshold) const;
+
 	/**
 	 * Precaches all existing sounds. Called when audio setup is complete
 	 */
@@ -552,6 +564,15 @@ public:
 
 	/** Returns the max channels used by the audio device. */
 	int32 GetMaxChannels() const;
+
+	/** Returns the maximum sources used by the audio device set on initialization,
+	  * including the number of stopping voices reserved. */
+	int32 GetMaxSources() const;
+
+	/**
+	 * Returns global pitch range
+	 */
+	TRange<float> GetGlobalPitchRange() const;
 
 	/**
 	* Stops any sound sources which are using the given buffer.
@@ -1133,6 +1154,9 @@ public:
 		return bIsBakedAnalysisEnabled;
 	}
 
+	/** Updates the source's modulation controls. */
+	virtual void UpdateModulationControls(const uint32 SourceId, const FSoundModulationControls& InControls) {}
+
 	/** Updates the source effect chain. Only implemented in audio mixer. */
 	virtual void UpdateSourceEffectChain(const uint32 SourceEffectChainId, const TArray<FSourceEffectChainEntry>& SourceEffectChain, const bool bPlayEffectChainTails) {}
 
@@ -1179,30 +1203,11 @@ public:
 	}
 
 	/** Adds an envelope follower delegate to the submix for this audio device. */
-	virtual void AddEnvelopeFollowerDelegate(USoundSubmix* InSubmix, const FOnSubmixEnvelopeBP& OnSubmixEnvelopeBP)
-	{
-		UE_LOG(LogAudio, Error, TEXT("Envelope following submixes only works with the audio mixer. Please run using -audiomixer or set INI file to use submix recording."));
-	}
-
-	virtual void StartSpectrumAnalysis(USoundSubmix* InSubmix, const Audio::FSpectrumAnalyzerSettings& InSettings)
-	{
-		UE_LOG(LogAudio, Error, TEXT("Spectrum analysis of submixes only works with the audio mixer. Please run using -audiomixer or set INI file to use submix recording."));
-	}
-
-	virtual void StopSpectrumAnalysis(USoundSubmix* InSubmix)
-	{
-		UE_LOG(LogAudio, Error, TEXT("Spectrum analysis of submixes only works with the audio mixer. Please run using -audiomixer or set INI file to use submix recording."));
-	}
-
-	virtual void GetMagnitudesForFrequencies(USoundSubmix* InSubmix, const TArray<float>& InFrequencies, TArray<float>& OutMagnitudes)
-	{
-		UE_LOG(LogAudio, Error, TEXT("Spectrum analysis of submixes only works with the audio mixer. Please run using -audiomixer or set INI file to use submix recording."));
-	}
-
-	virtual void GetPhasesForFrequencies(USoundSubmix* InSubmix, const TArray<float>& InFrequencies, TArray<float>& OutPhases)
-	{
-		UE_LOG(LogAudio, Error, TEXT("Spectrum analysis of submixes only works with the audio mixer. Please run using -audiomixer or set INI file to use submix recording."));
-	}
+	virtual void AddEnvelopeFollowerDelegate(USoundSubmix* InSubmix, const FOnSubmixEnvelopeBP& OnSubmixEnvelopeBP);
+	virtual void StartSpectrumAnalysis(USoundSubmix* InSubmix, const Audio::FSpectrumAnalyzerSettings& InSettings);
+	virtual void StopSpectrumAnalysis(USoundSubmix* InSubmix);
+	virtual void GetMagnitudesForFrequencies(USoundSubmix* InSubmix, const TArray<float>& InFrequencies, TArray<float>& OutMagnitudes);
+	virtual void GetPhasesForFrequencies(USoundSubmix* InSubmix, const TArray<float>& InFrequencies, TArray<float>& OutPhases);
 
 protected:
 	friend class FSoundSource;
@@ -1246,9 +1251,16 @@ private:
 	* Called in the game thread.
 	*
 	* @param World: Pointer to the UWorld the listener is in.
-	* @param InViewportIndex: Viewport that the listener belongs to.
 	*/
 	void InitializePluginListeners(UWorld* World);
+
+	/**
+	* Notifies all plugin listeners belonging to this audio device that
+	* the world changed. Called in the game thread.
+	*
+	* @param World: Pointer to the UWorld the listener is in.
+	*/
+	void NotifyPluginListenersWorldChanged(UWorld* World);
 
 	/**
 	 * Parses the sound classes and propagates multiplicative properties down the tree.
@@ -1358,6 +1370,9 @@ private:
 	{
 		return Adjuster * InterpValue + 1.0f - InterpValue;
 	}
+
+	/** Retrieve the filter frequency to use. Takes into account logarithmic nature of frequency. */
+	float GetInterpolatedFrequency(const float InFrequency, const float InterpValue) const;
 
 	/** Allow platforms to optionally specify low-level audio platform settings. */
 	virtual FAudioPlatformSettings GetPlatformSettings() const { return FAudioPlatformSettings(); }
@@ -1534,7 +1549,6 @@ private:
 	int32 GetNumPrecacheFrames() const;
 
 	bool RemoveVirtualLoop(FActiveSound& ActiveSound);
-
 public:
 
 	/** Query if the editor is in VR Preview for the current play world. Returns false for non-editor builds */
@@ -1598,16 +1612,8 @@ public:
 
 public:
 
-	/** The maximum number of concurrent audible sounds */
-	int32 MaxChannels;
-	int32 MaxChannels_GameThread;
-
-	/** A scaler on the max channels. */
-	float MaxChannelsScale;
-	float MaxChannelsScale_GameThread;
-
 	/** The number of sources to reserve for stopping sounds. */
-	int32 NumStoppingVoices;
+	int32 NumStoppingSources;
 
 	/** The sample rate of all the audio devices */
 	int32 SampleRate;
@@ -1618,17 +1624,8 @@ public:
 	/** The number of frames to precache. */
 	int32 NumPrecacheFrames;
 
-	/** The amount of memory to reserve for always resident sounds */
-	int32 CommonAudioPoolSize;
-
-	/** Pointer to permanent memory allocation stack. */
-	void* CommonAudioPool;
-
-	/** Available size in permanent memory stack */
-	int32 CommonAudioPoolFreeBytes;
-
 	/** The handle for this audio device used in the audio device manager. */
-	uint32 DeviceHandle;
+	Audio::FDeviceId DeviceHandle;
 
 	/** 3rd party audio spatialization interface. */
 	TAudioSpatializationPtr SpatializationPluginInterface;
@@ -1652,6 +1649,17 @@ public:
 	TArray<FTransform> ListenerTransforms;
 
 private:
+	/** The maximum number of sources.  Value cannot change after initialization. */
+	int32 MaxSources;
+
+	/** The maximum number of concurrent audible sounds. Value cannot exceed MaxSources. */
+	int32 MaxChannels;
+	int32 MaxChannels_GameThread;
+
+	/** Normalized (0.0f - 1.0f) scalar multiplier on max channels. */
+	float MaxChannelsScale;
+	float MaxChannelsScale_GameThread;
+
 	uint64 CurrentTick;
 
 	/** An AudioComponent to play test sounds on */
@@ -1820,7 +1828,13 @@ private:
 	TArray<FActiveSound*> ActiveSounds;
 	/** Array of sound waves to add references to avoid GC until guaranteed to be done with precache or decodes. */
 	TArray<USoundWave*> ReferencedSoundWaves;
+
+	void UpdateReferencedSoundWaves();
+	TArray<USoundWave*> ReferencedSoundWaves_AudioThread;
+	FCriticalSection ReferencedSoundWaveCritSec;
+
 	TArray<USoundWave*> PrecachingSoundWaves;
+
 	TArray<FWaveInstance*> ActiveWaveInstances;
 
 	/** Array of dormant loops stopped due to proximity/applicable concurrency rules
@@ -1864,21 +1878,6 @@ private:
 	// Global min and max pitch scale, derived from audio settings
 	float GlobalMinPitch;
 	float GlobalMaxPitch;
-};
-
-
-/**
- * Interface for audio device modules
- */
-
-/** Defines the interface of a module implementing an audio device and associated classes. */
-class IAudioDeviceModule : public IModuleInterface
-{
-public:
-
-	/** Creates a new instance of the audio device implemented by the module. */
-	virtual bool IsAudioMixerModule() const { return false; }
-	virtual FAudioDevice* CreateAudioDevice() = 0;
 };
 
 

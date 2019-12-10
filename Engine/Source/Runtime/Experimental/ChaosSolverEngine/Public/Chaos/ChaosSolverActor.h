@@ -6,7 +6,7 @@
 
 #include "Chaos/ChaosSolver.h"
 #include "Chaos/ChaosSolverComponentTypes.h"
-#include "Chaos/PBDRigidClustering.h"
+#include "Chaos/ClusterCreationParameters.h"
 #include "Components/BillboardComponent.h"
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
@@ -181,10 +181,8 @@ public:
 
 	UChaosGameplayEventDispatcher* GetGameplayEventDispatcher() const { return GameplayEventDispatcherComponent; };
 
-#if INCLUDE_CHAOS
 	TSharedPtr<FPhysScene_Chaos> GetPhysicsScene() const { return PhysScene; }
-	Chaos::FPBDRigidsSolver* GetSolver() const { return Solver; }
-#endif
+	Chaos::FPhysicsSolver* GetSolver() const { return Solver; }
 
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;
@@ -192,13 +190,11 @@ public:
 	virtual void PostRegisterAllComponents() override;
 	
 	virtual void BeginPlay() override;
-	virtual void EndPlay(EEndPlayReason::Type ReasonEnd) override;
+	virtual void EndPlay(const EEndPlayReason::Type ReasonEnd) override;
 
 private:
-#if INCLUDE_CHAOS
 	TSharedPtr<FPhysScene_Chaos> PhysScene;
-	Chaos::FPBDRigidsSolver* Solver;
-#endif
+	Chaos::FPhysicsSolver* Solver;
 
 	/** Component responsible for harvesting and triggering physics-related gameplay events (hits, breaks, etc) */
 	UPROPERTY()

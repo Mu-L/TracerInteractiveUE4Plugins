@@ -272,6 +272,12 @@ public:
 	}
 };
 
+class FSkyAtmosphereMapBuildData
+{
+public:
+	bool bDummy = false;
+};
+
 UCLASS(MinimalAPI)
 class UMapBuildDataRegistry : public UObject
 {
@@ -331,12 +337,23 @@ public:
 	ENGINE_API FLightComponentMapBuildData* GetLightBuildData(FGuid LightId);
 
 	/** 
-	 * Allocates a new FMeshMapBuildData from the registry.
+	 * Allocates a new FReflectionCaptureMapBuildData from the registry.
 	 * Warning: Further allocations will invalidate the returned reference.
 	 */
 	ENGINE_API FReflectionCaptureMapBuildData& AllocateReflectionCaptureBuildData(const FGuid& CaptureId, bool bMarkDirty);
 	ENGINE_API const FReflectionCaptureMapBuildData* GetReflectionCaptureBuildData(FGuid CaptureId) const;
 	ENGINE_API FReflectionCaptureMapBuildData* GetReflectionCaptureBuildData(FGuid CaptureId);
+
+	/**
+	 * Allocates a new FAtmosphericFogMapBuildData from the registry.
+	 * Warning: Further allocations will invalidate the returned reference.
+	 */
+	ENGINE_API FSkyAtmosphereMapBuildData& FindOrAllocateSkyAtmosphereBuildData(const FGuid& Guid);
+	/**
+	 * @returns pointer to the AtmosphericFogBuildData, nullptr if built data has not been built yet.
+	 */
+	ENGINE_API const FSkyAtmosphereMapBuildData* GetSkyAtmosphereBuildData(const FGuid& Guid) const;
+	ENGINE_API void ClearSkyAtmosphereBuildData();
 
 	ENGINE_API void InvalidateStaticLighting(UWorld* World, bool bRecreateRenderState = true, const TSet<FGuid>* ResourcesToKeep = nullptr);
 	ENGINE_API void InvalidateReflectionCaptures(const TSet<FGuid>* ResourcesToKeep = nullptr);
@@ -363,6 +380,7 @@ private:
 	TMap<FGuid, FPrecomputedVolumetricLightmapData*> LevelPrecomputedVolumetricLightmapBuildData;
 	TMap<FGuid, FLightComponentMapBuildData> LightBuildData;
 	TMap<FGuid, FReflectionCaptureMapBuildData> ReflectionCaptureBuildData;
+	TMap<FGuid, FSkyAtmosphereMapBuildData> SkyAtmosphereBuildData;
 
 	bool bSetupResourceClusters;
 	TArray<FLightmapResourceCluster> LightmapResourceClusters;

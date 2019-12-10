@@ -39,6 +39,11 @@ namespace UE4String_Private
 		// Skip over common initial non-wildcard-char sequence of Target and Wildcard
 		for (;;)
 		{
+			if (WildcardLength == 0)
+			{
+				return TargetLength == 0;
+			}
+
 			TCHAR WCh = *Wildcard;
 			if (WCh == TEXT('*') || WCh == TEXT('?'))
 			{
@@ -48,11 +53,6 @@ namespace UE4String_Private
 			if (!CompareType::Compare(*Target, WCh))
 			{
 				return false;
-			}
-
-			if (WCh == TEXT('\0'))
-			{
-				return true;
 			}
 
 			++Target;
@@ -81,12 +81,12 @@ namespace UE4String_Private
 			}
 
 			--TargetLength;
+			--WildcardLength;
+
 			if (TargetLength == 0)
 			{
-				return false;
+				break;
 			}
-
-			--WildcardLength;
 		}
 
 		// Match * against anything and ? against single (and zero?) chars
@@ -107,7 +107,7 @@ namespace UE4String_Private
 
 		for (int32 Index = 0; Index <= MaxNum; ++Index)
 		{
-			if (MatchesWildcardRecursive<CompareType>(Target, TargetLength - Index, Wildcard, WildcardLength))
+			if (MatchesWildcardRecursive<CompareType>(Target + Index, TargetLength - Index, Wildcard, WildcardLength))
 			{
 				return true;
 			}
@@ -913,79 +913,19 @@ int32 FString::ParseIntoArray( TArray<FString>& OutArray, const TCHAR* pchDelim,
 	return OutArray.Num();
 }
 
-bool FString::MatchesWildcard(const FString& InWildcard, ESearchCase::Type SearchCase) const
+bool FString::MatchesWildcard(const TCHAR* InWildcard, ESearchCase::Type SearchCase) const
 {
-	FString Wildcard(InWildcard);
-	FString Target(*this);
-	int32 IndexOfStar = Wildcard.Find(TEXT("*"), ESearchCase::CaseSensitive, ESearchDir::FromEnd); // last occurance
-	int32 IndexOfQuestion = Wildcard.Find( TEXT("?"), ESearchCase::CaseSensitive, ESearchDir::FromEnd); // last occurance
-	int32 Suffix = FMath::Max<int32>(IndexOfStar, IndexOfQuestion);
-	if (Suffix == INDEX_NONE)
+	const TCHAR* Target = **this;
+	int32        TargetLength = Len();
+	int32        WildcardLength = FCString::Strlen(InWildcard);
+
+	if (SearchCase == ESearchCase::CaseSensitive)
 	{
-		// no wildcards
-		if (SearchCase == ESearchCase::IgnoreCase)
-		{
-			return FCString::Stricmp( *Target, *Wildcard )==0;
-		}
-		else
-		{
-			return FCString::Strcmp( *Target, *Wildcard )==0;
-		}
+		return UE4String_Private::MatchesWildcardRecursive<UE4String_Private::FCompareCharsCaseSensitive>(Target, TargetLength, InWildcard, WildcardLength);
 	}
 	else
 	{
-		if (Suffix + 1 < Wildcard.Len())
-		{
-			FString SuffixString = Wildcard.Mid(Suffix + 1);
-			if (!Target.EndsWith(SuffixString, SearchCase))
-			{
-				return false;
-			}
-			Wildcard = Wildcard.Left(Suffix + 1);
-			Target = Target.Left(Target.Len() - SuffixString.Len());
-		}
-		int32 PrefixIndexOfStar = Wildcard.Find(TEXT("*"), ESearchCase::CaseSensitive); 
-		int32 PrefixIndexOfQuestion = Wildcard.Find(TEXT("?"), ESearchCase::CaseSensitive);
-		int32 Prefix = FMath::Min<int32>(PrefixIndexOfStar < 0 ? MAX_int32 : PrefixIndexOfStar, PrefixIndexOfQuestion < 0 ? MAX_int32 : PrefixIndexOfQuestion);
-		check(Prefix >= 0 && Prefix < Wildcard.Len());
-		if (Prefix > 0)
-		{
-			FString PrefixString = Wildcard.Left(Prefix);
-			if (!Target.StartsWith(PrefixString, SearchCase))
-			{
-				return false;
-			}
-			Wildcard = Wildcard.Mid(Prefix);
-			Target = Target.Mid(Prefix);
-		}
-	}
-	// This routine is very slow, though it does ok with one wildcard
-	check(Wildcard.Len());
-	TCHAR FirstWild = Wildcard[0];
-	Wildcard = Wildcard.Right(Wildcard.Len() - 1);
-	if (FirstWild == TEXT('*') || FirstWild == TEXT('?'))
-	{
-		if (!Wildcard.Len())
-		{
-			if (FirstWild == TEXT('*') || Target.Len() < 2)
-			{
-				return true;
-			}
-		}
-		int32 MaxNum = FMath::Min<int32>(Target.Len(), FirstWild == TEXT('?') ? 1 : MAX_int32);
-		for (int32 Index = 0; Index <= MaxNum; Index++)
-		{
-			if (Target.Right(Target.Len() - Index).MatchesWildcard(Wildcard, SearchCase))
-			{
-				return true;
-			}
-		}
-		return false;
-	}
-	else
-	{
-		check(0); // we should have dealt with prefix comparison above
-		return false;
+		return UE4String_Private::MatchesWildcardRecursive<UE4String_Private::FCompareCharsCaseInsensitive>(Target, TargetLength, InWildcard, WildcardLength);
 	}
 }
 
@@ -1005,7 +945,7 @@ int32 FString::ParseIntoArrayWS( TArray<FString>& OutArray, const TCHAR* pchExtr
 	};
 
 	// start with just the standard whitespaces
-	int32 NumWhiteSpaces = ARRAY_COUNT(WhiteSpace) - 1;
+	int32 NumWhiteSpaces = UE_ARRAY_COUNT(WhiteSpace) - 1;
 	// if we got one passed in, use that in addition
 	if (pchExtraDelim && *pchExtraDelim)
 	{
@@ -1026,7 +966,7 @@ int32 FString::ParseIntoArrayLines(TArray<FString>& OutArray, bool InCullEmpty) 
 	};
 
 	// start with just the standard line endings
-	int32 NumLineEndings = ARRAY_COUNT(LineEndings);	
+	int32 NumLineEndings = UE_ARRAY_COUNT(LineEndings);	
 	return ParseIntoArray(OutArray, LineEndings, NumLineEndings, InCullEmpty);
 }
 
@@ -1252,7 +1192,7 @@ static const TCHAR* CharToEscapeSeqMap[][2] =
 	{ TEXT("\""), TEXT("\\\"") }
 };
 
-static const uint32 MaxSupportedEscapeChars = ARRAY_COUNT(CharToEscapeSeqMap);
+static const uint32 MaxSupportedEscapeChars = UE_ARRAY_COUNT(CharToEscapeSeqMap);
 
 /**
  * Replaces certain characters with the "escaped" version of that character (i.e. replaces "\n" with "\\n").
@@ -1409,17 +1349,20 @@ void FString::AppendfImpl(FString& AppendToMe, const TCHAR* Fmt, ...)
 	}
 }
 
+static_assert(PLATFORM_LITTLE_ENDIAN, "FString serialization needs updating to support big-endian platforms!");
+
 FArchive& operator<<( FArchive& Ar, FString& A )
 {
-	// > 0 for ANSICHAR, < 0 for UCS2CHAR serialization
+	// > 0 for ANSICHAR, < 0 for UTF16CHAR serialization
+	static_assert(sizeof(UTF16CHAR) == sizeof(UCS2CHAR), "UTF16CHAR and UCS2CHAR are assumed to be the same size!");
 
 	if (Ar.IsLoading())
 	{
 		int32 SaveNum;
 		Ar << SaveNum;
 
-		bool LoadUCS2Char = SaveNum < 0;
-		if (LoadUCS2Char)
+		bool bLoadUnicodeChar = SaveNum < 0;
+		if (bLoadUnicodeChar)
 		{
 			// If SaveNum cannot be negated due to integer overflow, Ar is corrupted.
 			if (SaveNum == MIN_int32)
@@ -1449,16 +1392,17 @@ FArchive& operator<<( FArchive& Ar, FString& A )
 
 		if (SaveNum)
 		{
-			if (LoadUCS2Char)
+			if (bLoadUnicodeChar)
 			{
-				// read in the unicode string and byteswap it, etc
+				// read in the unicode string
 				auto Passthru = StringMemoryPassthru<UCS2CHAR>(A.Data.GetData(), SaveNum, SaveNum);
 				Ar.Serialize(Passthru.Get(), SaveNum * sizeof(UCS2CHAR));
 				// Ensure the string has a null terminator
 				Passthru.Get()[SaveNum-1] = '\0';
 				Passthru.Apply();
 
-				INTEL_ORDER_TCHARARRAY(A.Data.GetData())
+				// Inline combine any surrogate pairs in the data when loading into a UTF-32 string
+				StringConv::InlineCombineSurrogates(A);
 
 				// Since Microsoft's vsnwprintf implementation raises an invalid parameter warning
 				// with a character of 0xffff, scan for it and terminate the string there.
@@ -1488,30 +1432,31 @@ FArchive& operator<<( FArchive& Ar, FString& A )
 	}
 	else
 	{
-		bool  SaveUCS2Char = Ar.IsForcingUnicode() || !FCString::IsPureAnsi(*A);
-		int32 Num        = A.Data.Num();
-		int32 SaveNum    = SaveUCS2Char ? -Num : Num;
+		A.Data.CountBytes(Ar);
 
-		Ar << SaveNum;
-
-		A.Data.CountBytes( Ar );
-
-		if (SaveNum)
+		const bool bSaveUnicodeChar = Ar.IsForcingUnicode() || !FCString::IsPureAnsi(*A);
+		if (bSaveUnicodeChar)
 		{
-			if (SaveUCS2Char)
-			{
-				// TODO - This is creating a temporary in order to byte-swap.  Need to think about how to make this not necessary.
-				#if !PLATFORM_LITTLE_ENDIAN
-					FString  ATemp  = A;
-					FString& A      = ATemp;
-					INTEL_ORDER_TCHARARRAY(A.Data.GetData());
-				#endif
+			// Note: This is a no-op on platforms that are using a 16-bit TCHAR
+ 			FTCHARToUTF16 UTF16String(*A, A.Len() + 1); // include the null terminator
+			int32 Num = UTF16String.Length() + 1; // include the null terminator
 
-				Ar.Serialize((void*)StringCast<UCS2CHAR>(A.Data.GetData(), Num).Get(), sizeof(UCS2CHAR)* Num);
-			}
-			else
+			int32 SaveNum = -Num;
+			Ar << SaveNum;
+
+			if (Num)
 			{
-				Ar.Serialize((void*)StringCast<ANSICHAR>(A.Data.GetData(), Num).Get(), sizeof(ANSICHAR)* Num);
+				Ar.Serialize((void*)UTF16String.Get(), sizeof(UTF16CHAR) * Num);
+			}
+		}
+		else
+		{
+			int32 Num = A.Data.Num();
+			Ar << Num;
+
+			if (Num)
+			{
+				Ar.Serialize((void*)StringCast<ANSICHAR>(A.Data.GetData(), Num).Get(), sizeof(ANSICHAR) * Num);
 			}
 		}
 	}
@@ -1569,7 +1514,7 @@ FString SlugStringForValidName(const FString& DisplayString, const TCHAR* Replac
 	// Convert the display label, which may consist of just about any possible character, into a
 	// suitable name for a UObject (remove whitespace, certain symbols, etc.)
 	{
-		for ( int32 BadCharacterIndex = 0; BadCharacterIndex < ARRAY_COUNT(INVALID_OBJECTNAME_CHARACTERS) - 1; ++BadCharacterIndex )
+		for ( int32 BadCharacterIndex = 0; BadCharacterIndex < UE_ARRAY_COUNT(INVALID_OBJECTNAME_CHARACTERS) - 1; ++BadCharacterIndex )
 		{
 			const TCHAR TestChar[2] = { INVALID_OBJECTNAME_CHARACTERS[BadCharacterIndex], 0 };
 			const int32 NumReplacedChars = GeneratedName.ReplaceInline(TestChar, ReplaceWith);
@@ -1608,4 +1553,9 @@ void FTextRange::CalculateLineRangesFromString(const FString& Input, TArray<FTex
 	{
 		LineRanges.Emplace(FTextRange(LineBeginIndex, Input.Len()));
 	}
+}
+
+void StringConv::InlineCombineSurrogates(FString& Str)
+{
+	InlineCombineSurrogates_Array(Str.GetCharArray());
 }

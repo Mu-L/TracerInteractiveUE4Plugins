@@ -88,14 +88,15 @@ namespace DisplayClusterStrings
 			// Viewport tokens
 			namespace viewport
 			{
-				static constexpr auto Header     = TEXT("[viewport]");
-				static constexpr auto Projection = TEXT("projection");
-				static constexpr auto Camera     = TEXT("camera");
-				static constexpr auto PosX       = TEXT("x");
-				static constexpr auto PosY       = TEXT("y");
-				static constexpr auto Width      = TEXT("width");
-				static constexpr auto Height     = TEXT("height");
-				static constexpr auto RTT        = TEXT("rtt");
+				static constexpr auto Header      = TEXT("[viewport]");
+				static constexpr auto Projection  = TEXT("projection");
+				static constexpr auto Camera      = TEXT("camera");
+				static constexpr auto PosX        = TEXT("x");
+				static constexpr auto PosY        = TEXT("y");
+				static constexpr auto Width       = TEXT("width");
+				static constexpr auto Height      = TEXT("height");
+				static constexpr auto RTT         = TEXT("rtt");
+				static constexpr auto BufferRatio = TEXT("buffer_ratio");
 				// + Id
 			}
 
@@ -168,8 +169,9 @@ namespace DisplayClusterStrings
 			// General settings tokens
 			namespace general
 			{
-				static constexpr auto Header         = TEXT("[general]");
-				static constexpr auto SwapSyncPolicy = TEXT("swap_sync_policy");
+				static constexpr auto Header                = TEXT("[general]");
+				static constexpr auto SwapSyncPolicy        = TEXT("swap_sync_policy");
+				static constexpr auto UnrealInputSyncPolicy = TEXT("ue4_input_sync_policy");
 			}
 
 			// Stereo tokens
@@ -222,7 +224,6 @@ namespace DisplayClusterStrings
 
 	namespace rhi
 	{
-		static constexpr auto OpenGL = TEXT("OpenGL");
 		static constexpr auto D3D11  = TEXT("D3D11");
 		static constexpr auto D3D12  = TEXT("D3D12");
 	}

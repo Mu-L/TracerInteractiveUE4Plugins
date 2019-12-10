@@ -41,48 +41,37 @@ static TAutoConsoleVariable<int32> CVarDisableDistortion(
 IMPLEMENT_GLOBAL_SHADER_PARAMETER_STRUCT(FDistortionPassUniformParameters, "DistortionPass");
 IMPLEMENT_GLOBAL_SHADER_PARAMETER_STRUCT(FMobileDistortionPassUniformParameters, "MobileDistortionPass");
 
-void SetupDistortionPassUniformBuffer(FRHICommandListImmediate& RHICmdList, const FViewInfo& View, FDistortionPassUniformParameters& DistortionPassParameters)
+void SetupDistortionParams(FVector4& DistortionParams, const FViewInfo& View)
 {
-	FSceneRenderTargets& SceneRenderTargets = FSceneRenderTargets::Get(RHICmdList);
-	SetupSceneTextureUniformParameters(SceneRenderTargets, View.FeatureLevel, ESceneTextureSetupMode::All, DistortionPassParameters.SceneTextures);
-
 	float Ratio = View.UnscaledViewRect.Width() / (float)View.UnscaledViewRect.Height();
-	DistortionPassParameters.DistortionParams.X = View.ViewMatrices.GetProjectionMatrix().M[0][0];
-	DistortionPassParameters.DistortionParams.Y = Ratio;
-	DistortionPassParameters.DistortionParams.Z = (float)View.UnscaledViewRect.Width();
-	DistortionPassParameters.DistortionParams.W = (float)View.UnscaledViewRect.Height();
+	DistortionParams.X = View.ViewMatrices.GetProjectionMatrix().M[0][0];
+	DistortionParams.Y = Ratio;
+	DistortionParams.Z = (float)View.UnscaledViewRect.Width();
+	DistortionParams.W = (float)View.UnscaledViewRect.Height();
 
 	// When ISR is enabled we store two FOVs in the distortion parameters and compute the aspect ratio in the shader instead.
 	if ((View.IsInstancedStereoPass() || View.bIsMobileMultiViewEnabled) && View.Family->Views.Num() > 0)
 	{
 		// When drawing the left eye in a stereo scene, copy the right eye view values into the instanced view uniform buffer.
-		const EStereoscopicPass StereoPassIndex = (View.StereoPass != eSSP_FULL) ? eSSP_RIGHT_EYE : eSSP_FULL;
+		const EStereoscopicPass StereoPassIndex = IStereoRendering::IsStereoEyeView(View) ? eSSP_RIGHT_EYE : eSSP_FULL;
 
 		const FViewInfo& InstancedView = static_cast<const FViewInfo&>(View.Family->GetStereoEyeView(StereoPassIndex));
-		DistortionPassParameters.DistortionParams.Y = InstancedView.ViewMatrices.GetProjectionMatrix().M[0][0];
+		DistortionParams.Y = InstancedView.ViewMatrices.GetProjectionMatrix().M[0][0];
 	}
+}
+
+void SetupDistortionPassUniformBuffer(FRHICommandListImmediate& RHICmdList, const FViewInfo& View, FDistortionPassUniformParameters& DistortionPassParameters)
+{
+	FSceneRenderTargets& SceneRenderTargets = FSceneRenderTargets::Get(RHICmdList);
+	SetupSceneTextureUniformParameters(SceneRenderTargets, View.FeatureLevel, ESceneTextureSetupMode::All, DistortionPassParameters.SceneTextures);
+	SetupDistortionParams(DistortionPassParameters.DistortionParams, View);
 }
 
 void SetupMobileDistortionPassUniformBuffer(FRHICommandListImmediate& RHICmdList, const FViewInfo& View, FMobileDistortionPassUniformParameters& DistortionPassParameters)
 {
 	FSceneRenderTargets& SceneRenderTargets = FSceneRenderTargets::Get(RHICmdList);
-	SetupMobileSceneTextureUniformParameters(SceneRenderTargets, View.FeatureLevel, true, DistortionPassParameters.SceneTextures);
-
-	float Ratio = View.UnscaledViewRect.Width() / (float)View.UnscaledViewRect.Height();
-	DistortionPassParameters.DistortionParams.X = View.ViewMatrices.GetProjectionMatrix().M[0][0];
-	DistortionPassParameters.DistortionParams.Y = Ratio;
-	DistortionPassParameters.DistortionParams.Z = (float)View.UnscaledViewRect.Width();
-	DistortionPassParameters.DistortionParams.W = (float)View.UnscaledViewRect.Height();
-
-	// When ISR is enabled we store two FOVs in the distortion parameters and compute the aspect ratio in the shader instead.
-	if ((View.IsInstancedStereoPass() || View.bIsMobileMultiViewEnabled) && View.Family->Views.Num() > 0)
-	{
-		// When drawing the left eye in a stereo scene, copy the right eye view values into the instanced view uniform buffer.
-		const EStereoscopicPass StereoPassIndex = (View.StereoPass != eSSP_FULL) ? eSSP_RIGHT_EYE : eSSP_FULL;
-
-		const FViewInfo& InstancedView = static_cast<const FViewInfo&>(View.Family->GetStereoEyeView(StereoPassIndex));
-		DistortionPassParameters.DistortionParams.Y = InstancedView.ViewMatrices.GetProjectionMatrix().M[0][0];
-	}
+	SetupMobileSceneTextureUniformParameters(SceneRenderTargets, View.FeatureLevel, true, View.bUsesCustomDepthStencil, DistortionPassParameters.SceneTextures);
+	SetupDistortionParams(DistortionPassParameters.DistortionParams, View);
 }
 
 /**
@@ -612,13 +601,16 @@ void FSceneRenderer::RenderDistortion(FRHICommandListImmediate& RHICmdList)
 			RPInfo.DepthStencilRenderTarget.DepthStencilTarget = SceneContext.GetSceneDepthSurface();
 			RPInfo.DepthStencilRenderTarget.ExclusiveDepthStencil = FExclusiveDepthStencil::DepthRead_StencilWrite;
 
+			RHICmdList.TransitionResource(RPInfo.DepthStencilRenderTarget.ExclusiveDepthStencil, SceneContext.GetSceneDepthSurface());
+
 			RHICmdList.BeginRenderPass(RPInfo, TEXT("RenderDistortion"));
 			{
 				for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ViewIndex++)
 				{
+					FViewInfo& View = Views[ViewIndex];
+					SCOPED_GPU_MASK(RHICmdList, View.GPUMask);
 					SCOPED_CONDITIONAL_DRAW_EVENTF(RHICmdList, EventView, Views.Num() > 1, TEXT("View%d"), ViewIndex);
 
-					FViewInfo& View = Views[ViewIndex];
 					if (!View.ShouldRenderView())
 					{
 						continue;
@@ -657,7 +649,7 @@ void FSceneRenderer::RenderDistortion(FRHICommandListImmediate& RHICmdList)
 			if (bDirty)
 			{
 				// Ideally we skip the EliminateFastClear since we don't need pixels with no stencil set to be cleared
-				RHICmdList.TransitionResource( EResourceTransitionAccess::EReadable, DistortionRT->GetRenderTargetItem().TargetableTexture );
+				RHICmdList.TransitionResource(EResourceTransitionAccess::EReadable, DistortionRT->GetRenderTargetItem().TargetableTexture);
 				// to be able to observe results with VisualizeTexture
 				GVisualizeTexture.SetCheckPoint(RHICmdList, DistortionRT);
 			}
@@ -688,10 +680,11 @@ void FSceneRenderer::RenderDistortion(FRHICommandListImmediate& RHICmdList)
 			{
 				for (int32 ViewIndex = 0, Num = Views.Num(); ViewIndex < Num; ++ViewIndex)
 				{
-					QUICK_SCOPE_CYCLE_COUNTER(STAT_FSceneRenderer_RenderDistortion_PostView1);
-					SCOPED_CONDITIONAL_DRAW_EVENTF(RHICmdList, EventView, Views.Num() > 1, TEXT("View%d"), ViewIndex);
-
 					FViewInfo& View = Views[ViewIndex];
+
+					QUICK_SCOPE_CYCLE_COUNTER(STAT_FSceneRenderer_RenderDistortion_PostView1);
+					SCOPED_GPU_MASK(RHICmdList, View.GPUMask);
+					SCOPED_CONDITIONAL_DRAW_EVENTF(RHICmdList, EventView, Views.Num() > 1, TEXT("View%d"), ViewIndex);
 
 					if (MSAACount == 1)
 					{
@@ -719,10 +712,11 @@ void FSceneRenderer::RenderDistortion(FRHICommandListImmediate& RHICmdList)
 			{
 				for (int32 ViewIndex = 0, Num = Views.Num(); ViewIndex < Num; ++ViewIndex)
 				{
-					QUICK_SCOPE_CYCLE_COUNTER(STAT_FSceneRenderer_RenderDistortion_PostView2);
-					SCOPED_CONDITIONAL_DRAW_EVENTF(RHICmdList, EventView, Views.Num() > 1, TEXT("View%d"), ViewIndex);
-
 					FViewInfo& View = Views[ViewIndex];
+
+					QUICK_SCOPE_CYCLE_COUNTER(STAT_FSceneRenderer_RenderDistortion_PostView2);
+					SCOPED_GPU_MASK(RHICmdList, View.GPUMask);
+					SCOPED_CONDITIONAL_DRAW_EVENTF(RHICmdList, EventView, Views.Num() > 1, TEXT("View%d"), ViewIndex);
 
 					if (MSAACount == 1)
 					{

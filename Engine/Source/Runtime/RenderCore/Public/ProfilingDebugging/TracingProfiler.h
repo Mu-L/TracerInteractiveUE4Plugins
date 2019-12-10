@@ -16,7 +16,11 @@
 #include "CoreTypes.h"
 #include "CoreMinimal.h"
 
-#define TRACING_PROFILER (WITH_ENGINE && !UE_BUILD_SHIPPING)
+#ifndef USE_TRACING_PROFILER_IN_TEST_BUILD
+#define USE_TRACING_PROFILER_IN_TEST_BUILD 1
+#endif
+
+#define TRACING_PROFILER (WITH_ENGINE && !UE_BUILD_SHIPPING && (!UE_BUILD_TEST || USE_TRACING_PROFILER_IN_TEST_BUILD))
 
 #if TRACING_PROFILER
 
@@ -37,7 +41,7 @@ public:
 
 	struct FEvent
 	{
-		const char* Name;
+		FName Name;
 		uint32 FrameNumber;
 		uint32 SessionId;
 		EEventType Type;
@@ -63,7 +67,7 @@ public:
 
 	RENDERCORE_API void Init();
 
-	uint32 AddCPUEvent(const char* Name,
+	uint32 AddCPUEvent(FName Name,
 		uint64 TimestampBeginCycles,
 		uint64 TimestempEndCycles,
 		uint32 ThreadId,
@@ -80,7 +84,7 @@ public:
 		return AddEvent(Event);
 	}
 
-	uint32 AddGPUEvent(const char* Name,
+	uint32 AddGPUEvent(FName Name,
 		uint64 TimestempBeginMicroseconds,
 		uint64 TimestampEndMicroseconds,
 		uint64 GPUIndex,

@@ -3,8 +3,10 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Hierarchy.h"
+#include "Rigs/RigHierarchyContainer.h"
+#include "Rigs/RigCurveContainer.h"
 #include "ControlRigLog.h"
+#include "AnimationDataSource.h"
 #include "Drawing/ControlRigDrawInterface.h"
 
 /** Current state of rig
@@ -24,6 +26,10 @@ struct FRigUnitContext
 	/** default constructor */
 	FRigUnitContext()
 		: DrawInterface(nullptr)
+		, DataSourceRegistry(nullptr)
+		, DeltaTime(0.f)
+		, State(EControlRigState::Invalid)
+		, Hierarchy(nullptr)
 #if WITH_EDITOR
 		, Log(nullptr)
 #endif
@@ -34,6 +40,9 @@ struct FRigUnitContext
 	/** The draw interface for the units to use */
 	FControlRigDrawInterface* DrawInterface;
 
+	/** The registry to access data source */
+	const UAnimationDataSourceRegistry* DataSourceRegistry;
+
 	/** The current delta time */
 	float DeltaTime;
 
@@ -41,12 +50,64 @@ struct FRigUnitContext
 	EControlRigState State;
 
 	/** The current hierarchy being executed */
-	FRigHierarchyRef HierarchyReference;
+	const FRigHierarchyContainer* Hierarchy;
 
 #if WITH_EDITOR
 	/** A handle to the compiler log */
 	FControlRigLog* Log;
 #endif
+
+	const FRigBoneHierarchy* GetBones() const
+	{
+		if (Hierarchy != nullptr)
+		{
+			return &Hierarchy->BoneHierarchy;
+		}
+		return nullptr;
+	}
+
+	const FRigSpaceHierarchy* GetSpaces() const
+	{
+		if (Hierarchy != nullptr)
+		{
+			return &Hierarchy->SpaceHierarchy;
+		}
+		return nullptr;
+	}
+
+	const FRigControlHierarchy* GetControls() const
+	{
+		if (Hierarchy != nullptr)
+		{
+			return &Hierarchy->ControlHierarchy;
+		}
+		return nullptr;
+	}
+
+	const FRigCurveContainer* GetCurves() const
+	{
+		if (Hierarchy != nullptr)
+		{
+			return &Hierarchy->CurveContainer;
+		}
+		return nullptr;
+	}
+
+	/**
+	 * Returns a given data source and cast it to the expected class.
+	 *
+	 * @param InName The name of the data source to look up.
+	 * @return The requested data source
+	 */
+	template<class T>
+	T* RequestDataSource(const FName& InName) const
+	{
+		if (DataSourceRegistry == nullptr)
+		{
+			return nullptr;
+		}
+		return DataSourceRegistry->RequestSource<T>(InName);
+	}
 };
 
 #if WITH_EDITOR

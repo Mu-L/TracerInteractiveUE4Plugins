@@ -9,6 +9,7 @@
 #include "Engine/EngineBaseTypes.h"
 #include "VREditorTeleporter.generated.h"
 
+class UVREditorInteractor;
 class UViewportInteractor;
 class UVREditorMode;
 
@@ -16,7 +17,7 @@ class UVREditorMode;
  * VR Editor teleport manager and the visual representation of the teleport
  */
 UCLASS( Blueprintable, BlueprintType )
-class AVREditorTeleporter: public AActor
+class VREDITOR_API AVREditorTeleporter: public AActor
 {
 	GENERATED_BODY()
 

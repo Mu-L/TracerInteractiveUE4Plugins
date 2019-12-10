@@ -997,15 +997,20 @@ namespace BlueprintSearchMetaDataHelpers
 					{
 						// Find all the pins and extract their metadata
 						InWriter->WriteArrayStart(FFindInBlueprintSearchTags::FiB_Pins);
-						for (UEdGraphPin* Pin : Node->Pins)
+						for (const UEdGraphPin* Pin : Node->Pins)
 						{
 							// Hidden pins are not searchable
 							if (Pin->bHidden == false)
 							{
 								InWriter->WriteObjectStart();
 								{
-									InWriter->WriteValue(FFindInBlueprintSearchTags::FiB_Name, Pin->GetSchema()->GetPinDisplayName(Pin));
-									InWriter->WriteValue(FFindInBlueprintSearchTags::FiB_DefaultValue, Pin->GetDefaultAsText());
+									TArray<struct FSearchTagDataPair> Tags;
+									Node->AddPinSearchMetaDataInfo(Pin, Tags);
+
+									for (const FSearchTagDataPair& SearchData : Tags)
+									{
+										InWriter->WriteValue(SearchData.Key, SearchData.Value);
+									}
 								}
 								SavePinTypeToJson(InWriter, Pin->PinType);
 								InWriter->WriteObjectEnd();
@@ -1434,7 +1439,7 @@ FFindInBlueprintSearchManager::FFindInBlueprintSearchManager()
 	, AssetRegistryModule(nullptr)
 	, CachingObject(nullptr)
 {
-	for (int32 TabIdx = 0; TabIdx < ARRAY_COUNT(GlobalFindResultsTabIDs); TabIdx++)
+	for (int32 TabIdx = 0; TabIdx < UE_ARRAY_COUNT(GlobalFindResultsTabIDs); TabIdx++)
 	{
 		const FName TabID = FName(*FString::Printf(TEXT("GlobalFindResults_%02d"), TabIdx + 1));
 		GlobalFindResultsTabIDs[TabIdx] = TabID;
@@ -2562,7 +2567,6 @@ TSharedRef<SDockTab> FFindInBlueprintSearchManager::SpawnGlobalFindResultsTab(co
 		.ToolTipText(LOCTEXT("GlobalFindResultsTabTooltip", "Search for a string in all Blueprint assets."));
 
 	TSharedRef<SFindInBlueprints> FindResults = SNew(SFindInBlueprints)
-		.bIsSearchWindow(false)
 		.ContainingTab(NewTab);
 
 	GlobalFindResults.Add(FindResults);
@@ -2585,7 +2589,7 @@ TSharedPtr<SFindInBlueprints> FFindInBlueprintSearchManager::OpenGlobalFindResul
 		}
 	}
 
-	for (int32 Idx = 0; Idx < ARRAY_COUNT(GlobalFindResultsTabIDs); ++Idx)
+	for (int32 Idx = 0; Idx < UE_ARRAY_COUNT(GlobalFindResultsTabIDs); ++Idx)
 	{
 		const FName GlobalTabId = GlobalFindResultsTabIDs[Idx];
 		if (!OpenGlobalTabIDs.Contains(GlobalTabId))
@@ -2638,7 +2642,7 @@ void FFindInBlueprintSearchManager::EnableGlobalFindResults(bool bEnable)
 			GlobalFindResultsIcon,
 			true);
 
-		for (int32 TabIdx = 0; TabIdx < ARRAY_COUNT(GlobalFindResultsTabIDs); TabIdx++)
+		for (int32 TabIdx = 0; TabIdx < UE_ARRAY_COUNT(GlobalFindResultsTabIDs); TabIdx++)
 		{
 			const FName TabID = GlobalFindResultsTabIDs[TabIdx];
 			if (!GlobalTabManager->HasTabSpawner(TabID))
@@ -2673,7 +2677,7 @@ void FFindInBlueprintSearchManager::EnableGlobalFindResults(bool bEnable)
 
 		GlobalFindResults.Empty();
 
-		for (int32 TabIdx = 0; TabIdx < ARRAY_COUNT(GlobalFindResultsTabIDs); TabIdx++)
+		for (int32 TabIdx = 0; TabIdx < UE_ARRAY_COUNT(GlobalFindResultsTabIDs); TabIdx++)
 		{
 			const FName TabID = GlobalFindResultsTabIDs[TabIdx];
 			if (GlobalTabManager->HasTabSpawner(TabID))
@@ -2694,7 +2698,7 @@ void FFindInBlueprintSearchManager::CloseOrphanedGlobalFindResultsTabs(TSharedPt
 {
 	if (TabManager.IsValid())
 	{
-		for (int32 TabIdx = 0; TabIdx < ARRAY_COUNT(GlobalFindResultsTabIDs); TabIdx++)
+		for (int32 TabIdx = 0; TabIdx < UE_ARRAY_COUNT(GlobalFindResultsTabIDs); TabIdx++)
 		{
 			const FName TabID = GlobalFindResultsTabIDs[TabIdx];
 			if (!FGlobalTabmanager::Get()->HasTabSpawner(TabID))

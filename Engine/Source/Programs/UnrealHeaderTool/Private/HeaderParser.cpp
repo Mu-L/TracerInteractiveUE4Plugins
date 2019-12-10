@@ -72,6 +72,7 @@ static const FName NAME_DocumentationPolicy(TEXT("DocumentationPolicy"));
 EGeneratedCodeVersion FHeaderParser::DefaultGeneratedCodeVersion = EGeneratedCodeVersion::V1;
 TArray<FString> FHeaderParser::StructsWithNoPrefix;
 TArray<FString> FHeaderParser::StructsWithTPrefix;
+FRigVMStructMap FHeaderParser::StructRigVMMap;
 TArray<FString> FHeaderParser::DelegateParameterCountStrings;
 TMap<FString, FString> FHeaderParser::TypeRedirectMap;
 TArray<FString> FHeaderParser::PropertyCPPTypesRequiringUIRanges = { TEXT("float"), TEXT("double") };
@@ -100,19 +101,19 @@ namespace
 
 		// Test for known delegate and event macros.
 		TCHAR MulticastDelegateStart[] = TEXT("DECLARE_MULTICAST_DELEGATE");
-		if (!FCString::Strncmp(Identifier, MulticastDelegateStart, ARRAY_COUNT(MulticastDelegateStart) - 1))
+		if (!FCString::Strncmp(Identifier, MulticastDelegateStart, UE_ARRAY_COUNT(MulticastDelegateStart) - 1))
 		{
 			return true;
 		}
 
 		TCHAR DelegateStart[] = TEXT("DECLARE_DELEGATE");
-		if (!FCString::Strncmp(Identifier, DelegateStart, ARRAY_COUNT(DelegateStart) - 1))
+		if (!FCString::Strncmp(Identifier, DelegateStart, UE_ARRAY_COUNT(DelegateStart) - 1))
 		{
 			return true;
 		}
 
 		TCHAR DelegateEvent[] = TEXT("DECLARE_EVENT");
-		if (!FCString::Strncmp(Identifier, DelegateEvent, ARRAY_COUNT(DelegateEvent) - 1))
+		if (!FCString::Strncmp(Identifier, DelegateEvent, UE_ARRAY_COUNT(DelegateEvent) - 1))
 		{
 			return true;
 		}
@@ -188,7 +189,7 @@ namespace
 			TEXT("FORCEINLINE_STATS"),
 			TEXT("SIZE_T")
 		};
-		if (Algo::FindSortedStringCaseInsensitive(Token.Identifier, Whitelist, ARRAY_COUNT(Whitelist)) >= 0)
+		if (Algo::FindSortedStringCaseInsensitive(Token.Identifier, Whitelist, UE_ARRAY_COUNT(Whitelist)) >= 0)
 		{
 			return false;
 		}
@@ -226,7 +227,7 @@ namespace
 			{
 				// It's a tag with an argument
 
-				if (FCString::Strnicmp(IdentifierPtr, IdTag, ARRAY_COUNT(IdTag) - 1) == 0)
+				if (FCString::Strnicmp(IdentifierPtr, IdTag, UE_ARRAY_COUNT(IdTag) - 1) == 0)
 				{
 					int32 TempInt = FCString::Atoi(Equals + 1);
 					if (TempInt <= 0 || TempInt > MAX_uint16)
@@ -235,8 +236,8 @@ namespace
 					}
 					FuncInfo.RPCId = TempInt;
 				}
-				else if (FCString::Strnicmp(IdentifierPtr, ResponseIdTag, ARRAY_COUNT(ResponseIdTag) - 1) == 0 ||
-					FCString::Strnicmp(IdentifierPtr, JSBridgePriTag, ARRAY_COUNT(JSBridgePriTag) - 1) == 0)
+				else if (FCString::Strnicmp(IdentifierPtr, ResponseIdTag, UE_ARRAY_COUNT(ResponseIdTag) - 1) == 0 ||
+					FCString::Strnicmp(IdentifierPtr, JSBridgePriTag, UE_ARRAY_COUNT(JSBridgePriTag) - 1) == 0)
 				{
 					int32 TempInt = FCString::Atoi(Equals + 1);
 					if (TempInt <= 0 || TempInt > MAX_uint16)
@@ -1275,7 +1276,7 @@ FClass* FHeaderParser::GetQualifiedClass(const FClasses& AllClasses, const TCHAR
 	{
 		RedirectTypeIdentifier(Token);
 
-		FCString::Strncat( ClassName, Token.Identifier, ARRAY_COUNT(ClassName) );
+		FCString::Strncat( ClassName, Token.Identifier, UE_ARRAY_COUNT(ClassName) );
 	}
 
 	if (!ClassName[0])
@@ -1784,6 +1785,12 @@ UEnum* FHeaderParser::CompileEnum()
 	}
 
 	CheckDocumentationPolicyForEnum(Enum, EnumValueMetaData, EntryMetaData);
+
+	if (!Enum->IsValidEnumValue(0) && EnumToken.MetaData.Contains(BlueprintTypeName))
+	{
+		UE_LOG_WARNING_UHT(TEXT("'%s' does not have a 0 entry! (This is a problem when the enum is initalized by default)"), *Enum->GetName());
+	}
+
 	return Enum;
 }
 
@@ -2045,54 +2052,59 @@ FString FHeaderParser::FormatCommentForToolTip(const FString& Input)
 
 TMap<FName, FString> FHeaderParser::GetParameterToolTipsFromFunctionComment(const FString& Input)
 {
-	TMap<FName, FString> Map;
-	TArray<FString> Params;
+	SCOPE_SECONDS_COUNTER_UHT(DocumentationPolicy);
 
+	TMap<FName, FString> Map;
+	if (Input.IsEmpty())
+	{
+		return Map;
+	}
+	
+	TArray<FString> Params;
+	static const TCHAR ParamTag[] = TEXT("@param");
+	static const TCHAR ReturnTag[] = TEXT("@return");
+	static const TCHAR ReturnParamPrefix[] = TEXT("ReturnValue ");
+
+	/**
+	 * Search for @param / @return followed by a section until a line break.
+	 * For example: "@param Test MyTest Variable" becomes "Test", "MyTest Variable"
+	 * These pairs are then later split and stored as the parameter tooltips.
+	 * Once we don't find either @param or @return we break from the loop.
+	 */
 	int32 Offset = 0;
-	int32 ParamStart = -1;
-	int32 ParamLength = 0;
-	FString ParamPrefix;
 	while (Offset < Input.Len())
 	{
-		if (ParamStart == -1)
+		const TCHAR* ParamPrefix = TEXT("");
+		int32 ParamStart = Input.Find(ParamTag, ESearchCase::CaseSensitive, ESearchDir::FromStart, Offset);
+		if(ParamStart != INDEX_NONE)
 		{
-			if (Input.Find(TEXT("@param"), ESearchCase::CaseSensitive, ESearchDir::FromStart, Offset) == Offset)
-			{
-				ParamStart = Offset + 6;
-				Offset += 6;
-				continue;
-			}
-			else if (Input.Find(TEXT("@return"), ESearchCase::CaseSensitive, ESearchDir::FromStart, Offset) == Offset)
-			{
-				ParamStart = Offset + 7;
-				Offset += 7;
-				ParamPrefix = TEXT("ReturnValue ");
-				continue;
-			}
-			Offset++;
-			continue;
-		}
-
-		TCHAR CurrentChar = Input[Offset];
-		if ((CurrentChar == '\n') || (CurrentChar == '\r'))
-		{
-			if (ParamLength > 0)
-			{
-				Params.Add(ParamPrefix + Input.Mid(ParamStart, ParamLength));
-				ParamStart = -1;
-				ParamLength = 0;
-			}
-			ParamPrefix.Reset();
+			ParamStart = ParamStart + UE_ARRAY_COUNT(ParamTag);
+			Offset = ParamStart;
 		}
 		else
 		{
-			ParamLength++;
+			ParamStart = Input.Find(ReturnTag, ESearchCase::CaseSensitive, ESearchDir::FromStart, Offset);
+			if (ParamStart != INDEX_NONE)
+			{
+				ParamStart = ParamStart + UE_ARRAY_COUNT(ReturnTag);
+				Offset = ParamStart;
+				ParamPrefix = ReturnParamPrefix;
+			}
+			else
+			{
+				// no @param, no @return?
+				break;
+			}
 		}
-		Offset++;
-	}
-	if (ParamLength > 0)
-	{
-		Params.Add(ParamPrefix + Input.Mid(ParamStart, ParamLength));
+
+		int32 ParamEnd = Input.Find(TEXT("\n"), ESearchCase::CaseSensitive, ESearchDir::FromStart, ParamStart);
+		if (ParamEnd == INDEX_NONE)
+		{
+			ParamEnd = Input.Len();
+		}
+		Offset = ParamEnd;
+
+		Params.Add(ParamPrefix + Input.Mid(ParamStart, ParamEnd - ParamStart - 1));
 	}
 
 	for (FString Param : Params)
@@ -2489,6 +2501,10 @@ UScriptStruct* FHeaderParser::CompileStructDeclaration(FClasses& AllClasses)
 		{
 			FError::Throwf(TEXT("USTRUCTs cannot contain UFUNCTIONs."));
 		}
+		else if (Token.Matches(TEXT("RIGVM_METHOD"), ESearchCase::CaseSensitive))
+		{
+			CompileRigVMMethodDeclaration(AllClasses, Struct);
+		}
 		else if (Token.Matches(TEXT("GENERATED_USTRUCT_BODY")) || Token.Matches(TEXT("GENERATED_BODY")))
 		{
 			// Match 'GENERATED_USTRUCT_BODY' '(' [StructName] ')' or 'GENERATED_BODY' '(' [StructName] ')'
@@ -2633,7 +2649,6 @@ UScriptStruct* FHeaderParser::CompileStructDeclaration(FClasses& AllClasses)
 	// Link the properties within the struct
 	Struct->StaticLink(true);
 
-	CheckDocumentationPolicyForStruct(Struct, MetaData);
 	return Struct;
 }
 
@@ -2990,6 +3005,93 @@ void FHeaderParser::FixupDelegateProperties( FClasses& AllClasses, UStruct* Stru
 			if ( InternalStruct != NULL )
 			{
 				FixupDelegateProperties(AllClasses, InternalStruct, Scope, DelegateCache);
+			}
+		}
+	}
+
+	TMap<FName, FString> MetaData;
+	MetaData.Add(NAME_ToolTip, Struct->GetMetaData(NAME_ToolTip));
+	CheckDocumentationPolicyForStruct(Struct, MetaData);
+
+	ParseRigVMMethodParameters(Struct);
+}
+
+void FHeaderParser::CheckSparseClassData(const UStruct* StructToCheck)
+{
+	// we're looking for classes that have sparse class data structures
+	const UClass* ClassToCheck = Cast<const UClass>(StructToCheck);
+	if (!ClassToCheck)
+	{
+		// make sure we don't try to have sparse class data inside of a struct instead of a class
+		if (StructToCheck->HasMetaData(TEXT("SparseClassDataTypes")))
+		{
+			UE_LOG_ERROR_UHT(TEXT("%s contains sparse class data but is not a class."), *StructToCheck->GetName());
+		}
+		return;
+	}
+
+	if (!ClassToCheck->HasMetaData(TEXT("SparseClassDataTypes")))
+	{
+		return;
+	}
+
+	TArray<FString> SparseClassDataTypes;
+	((FClass*)ClassToCheck)->GetSparseClassDataTypes(SparseClassDataTypes);
+
+	// for now we only support one sparse class data structure per class
+	if (SparseClassDataTypes.Num() > 1)
+	{
+		UE_LOG_ERROR_UHT(TEXT("Class %s contains multiple sparse class data types."), *ClassToCheck->GetName());
+		return;
+	}
+	if (SparseClassDataTypes.Num() == 0)
+	{
+		UE_LOG_ERROR_UHT(TEXT("Class %s has sparse class metadata but does not specify a type."), *ClassToCheck->GetName());
+		return;
+	}
+
+	for (const FString& SparseClassDataTypeName : SparseClassDataTypes)
+	{
+		UScriptStruct* SparseClassDataStruct = FindObjectSafe<UScriptStruct>(ANY_PACKAGE, *SparseClassDataTypeName);
+
+		// make sure the sparse class data struct actually exists
+		if (!SparseClassDataStruct)
+		{
+			UE_LOG_ERROR_UHT(TEXT("Unable to find sparse data type %s for class %s."), *SparseClassDataTypeName, *ClassToCheck->GetName());
+			return;
+		}
+
+		// check the data struct for invalid properties
+		for (TFieldIterator<UProperty> Property(SparseClassDataStruct); Property; ++Property)
+		{
+			if (Property->HasAnyPropertyFlags(CPF_BlueprintAssignable))
+			{
+				UE_LOG_ERROR_UHT(TEXT("Sparse class data types can not contain blueprint assignable delegates. Type '%s' Delegate '%s'"), *SparseClassDataStruct->GetName(), *Property->GetName());
+			}
+
+			// all sparse properties should have EditDefaultsOnly
+			if (!Property->HasAllPropertyFlags(CPF_Edit | CPF_DisableEditOnInstance))
+			{
+				UE_LOG_ERROR_UHT(TEXT("Sparse class data types must be EditDefaultsOnly. Type '%s' Property '%s'"), *SparseClassDataStruct->GetName(), *Property->GetName());
+			}
+
+			// no sparse properties should have BlueprintReadWrite
+			if (Property->HasAllPropertyFlags(CPF_BlueprintVisible) && !Property->HasAllPropertyFlags(CPF_BlueprintReadOnly))
+			{
+				UE_LOG_ERROR_UHT(TEXT("Sparse class data types must not be BlueprintReadWrite. Type '%s' Property '%s'"), *SparseClassDataStruct->GetName(), *Property->GetName());
+			}
+		}
+
+		// if the class's parent has a sparse class data struct then the current class must also use the same struct or one that inherits from it
+		const UClass* ParentClass = ClassToCheck->GetSuperClass();
+		TArray<FString> ParentSparseClassDataTypeNames;
+		((FClass*)ParentClass)->GetSparseClassDataTypes(ParentSparseClassDataTypeNames);
+		for (FString& ParentSparseClassDataTypeName : ParentSparseClassDataTypeNames)
+		{
+			UScriptStruct* ParentSparseClassDataStruct = FindObjectSafe<UScriptStruct>(ANY_PACKAGE, *ParentSparseClassDataTypeName);
+			if (ParentSparseClassDataStruct && !SparseClassDataStruct->IsChildOf(ParentSparseClassDataStruct))
+			{
+				UE_LOG_ERROR_UHT(TEXT("Class %s is a child of %s but its sparse class data struct, %s, does not inherit from %s."), *ClassToCheck->GetName(), *ParentClass->GetName(), *SparseClassDataStruct->GetName(), *ParentSparseClassDataStruct->GetName());
 			}
 		}
 	}
@@ -5436,6 +5538,7 @@ bool FHeaderParser::CompileDeclaration(FClasses& AllClasses, TArray<UDelegateFun
 		static const FName NAME_CloseBracket(TEXT(")"));
 		static const FName NAME_FArchive(TEXT("FArchive"));
 		static const FName NAME_FStructuredArchive(TEXT("FStructuredArchive"));
+		static const FName NAME_FStructuredArchiveRecord(TEXT("FStructuredArchiveRecord"));
 		static const FName NAME_Reference(TEXT("&"));
 		static const FName NAME_ClassMember(TEXT("::"));
 		static const FName NAME_FRecord(TEXT("FRecord"));
@@ -5454,72 +5557,81 @@ bool FHeaderParser::CompileDeclaration(FClasses& AllClasses, TArray<UDelegateFun
 				if (Token.Identifier == NAME_OpenBracket)
 				{
 					GetToken(Token);
-					bool bMatchedSerializeToFArchive = Token.Identifier == NAME_FArchive;
-					bool bMatchedSerializeToFStructuredArchive = Token.Identifier == NAME_FStructuredArchive;
 
-					if (bMatchedSerializeToFArchive || bMatchedSerializeToFStructuredArchive)
+					ESerializerArchiveType ArchiveType = ESerializerArchiveType::None;
+					if (Token.Identifier == NAME_FArchive)
 					{
-						bool bMatchingFunctionSignature = false;
 						GetToken(Token);
-
-						if (bMatchedSerializeToFArchive)
+						if (Token.Identifier == NAME_Reference)
 						{
-							if (Token.Identifier == NAME_Reference)
+							GetToken(Token);
+
+							// Allow the declaration to not define a name for the archive parameter
+							if (Token.Identifier != NAME_CloseBracket)
+							{
+								GetToken(Token);
+							}
+
+							if (Token.Identifier == NAME_CloseBracket)
+							{
+								ArchiveType = ESerializerArchiveType::Archive;
+							}
+						}
+					}
+					else if (Token.Identifier == NAME_FStructuredArchive)
+					{
+						GetToken(Token);
+						if (Token.Identifier == NAME_ClassMember)
+						{
+							GetToken(Token);
+
+							if (Token.Identifier == NAME_FRecord)
 							{
 								GetToken(Token);
 
-								// Allow the declaration to not define a name for the archive parameter
+								// Allow the declaration to not define a name for the slot parameter
 								if (Token.Identifier != NAME_CloseBracket)
 								{
 									GetToken(Token);
 								}
 
-								bMatchingFunctionSignature = Token.Identifier == NAME_CloseBracket;
+								if (Token.Identifier == NAME_CloseBracket)
+								{
+									ArchiveType = ESerializerArchiveType::StructuredArchiveRecord;
+								}
 							}
+						}
+					}
+					else if (Token.Identifier == NAME_FStructuredArchiveRecord)
+					{
+						GetToken(Token);
+
+						// Allow the declaration to not define a name for the slot parameter
+						if (Token.Identifier != NAME_CloseBracket)
+						{
+							GetToken(Token);
+						}
+
+						if (Token.Identifier == NAME_CloseBracket)
+						{
+							ArchiveType = ESerializerArchiveType::StructuredArchiveRecord;
+						}
+					}
+
+					if (ArchiveType != ESerializerArchiveType::None)
+					{
+						// Found what we want!
+						if (CompilerDirectiveStack.Num() == 0 || (CompilerDirectiveStack.Num() == 1 && CompilerDirectiveStack[0] == ECompilerDirective::WithEditorOnlyData))
+						{
+							FString EnclosingDefine = CompilerDirectiveStack.Num() > 0 ? TEXT("WITH_EDITORONLY_DATA") : TEXT("");
+
+							UClass* CurrentClass = GetCurrentClass();
+
+							GClassSerializerMap.Add(CurrentClass, { ArchiveType, MoveTemp(EnclosingDefine) });
 						}
 						else
 						{
-							if (Token.Identifier == NAME_ClassMember)
-							{
-								GetToken(Token);
-
-								if (Token.Identifier == NAME_FRecord)
-								{
-									GetToken(Token);
-
-									// Allow the declaration to not define a name for the slot parameter
-									if (Token.Identifier != NAME_CloseBracket)
-									{
-										GetToken(Token);
-									}
-
-									bMatchingFunctionSignature = Token.Identifier == NAME_CloseBracket;
-								}
-							}
-						}
-
-						if (bMatchingFunctionSignature)
-						{
-							// Found what we want!
-							if (CompilerDirectiveStack.Num() == 0 || (CompilerDirectiveStack.Num() == 1 && CompilerDirectiveStack[0] == ECompilerDirective::WithEditorOnlyData))
-							{
-								FString EnclosingDefine = CompilerDirectiveStack.Num() > 0 ? TEXT("WITH_EDITORONLY_DATA") : TEXT("");
-
-								UClass* CurrentClass = GetCurrentClass();
-								
-								if (bMatchedSerializeToFArchive)
-								{
-									CurrentClass->SetMetaData(TEXT("SerializeToFArchive"), *EnclosingDefine);
-								}
-								else
-								{
-									CurrentClass->SetMetaData(TEXT("SerializeToFStructuredArchive"), *EnclosingDefine);
-								}
-							}
-							else
-							{
-								FError::Throwf(TEXT("Serialize functions must not be inside preprocessor blocks, except for WITH_EDITORONLY_DATA"));
-							}
+							FError::Throwf(TEXT("Serialize functions must not be inside preprocessor blocks, except for WITH_EDITORONLY_DATA"));
 						}
 					}
 				}
@@ -5911,6 +6023,7 @@ UClass* FHeaderParser::CompileClassDeclaration(FClasses& AllClasses)
 	if (ClassDeclarationData->AutoCollapseCategories.Num()) { MetaData.Add("AutoCollapseCategories", FString::Join(ClassDeclarationData->AutoCollapseCategories, TEXT(" "))); }
 	if (ClassDeclarationData->HideCategories.Num()) { MetaData.Add("HideCategories", FString::Join(ClassDeclarationData->HideCategories, TEXT(" "))); }
 	if (ClassDeclarationData->ShowSubCatgories.Num()) { MetaData.Add("ShowCategories", FString::Join(ClassDeclarationData->ShowSubCatgories, TEXT(" "))); }
+	if (ClassDeclarationData->SparseClassDataTypes.Num()) { MetaData.Add("SparseClassDataTypes", FString::Join(ClassDeclarationData->SparseClassDataTypes, TEXT(" "))); }
 	if (ClassDeclarationData->HideFunctions.Num()) { MetaData.Add("HideFunctions", FString::Join(ClassDeclarationData->HideFunctions, TEXT(" "))); }
 	if (ClassDeclarationData->AutoExpandCategories.Num()) { MetaData.Add("AutoExpandCategories", FString::Join(ClassDeclarationData->AutoExpandCategories, TEXT(" "))); }
 
@@ -5956,7 +6069,6 @@ UClass* FHeaderParser::CompileClassDeclaration(FClasses& AllClasses)
 		}
 	}
 
-	CheckDocumentationPolicyForStruct(Class, MetaData);
 	return Class;
 }
 
@@ -6151,6 +6263,203 @@ void FHeaderParser::CompileInterfaceDeclaration(FClasses& AllClasses)
 	// Push the interface class nesting.
 	// we need a more specific set of allow flags for ENestType::Interface, only function declaration is allowed, no other stuff are allowed
 	PushNest(ENestType::Interface, InterfaceClass);
+}
+
+void FHeaderParser::CompileRigVMMethodDeclaration(FClasses& AllClasses, UStruct* Struct)
+{
+	if (!MatchSymbol(TEXT("(")))
+	{
+		FError::Throwf(TEXT("Bad RIGVM_METHOD definition"));
+	}
+
+	// find the next close brace
+	while (!MatchSymbol(TEXT(")")))
+	{
+		FToken Token;
+		if (!GetToken(Token))
+		{
+			break;
+		}
+	}
+
+	FToken PrefixToken, ReturnTypeToken, NameToken, PostfixToken;
+	if (!GetToken(PrefixToken))
+	{
+		return;
+	}
+
+	if (FString(PrefixToken.Identifier).Equals(TEXT("virtual")))
+	{
+		if (!GetToken(ReturnTypeToken))
+		{
+			return;
+		}
+	}
+	else
+	{
+		ReturnTypeToken = PrefixToken;
+	}
+
+	if (!GetToken(NameToken))
+	{
+		return;
+	}
+
+	if (!MatchSymbol(TEXT("(")))
+	{
+		FError::Throwf(TEXT("Bad RIGVM_METHOD definition"));
+	}
+
+	TArray<FString> ParamsContent;
+	while (!MatchSymbol(TEXT(")")))
+	{
+		FToken Token;
+		if (!GetToken(Token))
+		{
+			break;
+		}
+		ParamsContent.Add(FString(Token.Identifier));
+	}
+
+	while (!FString(PostfixToken.Identifier).Equals(TEXT(";")))
+	{
+		if (!GetToken(PostfixToken))
+		{
+			return;
+		}
+	}
+
+	FRigVMMethodInfo MethodInfo;
+	MethodInfo.ReturnType = ReturnTypeToken.Identifier;
+	MethodInfo.Name = NameToken.Identifier;
+	
+	FString ParamString = FString::Join(ParamsContent, TEXT(" "));
+	if (!ParamString.IsEmpty())
+	{
+		FString ParamPrev, ParamLeft, ParamRight;
+		ParamPrev = ParamString;
+		while (ParamPrev.Contains(TEXT(",")))
+		{
+			ParamPrev.Split(TEXT(","), &ParamLeft, &ParamRight);
+			FRigVMParameter Parameter;
+			Parameter.Name = ParamLeft.TrimStartAndEnd();
+			MethodInfo.Parameters.Add(Parameter);
+			ParamPrev = ParamRight;
+		}
+
+		ParamPrev = ParamPrev.TrimStartAndEnd();
+		if (!ParamPrev.IsEmpty())
+		{
+			FRigVMParameter Parameter;
+			Parameter.Name = ParamPrev.TrimStartAndEnd();
+			MethodInfo.Parameters.Add(Parameter);
+		}
+	}
+
+	for (FRigVMParameter& Parameter : MethodInfo.Parameters)
+	{
+		FString FullParameter = Parameter.Name;
+
+		int32 LastEqual = INDEX_NONE;
+		if (FullParameter.FindLastChar(TCHAR('='), LastEqual))
+		{
+			FullParameter = FullParameter.Mid(0, LastEqual);
+		}
+
+		FullParameter.TrimStartAndEndInline();
+
+		FString ParameterType = FullParameter;
+		FString ParameterName = FullParameter;
+
+		int32 LastSpace = INDEX_NONE;
+		if (FullParameter.FindLastChar(TCHAR(' '), LastSpace))
+		{
+			Parameter.Type = FullParameter.Mid(0, LastSpace);
+			Parameter.Name = FullParameter.Mid(LastSpace + 1);
+			Parameter.Type.TrimStartAndEndInline();
+			Parameter.Name.TrimStartAndEndInline();
+		}
+	}
+
+	FRigVMStructInfo& StructRigVMInfo = StructRigVMMap.FindOrAdd(Struct);
+	StructRigVMInfo.Name = Struct->GetName();
+	StructRigVMInfo.Methods.Add(MethodInfo);
+}
+
+void FHeaderParser::ParseRigVMMethodParameters(UStruct* Struct)
+{
+	FRigVMStructInfo* StructRigVMInfo = StructRigVMMap.Find(Struct);
+	if (StructRigVMInfo == nullptr)
+	{
+		return;
+	}
+
+	const TCHAR* InputText = TEXT("Input");
+	const TCHAR* OutputText = TEXT("Output");
+	const TCHAR* ConstantText = TEXT("Constant");
+	const TCHAR* MaxArraySizeText = TEXT("MaxArraySize");
+	const TCHAR* TArrayText = TEXT("TArray");
+	const TCHAR* TArrayViewText = TEXT("TArrayView");
+	const TCHAR* GetRefText = TEXT("GetRef");
+	const TCHAR* GetArrayText = TEXT("GetArray");
+
+	// validate the property types for this struct
+	for (TFieldIterator<UProperty> It(Struct); It; ++It)
+	{
+		UProperty const* const Prop = *It;
+		FString PropName = Prop->GetName();
+		FString MemberCPPType;
+		FString ExtendedCPPType;
+		MemberCPPType = Prop->GetCPPType(&ExtendedCPPType);
+
+		FRigVMParameter Parameter;
+		Parameter.Name = Prop->GetName();
+		Parameter.Type = MemberCPPType + ExtendedCPPType;
+		Parameter.bConstant = Prop->HasMetaData(ConstantText);
+		Parameter.bInput = Prop->HasMetaData(InputText);
+		Parameter.bOutput = Prop->HasMetaData(OutputText);
+		Parameter.MaxArraySize = Prop->GetMetaData(MaxArraySizeText);
+		Parameter.Getter = GetRefText;
+		Parameter.bEditorOnly = Prop->IsEditorOnlyProperty();
+
+		if (Parameter.bEditorOnly)
+		{
+			UE_LOG_ERROR_UHT(TEXT("RigVM Struct '%s' - Member '%s' is editor only - WITH_EDITORONLY_DATA not allowed on structs with RIGVM_METHOD."), *Struct->GetName(), *Parameter.Name, *MemberCPPType);
+		}
+
+		if (!ExtendedCPPType.IsEmpty())
+		{
+			// we only support arrays - no maps or similar data structures
+			if (MemberCPPType != TArrayText)
+			{
+				UE_LOG_ERROR_UHT(TEXT("RigVM Struct '%s' - Member '%s' type '%s' not supported by RigVM."), *Struct->GetName(), *Parameter.Name, *MemberCPPType);
+				continue;
+			}
+
+			if (!Parameter.IsConst() && Parameter.MaxArraySize.IsEmpty())
+			{
+				UE_LOG_ERROR_UHT(TEXT("RigVM Struct '%s' - Member '%s' requires the 'MaxArraySize' meta tag."), *Struct->GetName(), *Parameter.Name);
+				continue;
+			}
+		}
+
+		if (MemberCPPType.StartsWith(TArrayText))
+		{
+			if (Parameter.IsConst() || !Parameter.MaxArraySize.IsEmpty())
+			{
+				Parameter.CastName = FString::Printf(TEXT("%s_%d_View"), *Parameter.Name, StructRigVMInfo->Members.Num());
+				Parameter.CastType = FString::Printf(TEXT("%s%s"), TArrayViewText, *ExtendedCPPType);
+				Parameter.Getter = GetArrayText;
+			}
+		}
+
+		StructRigVMInfo->Members.Add(Parameter);
+	}
+
+	if (StructRigVMInfo->Members.Num() > 64)
+	{
+		UE_LOG_ERROR_UHT(TEXT("RigVM Struct '%s' - has %d members (64 is the limit)."), *Struct->GetName(), StructRigVMInfo->Members.Num());
+	}
 }
 
 // Returns true if the token is a dynamic delegate declaration
@@ -8149,6 +8458,8 @@ ECompilationResult::Type FHeaderParser::ParseAllHeadersInside(
 	TArray<IScriptGeneratorPluginInterface*>& ScriptPlugins
 	)
 {
+	SCOPE_SECONDS_COUNTER_UHT(ParseAllHeaders);
+
 	// Disable loading of objects outside of this package (or more exactly, objects which aren't UFields, CDO, or templates)
 	TGuardValue<bool> AutoRestoreVerifyObjectRefsFlag(GVerifyObjectReferencesOnly, true);
 	// Create the header parser and register it as the warning context.
@@ -8190,9 +8501,16 @@ ECompilationResult::Type FHeaderParser::ParseAllHeadersInside(
 			Result = FHeaderParser::ParseRestOfModulesSourceFiles(ModuleClasses, CurrentPackage, HeaderParser);
 		}
 
-		// Export the autogenerated code wrappers
 		if (Result == ECompilationResult::Succeeded)
 		{
+			// Validate the sparse class data for all classes in the current package
+			for (const FClass* Class : ModuleClasses.GetClassesInPackage(CurrentPackage))
+			{
+				CheckSparseClassData(Class);
+			}
+
+			// Export the autogenerated code wrappers
+
 			// At this point all headers have been parsed and the header parser will
 			// no longer have up to date info about what's being done so unregister it 
 			// from the feedback context.
@@ -9480,6 +9798,10 @@ void FHeaderParser::ResetClassData()
 		{
 			CurrentClass->SetMetaData(TEXT("ShowCategories"), *SuperClass->GetMetaData("ShowCategories"));
 		}
+		if (SuperClass->HasMetaData(TEXT("SparseClassDataTypes")))
+		{
+			CurrentClass->SetMetaData(TEXT("SparseClassDataTypes"), *SuperClass->GetMetaData("SparseClassDataTypes"));
+		}
 		if (SuperClass->HasMetaData(TEXT("HideFunctions")))
 		{
 			CurrentClass->SetMetaData(TEXT("HideFunctions"), *SuperClass->GetMetaData("HideFunctions"));
@@ -9624,6 +9946,8 @@ FDocumentationPolicy FHeaderParser::GetDocumentationPolicyFromName(const FString
 
 FDocumentationPolicy FHeaderParser::GetDocumentationPolicyForStruct(UStruct* Struct)
 {
+	SCOPE_SECONDS_COUNTER_UHT(DocumentationPolicy);
+
 	check(Struct!= nullptr);
 
 	FDocumentationPolicy DocumentationPolicy;
@@ -9637,6 +9961,8 @@ FDocumentationPolicy FHeaderParser::GetDocumentationPolicyForStruct(UStruct* Str
 
 void FHeaderParser::CheckDocumentationPolicyForEnum(UEnum* Enum, const TMap<FName, FString>& MetaData, const TArray<TMap<FName, FString>>& Entries)
 {
+	SCOPE_SECONDS_COUNTER_UHT(DocumentationPolicy);
+
 	check(Enum != nullptr);
 
 	const FString* DocumentationPolicyName = MetaData.Find(NAME_DocumentationPolicy);
@@ -9653,7 +9979,7 @@ void FHeaderParser::CheckDocumentationPolicyForEnum(UEnum* Enum, const TMap<FNam
 		const FString* EnumToolTip = MetaData.Find(NAME_ToolTip);
 		if (EnumToolTip == nullptr)
 		{
-			FError::Throwf(TEXT("Enum '%s' does not provide a tooltip / comment (DocumentationPolicy)."), *Enum->GetName());
+			UE_LOG_ERROR_UHT(TEXT("Enum '%s' does not provide a tooltip / comment (DocumentationPolicy)."), *Enum->GetName());
 		}
 	}
 
@@ -9669,47 +9995,56 @@ void FHeaderParser::CheckDocumentationPolicyForEnum(UEnum* Enum, const TMap<FNam
 		const FString* ToolTip = Entry.Find(NAME_ToolTip);
 		if (ToolTip == nullptr)
 		{
-			FError::Throwf(TEXT("Enum entry '%s::%s' does not provide a tooltip / comment (DocumentationPolicy)."), *Enum->GetName(), **EntryName);
+			UE_LOG_ERROR_UHT(TEXT("Enum entry '%s::%s' does not provide a tooltip / comment (DocumentationPolicy)."), *Enum->GetName(), *(*EntryName));
+			continue;
 		}
 
 		const FString* ExistingEntry = ToolTipToEntry.Find(*ToolTip);
 		if (ExistingEntry != nullptr)
 		{
-			FError::Throwf(TEXT("Enum entries '%s::%s' and '%s::%s' have identical tooltips / comments (DocumentationPolicy)."), *Enum->GetName(), **ExistingEntry, *Enum->GetName(), **EntryName);
+			UE_LOG_ERROR_UHT(TEXT("Enum entries '%s::%s' and '%s::%s' have identical tooltips / comments (DocumentationPolicy)."), *Enum->GetName(), *(*ExistingEntry), *Enum->GetName(), *(*EntryName));
 		}
 		ToolTipToEntry.Add(*ToolTip, *EntryName);
 	}
-	
 }
 
 void FHeaderParser::CheckDocumentationPolicyForStruct(UStruct* Struct, const TMap<FName, FString>& MetaData)
 {
+	SCOPE_SECONDS_COUNTER_UHT(DocumentationPolicy);
+
 	check(Struct != nullptr);
 
 	FDocumentationPolicy DocumentationPolicy = GetDocumentationPolicyForStruct(Struct);
 	if (DocumentationPolicy.bClassOrStructCommentRequired)
 	{
-		const FString* ClassTooltip = MetaData.Find(NAME_ToolTip);
-		if (ClassTooltip == nullptr)
+		const FString* ClassTooltipPtr = MetaData.Find(NAME_ToolTip);
+		FString ClassTooltip;
+		if (ClassTooltipPtr != nullptr)
 		{
-			FError::Throwf(TEXT("Struct '%s' does not provide a tooltip / comment (DocumentationPolicy)."), *Struct->GetName());
+			ClassTooltip = *ClassTooltipPtr;
+		}
+
+		if (ClassTooltip.IsEmpty() || ClassTooltip.Equals(Struct->GetName()))
+		{
+			UE_LOG_ERROR_UHT(TEXT("Struct '%s' does not provide a tooltip / comment (DocumentationPolicy)."), *Struct->GetName());
 		}
 	}
 
 	if (DocumentationPolicy.bMemberToolTipsRequired)
 	{
 		TMap<FString, FName> ToolTipToPropertyName;
-		for (UProperty* Property : TFieldRange<UProperty>(Struct))
+		for (UProperty* Property : TFieldRange<UProperty>(Struct, EFieldIteratorFlags::ExcludeSuper))
 		{
 			FString ToolTip = Property->GetToolTipText().ToString();
-			if (ToolTip.IsEmpty() || ToolTip.Equals(Property->GetName()))
+			if (ToolTip.IsEmpty() || ToolTip.Equals(Property->GetDisplayNameText().ToString()))
 			{
-				FError::Throwf(TEXT("Property '%s::%s' does not provide a tooltip / comment (DocumentationPolicy)."), *Struct->GetName(), *Property->GetName());
+				UE_LOG_ERROR_UHT(TEXT("Property '%s::%s' does not provide a tooltip / comment (DocumentationPolicy)."), *Struct->GetName(), *Property->GetName());
+				continue;
 			}
 			const FName* ExistingPropertyName = ToolTipToPropertyName.Find(ToolTip);
 			if (ExistingPropertyName != nullptr)
 			{
-				FError::Throwf(TEXT("Property '%s::%s' and '%s::%s' are using identical tooltips (DocumentationPolicy)."), *Struct->GetName(), *ExistingPropertyName->ToString(), *Struct->GetName(), *Property->GetName());
+				UE_LOG_ERROR_UHT(TEXT("Property '%s::%s' and '%s::%s' are using identical tooltips (DocumentationPolicy)."), *Struct->GetName(), *ExistingPropertyName->ToString(), *Struct->GetName(), *Property->GetName());
 			}
 			ToolTipToPropertyName.Add(ToolTip, Property->GetFName());
 		}
@@ -9717,15 +10052,16 @@ void FHeaderParser::CheckDocumentationPolicyForStruct(UStruct* Struct, const TMa
 
 	if (DocumentationPolicy.bFloatRangesRequired)
 	{
-		for (UProperty* Property : TFieldRange<UProperty>(Struct))
+		for (UProperty* Property : TFieldRange<UProperty>(Struct, EFieldIteratorFlags::ExcludeSuper))
 		{
 			if(DoesCPPTypeRequireDocumentation(Property->GetCPPType()))
 			{
 				const FString& UIMin = Property->GetMetaData(TEXT("UIMin"));
 				const FString& UIMax = Property->GetMetaData(TEXT("UIMax"));
+
 				if(!CheckUIMinMaxRangeFromMetaData(UIMin, UIMax))
 				{
-					FError::Throwf(TEXT("Property '%s::%s' does not provide a valid UIMin / UIMax (DocumentationPolicy)."), *Struct->GetName(), *Property->GetName());
+					UE_LOG_ERROR_UHT(TEXT("Property '%s::%s' does not provide a valid UIMin / UIMax (DocumentationPolicy)."), *Struct->GetName(), *Property->GetName());
 				}
 			}
 		}
@@ -9738,23 +10074,20 @@ void FHeaderParser::CheckDocumentationPolicyForStruct(UStruct* Struct, const TMa
 		if (Class != nullptr)
 		{
 			TMap<FString, FString> ToolTipToFunc;
-			for (UField* Field = Class->Children; Field; Field = Field->Next)
+			for (UFunction* Func : TFieldRange<UFunction>(Class, EFieldIteratorFlags::ExcludeSuper))
 			{
-				UFunction* Func = Cast<UFunction>(Field);
-				if (Func != NULL)
+				FString ToolTip = Func->GetToolTipText().ToString();
+				if (ToolTip.IsEmpty())
 				{
-					FString ToolTip = Func->GetToolTipText().ToString();
-					if (ToolTip.IsEmpty())
-					{
-						FError::Throwf(TEXT("Function '%s::%s' does not provide a tooltip / comment (DocumentationPolicy)."), *Class->GetName(), *Func->GetName());
-					}
-					const FString* ExistingFuncName = ToolTipToFunc.Find(ToolTip);
-					if (ExistingFuncName != nullptr)
-					{
-						FError::Throwf(TEXT("Functions '%s::%s' and '%s::%s' uses identical tooltips / comments (DocumentationPolicy)."), *Class->GetName(), **ExistingFuncName, *Class->GetName(), *Func->GetName());
-					}
-					ToolTipToFunc.Add(ToolTip, Func->GetName());
+					UE_LOG_ERROR_UHT(TEXT("Function '%s::%s' does not provide a tooltip / comment (DocumentationPolicy)."), *Class->GetName(), *Func->GetName());
+					continue;
 				}
+				const FString* ExistingFuncName = ToolTipToFunc.Find(ToolTip);
+				if (ExistingFuncName != nullptr)
+				{
+					UE_LOG_ERROR_UHT(TEXT("Functions '%s::%s' and '%s::%s' uses identical tooltips / comments (DocumentationPolicy)."), *Class->GetName(), *(*ExistingFuncName), *Class->GetName(), *Func->GetName());
+				}
+				ToolTipToFunc.Add(ToolTip, Func->GetName());
 			}
 		}
 	}
@@ -9762,12 +10095,14 @@ void FHeaderParser::CheckDocumentationPolicyForStruct(UStruct* Struct, const TMa
 
 bool FHeaderParser::DoesCPPTypeRequireDocumentation(const FString& CPPType)
 {
-	return PropertyCPPTypesRequiringUIRanges.Find(CPPType) != INDEX_NONE;
+	return PropertyCPPTypesRequiringUIRanges.Contains(CPPType);
 }
 
 // Validates the documentation for a given method
 void FHeaderParser::CheckDocumentationPolicyForFunc(UClass* Class, UFunction* Func, const TMap<FName, FString>& MetaData)
 {
+	SCOPE_SECONDS_COUNTER_UHT(DocumentationPolicy);
+
 	check(Class != nullptr);
 	check(Func != nullptr);
 
@@ -9777,7 +10112,7 @@ void FHeaderParser::CheckDocumentationPolicyForFunc(UClass* Class, UFunction* Fu
 		const FString* FunctionTooltip = MetaData.Find(NAME_ToolTip);
 		if (FunctionTooltip == nullptr)
 		{
-			FError::Throwf(TEXT("Function '%s::%s' does not provide a tooltip / comment (DocumentationPolicy)."), *Class->GetName(), *Func->GetName());
+			UE_LOG_ERROR_UHT(TEXT("Function '%s::%s' does not provide a tooltip / comment (DocumentationPolicy)."), *Class->GetName(), *Func->GetName());
 		}
 	}
 
@@ -9786,7 +10121,8 @@ void FHeaderParser::CheckDocumentationPolicyForFunc(UClass* Class, UFunction* Fu
 		const FString* FunctionComment = MetaData.Find(NAME_Comment);
 		if (FunctionComment == nullptr)
 		{
-			FError::Throwf(TEXT("Function '%s::%s' does not provide a comment (DocumentationPolicy)."), *Class->GetName(), *Func->GetName());
+			UE_LOG_ERROR_UHT(TEXT("Function '%s::%s' does not provide a comment (DocumentationPolicy)."), *Class->GetName(), *Func->GetName());
+			return;
 		}
 		
 		TMap<FName, FString> ParamToolTips = GetParameterToolTipsFromFunctionComment(*FunctionComment);
@@ -9815,7 +10151,7 @@ void FHeaderParser::CheckDocumentationPolicyForFunc(UClass* Class, UFunction* Fu
 				const FString* ParamToolTip = ParamToolTips.Find(ParamName);
 				if (ParamToolTip == nullptr)
 				{
-					FError::Throwf(TEXT("Function '%s::%s' doesn't provide a tooltip for parameter '%s' (DocumentationPolicy)."), *Class->GetName(), *Func->GetName(), *ParamName.ToString());
+					UE_LOG_ERROR_UHT(TEXT("Function '%s::%s' doesn't provide a tooltip for parameter '%s' (DocumentationPolicy)."), *Class->GetName(), *Func->GetName(), *ParamName.ToString());
 				}
 				ExistingFields.Add(ParamName);
 			}
@@ -9830,7 +10166,7 @@ void FHeaderParser::CheckDocumentationPolicyForFunc(UClass* Class, UFunction* Fu
 				}
 				if (!ExistingFields.Contains(ParamName))
 				{
-					FError::Throwf(TEXT("Function '%s::%s' provides a tooltip for an unknown parameter '%s' (DocumentationPolicy)."), *Class->GetName(), *Func->GetName(), *Pair.Key.ToString());
+					UE_LOG_ERROR_UHT(TEXT("Function '%s::%s' provides a tooltip for an unknown parameter '%s' (DocumentationPolicy)."), *Class->GetName(), *Func->GetName(), *Pair.Key.ToString());
 				}
 			}
 
@@ -9846,7 +10182,7 @@ void FHeaderParser::CheckDocumentationPolicyForFunc(UClass* Class, UFunction* Fu
 				const FName* ExistingParam = ToolTipToParam.Find(Pair.Value);
 				if (ExistingParam != nullptr)
 				{
-					FError::Throwf(TEXT("Function '%s::%s' uses identical tooltips for parameters '%s' and '%s' (DocumentationPolicy)."), *Class->GetName(), *Func->GetName(), *ExistingParam->ToString(), *Pair.Key.ToString());
+					UE_LOG_ERROR_UHT(TEXT("Function '%s::%s' uses identical tooltips for parameters '%s' and '%s' (DocumentationPolicy)."), *Class->GetName(), *Func->GetName(), *ExistingParam->ToString(), *Pair.Key.ToString());
 				}
 				ToolTipToParam.Add(Pair.Value, Pair.Key);
 			}

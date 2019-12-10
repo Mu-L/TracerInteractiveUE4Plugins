@@ -77,7 +77,7 @@ void FSlateElementIndexBuffer::ResizeBuffer( int32 NewSizeBytes )
 
 void FSlateElementIndexBuffer::PreFillBuffer(int32 RequiredIndexCount, bool bShrinkToMinSize)
 {
-	//SCOPE_CYCLE_COUNTER( STAT_SlatePreFullBufferRTTime );
+	SCOPE_CYCLE_COUNTER( STAT_SlatePreFullBufferRTTime );
 
 	checkSlow(IsInRenderingThread());
 
@@ -94,17 +94,6 @@ void FSlateElementIndexBuffer::PreFillBuffer(int32 RequiredIndexCount, bool bShr
 
 		BufferUsageSize = RequiredBufferSize;		
 	}
-}
-
-void* FSlateElementIndexBuffer::LockBuffer_RenderThread(int32 NumIndices)
-{
-	uint32 RequiredBufferSize = NumIndices*sizeof(SlateIndex);		
-	return RHILockIndexBuffer( IndexBufferRHI, 0, RequiredBufferSize, RLM_WriteOnly );
-}
-
-void FSlateElementIndexBuffer::UnlockBuffer_RenderThread()
-{
-	RHIUnlockIndexBuffer( IndexBufferRHI );
 }
 
 /** Releases the index buffers RHI resource. */

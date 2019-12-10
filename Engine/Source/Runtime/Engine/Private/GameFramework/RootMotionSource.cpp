@@ -32,7 +32,7 @@ void RootMotionSourceDebug::PrintOnScreen(const ACharacter& InCharacter, const F
 		const FString AdjustedDebugString = FString::Printf(TEXT("[%d] [%s] %s"), (uint64)GFrameCounter, *InCharacter.GetName(), *InString);
 
 		// If on the server, replicate this message to everyone.
-		if (!InCharacter.IsLocallyControlled() && (InCharacter.Role == ROLE_Authority))
+		if (!InCharacter.IsLocallyControlled() && (InCharacter.GetLocalRole() == ROLE_Authority))
 		{
 			for (FConstPlayerControllerIterator Iterator = InCharacter.GetWorld()->GetPlayerControllerIterator(); Iterator; ++Iterator)
 			{
@@ -1197,7 +1197,7 @@ void FRootMotionSource_JumpForce::PrepareRootMotion
 			DrawDebugCapsule(Character.GetWorld(), DestinationLocation + LocDiff, Character.GetSimpleCollisionHalfHeight(), Character.GetSimpleCollisionRadius(), FQuat::Identity, FColor::White, true, DebugLifetime);
 
 			UE_LOG(LogRootMotion, VeryVerbose, TEXT("RootMotionJumpForce %s %s preparing from %f to %f from (%s) to (%s) resulting force %s"), 
-				Character.Role == ROLE_AutonomousProxy ? TEXT("AUTONOMOUS") : TEXT("AUTHORITY"),
+				Character.GetLocalRole() == ROLE_AutonomousProxy ? TEXT("AUTONOMOUS") : TEXT("AUTHORITY"),
 				Character.bClientUpdating ? TEXT("UPD") : TEXT("NOR"),
 				GetTime(), GetTime() + SimulationTime, 
 				*CurrentLocation.ToString(), *CurrentTargetLocation.ToString(), 
@@ -1475,7 +1475,7 @@ void FRootMotionSourceGroup::PrepareRootMotion(float DeltaTime, const ACharacter
 							if (bRootMotionHasNotStarted && bRootMotionHasValidStartTime)
 							{
 								float CharacterMovementTime = -1.f;
-								if (Character.Role == ROLE_AutonomousProxy)
+								if (Character.GetLocalRole() == ROLE_AutonomousProxy)
 								{
 									const FNetworkPredictionData_Client_Character* ClientData = MoveComponent.HasPredictionData_Client() ? static_cast<FNetworkPredictionData_Client_Character*>(MoveComponent.GetPredictionData_Client()) : nullptr;
 									if (ClientData)
@@ -1495,7 +1495,7 @@ void FRootMotionSourceGroup::PrepareRootMotion(float DeltaTime, const ACharacter
 										}
 									}
 								}
-								else if (Character.Role == ROLE_Authority)
+								else if (Character.GetLocalRole() == ROLE_Authority)
 								{
 									const FNetworkPredictionData_Server_Character* ServerData = MoveComponent.HasPredictionData_Server() ? static_cast<FNetworkPredictionData_Server_Character*>(MoveComponent.GetPredictionData_Server()) : nullptr;
 									if (ServerData)
@@ -1837,6 +1837,28 @@ void FRootMotionSourceGroup::UpdateStateFrom(const FRootMotionSourceGroup& Group
 {
 	bIsAdditiveVelocityApplied = GroupToTakeStateFrom.bIsAdditiveVelocityApplied;
 	LastPreAdditiveVelocity = GroupToTakeStateFrom.LastPreAdditiveVelocity;
+
+	// If we have a PendingAdd root motion source that is already active in GroupToTakeStateFrom, make it active
+	PendingAddRootMotionSources.RemoveAll([this, &GroupToTakeStateFrom](const TSharedPtr<FRootMotionSource>& RootSource) 
+		{ 
+			if (RootSource.IsValid())
+			{
+				if (RootSource->LocalID != (uint16)ERootMotionSourceID::Invalid)
+				{
+					for (const TSharedPtr<FRootMotionSource>& TakeFromRootMotionSource : GroupToTakeStateFrom.RootMotionSources)
+					{
+						if (TakeFromRootMotionSource.IsValid() && (RootSource->LocalID == TakeFromRootMotionSource->LocalID))
+						{
+							// Matches, move to active and remove from pending
+							UE_LOG(LogRootMotion, VeryVerbose, TEXT("UpdateStateFream moving PendingAdd RMS to active: %s"), *RootSource->ToSimpleString());
+							RootMotionSources.Add(RootSource);
+							return true;
+						}
+					}
+				}
+			}
+			return false;
+		});
 
 	// For each matching Source in GroupToTakeStateFrom, move state over to this group's Sources
 	// Can do all matching with LocalID only, since anything passed into this function should have

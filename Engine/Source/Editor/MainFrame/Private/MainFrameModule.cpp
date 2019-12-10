@@ -44,9 +44,9 @@ const FText StaticGetApplicationTitle( const bool bIncludeGameName )
 		Args.Add(TEXT("GameName"), FText::FromString( FString( FApp::GetProjectName())));
 		Args.Add(TEXT("AppTitle"), ApplicationTitle);
 
-		const EBuildConfigurations::Type BuildConfig = FApp::GetBuildConfiguration();
+		const EBuildConfiguration BuildConfig = FApp::GetBuildConfiguration();
 
-		if (BuildConfig != EBuildConfigurations::Shipping && BuildConfig != EBuildConfigurations::Development && BuildConfig != EBuildConfigurations::Unknown)
+		if (BuildConfig != EBuildConfiguration::Shipping && BuildConfig != EBuildConfiguration::Development && BuildConfig != EBuildConfiguration::Unknown)
 		{
 			Args.Add( TEXT("Config"), EBuildConfigurations::ToText(BuildConfig));
 
@@ -204,7 +204,8 @@ void FMainFrameModule::CreateDefaultMainFrame( const bool bStartImmersive, const
 				)
 			);
 
-			MainFrameContent = FGlobalTabmanager::Get()->RestoreFrom( LoadedLayout, RootWindow, bEmbedTitleAreaContent );
+			const EOutputCanBeNullptr OutputCanBeNullptr = EOutputCanBeNullptr::IfNoOpenTabValid;
+			MainFrameContent = FGlobalTabmanager::Get()->RestoreFrom(LoadedLayout, RootWindow, bEmbedTitleAreaContent, OutputCanBeNullptr);
 			bLevelEditorIsMainTab = true;
 		}
 
@@ -233,16 +234,30 @@ void FMainFrameModule::CreateDefaultMainFrame( const bool bStartImmersive, const
 	}
 }
 
-
-TSharedRef<SWidget> FMainFrameModule::MakeMainMenu( const TSharedPtr<FTabManager>& TabManager, const TSharedRef< FExtender > Extender ) const
+void FMainFrameModule::RecreateDefaultMainFrame(const bool bStartImmersive, const bool bStartPIE)
 {
-	return FMainMenu::MakeMainMenu( TabManager, Extender );
+	// Clean previous default main frame
+	if (IsWindowInitialized())
+	{
+		// Clean FSlateApplication
+		FSlateApplication::Get().CloseAllWindowsImmediately();
+		// Clean FGlobalTabmanager
+		FGlobalTabmanager::Get()->CloseAllAreas();
+	}
+	// (Re-)create default main frame
+	CreateDefaultMainFrame(bStartImmersive, bStartPIE);
 }
 
 
-TSharedRef<SWidget> FMainFrameModule::MakeMainTabMenu( const TSharedPtr<FTabManager>& TabManager, const TSharedRef< FExtender > Extender ) const
+TSharedRef<SWidget> FMainFrameModule::MakeMainMenu(const TSharedPtr<FTabManager>& TabManager, const FName MenuName, FToolMenuContext& ToolMenuContext) const
 {
-	return FMainMenu::MakeMainTabMenu( TabManager, Extender );
+	return FMainMenu::MakeMainMenu(TabManager, MenuName, ToolMenuContext);
+}
+
+
+TSharedRef<SWidget> FMainFrameModule::MakeMainTabMenu(const TSharedPtr<FTabManager>& TabManager, const FName MenuName, FToolMenuContext& ToolMenuContext) const
+{
+	return FMainMenu::MakeMainTabMenu(TabManager, MenuName, ToolMenuContext);
 }
 
 

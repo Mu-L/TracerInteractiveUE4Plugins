@@ -2,78 +2,202 @@
 #pragma once
 
 #include "Chaos/Array.h"
-#include "Chaos/Map.h"
-#include "Chaos/PBDRigidSpringConstraintsBase.h"
+#include "Chaos/ConstraintHandle.h"
+#include "Chaos/ParticleHandle.h"
 #include "Chaos/PBDConstraintContainer.h"
 
 namespace Chaos
 {
-template<class T, int d>
-class TPBDRigidSpringConstraints : public TPBDRigidSpringConstraintsBase<T, d>, public TPBDConstraintContainer<T, d>
-{
-	typedef TPBDRigidSpringConstraintsBase<T, d> Base;
+	template<class T, int d>
+	class TPBDRigidSpringConstraints;
 
-	using Base::Constraints;
-	using Base::Distances;
-
-  public:
-	TPBDRigidSpringConstraints(const T InStiffness = (T)1)
-	    : TPBDRigidSpringConstraintsBase<T, d>(InStiffness) 
-	{}
-
-	TPBDRigidSpringConstraints(const TRigidParticles<T, d>& InParticles, const TArray<TVector<T, 3>>& Locations0, const TArray<TVector<T, 3>>& Locations1, TArray<TVector<int32, 2>>&& InConstraints, const T InStiffness = (T)1)
-	    : TPBDRigidSpringConstraintsBase<T, d>(InParticles, Locations0, Locations1, MoveTemp(InConstraints), InStiffness)
-	{}
-
-	virtual ~TPBDRigidSpringConstraints() {}
-
-	void UpdatePositionBasedState(const TPBDRigidParticles<T, d>& InParticles, const TArray<int32>& InIndices, const T Dt)
+	template<class T, int d>
+	class CHAOS_API TPBDRigidSpringConstraintHandle : public TContainerConstraintHandle<TPBDRigidSpringConstraints<T, d>>
 	{
-	}
+	public:
+		using Base = TContainerConstraintHandle<TPBDRigidSpringConstraints<T, d>>;
+		using FConstraintContainer = TPBDRigidSpringConstraints<T, d>;
 
-	void ApplyHelper(TPBDRigidParticles<T, d>& InParticles, const T Dt, const TArray<int32>& InConstraintIndices) const
+		TPBDRigidSpringConstraintHandle() {}
+		TPBDRigidSpringConstraintHandle(FConstraintContainer* InConstraintContainer, int32 InConstraintIndex) : TContainerConstraintHandle<TPBDRigidSpringConstraints<T, d>>(InConstraintContainer, InConstraintIndex) {}
+
+		const TVector<TVector<T, 3>, 2>& GetConstraintPositions() const;
+		void SetConstraintPositions(const TVector<TVector<T, 3>, 2>& ConstraintPositions);
+
+	protected:
+		using Base::ConstraintIndex;
+		using Base::ConstraintContainer;
+	};
+
+
+	template<class T, int d>
+	class TPBDRigidSpringConstraints : public TPBDConstraintContainer<T, d>
 	{
-		for (int32 ConstraintIndex : InConstraintIndices)
+	public:
+		using Base = TPBDConstraintContainer<T, d>;
+		using FReal = T;
+		static const int Dimensions = d;
+		using FConstraintHandle = TPBDRigidSpringConstraintHandle<FReal, Dimensions>;
+		using FConstraintHandleAllocator = TConstraintHandleAllocator<TPBDRigidSpringConstraints<FReal, Dimensions>>;
+		using FConstrainedParticlePair = TVector<TGeometryParticleHandle<T, d>*, 2>;
+
+		TPBDRigidSpringConstraints(const T InStiffness = (T)1)
+			: Stiffness(InStiffness) 
+		{}
+
+		TPBDRigidSpringConstraints(const TArray<TVector<T, 3>>& Locations0, const TArray<TVector<T, 3>>& Locations1, TArray<FConstrainedParticlePair>&& InConstraints, const T InStiffness = (T)1)
+			: Constraints(MoveTemp(InConstraints)), Stiffness(InStiffness)
 		{
-			const TVector<int32, 2>& Constraint = Constraints[ConstraintIndex];
-
-			int32 ConstraintInnerIndex1 = Constraint[0];
-			int32 ConstraintInnerIndex2 = Constraint[1];
-
-			check(InParticles.Island(ConstraintInnerIndex1) == InParticles.Island(ConstraintInnerIndex2) || InParticles.Island(ConstraintInnerIndex1) == -1 || InParticles.Island(ConstraintInnerIndex2) == -1);
-
-			const TVector<T, d> WorldSpaceX1 = InParticles.Q(ConstraintInnerIndex1).RotateVector(Distances[ConstraintIndex][0]) + InParticles.P(ConstraintInnerIndex1);
-			const TVector<T, d> WorldSpaceX2 = InParticles.Q(ConstraintInnerIndex2).RotateVector(Distances[ConstraintIndex][1]) + InParticles.P(ConstraintInnerIndex2);
-			const PMatrix<T, d, d> WorldSpaceInvI1 = (InParticles.Q(ConstraintInnerIndex1) * FMatrix::Identity) * InParticles.InvI(ConstraintInnerIndex1) * (InParticles.Q(ConstraintInnerIndex1) * FMatrix::Identity).GetTransposed();
-			const PMatrix<T, d, d> WorldSpaceInvI2 = (InParticles.Q(ConstraintInnerIndex2) * FMatrix::Identity) * InParticles.InvI(ConstraintInnerIndex2) * (InParticles.Q(ConstraintInnerIndex2) * FMatrix::Identity).GetTransposed();
-			const TVector<T, d> Delta = Base::GetDelta(InParticles, WorldSpaceX1, WorldSpaceX2, ConstraintIndex);
-
-			if (InParticles.InvM(ConstraintInnerIndex1) > 0)
+			if (Constraints.Num() > 0)
 			{
-				const TVector<T, d> Radius = WorldSpaceX1 - InParticles.P(ConstraintInnerIndex1);
-				InParticles.P(ConstraintInnerIndex1) += InParticles.InvM(ConstraintInnerIndex1) * Delta;
-				InParticles.Q(ConstraintInnerIndex1) += TRotation<T, d>(WorldSpaceInvI1 * TVector<T, d>::CrossProduct(Radius, Delta), 0.f) * InParticles.Q(ConstraintInnerIndex1) * T(0.5);
-				InParticles.Q(ConstraintInnerIndex1).Normalize();
-			}
-
-			if (InParticles.InvM(ConstraintInnerIndex2) > 0)
-			{
-				const TVector<T, d> Radius = WorldSpaceX2 - InParticles.P(ConstraintInnerIndex2);
-				InParticles.P(ConstraintInnerIndex2) -= InParticles.InvM(ConstraintInnerIndex2) * Delta;
-				InParticles.Q(ConstraintInnerIndex2) += TRotation<T, d>(WorldSpaceInvI2 * TVector<T, d>::CrossProduct(Radius, -Delta), 0.f) * InParticles.Q(ConstraintInnerIndex2) * T(0.5);
-				InParticles.Q(ConstraintInnerIndex2).Normalize();
+				Handles.Reserve(Constraints.Num());
+				Distances.Reserve(Constraints.Num());
+				SpringDistances.Reserve(Constraints.Num());
+				for (int32 ConstraintIndex = 0; ConstraintIndex < Constraints.Num(); ++ConstraintIndex)
+				{
+					Handles.Add(HandleAllocator.AllocHandle(this, ConstraintIndex));
+					Distances.Add({});
+					SpringDistances.Add({});
+					UpdateDistance(ConstraintIndex, Locations0[ConstraintIndex], Locations1[ConstraintIndex]);
+				}
 			}
 		}
-	}
 
-	void Apply(TPBDRigidParticles<T, d>& InParticles, const T Dt, const TArray<int32>& InConstraintIndices) const
-	{
-		ApplyHelper(InParticles, Dt, InConstraintIndices);
-	}
+		virtual ~TPBDRigidSpringConstraints() {}
 
-	CHAOS_API void ApplyPushOut(TPBDRigidParticles<T, d>& InParticles, const T Dt, const TArray<int32>& InConstraintIndices)
-	{
+		//
+		// Constraint Container API
+		//
 
-	}
-};
+		/**
+		 * Get the number of constraints.
+		 */
+		int32 NumConstraints() const
+		{
+			return Constraints.Num();
+		}
+
+		/**
+		 * Add a constraint initialized from current world-space particle positions.
+		 * You would use this method when your objects are already positioned in the world.
+		 */
+		FConstraintHandle* AddConstraint(const FConstrainedParticlePair& InConstrainedParticles, const  TVector<TVector<T, 3>, 2>& InLocations)
+		{
+			Handles.Add(HandleAllocator.AllocHandle(this, Handles.Num()));
+			int32 ConstraintIndex = Constraints.Add(InConstrainedParticles);
+			Distances.Add({});
+			SpringDistances.Add({});
+			UpdateDistance(ConstraintIndex, InLocations[0], InLocations[1]);
+			return Handles.Last();
+		}
+
+		/**
+		 * Remove the specified constraint.
+		 */
+		void RemoveConstraint(int ConstraintIndex)
+		{
+			FConstraintHandle* ConstraintHandle = Handles[ConstraintIndex];
+			if (ConstraintHandle != nullptr)
+			{
+				// Release the handle for the freed constraint
+				HandleAllocator.FreeHandle(ConstraintHandle);
+				Handles[ConstraintIndex] = nullptr;
+			}
+
+			// Swap the last constraint into the gap to keep the array packed
+			Constraints.RemoveAtSwap(ConstraintIndex);
+			Distances.RemoveAtSwap(ConstraintIndex);
+			Handles.RemoveAtSwap(ConstraintIndex);
+
+			// Update the handle for the constraint that was moved
+			if (ConstraintIndex < Handles.Num())
+			{
+				SetConstraintIndex(Handles[ConstraintIndex], ConstraintIndex);
+			}
+		}
+
+		// @todo(ccaulfield): rename/remove  this
+		void RemoveConstraints(const TSet<TGeometryParticleHandle<T, d>*>& RemovedParticles)
+		{
+		}
+
+		//
+		// Constraint API
+		//
+
+		const FConstraintHandle* GetConstraintHandle(int32 ConstraintIndex) const
+		{
+			return Handles[ConstraintIndex];
+		}
+
+		FConstraintHandle* GetConstraintHandle(int32 ConstraintIndex)
+		{
+			return Handles[ConstraintIndex];
+		}
+
+		/**
+		 * Get the particles that are affected by the specified constraint.
+		 */
+		const FConstrainedParticlePair& GetConstrainedParticles(int32 ConstraintIndex) const
+		{
+			return Constraints[ConstraintIndex];
+		}
+
+		/**
+		 * Get the local-space constraint positions for each body.
+		 */
+		const TVector<TVector<T, 3>, 2>& GetConstraintPositions(int ConstraintIndex) const
+		{
+			return Distances[ConstraintIndex];
+		}
+
+		/**
+		 * Set the local-space constraint positions for each body.
+		 */
+		void SetConstraintPositions(int ConstraintIndex, const TVector<TVector<T, 3>, 2>& ConstraintPositions)
+		{
+			Distances[ConstraintIndex] = ConstraintPositions;
+		}
+
+
+		//
+		// Island Rule API
+		//
+
+		void UpdatePositionBasedState(const T Dt)
+		{
+		}
+
+		void Apply(const T Dt, const TArray<FConstraintHandle*>& InConstraintHandles, const int32 It, const int32 NumIts)
+		{
+			for (FConstraintHandle* ConstraintHandle : InConstraintHandles)
+			{
+				ApplySingle(Dt, ConstraintHandle->GetConstraintIndex());
+			}
+		}
+
+		// @todo(ccaulfield): remove  this
+		void ApplyPushOut(const T Dt, const TArray<FConstraintHandle*>& InConstraintHandles)
+		{
+		}
+
+	protected:
+		using Base::GetConstraintIndex;
+		using Base::SetConstraintIndex;
+
+	private:
+		void ApplySingle(const T Dt, int32 ConstraintIndex) const;
+
+		void UpdateDistance(int32 ConstraintIndex, const TVector<T, d>& Location0, const TVector<T, d>& Location1);
+
+		TVector<T, d> GetDelta(int32 ConstraintIndex, const TVector<T, d>& WorldSpaceX1, const TVector<T, d>& WorldSpaceX2) const;
+
+		TArray<FConstrainedParticlePair> Constraints;
+		TArray<TVector<TVector<T, 3>, 2>> Distances;
+		TArray<T> SpringDistances;
+		T Stiffness;
+
+		TArray<FConstraintHandle*> Handles;
+		FConstraintHandleAllocator HandleAllocator;
+	};
 }

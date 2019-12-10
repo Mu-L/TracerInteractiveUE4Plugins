@@ -730,10 +730,10 @@ struct FXYOffsetmapAccessor
 			bool bUpdateFoliage = false;
 			bool bUpdateNormals = false;
 			
-			ALandscapeProxy::InvalidateGeneratedComponentData(Components);
-
 			if (!LandscapeEdit->HasLandscapeLayersContent())
 			{
+				ALandscapeProxy::InvalidateGeneratedComponentData(Components);
+
 				bUpdateNormals = true;
 				for (ULandscapeComponent* Component : Components)
 				{
@@ -920,22 +920,30 @@ public:
 			CacheUpToEditingLayer.GetDataAndCache(X1, Y1, X2, Y2, Data, [&]() -> FIntRect
 			{
 				TSet<ULandscapeComponent*> AffectedComponents;
-				LandscapeInfo->GetComponentsInRegion(X1, Y1, X2, Y2, AffectedComponents);
+				LandscapeInfo->GetComponentsInRegion(Bounds.Min.X, Bounds.Min.Y, Bounds.Max.X, Bounds.Max.Y, AffectedComponents);
 				SynchronousUpdateComponentVisibilityForHeight(AffectedComponents, NewLayerVisibility);
+				if (bVisibilityChanged)
+				{
+					VisibilityChangedComponents.Append(AffectedComponents);
+				}
 				return Bounds;
 			});
-            // Release Texture Mips that will be Locked by the next SynchronousUpdateComponentVisibilityForHeight
+			// Release Texture Mips that will be Locked by the next SynchronousUpdateComponentVisibilityForHeight
 			CacheUpToEditingLayer.DataAccess.Flush();
 
 			CacheBottomLayers.GetDataAndCache(X1, Y1, X2, Y2, BottomLayersData, [&]() -> FIntRect
 			{
 				NewLayerVisibility[EditingLayerIndex] = false;
 				TSet<ULandscapeComponent*> AffectedComponents;
-				LandscapeInfo->GetComponentsInRegion(X1, Y1, X2, Y2, AffectedComponents);
+				LandscapeInfo->GetComponentsInRegion(Bounds.Min.X, Bounds.Min.Y, Bounds.Max.X, Bounds.Max.Y, AffectedComponents);
 				SynchronousUpdateComponentVisibilityForHeight(AffectedComponents, NewLayerVisibility);
+				if (bVisibilityChanged)
+				{
+					VisibilityChangedComponents.Append(AffectedComponents);
+				}
 				return Bounds;
 			});
-            // Do the same here for consistency
+			// Do the same here for consistency
 			CacheBottomLayers.DataAccess.Flush();
 		}
 		else
@@ -972,10 +980,10 @@ public:
 			CacheUpToEditingLayer.DataAccess.Flush();
 			if (bVisibilityChanged)
 			{
-				TSet<ULandscapeComponent*> AffectedComponents;
-				LandscapeInfo->GetComponentsInRegion(X1, Y1, X2, Y2, AffectedComponents);
-                const bool bUpdateCollision = true;
-				SynchronousUpdateHeightmapForComponents(AffectedComponents, bUpdateCollision);
+				const bool bUpdateCollision = true;
+				const bool bIntermediateRender = false;
+				SynchronousUpdateHeightmapForComponents(VisibilityChangedComponents, bUpdateCollision, bIntermediateRender);
+				VisibilityChangedComponents.Empty();
 				bVisibilityChanged = false;
 			}
 		}
@@ -988,14 +996,14 @@ public:
 
 private:
 
-	void SynchronousUpdateHeightmapForComponents(const TSet<ULandscapeComponent*>& InComponents, bool bUpdateCollision)
+	void SynchronousUpdateHeightmapForComponents(const TSet<ULandscapeComponent*>& InComponents, bool bUpdateCollision, bool bIntermediateRender)
 	{
 		for (ULandscapeComponent* Component : InComponents)
 		{
 			const bool bUpdateAll = false; // default value
 			Component->RequestHeightmapUpdate(bUpdateAll, bUpdateCollision);
 		}
-		Landscape->ForceUpdateLayersContent();
+		Landscape->ForceUpdateLayersContent(bIntermediateRender);
 	};
 
 	void SetLayersVisibility(const TArray<bool>& InLayerVisibility)
@@ -1019,7 +1027,8 @@ private:
 		SetLayersVisibility(InLayerVisibility);
         // No need to update collision here as we are only doing a intermediate render to gather heightdata
         const bool bUpdateCollision = false;
-		SynchronousUpdateHeightmapForComponents(InComponents, bUpdateCollision);
+		const bool bIntermediateRender = true;
+		SynchronousUpdateHeightmapForComponents(InComponents, bUpdateCollision, bIntermediateRender);
 	};
 
 	ULandscapeInfo* LandscapeInfo;
@@ -1032,6 +1041,7 @@ private:
 	bool bCombinedLayerOperation;
 	bool bVisibilityChanged;
 	bool bTargetIsHeightmap;
+	TSet<ULandscapeComponent*> VisibilityChangedComponents;
 
 	typename ToolTarget::CacheClass& CacheUpToEditingLayer;
 	typename ToolTarget::CacheClass CacheBottomLayers;
@@ -1094,10 +1104,9 @@ struct FFullWeightmapAccessor
 		TSet<ULandscapeComponent*> Components;
 		if (LandscapeEdit.GetComponentsInRegion(X1, Y1, X2, Y2, &Components))
 		{
-			ALandscapeProxy::InvalidateGeneratedComponentData(Components);
-
 			if (!LandscapeEdit.HasLandscapeLayersContent())
 			{
+				ALandscapeProxy::InvalidateGeneratedComponentData(Components);
 				ModifiedComponents.Append(Components);
 			}
 			LandscapeEdit.SetAlphaData(DirtyLayerInfos, X1, Y1, X2, Y2, Data, 0, PaintingRestriction);

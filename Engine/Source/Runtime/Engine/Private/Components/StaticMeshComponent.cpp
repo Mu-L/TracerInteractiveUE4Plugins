@@ -172,7 +172,6 @@ UStaticMeshComponent::UStaticMeshComponent(const FObjectInitializer& ObjectIniti
 	bForceNavigationObstacle = true;
 	bDisallowMeshPaintPerInstance = false;
 	DistanceFieldIndirectShadowMinVisibility = .1f;
-
 	GetBodyInstance()->bAutoWeld = true;	//static mesh by default has auto welding
 
 #if WITH_EDITORONLY_DATA
@@ -288,6 +287,17 @@ void UStaticMeshComponent::Serialize(FArchive& Ar)
 	}
 #endif
 
+#if WITH_EDITORONLY_DATA
+	if (Ar.IsCooking())
+	{
+		// LODData's OwningComponent can be NULL for a component created via SpawnActor off of a blueprint default (LODData will be created without a call to SetLODDataCount)
+		for (int32 LODIndex = 0; LODIndex < LODData.Num(); LODIndex++)
+		{
+			LODData[LODIndex].OwningComponent = this;
+		}
+	}
+#endif
+
 	Ar << LODData;
 
 #if WITH_EDITOR
@@ -365,22 +375,25 @@ bool UStaticMeshComponent::AreNativePropertiesIdenticalTo( UObject* Other ) cons
 	return bNativePropertiesAreIdentical;
 }
 
+#if WITH_EDITORONLY_DATA
 void UStaticMeshComponent::PreSave(const class ITargetPlatform* TargetPlatform)
 {
 	Super::PreSave(TargetPlatform);
-#if WITH_EDITORONLY_DATA
+
 	CachePaintedDataIfNecessary();
-#endif // WITH_EDITORONLY_DATA
 }
+#endif // WITH_EDITORONLY_DATA
 
 #if WITH_EDITOR
 void UStaticMeshComponent::CheckForErrors()
 {
 	Super::CheckForErrors();
 
+	const FCoreTexts& CoreTexts = FCoreTexts::Get();
+
 	// Get the mesh owner's name.
 	AActor* Owner = GetOwner();
-	FString OwnerName(*(GNone.ToString()));
+	FString OwnerName(*(CoreTexts.None.ToString()));
 	if ( Owner )
 	{
 		OwnerName = Owner->GetName();
@@ -851,7 +864,9 @@ void UStaticMeshComponent::GetStreamingRenderAssetInfo(FStreamingTextureLevelCon
 
 	if (IsStreamingRenderAsset(GetStaticMesh()))
 	{
-		const float TexelFactor = ForcedLodModel > 0 ? -(GetStaticMesh()->RenderData->LODResources.Num() - ForcedLodModel + 1) : Bounds.SphereRadius * 2.f;
+		const float TexelFactor = ForcedLodModel > 0 ?
+			-(GetStaticMesh()->RenderData->LODResources.Num() - ForcedLodModel + 1) :
+			(IsRegistered() ? Bounds.SphereRadius * 2.f : 0.f);
 		new (OutStreamingRenderAssets) FStreamingRenderAssetPrimitiveInfo(GetStaticMesh(), Bounds, TexelFactor, PackedRelativeBox_Identity, true);
 	}
 }
@@ -970,10 +985,9 @@ FTransform UStaticMeshComponent::GetSocketTransform(FName InSocketName, ERelativ
 	return Super::GetSocketTransform(InSocketName, TransformSpace);
 }
 
-
+#if WITH_EDITORONLY_DATA
 bool UStaticMeshComponent::RequiresOverrideVertexColorsFixup()
 {
-#if WITH_EDITORONLY_DATA
 	UStaticMesh* Mesh = GetStaticMesh();
 	if (!Mesh)
 	{
@@ -1014,60 +1028,53 @@ bool UStaticMeshComponent::RequiresOverrideVertexColorsFixup()
 	}
 
 	return true;
-#else
-	return false;
-#endif // WITH_EDITORONLY_DATA
 }
 
 void UStaticMeshComponent::SetSectionPreview(int32 InSectionIndexPreview)
 {
-#if WITH_EDITORONLY_DATA
 	if (SectionIndexPreview != InSectionIndexPreview)
 	{
 		SectionIndexPreview = InSectionIndexPreview;
 		MarkRenderStateDirty();
 	}
-#endif
 }
 
 void UStaticMeshComponent::SetMaterialPreview(int32 InMaterialIndexPreview)
 {
-#if WITH_EDITORONLY_DATA
 	if (MaterialIndexPreview != InMaterialIndexPreview)
 	{
 		MaterialIndexPreview = InMaterialIndexPreview;
 		MarkRenderStateDirty();
 	}
-#endif
 }
+#endif
 
 void UStaticMeshComponent::RemoveInstanceVertexColorsFromLOD( int32 LODToRemoveColorsFrom )
 {
-#if WITH_EDITORONLY_DATA
 	if (GetStaticMesh() && LODToRemoveColorsFrom < GetStaticMesh()->GetNumLODs() && LODToRemoveColorsFrom < LODData.Num())
 	{
 		FStaticMeshComponentLODInfo& CurrentLODInfo = LODData[LODToRemoveColorsFrom];
 
 		CurrentLODInfo.ReleaseOverrideVertexColorsAndBlock();
 		CurrentLODInfo.PaintedVertices.Empty();
+
+#if WITH_EDITORONLY_DATA
 		StaticMeshDerivedDataKey = GetStaticMesh()->RenderData->DerivedDataKey;
-	}
 #endif
+	}
 }
 
+#if WITH_EDITORONLY_DATA
 void UStaticMeshComponent::RemoveInstanceVertexColors()
 {
-#if WITH_EDITORONLY_DATA
 	for ( int32 i=0; i < GetStaticMesh()->GetNumLODs(); i++ )
 	{
 		RemoveInstanceVertexColorsFromLOD( i );
 	}
-#endif
 }
 
 void UStaticMeshComponent::CopyInstanceVertexColorsIfCompatible( UStaticMeshComponent* SourceComponent )
 {
-#if WITH_EDITORONLY_DATA
 	// The static mesh assets have to match, currently.
 	if (( GetStaticMesh()->GetPathName() == SourceComponent->GetStaticMesh()->GetPathName() ) &&
 		( SourceComponent->LODData.Num() != 0 ))
@@ -1136,12 +1143,10 @@ void UStaticMeshComponent::CopyInstanceVertexColorsIfCompatible( UStaticMeshComp
 
 		MarkRenderStateDirty();
 	}
-#endif
 }
 
 void UStaticMeshComponent::CachePaintedDataIfNecessary()
 {
-#if WITH_EDITORONLY_DATA
 	// Only cache the vertex positions if we're in the editor
 	if ( GIsEditor && GetStaticMesh() )
 	{
@@ -1194,12 +1199,10 @@ void UStaticMeshComponent::CachePaintedDataIfNecessary()
 			}
 		}
 	}
-#endif // WITH_EDITORONLY_DATA
 }
 
 bool UStaticMeshComponent::FixupOverrideColorsIfNecessary( bool bRebuildingStaticMesh )
 {
-#if WITH_EDITORONLY_DATA
 
 	// Detect if there is a version mismatch between the source mesh and the component. If so, the component's LODs potentially
 	// need to have their override colors updated to match changes in the source mesh.
@@ -1221,10 +1224,10 @@ bool UStaticMeshComponent::FixupOverrideColorsIfNecessary( bool bRebuildingStati
 
 		return true;
 	}
-#endif // WITH_EDITORONLY_DATA
 
 	return false;
 }
+#endif // WITH_EDITORONLY_DATA
 
 void UStaticMeshComponent::InitResources()
 {
@@ -1239,9 +1242,9 @@ void UStaticMeshComponent::InitResources()
 	}
 }
 
+#if WITH_EDITOR
 void UStaticMeshComponent::PrivateFixupOverrideColors()
 {
-#if WITH_EDITOR
 	if (!GetStaticMesh() || !GetStaticMesh()->RenderData)
 	{
 		return;
@@ -1336,9 +1339,8 @@ void UStaticMeshComponent::PrivateFixupOverrideColors()
 	{
 		StaticMeshDerivedDataKey = GetStaticMesh()->RenderData->DerivedDataKey;
 	}
-
-#endif // WITH_EDITOR
 }
+#endif // WITH_EDITOR
 
 float GKeepPreCulledIndicesThreshold = .95f;
 
@@ -1464,7 +1466,7 @@ void UStaticMeshComponent::ImportCustomProperties(const TCHAR* SourceText, FFeed
 		if (FParse::Value(SourceText, LODString, LODIndex))
 		{
 			TmpStr = FString::Printf(TEXT("%d"), LODIndex);
-			SourceText += TmpStr.Len() + (ARRAY_COUNT(LODString) - 1); // without the zero terminator
+			SourceText += TmpStr.Len() + (UE_ARRAY_COUNT(LODString) - 1); // without the zero terminator
 
 			// See if we need to add a new element to the LODData array
 			if (LODIndex > MaxLODIndex)
@@ -1684,6 +1686,7 @@ void UStaticMeshComponent::PostLoad()
 
 	Super::PostLoad();
 
+#if WITH_EDITORONLY_DATA
 	if ( GetStaticMesh() )
 	{
 		CachePaintedDataIfNecessary();
@@ -1692,7 +1695,6 @@ void UStaticMeshComponent::PostLoad()
 
 		if (FixupOverrideColorsIfNecessary())
 		{
-#if WITH_EDITORONLY_DATA
 
 			AActor* Owner = GetOwner();
 
@@ -1707,9 +1709,9 @@ void UStaticMeshComponent::PostLoad()
 					Level->FixupOverrideVertexColorsCount++;
 				}
 			}
-#endif
 		}
 	}
+#endif
 
 	// Empty after potential editor fix-up when we don't care about re-saving, e.g. game or client
 	if (!GIsEditor && !IsRunningCommandlet())

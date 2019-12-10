@@ -61,14 +61,13 @@ void FMovieSceneEvaluationTemplateGenerator::ProcessTrack(const UMovieSceneTrack
 {
 	FMovieSceneTrackSegmentBlenderPtr TrackBlender = Track.GetTrackSegmentBlender();
 
-	// Deal with sub tracks specifically
-	if (const UMovieSceneSubTrack* SubTrack = Cast<const UMovieSceneSubTrack>(&Track))
+	if (Track.IsEvalDisabled())
 	{
-		ProcessSubTrack(*SubTrack, ObjectBindingId);
+		return;
 	}
 
 	// If the ledger already contains this track, just update the uncompiled track field
-	else if (FMovieSceneTrackIdentifier TrackID = Template.GetLedger().FindTrack(Track.GetSignature()))
+	if (FMovieSceneTrackIdentifier TrackID = Template.GetLedger().FindTrack(Track.GetSignature()))
 	{
 		CompiledSignatures.Add(Track.GetSignature());
 
@@ -84,6 +83,12 @@ void FMovieSceneEvaluationTemplateGenerator::ProcessTrack(const UMovieSceneTrack
 		Args.ObjectBindingId = ObjectBindingId;
 		Args.DefaultCompletionMode = SourceSequence.DefaultCompletionMode;
 		Track.GenerateTemplate(Args);
+	}
+
+	// Deal with sub tracks specifically
+	if (const UMovieSceneSubTrack* SubTrack = Cast<const UMovieSceneSubTrack>(&Track))
+	{
+		ProcessSubTrack(*SubTrack, ObjectBindingId);
 	}
 }
 

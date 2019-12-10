@@ -2,8 +2,6 @@
 
 #pragma once
 
-#if INCLUDE_CHAOS
-
 #include "Modules/ModuleInterface.h"
 
 class CHAOS_API FChaosEngineModule : public IModuleInterface
@@ -13,5 +11,3 @@ public:
 	virtual void StartupModule() override {};
 	virtual void ShutdownModule() override {};
 };
-
-#endif

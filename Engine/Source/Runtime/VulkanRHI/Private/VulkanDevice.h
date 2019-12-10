@@ -18,20 +18,43 @@ class FVulkanOcclusionQueryPool;
 class FOLDVulkanQueryPool;
 #endif
 
+#define VULKAN_USE_DEBUG_NAMES 1
+
+#if VULKAN_USE_DEBUG_NAMES
+#define VULKAN_SET_DEBUG_NAME(Device, Type, Handle, Format, ...) Device.VulkanSetObjectName(Type, (uint64)Handle, *FString::Printf(Format, __VA_ARGS__))
+#else
+#define VULKAN_SET_DEBUG_NAME(Device, Type, Handle, Format, ...) do{}while(0)
+#endif
+
 struct FOptionalVulkanDeviceExtensions
 {
-	uint32 HasKHRMaintenance1 : 1;
-	uint32 HasKHRMaintenance2 : 1;
-	//uint32 HasMirrorClampToEdge : 1;
-	uint32 HasKHRExternalMemoryCapabilities : 1;
-	uint32 HasKHRGetPhysicalDeviceProperties2 : 1;
-	uint32 HasKHRDedicatedAllocation : 1;
-	uint32 HasEXTValidationCache : 1;
-	uint32 HasAMDBufferMarker : 1;
-	uint32 HasNVDiagnosticCheckpoints : 1;
-	uint32 HasGoogleDisplayTiming : 1;
-	uint32 HasYcbcrSampler : 1;
-	uint32 HasMemoryPriority : 1;
+	union
+	{
+		struct
+		{
+			uint32 HasKHRMaintenance1 : 1;
+			uint32 HasKHRMaintenance2 : 1;
+			//uint32 HasMirrorClampToEdge : 1;
+			uint32 HasKHRDedicatedAllocation : 1;
+			uint32 HasEXTValidationCache : 1;
+			uint32 HasAMDBufferMarker : 1;
+			uint32 HasNVDiagnosticCheckpoints : 1;
+			uint32 HasGoogleDisplayTiming : 1;
+			uint32 HasYcbcrSampler : 1;
+			uint32 HasMemoryPriority : 1;
+			uint32 HasDriverProperties : 1;
+			uint32 HasEXTFragmentDensityMap : 1;
+		};
+		uint32 Packed;
+	};
+
+	FOptionalVulkanDeviceExtensions()
+	{
+		static_assert(sizeof(Packed) == sizeof(FOptionalVulkanDeviceExtensions), "More bits needed!");
+		Packed = 0;
+	}
+
+	void Setup(const TArray<const ANSICHAR*>& InDeviceExtensions);
 
 	inline bool HasGPUCrashDumpExtensions() const
 	{
@@ -42,7 +65,7 @@ struct FOptionalVulkanDeviceExtensions
 class FVulkanDevice
 {
 public:
-	FVulkanDevice(VkPhysicalDevice Gpu);
+	FVulkanDevice(FVulkanDynamicRHI* InRHI, VkPhysicalDevice Gpu);
 
 	~FVulkanDevice();
 
@@ -57,6 +80,11 @@ public:
 	void Destroy();
 
 	void WaitUntilIdle();
+
+	inline EGpuVendorId GetVendorId() const
+	{
+		return VendorId;
+	}
 
 	inline bool HasAsyncComputeQueue() const
 	{
@@ -114,10 +142,10 @@ public:
 		return GpuProps.limits;
 	}
 
-#if VULKAN_ENABLE_DESKTOP_HMD_SUPPORT
+#if VULKAN_SUPPORTS_PHYSICAL_DEVICE_PROPERTIES2
 	inline const VkPhysicalDeviceIDPropertiesKHR& GetDeviceIdProperties() const
 	{
-		check(GetOptionalExtensions().HasKHRGetPhysicalDeviceProperties2);
+		check(RHI->GetOptionalExtensions().HasKHRGetPhysicalDeviceProperties2);
 		return GpuIdProps;
 	}
 #endif
@@ -281,7 +309,7 @@ public:
 
 	FVulkanCommandListContext* AcquireDeferredContext();
 	void ReleaseDeferredContext(FVulkanCommandListContext* InContext);
-
+	void VulkanSetObjectName(VkObjectType Type, uint64_t Handle, const TCHAR* Name);
 	inline const FOptionalVulkanDeviceExtensions& GetOptionalExtensions() const
 	{
 		return OptionalDeviceExtensions;
@@ -295,7 +323,7 @@ public:
 
 	void* GetCrashMarkerMappedPointer() const
 	{
-		return CrashMarker.Allocation->GetMappedPointer();
+		return (CrashMarker.Allocation != nullptr) ? CrashMarker.Allocation->GetMappedPointer() : nullptr;
 	}
 #endif
 
@@ -346,7 +374,7 @@ private:
 
 	VkPhysicalDevice Gpu;
 	VkPhysicalDeviceProperties GpuProps;
-#if VULKAN_ENABLE_DESKTOP_HMD_SUPPORT
+#if VULKAN_SUPPORTS_PHYSICAL_DEVICE_PROPERTIES2
 	VkPhysicalDeviceIDPropertiesKHR GpuIdProps;
 #endif
 	VkPhysicalDeviceFeatures PhysicalFeatures;
@@ -368,6 +396,8 @@ private:
 	bool bAsyncComputeQueue = false;
 	bool bPresentOnComputeQueue = false;
 
+	EGpuVendorId VendorId = EGpuVendorId::NotQueried;
+
 #if VULKAN_SUPPORTS_GPU_CRASH_DUMPS
 	struct
 	{
@@ -387,9 +417,13 @@ private:
 	TMap<uint32, VkSamplerYcbcrConversion> SamplerColorConversionMap;
 #endif
 
-	void GetDeviceExtensionsAndLayers(TArray<const ANSICHAR*>& OutDeviceExtensions, TArray<const ANSICHAR*>& OutDeviceLayers, bool& bOutDebugMarkers);
+	FVulkanDynamicRHI* RHI = nullptr;
+	bool bDebugMarkersFound = false;
+	TArray<const ANSICHAR*> DeviceExtensions;
+	TArray<const ANSICHAR*> ValidationLayers;
 
-	void ParseOptionalDeviceExtensions(const TArray<const ANSICHAR*>& DeviceExtensions);
+	static void GetDeviceExtensionsAndLayers(VkPhysicalDevice Gpu, EGpuVendorId VendorId, TArray<const ANSICHAR*>& OutDeviceExtensions, TArray<const ANSICHAR*>& OutDeviceLayers, TArray<FString>& OutAllDeviceExtensions, TArray<FString>& OutAllDeviceLayers, bool& bOutDebugMarkers);
+
 	FOptionalVulkanDeviceExtensions OptionalDeviceExtensions;
 
 	void SetupFormats();
@@ -404,15 +438,16 @@ private:
 		PFN_vkCmdDebugMarkerBeginEXT		CmdBegin = nullptr;
 		PFN_vkCmdDebugMarkerEndEXT			CmdEnd = nullptr;
 		PFN_vkDebugMarkerSetObjectNameEXT	CmdSetObjectName = nullptr;
+		PFN_vkSetDebugUtilsObjectNameEXT	SetDebugName = nullptr;
 
 #if 0//VULKAN_SUPPORTS_DEBUG_UTILS
 		PFN_vkCmdBeginDebugUtilsLabelEXT	CmdBeginDebugLabel = nullptr;
 		PFN_vkCmdEndDebugUtilsLabelEXT		CmdEndDebugLabel = nullptr;
-		PFN_vkSetDebugUtilsObjectNameEXT	SetDebugName = nullptr;
 #endif
 	} DebugMarkers;
 	friend class FVulkanCommandListContext;
 #endif
+	void SetupDrawMarkers();
 
 	class FVulkanPipelineStateCacheManager* PipelineStateCache;
 	friend class FVulkanDynamicRHI;

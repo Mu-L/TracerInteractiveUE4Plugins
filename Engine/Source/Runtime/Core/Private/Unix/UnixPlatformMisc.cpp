@@ -355,7 +355,10 @@ void FUnixPlatformMisc::RequestExit(bool Force)
 	if (GEnteredSignalHandler)
 	{
 		// Lets set our selfs to request exit as the generic platform request exit could log
+		// This is deprecated but one of the few excpetions to leave around for now as we dont want to UE_LOG as that may allocate memory
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
 		GIsRequestingExit = 1;
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
 	}
 	else
 	{
@@ -598,7 +601,7 @@ FString FUnixPlatformMisc::GetCPUVendor()
 
 		VendorResult.Buffer[12] = 0;
 
-		FCString::Strncpy(Result, UTF8_TO_TCHAR(VendorResult.Buffer), ARRAY_COUNT(Result));
+		FCString::Strncpy(Result, UTF8_TO_TCHAR(VendorResult.Buffer), UE_ARRAY_COUNT(Result));
 #else
 		// use /proc?
 #endif // PLATFORM_HAS_CPUID
@@ -654,7 +657,7 @@ FString FUnixPlatformMisc::GetCPUBrand()
 			}
 		}
 
-		FCString::Strncpy(Result, UTF8_TO_TCHAR(BrandString), ARRAY_COUNT(Result));
+		FCString::Strncpy(Result, UTF8_TO_TCHAR(BrandString), UE_ARRAY_COUNT(Result));
 #else
 		// use /proc?
 #endif // PLATFORM_HAS_CPUID

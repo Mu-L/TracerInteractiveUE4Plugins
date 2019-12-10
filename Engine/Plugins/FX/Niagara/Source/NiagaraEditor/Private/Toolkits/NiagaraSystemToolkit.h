@@ -17,6 +17,7 @@
 
 class FNiagaraSystemInstance;
 class FNiagaraSystemViewModel;
+class FNiagaraObjectSelection;
 class SNiagaraSystemEditorViewport;
 class SNiagaraSystemEditorWidget;
 class SNiagaraSystemViewport;
@@ -94,7 +95,6 @@ private:
 	TSharedRef<SDockTab> SpawnTab_CurveEd(const FSpawnTabArgs& Args);
 	TSharedRef<SDockTab> SpawnTab_Sequencer(const FSpawnTabArgs& Args);
 	TSharedRef<SDockTab> SpawnTab_SystemScript(const FSpawnTabArgs& Args);
-	TSharedRef<SDockTab> SpawnTab_SystemDetails(const FSpawnTabArgs& Args);
 	TSharedRef<SDockTab> SpawnTab_SystemParameters(const FSpawnTabArgs& Args);
 	TSharedRef<SDockTab> SpawnTab_SelectedEmitterStack(const FSpawnTabArgs& Args);
 	TSharedRef<SDockTab> SpawnTab_SelectedEmitterGraph(const FSpawnTabArgs& Args);
@@ -102,6 +102,7 @@ private:
 	TSharedRef<SDockTab> SpawnTab_PreviewSettings(const FSpawnTabArgs& Args);
 	TSharedRef<SDockTab> SpawnTab_GeneratedCode(const FSpawnTabArgs& Args);
 	TSharedRef<SDockTab> SpawnTab_MessageLog(const FSpawnTabArgs& Args);
+	TSharedRef<SDockTab> SpawnTab_SystemOverview(const FSpawnTabArgs& Args);
 
 	/** Builds the toolbar widget */
 	void ExtendToolbar();	
@@ -122,9 +123,9 @@ private:
 	bool OnApplyEnabled() const;
 
 	void OnPinnedCurvesChanged();
-	void OnRefresh();
+	void RefreshParameters();
+	void OnSystemSelectionChanged();
 
-private:
 	TSharedRef<SWidget> GenerateBoundsMenuContent(TSharedRef<FUICommandList> InCommandList);
 	const FName GetNiagaraSystemMessageLogName(UNiagaraSystem* InSystem) const;
 	void OnSaveThumbnailImage();
@@ -161,6 +162,8 @@ private:
 
 	TSharedPtr<class SNiagaraParameterMapView> ParameterMapView;
 
+	TSharedPtr<FNiagaraObjectSelection> ObjectSelectionForParameterMapView;
+
 	bool bChangesDiscarded;
 
 	static const FName ViewportTabID;
@@ -175,4 +178,5 @@ private:
 	static const FName PreviewSettingsTabId;
 	static const FName GeneratedCodeTabID;
 	static const FName MessageLogTabID;
+	static const FName SystemOverviewTabID;
 };

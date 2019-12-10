@@ -29,6 +29,7 @@
 #include "PostProcess/PostProcessing.h"
 #include "PostProcess/PostProcessTemporalAA.h"
 #include "PipelineStateCache.h"
+#include "SceneTextureParameters.h"
 
 /** Tweaked values from UE3 implementation **/
 extern const float PointLightFadeDistanceIncrease = 200;
@@ -40,6 +41,15 @@ static FAutoConsoleVariableRef CVarLightShaftQuality(
 	TEXT("r.LightShaftQuality"),
 	GLightShafts,
 	TEXT("Defines the light shaft quality (mobile and non mobile).\n")
+	TEXT("  0: off\n")
+	TEXT("  1: on (default)"),
+	ECVF_Scalability | ECVF_RenderThreadSafe);
+
+int32 GLightShaftAllowTAA = 1;
+static FAutoConsoleVariableRef CVarLightAllowTAA(
+	TEXT("r.LightShaftAllowTAA"),
+	GLightShaftAllowTAA,
+	TEXT("Allows temporal filtering for lightshafts.\n")
 	TEXT("  0: off\n")
 	TEXT("  1: on (default)"),
 	ECVF_Scalability | ECVF_RenderThreadSafe);
@@ -111,6 +121,7 @@ public:
 		AspectRatioAndInvAspectRatioParameter.Bind(ParameterMap,TEXT("AspectRatioAndInvAspectRatio"));
 		LightShaftParameters.Bind(ParameterMap, TEXT("LightShaftParameters"));
 		BloomTintAndThresholdParameter.Bind(ParameterMap,TEXT("BloomTintAndThreshold"));
+		BloomMaxBrightnessParameter.Bind(ParameterMap,TEXT("BloomMaxBrightness"));
 		DistanceFadeParameter.Bind(ParameterMap, TEXT("DistanceFade"));
 		SourceTextureParameter.Bind(ParameterMap, TEXT("SourceTexture"));
 		SourceTextureSamplerParameter.Bind(ParameterMap, TEXT("SourceTextureSampler"));
@@ -128,6 +139,7 @@ public:
 		Ar << Parameters.AspectRatioAndInvAspectRatioParameter;
 		Ar << Parameters.LightShaftParameters;
 		Ar << Parameters.BloomTintAndThresholdParameter;
+		Ar << Parameters.BloomMaxBrightnessParameter;
 		Ar << Parameters.DistanceFadeParameter;
 		Ar << Parameters.SourceTextureParameter;
 		Ar << Parameters.SourceTextureSamplerParameter;
@@ -210,6 +222,7 @@ public:
 
 		const FLinearColor BloomTint = LightSceneInfo->BloomTint;
 		SetShaderValue(RHICmdList, Shader, BloomTintAndThresholdParameter, FVector4(BloomTint.R, BloomTint.G, BloomTint.B, LightSceneInfo->BloomThreshold));
+		SetShaderValue(RHICmdList, Shader, BloomMaxBrightnessParameter, LightSceneInfo->BloomMaxBrightness);
 
 		float OcclusionMaskDarkness;
 		float OcclusionDepthRange;
@@ -248,6 +261,7 @@ private:
 	FShaderParameter AspectRatioAndInvAspectRatioParameter;
 	FShaderParameter LightShaftParameters;
 	FShaderParameter BloomTintAndThresholdParameter;
+	FShaderParameter BloomMaxBrightnessParameter;
 	FShaderParameter DistanceFadeParameter;
 	FShaderResourceParameter SourceTextureParameter;
 	FShaderResourceParameter SourceTextureSamplerParameter;
@@ -264,7 +278,7 @@ public:
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
 	{
-		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM4);
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
 	}
 
 	/** Default constructor. */
@@ -297,7 +311,7 @@ public:
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
 	{
-		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM4); 
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5); 
 	}
 
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
@@ -371,7 +385,7 @@ public:
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
 	{
-		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM4); 
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5); 
 	}
 
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
@@ -428,7 +442,7 @@ public:
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
 	{
-		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM4); 
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5); 
 	}
 
 	/** Default constructor. */
@@ -470,7 +484,7 @@ void AllocateOrReuseLightShaftRenderTarget(FRHICommandListImmediate& RHICmdList,
 		EPixelFormat LightShaftFilterBufferFormat = PF_FloatRGB;
 		const FIntPoint BufferSize = FSceneRenderTargets::Get(RHICmdList).GetBufferSizeXY();
 		FIntPoint LightShaftSize(FMath::Max<uint32>(BufferSize.X / GetLightShaftDownsampleFactor(), 1), FMath::Max<uint32>(BufferSize.Y / GetLightShaftDownsampleFactor(), 1));
-		FPooledRenderTargetDesc Desc(FPooledRenderTargetDesc::Create2DDesc(LightShaftSize, LightShaftFilterBufferFormat, FClearValueBinding::White, TexCreate_None, TexCreate_RenderTargetable, false));
+		FPooledRenderTargetDesc Desc(FPooledRenderTargetDesc::Create2DDesc(LightShaftSize, LightShaftFilterBufferFormat, FClearValueBinding::White, TexCreate_None, TexCreate_ShaderResource | TexCreate_RenderTargetable, false));
 		Desc.AutoWritable = false;
 		GRenderTargetPool.FindFreeElement(RHICmdList, Desc, Target, Name);
 
@@ -493,6 +507,7 @@ void DownsamplePass(FRHICommandListImmediate& RHICmdList, const FViewInfo& View,
 
 	FRHIRenderPassInfo RPInfo(LightShaftsDest->GetRenderTargetItem().TargetableTexture, ERenderTargetActions::Load_Store);
 	TransitionRenderPassTargets(RHICmdList, RPInfo);
+	RHICmdList.TransitionResource(EResourceTransitionAccess::EReadable, FSceneRenderTargets::Get(RHICmdList).GetSceneColorTexture());
 	RHICmdList.BeginRenderPass(RPInfo, TEXT("DownsampleLightshaftMask"));
 	{
 		RHICmdList.SetViewport(DownSampledXY.X, DownSampledXY.Y, 0.0f, DownSampledXY.X + DownsampledSizeX, DownSampledXY.Y + DownsampledSizeY, 1.0f);
@@ -576,41 +591,31 @@ void ApplyTemporalAA(
 	/** Output of Temporal AA for the next step in the pipeline. */
 	TRefCountPtr<IPooledRenderTarget>& HistoryOutput)
 {
-	if( View.AntiAliasingMethod == AAM_TemporalAA &&
-		HistoryState &&
-		HistoryState->RT[0] )
+	if (View.AntiAliasingMethod == AAM_TemporalAA && HistoryState && GLightShaftAllowTAA)
 	{
-		FMemMark Mark(FMemStack::Get());
-		FRenderingCompositePassContext CompositeContext(RHICmdList, View);
-		FPostprocessContext Context(RHICmdList, CompositeContext.Graph, View);
+		FRDGBuilder GraphBuilder(RHICmdList);
 
-		// Nodes for input render targets
-		FRenderingCompositePass* LightShaftSetup = Context.Graph.RegisterPass( new(FMemStack::Get()) FRCPassPostProcessInput( LightShaftsSource ) );
+		FRDGTextureRef LightShaftSetup = GraphBuilder.RegisterExternalTexture(LightShaftsSource, TEXT("LightShaftsSource"));
+
+		FSceneTextureParameters SceneTextures;
+		SetupSceneTextureParameters(GraphBuilder, &SceneTextures);
 
 		FTAAPassParameters TAAParameters(View);
 		TAAParameters.Pass = ETAAPassConfig::LightShaft;
 		TAAParameters.SetupViewRect(View, /** ResolutionDivisor = */ 2);
+		TAAParameters.SceneColorInput = LightShaftSetup;
 
-		// Temporal AA node
-		FRenderingCompositePass* NodeTemporalAA = Context.Graph.RegisterPass( new(FMemStack::Get()) FRCPassPostProcessTemporalAA(Context, TAAParameters,
-			*HistoryState, HistoryState) );
+		FTAAOutputs Outputs = AddTemporalAAPass(
+			GraphBuilder,
+			SceneTextures,
+			View,
+			TAAParameters,
+			*HistoryState,
+			HistoryState);
 
-		// Setup inputs on Temporal AA node as the shader expects
-		NodeTemporalAA->SetInput( ePId_Input0, LightShaftSetup );
+		GraphBuilder.QueueTextureExtraction(Outputs.SceneColor, &HistoryOutput);
 
-		// Reuse a render target from the pool with a consistent name, for vis purposes
-		TRefCountPtr<IPooledRenderTarget> NewHistory;
-		AllocateOrReuseLightShaftRenderTarget(RHICmdList, NewHistory, HistoryRTName);
-
-		// Setup the output to write to the new history render target
-		Context.FinalOutput = FRenderingCompositeOutputRef(NodeTemporalAA);
-		Context.FinalOutput.GetOutput()->RenderTargetDesc = NewHistory->GetDesc();
-		Context.FinalOutput.GetOutput()->PooledRenderTarget = NewHistory;
-
-		// Execute Temporal AA
-		CompositeContext.Process(Context.FinalOutput.GetPass(), TEXT("LightShaftTemporalAA"));
-
-		HistoryOutput = NewHistory;
+		GraphBuilder.Execute();
 	}
 	else
 	{
@@ -751,7 +756,6 @@ bool DoesViewFamilyAllowLightShafts(const FSceneViewFamily& ViewFamily)
 		&& ViewFamily.EngineShowFlags.LightShafts
 		&& ViewFamily.EngineShowFlags.Lighting
 		&& !ViewFamily.UseDebugViewPS()
-		&& !(ViewFamily.EngineShowFlags.VisualizeAdaptiveDOF)
 		&& !(ViewFamily.EngineShowFlags.VisualizeDOF)
 		&& !(ViewFamily.EngineShowFlags.VisualizeBuffer)
 		&& !(ViewFamily.EngineShowFlags.VisualizeHDR)
@@ -831,6 +835,7 @@ void FDeferredShadingSceneRenderer::RenderLightShaftOcclusion(FRHICommandListImm
 						{
 							FViewInfo& View = Views[ViewIndex];
 							
+							SCOPED_GPU_MASK(RHICmdList, View.GPUMask);
 							SCOPED_DRAW_EVENTF(RHICmdList, RenderLightShaftOcclusion, TEXT("RenderLightShaftOcclusion %dx%d (multiple passes)"), View.ViewRect.Width(), View.ViewRect.Height());
 		
 							if (ShouldRenderLightShaftsForLight(View, LightSceneInfo))
@@ -877,7 +882,7 @@ public:
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
 	{
-		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM4); 
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5); 
 	}
 
 	/** Default constructor. */
@@ -1062,6 +1067,7 @@ void FDeferredShadingSceneRenderer::RenderLightShaftBloom(FRHICommandListImmedia
 					{
 						FViewInfo& View = Views[ViewIndex];
 
+						SCOPED_GPU_MASK(RHICmdList, View.GPUMask);
 						SCOPED_DRAW_EVENTF(RHICmdList, RenderLightShaftBloom, TEXT("RenderLightShaftBloom %dx%d"), View.ViewRect.Width(), View.ViewRect.Height());
 
 						if (ShouldRenderLightShaftsForLight(View, LightSceneInfo))

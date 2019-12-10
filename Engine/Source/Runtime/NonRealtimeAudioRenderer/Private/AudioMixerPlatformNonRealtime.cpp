@@ -3,6 +3,7 @@
 #include "AudioMixerPlatformNonRealtime.h"
 #include "AudioMixer.h"
 #include "AudioMixerDevice.h"
+#include "AudioPluginUtilities.h"
 #include "HAL/PlatformAffinity.h"
 #include "Misc/App.h"
 
@@ -65,6 +66,10 @@ namespace Audio
 		double SecondsRendered = TotalDurationRendered;
 		TotalDurationRendered += NumSecondsToRender;
 
+		CurrentBufferWriteIndex = 0;
+		CurrentBufferReadIndex = 0;
+
+
 		while (SecondsRendered < TotalDurationRendered)
 		{
 			// RenderTimeAnalysis.Start();
@@ -74,6 +79,9 @@ namespace Audio
 			ReadNextBuffer();
 			SecondsRendered += TimePerCallback;
 		}
+
+		CurrentBufferReadIndex = INDEX_NONE;
+		CurrentBufferWriteIndex = INDEX_NONE;
 	}
 
 	void FMixerPlatformNonRealtime::OpenFileToWriteAudioTo(const FString& OutPath)
@@ -386,7 +394,7 @@ namespace Audio
 
 	FAudioPlatformSettings FMixerPlatformNonRealtime::GetPlatformSettings() const
 	{
-		return FAudioPlatformSettings::GetPlatformSettings(TEXT("/Script/WindowsTargetPlatform.WindowsTargetSettings"));
+		return FAudioPlatformSettings::GetPlatformSettings(FPlatformProperties::GetRuntimeSettingsClassName());
 	}
 
 	void FMixerPlatformNonRealtime::OnHardwareUpdate()

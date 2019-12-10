@@ -253,12 +253,14 @@ void USimpleConstructionScript::PostLoad()
 						if(Node->ParentComponentOrVariableName == NAME_None)
 						{
 							// Note that we have to check for nullptr here, because it may be an ActorComponent type
-							USceneComponent* SceneComponentTemplate = Cast<USceneComponent>(Node->ComponentTemplate);
-							if(SceneComponentTemplate != nullptr
-								&& SceneComponentTemplate->RelativeScale3D != FVector(1.0f, 1.0f, 1.0f))
+							if (USceneComponent* SceneComponentTemplate = Cast<USceneComponent>(Node->ComponentTemplate))
 							{
-								UE_LOG(LogBlueprint, Warning, TEXT("%s: Found non-native root component custom scale for %s (%s) saved prior to being usable; reverting to default scale."), *BPGeneratedClass->GetName(), *Node->GetVariableName().ToString(), *SceneComponentTemplate->RelativeScale3D.ToString());
-								SceneComponentTemplate->RelativeScale3D = FVector(1.0f, 1.0f, 1.0f);
+								const FVector ComponentRelativeScale3D = SceneComponentTemplate->GetRelativeScale3D();
+								if (ComponentRelativeScale3D != FVector(1.0f, 1.0f, 1.0f))
+								{
+									UE_LOG(LogBlueprint, Warning, TEXT("%s: Found non-native root component custom scale for %s (%s) saved prior to being usable; reverting to default scale."), *BPGeneratedClass->GetName(), *Node->GetVariableName().ToString(), *ComponentRelativeScale3D.ToString());
+									SceneComponentTemplate->SetRelativeScale3D_Direct(FVector(1.0f, 1.0f, 1.0f));
+								}
 							}
 
 							// Done - no need to fix up any other nodes.
@@ -635,7 +637,8 @@ void USimpleConstructionScript::ExecuteScriptOnActor(AActor* Actor, const TInlin
 
 		for (USCS_Node* RootNode : RootNodes)
 		{
-			if(RootNode != nullptr)
+			// If the node is a default scene root and the actor already has a root component, skip it
+			if (RootNode && ((RootNode != DefaultSceneRootNode) || (RootComponent == nullptr)))
 			{
 				// If the root node specifies that it has a parent
 				USceneComponent* ParentComponent = nullptr;
@@ -816,7 +819,7 @@ void USimpleConstructionScript::AddNode(USCS_Node* Node)
 	}
 }
 
-void USimpleConstructionScript::RemoveNode(USCS_Node* Node)
+void USimpleConstructionScript::RemoveNode(USCS_Node* Node, const bool bValidateSceneRootNodes)
 {
 	// If it's a root node we are removing, clear it from the list
 	if(RootNodes.Contains(Node))
@@ -832,7 +835,10 @@ void USimpleConstructionScript::RemoveNode(USCS_Node* Node)
 		Node->ParentComponentOrVariableName = NAME_None;
 		Node->ParentComponentOwnerClassName = NAME_None;
 
-		ValidateSceneRootNodes();
+		if (bValidateSceneRootNodes)
+		{
+			ValidateSceneRootNodes();
+		}
 	}
 	// Not the root, so iterate over all nodes looking for the one with us in its ChildNodes array
 	else

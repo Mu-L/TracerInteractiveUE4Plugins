@@ -172,7 +172,7 @@ private:
 	void OnPreviewNeedsRecreation();
 
 	void PopulateWidgetGeometryCache(FArrangedWidget& Root);
-	void PopulateWidgetGeometryCache_Loop(FArrangedWidget& Parent, int32 ParentHitTestIndex);
+	void PopulateWidgetGeometryCache_Loop(FArrangedWidget& Parent);
 
 	/** @return Formatted text for the given resolution params */
 	FText GetResolutionText(int32 Width, int32 Height, const FString& AspectRatio) const;
@@ -195,8 +195,8 @@ private:
 	EVisibility GetCustomResolutionEntryVisibility() const;
 	
 	// Handles selecting a common screen resolution.
-	void HandleOnCommonResolutionSelected(FPlayScreenResolution InResolution);
-	bool HandleIsCommonResolutionSelected(FPlayScreenResolution InResolution) const;
+	void HandleOnCommonResolutionSelected(const FPlayScreenResolution InResolution);
+	bool HandleIsCommonResolutionSelected(const FPlayScreenResolution InResolution) const;
 	void AddScreenResolutionSection(FMenuBuilder& MenuBuilder, const TArray<FPlayScreenResolution> Resolutions, const FText SectionName);
 	TSharedRef<SWidget> GetResolutionsMenu();
 
@@ -212,6 +212,9 @@ private:
 	EVisibility GetDesignerOutlineVisibility() const;
 	FSlateColor GetDesignerOutlineColor() const;
 	FText GetDesignerOutlineText() const;
+
+	FText GetCursorPositionText() const;
+	EVisibility GetCursorPositionTextVisibility() const;
 
 	// Handles drawing selection and other effects a SPaintSurface widget injected into the hierarchy.
 	int32 HandleEffectsPainting(const FOnPaintHandlerParams& PaintArgs);

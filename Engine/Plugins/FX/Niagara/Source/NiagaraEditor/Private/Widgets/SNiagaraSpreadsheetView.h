@@ -132,7 +132,7 @@ protected:
 	bool CanCapture() const;
 	bool IsPausedAtRightTimeOnRightHandle() const;
 
-	void SelectedEmitterHandlesChanged();
+	void SystemSelectionChanged();
 
 	void ResetColumns(EUITab Tab);
 	void ResetEntries(EUITab Tab);

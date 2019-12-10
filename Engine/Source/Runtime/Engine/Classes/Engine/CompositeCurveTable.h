@@ -14,11 +14,6 @@ class UCompositeCurveTable
 {
 	GENERATED_UCLASS_BODY()
 
-	// Parent tables
-	// Tables with higher indices override data in tables with lower indices
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Tables)
-	TArray<UCurveTable*> ParentTables;
-
 	//~ Begin UObject Interface.
 	ENGINE_API virtual void GetPreloadDependencies(TArray<UObject*>& OutDeps) override;
 	ENGINE_API virtual void Serialize(FArchive& Ar) override;
@@ -33,6 +28,10 @@ class UCompositeCurveTable
 
 	ENGINE_API virtual void EmptyTable() override;
 
+	// Support for runtime modification of parent tables, 
+	// Be aware this can be slow and can cause hitches during gameplay
+	ENGINE_API void AppendParentTables(const TArray<UCurveTable*>& NewTables);
+
 protected:
 
 	// Searches the parent tables to see if there are any loops.
@@ -43,10 +42,18 @@ protected:
 
 	void OnParentTablesUpdated(EPropertyChangeType::Type ChangeType = EPropertyChangeType::Unspecified);
 
-	// true if this asset is currently being loaded; false otherwise
-	uint8 bIsLoading : 1;
+	// Parent tables
+	// Tables with higher indices override data in tables with lower indices
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Tables)
+	TArray<UCurveTable*> ParentTables;
 
 	// temporary copy used to detect changes so we can update delegates correctly on removal
 	UPROPERTY(transient)
 	TArray<UCurveTable*> OldParentTables;
+
+	// true if this asset is currently being loaded; false otherwise
+	uint8 bIsLoading : 1;
+
+	// true if we're already in the middle of updating parent tables for this asset
+	uint8 bUpdatingParentTables : 1;
 };

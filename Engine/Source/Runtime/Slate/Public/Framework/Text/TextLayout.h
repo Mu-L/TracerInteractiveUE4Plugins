@@ -261,8 +261,7 @@ public:
 
 		TSharedRef< IRun > Run;
 		TArray< FTextRange > MeasuredRanges;
-		// HACK: This should be a Vector2D, but changing to a FVector4 to overcome a compiler issue with vectorization running off the end of the array.
-		TArray< FVector4 > MeasuredRangeSizes;
+		TArray< FVector2D > MeasuredRangeSizes;
 	};
 
 	struct ELineModelDirtyState
@@ -529,6 +528,8 @@ public:
 	void GetTextOffsetLocations(FTextOffsetLocations& OutTextOffsetLocations) const;
 
 	void GetSelectionAsText(FString& DisplayText, const FTextSelection& Selection) const;
+
+	FTextSelection GetGraphemeAt(const FTextLocation& Location) const;
 
 	FTextSelection GetWordAt(const FTextLocation& Location) const;
 

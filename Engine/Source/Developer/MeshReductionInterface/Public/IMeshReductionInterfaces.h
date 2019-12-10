@@ -39,8 +39,7 @@ public:
 	*/
 	virtual bool ReduceSkeletalMesh(
 		class USkeletalMesh* SkeletalMesh,
-		int32 LODIndex,
-		bool bReregisterComponent = true
+		int32 LODIndex
 	) = 0;
 	/**
 	* Returns a unique string identifying both the reduction plugin itself and the version of the plugin.
@@ -57,6 +56,7 @@ public:
 	*/
 	virtual bool IsReductionActive(const struct FMeshReductionSettings &ReductionSettings) const = 0;
 	virtual bool IsReductionActive(const struct FSkeletalMeshOptimizationSettings &ReductionSettings) const = 0;
+	virtual bool IsReductionActive(const struct FSkeletalMeshOptimizationSettings &ReductionSettings, uint32 NumVertices, uint32 NumTriangles) const = 0;
 };
 
 DECLARE_DELEGATE_ThreeParams(FProxyCompleteDelegate, struct FMeshDescription&, struct FFlattenMaterial&, const FGuid);

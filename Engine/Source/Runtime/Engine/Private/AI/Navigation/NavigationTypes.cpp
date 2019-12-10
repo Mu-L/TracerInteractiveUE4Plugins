@@ -35,13 +35,13 @@ uint32 FNavPathType::NextUniqueId = 0;
 //----------------------------------------------------------------------//
 // FNavDataConfig
 //----------------------------------------------------------------------//
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
 FNavDataConfig::FNavDataConfig(float Radius, float Height)
 	: FNavAgentProperties(Radius, Height)
 	, Name(TEXT("Default"))
 	, Color(140, 255, 0, 164)
 	, DefaultQueryExtent(DEFAULT_NAV_QUERY_EXTENT_HORIZONTAL, DEFAULT_NAV_QUERY_EXTENT_HORIZONTAL, DEFAULT_NAV_QUERY_EXTENT_VERTICAL)
-	, NavigationDataClass(FNavigationSystem::GetDefaultNavDataClass())
-	, NavigationDataClassName(NavigationDataClass)
+	, NavDataClass(FNavigationSystem::GetDefaultNavDataClass())
 {
 }
 
@@ -50,12 +50,32 @@ FNavDataConfig::FNavDataConfig(const FNavDataConfig& Other)
 	, Name(Other.Name)
 	, Color(Other.Color)
 	, DefaultQueryExtent(Other.DefaultQueryExtent)
-	, NavigationDataClass(Other.NavigationDataClass)
-	, NavigationDataClassName(NavigationDataClass)
+	, NavDataClass(Other.NavDataClass)
 {
+}
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
 
+void FNavDataConfig::SetNavDataClass(UClass* InNavDataClass)
+{
+	NavDataClass = InNavDataClass;
 }
 
+void FNavDataConfig::SetNavDataClass(TSoftClassPtr<AActor> InNavDataClass)
+{
+	NavDataClass = InNavDataClass;
+}
+
+void FNavDataConfig::Invalidate()
+{
+	new(this) FNavAgentProperties();
+	SetNavDataClass(nullptr);
+}
+
+FString FNavDataConfig::GetDescription() const
+{
+	return FString::Printf(TEXT("Name %s class %s agent radius %.1f")
+		, *Name.ToString(), *NavDataClass.ToString(), AgentRadius);
+}
 //----------------------------------------------------------------------//
 // FNavigationRelevantData
 //----------------------------------------------------------------------//
@@ -202,7 +222,8 @@ uint16 FNavigationQueryFilter::GetExcludeFlags() const
 //----------------------------------------------------------------------//
 // FNavAgentSelector
 //----------------------------------------------------------------------//
-FNavAgentSelector::FNavAgentSelector() : PackedBits(0x7fffffff)
+FNavAgentSelector::FNavAgentSelector(const uint32 InBits)
+	: PackedBits(InBits)
 {
 }
 
@@ -246,6 +267,11 @@ void FNavAgentProperties::UpdateWithCollisionComponent(UShapeComponent* Collisio
 bool FNavAgentProperties::IsNavDataMatching(const FNavAgentProperties& Other) const
 {
 	return (PreferredNavData == Other.PreferredNavData || PreferredNavData == nullptr || Other.PreferredNavData == nullptr);
+}
+
+void FNavAgentProperties::SetPreferredNavData(TSubclassOf<AActor> NavDataClass)
+{
+	PreferredNavData = FSoftClassPath(NavDataClass.Get());
 }
 
 //----------------------------------------------------------------------//

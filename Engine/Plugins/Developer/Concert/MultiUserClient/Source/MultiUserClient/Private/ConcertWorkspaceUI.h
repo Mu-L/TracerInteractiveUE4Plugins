@@ -58,6 +58,9 @@ private:
 	FText GetUserDescriptionText(const FGuid& ClientId) const;
 	FText GetUserDescriptionText(const FConcertClientInfo& ClientInfo) const;
 
+	/** Returns the avatar color corresponding to the specified client Id (including this client). */
+	FLinearColor GetUserAvatarColor(const FGuid& ClientId) const;
+
 	/** Get the local workspace's lock id. */
 	FGuid GetWorkspaceLockId() const;
 
@@ -143,17 +146,8 @@ private:
 	/** Delegate handle for context menu extension. */
 	FDelegateHandle ContentBrowserAssetExtenderDelegateHandle;
 
-	/** Delegate handle for asset lock state indicator icon extension. */
-	FDelegateHandle ContentBrowserAssetLockStateIconDelegateHandle;
-
-	/** Delegate handle for asset lock state indicator tooltip extension. */
-	FDelegateHandle ContentBrowserAssetLockStateTooltipDelegateHandle;
-
-	/** Delegate handle for asset modified by another client icon extension. */
-	FDelegateHandle ContentBrowserAssetModifiedByOtherIconDelegateHandle;
-
-	/** Delegate handle for asset modified by another client tooltip extension. */
-	FDelegateHandle ContentBrowserAssetModifiedByOtherTooltipDelegateHandle;
+	/* Delegate handles for asset lock state indicator extensions.  */
+	TArray<FDelegateHandle> ContentBrowserAssetExtraStateDelegateHandles;
 
 	/** Delegate handle for source control menu extension. */
 	FDelegateHandle SourceControlExtensionDelegateHandle;

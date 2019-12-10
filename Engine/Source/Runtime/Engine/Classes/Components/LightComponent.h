@@ -203,6 +203,10 @@ class ENGINE_API ULightComponent : public ULightComponentBase
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=LightShafts, meta=(UIMin = "0", UIMax = "4"))
 	float BloomThreshold;
 
+	/** After exposure is applied, scene color brightness larger than BloomMaxBrightness will be rescaled down to BloomMaxBrightness. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=LightShafts, meta=(UIMin = "0", UIMax = "100", SliderExponent = 20.0))
+	float BloomMaxBrightness;
+
 	/** Multiplies against scene color to create the bloom color. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=LightShafts)
 	FColor BloomTint;
@@ -270,6 +274,9 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category="Rendering|Components|Light")
 	void SetBloomThreshold(float NewValue);
+
+	UFUNCTION(BlueprintCallable, Category="Rendering|Components|Light")
+	void SetBloomMaxBrightness(float NewValue);
 
 	UFUNCTION(BlueprintCallable, Category="Rendering|Components|Light")
 	void SetBloomTint(FColor NewValue);
@@ -359,6 +366,10 @@ public:
 	virtual bool IsUsedAsAtmosphereSunLight() const
 	{
 		return false;
+	}
+	virtual uint8 GetAtmosphereSunLightIndex() const
+	{
+		return 0;
 	}
 
 	/** Compute current light brightness based on whether there is a valid IES profile texture attached, and whether IES brightness is enabled */

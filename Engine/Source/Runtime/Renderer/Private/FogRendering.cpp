@@ -70,13 +70,11 @@ void SetupFogUniformParameters(const FViewInfo& View, FFogUniformParameters& Out
 	// Volumetric Fog
 	{
 		FRHITexture* IntegratedLightScatteringTexture = nullptr;
-
 		if (View.VolumetricFogResources.IntegratedLightScattering)
 		{
 			IntegratedLightScatteringTexture = View.VolumetricFogResources.IntegratedLightScattering->GetRenderTargetItem().ShaderResourceTexture;
 		}
-
-		SetBlack3DIfNull(IntegratedLightScatteringTexture);
+		SetBlackAlpha13DIfNull(IntegratedLightScatteringTexture);
 
 		const bool bApplyVolumetricFog = View.VolumetricFogResources.IntegratedLightScattering != NULL;
 		OutParameters.ApplyVolumetricFog = bApplyVolumetricFog ? 1.0f : 0.0f;
@@ -100,7 +98,7 @@ public:
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
 	{
-		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM4);
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
 	}
 
 	FHeightFogVS( )	{ }
@@ -172,7 +170,7 @@ public:
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
 	{
-		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM4);
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
 	}
 
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
@@ -336,12 +334,13 @@ void FSceneRenderer::InitFogConstants()
 				View.DirectionalInscatteringExponent = FogInfo.DirectionalInscatteringExponent;
 				View.DirectionalInscatteringStartDistance = FogInfo.DirectionalInscatteringStartDistance;
 				View.InscatteringLightDirection = FVector(0);
-				if (Scene->SunLight)
+				FLightSceneInfo* SunLight = Scene->AtmosphereLights[0];	// Fog only takes into account a single atmosphere light with index 0.
+				if (SunLight)
 				{
-					View.InscatteringLightDirection = -Scene->SunLight->Proxy->GetDirection();
-					View.DirectionalInscatteringColor = FogInfo.DirectionalInscatteringColor * Scene->SunLight->Proxy->GetColor().ComputeLuminance();
+					View.InscatteringLightDirection = -SunLight->Proxy->GetDirection();
+					View.DirectionalInscatteringColor = FogInfo.DirectionalInscatteringColor * SunLight->Proxy->GetColor().ComputeLuminance();
 				}
-				View.bUseDirectionalInscattering = Scene->SunLight!=nullptr;
+				View.bUseDirectionalInscattering = SunLight != nullptr;
 			}
 		}
 	}

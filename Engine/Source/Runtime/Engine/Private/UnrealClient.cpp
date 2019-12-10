@@ -8,7 +8,6 @@
 #include "EngineStats.h"
 #include "EngineGlobals.h"
 #include "RenderingThread.h"
-#include "Templates/ScopedPointer.h"
 #include "CanvasItem.h"
 #include "CanvasTypes.h"
 #include "Misc/ConfigCacheIni.h"
@@ -291,7 +290,14 @@ void FScreenshotRequest::RequestScreenshot(const FString& InFilename, bool bInSh
 	{
 		const bool bRemovePath = false;
 		GeneratedFilename = FPaths::GetBaseFilename(GeneratedFilename, bRemovePath);
-		FFileHelper::GenerateNextBitmapFilename(GeneratedFilename, TEXT("png"), Filename);
+		if (GetHighResScreenshotConfig().bDateTimeBasedNaming)
+		{
+			FFileHelper::GenerateDateTimeBasedBitmapFilename(GeneratedFilename, TEXT("png"), Filename);
+		}
+		else
+		{
+			FFileHelper::GenerateNextBitmapFilename(GeneratedFilename, TEXT("png"), Filename);
+		}
 	}
 	else
 	{
@@ -389,6 +395,7 @@ FString GetMemoryString( const double Value, const bool bAutoType )
 }
 
 FOnScreenshotRequestProcessed FScreenshotRequest::ScreenshotProcessedDelegate;
+FOnScreenshotCaptured FScreenshotRequest::ScreenshotCapturedDelegate;
 bool FScreenshotRequest::bIsScreenshotRequested = false;
 FString FScreenshotRequest::Filename;
 FString FScreenshotRequest::NextScreenshotName;
@@ -666,7 +673,7 @@ int32 FStatUnitData::DrawStat(FViewport* InViewport, FCanvas* InCanvas, int32 In
 		}
 
 		ERHIFeatureLevel::Type FeatureLevel = InCanvas->GetFeatureLevel();
-		if (FeatureLevel >= ERHIFeatureLevel::SM4)
+		if (FeatureLevel >= ERHIFeatureLevel::SM5)
 		{
 			float ResolutionFraction = DynamicResolutionStateInfos.ResolutionFractionApproximation;
 			float ScreenPercentage = ResolutionFraction * 100.0f;
@@ -1166,6 +1173,7 @@ FViewport::FViewport(FViewportClient* InViewportClient):
 	bHitProxiesCached(false),
 	bHasRequestedToggleFreeze(false),
 	bIsSlateViewport(false),
+	bIsHDR(false),
 	bTakeHighResScreenShot(false)
 {
 	//initialize the hit proxy kernel
@@ -1395,29 +1403,6 @@ FRHIGPUMask FViewport::GetGPUMask(FRHICommandListImmediate& RHICmdList) const
 	return FRHIGPUMask::FromIndex(RHICmdList.GetViewportNextPresentGPUIndex(GetViewportRHI()));
 }
 
-void InsertVolume(IInterface_PostProcessVolume* Volume, TArray< IInterface_PostProcessVolume* >& VolumeArray)
-{
-	const int32 NumVolumes = VolumeArray.Num();
-	float TargetPriority = Volume->GetProperties().Priority;
-	int32 InsertIndex = 0;
-	// TODO: replace with binary search.
-	for (; InsertIndex < NumVolumes ; InsertIndex++)
-	{
-		IInterface_PostProcessVolume* CurrentVolume = VolumeArray[InsertIndex];
-		float CurrentPriority = CurrentVolume->GetProperties().Priority;
-
-		if (TargetPriority < CurrentPriority)
-		{
-			break;
-		}
-		if (CurrentVolume == Volume)
-		{
-			return;
-		}
-	}
-	VolumeArray.Insert(Volume, InsertIndex);
-}
-
 void APostProcessVolume::PostUnregisterAllComponents()
 {
 	// Route clear to super first.
@@ -1425,6 +1410,7 @@ void APostProcessVolume::PostUnregisterAllComponents()
 	// World will be NULL during exit purge.
 	if (GetWorld())
 	{
+		GetWorld()->RemovePostProcessVolume(this);
 		GetWorld()->PostProcessVolumes.RemoveSingle(this);
 	}
 }
@@ -1433,19 +1419,19 @@ void APostProcessVolume::PostRegisterAllComponents()
 {
 	// Route update to super first.
 	Super::PostRegisterAllComponents();
-	InsertVolume(this, GetWorld()->PostProcessVolumes);
+	GetWorld()->InsertPostProcessVolume(this);
 }
 
 void UPostProcessComponent::OnRegister()
 {
 	Super::OnRegister();
-	InsertVolume(this, GetWorld()->PostProcessVolumes);
+	GetWorld()->InsertPostProcessVolume(this);
 }
 
 void UPostProcessComponent::OnUnregister()
 {
 	Super::OnUnregister();
-	GetWorld()->PostProcessVolumes.RemoveSingle(this);
+	GetWorld()->RemovePostProcessVolume(this);
 }
 
 void UPostProcessComponent::Serialize(FArchive& Ar)
@@ -1549,23 +1535,28 @@ void FViewport::Draw( bool bShouldPresent /*= true */)
 
 				// Calculate gamethread time (excluding idle time)
 				{
-					static uint32 Lastimestamp = 0;
-					static bool bStarted = false;
-					uint32 CurrentTime	= FPlatformTime::Cycles();
-					FThreadIdleStats& GameThread = FThreadIdleStats::Get();
-					if (bStarted)
+					static uint64 LastFrameUpdated = MAX_uint64;
+					if (GFrameCounter != LastFrameUpdated)
 					{
-						uint32 ThreadTime	= CurrentTime - Lastimestamp;
-						// add any stalls via sleep or fevent
-						GGameThreadTime		= (ThreadTime > GameThread.Waits) ? (ThreadTime - GameThread.Waits) : ThreadTime;
-					}
-					else
-					{
-						bStarted = true;
-					}
+						static uint32 Lastimestamp = 0;
+						static bool bStarted = false;
+						uint32 CurrentTime	= FPlatformTime::Cycles();
+						FThreadIdleStats& GameThread = FThreadIdleStats::Get();
+						if (bStarted)
+						{
+							uint32 ThreadTime	= CurrentTime - Lastimestamp;
+							// add any stalls via sleep or fevent
+							GGameThreadTime		= (ThreadTime > GameThread.Waits) ? (ThreadTime - GameThread.Waits) : ThreadTime;
+						}
+						else
+						{
+							bStarted = true;
+						}
 
-					Lastimestamp		= CurrentTime;
-					GameThread.Waits = 0;
+						LastFrameUpdated = GFrameCounter;
+						Lastimestamp		= CurrentTime;
+						GameThread.Waits = 0;
+					}
 				}
 
 				UWorld* ViewportWorld = ViewportClient->GetWorld();
@@ -2155,7 +2146,7 @@ ENGINE_API bool GetViewportScreenShot(FViewport* Viewport, TArray<FColor>& Bitma
 
 extern bool ParseResolution( const TCHAR* InResolution, uint32& OutX, uint32& OutY, int32& WindowMode );
 
-ENGINE_API bool GetHighResScreenShotInput(const TCHAR* Cmd, FOutputDevice& Ar, uint32& OutXRes, uint32& OutYRes, float& OutResMult, FIntRect& OutCaptureRegion, bool& OutShouldEnableMask, bool& OutDumpBufferVisualizationTargets, bool& OutCaptureHDR, FString& OutFilenameOverride)
+ENGINE_API bool GetHighResScreenShotInput(const TCHAR* Cmd, FOutputDevice& Ar, uint32& OutXRes, uint32& OutYRes, float& OutResMult, FIntRect& OutCaptureRegion, bool& OutShouldEnableMask, bool& OutDumpBufferVisualizationTargets, bool& OutCaptureHDR, FString& OutFilenameOverride, bool& OutUseDateTimeAsFileName)
 {
 	FString CmdString = Cmd;
 	int32 SeperatorPos = -1;
@@ -2226,6 +2217,8 @@ ENGINE_API bool GetHighResScreenShotInput(const TCHAR* Cmd, FOutputDevice& Ar, u
 		OutShouldEnableMask = NumArguments > 5 ? FCString::Atoi(*Arguments[5]) != 0 : false;
 		OutDumpBufferVisualizationTargets = NumArguments > 6 ? FCString::Atoi(*Arguments[6]) != 0 : false;
 		OutCaptureHDR = NumArguments > 7 ? FCString::Atoi(*Arguments[7]) != 0 : false;
+		OutUseDateTimeAsFileName = NumArguments > 8 ? FCString::Atoi(*Arguments[8]) != 0 : false;
+
 
 		return true;
 	}

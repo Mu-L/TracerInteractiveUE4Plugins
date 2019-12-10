@@ -42,7 +42,7 @@
 #include "TimerManager.h"
 #include "Camera/CameraPhotography.h"
 #include "HAL/LowLevelMemTracker.h"
-#if WITH_CHAOS
+#if ENABLE_COLLISION_ANALYZER
 #include "PhysicsEngine/CollisionAnalyzerCapture.h"
 #endif
 
@@ -729,17 +729,17 @@ void UWorld::ProcessLevelStreamingVolumes(FVector* OverrideViewLocation)
 					LevelStreamingObject->SetShouldBeVisible(NewStreamingSettings->ShouldBeVisible(bOriginalShouldBeVisible));
 					LevelStreamingObject->bShouldBlockOnLoad	= NewStreamingSettings->ShouldBlockOnLoad();
 				}
-				// Prevent unload request flood.  The additional check ensures that unload requests can still be issued in the first UnloadCooldownTime seconds of play.
-				else 
-				if( TimeSeconds - LevelStreamingObject->LastVolumeUnloadRequestTime > LevelStreamingObject->MinTimeBetweenVolumeUnloadRequests 
-				||  LevelStreamingObject->LastVolumeUnloadRequestTime < 0.1f )
+				else if (LevelStreamingObject->ShouldBeLoaded())
 				{
-					//UE_LOG(LogLevel, Warning, TEXT("Unloading") );
-					if( GetPlayerControllerIterator() )
+					// Prevent unload request flood.  The additional check ensures that unload requests can still be issued in the first UnloadCooldownTime seconds of play.
+					if (TimeSeconds - LevelStreamingObject->LastVolumeUnloadRequestTime > LevelStreamingObject->MinTimeBetweenVolumeUnloadRequests ||  LevelStreamingObject->LastVolumeUnloadRequestTime < 0.1f)
 					{
-						LevelStreamingObject->LastVolumeUnloadRequestTime	= TimeSeconds;
-						LevelStreamingObject->SetShouldBeLoaded(false);
-						LevelStreamingObject->SetShouldBeVisible(false);
+						if (GetPlayerControllerIterator())
+						{
+							LevelStreamingObject->LastVolumeUnloadRequestTime = TimeSeconds;
+							LevelStreamingObject->SetShouldBeLoaded(false);
+							LevelStreamingObject->SetShouldBeVisible(false);
+						}
 					}
 				}
 
@@ -1080,6 +1080,24 @@ void UWorld::SendAllEndOfFrameUpdates()
 	EndSendEndOfFrameUpdatesDrawEvent(SendAllEndOfFrameUpdates);
 }
 
+/**
+ * Flush any pending parameter collection updates to the render thrad.
+ */
+void UWorld::FlushDeferredParameterCollectionInstanceUpdates()
+{
+	if ( bMaterialParameterCollectionInstanceNeedsDeferredUpdate )
+	{
+		for (UMaterialParameterCollectionInstance* ParameterCollectionInstance : ParameterCollectionInstances)
+		{
+			if (ParameterCollectionInstance)
+			{
+				ParameterCollectionInstance->DeferredUpdateRenderState(false);
+			}
+		}
+
+		bMaterialParameterCollectionInstanceNeedsDeferredUpdate = false;
+	}
+}
 
 #if !UE_BUILD_SHIPPING
 static class FFileProfileWrapperExec: private FSelfRegisteringExec
@@ -1223,7 +1241,6 @@ public:
 #if ENABLE_COLLISION_ANALYZER
 #include "ICollisionAnalyzer.h"
 #include "CollisionAnalyzerModule.h"
-extern bool GCollisionAnalyzerIsRecording;
 #endif // ENABLE_COLLISION_ANALYZER
 
 
@@ -1252,11 +1269,11 @@ extern TMap<FName, int32> CSVActorClassNameToCountMap;
 extern int32 CSVActorTotalCount;
 
 /** Add additional stats to CSV profile for tick and actor counts */
-static void RecordWorldCountsToCSV(UWorld* World)
+static void RecordWorldCountsToCSV(UWorld* World, bool bDoingActorTicks)
 {
 	if(FCsvProfiler::Get()->IsCapturing())
 	{
-		if (CVarRecordTickCountsToCSV.GetValueOnGameThread())
+		if (bDoingActorTicks && CVarRecordTickCountsToCSV.GetValueOnGameThread())
 		{
 			QUICK_SCOPE_CYCLE_COUNTER(STAT_RecordTickCountsToCSV);
 			CSV_SCOPED_TIMING_STAT_EXCLUSIVE(RecordTickCountsToCSV);
@@ -1265,7 +1282,7 @@ static void RecordWorldCountsToCSV(UWorld* World)
 
 			TSortedMap<FName, int32, FDefaultAllocator, FNameFastLess> TickContextToCountMap;
 			int32 EnabledCount;
-			FTickTaskManagerInterface::Get().GetEnabledTickFunctionCounts(World, TickContextToCountMap, EnabledCount, bDetailed);
+			FTickTaskManagerInterface::Get().GetEnabledTickFunctionCounts(World, TickContextToCountMap, EnabledCount, bDetailed, true);
 
 			for (auto It = TickContextToCountMap.CreateConstIterator(); It; ++It)
 			{
@@ -1351,7 +1368,7 @@ void UWorld::Tick( ELevelTick TickType, float DeltaSeconds )
 
 	TDrawEvent<FRHICommandList>* TickDrawEvent = BeginTickDrawEvent();
 
-	FWorldDelegates::OnWorldTickStart.Broadcast(TickType, DeltaSeconds);
+	FWorldDelegates::OnWorldTickStart.Broadcast(this, TickType, DeltaSeconds);
 
 	//Tick game and other thread trackers.
 	for (int32 Tracker = 0; Tracker < (int32)EInGamePerfTrackers::Num; ++Tracker)
@@ -1494,11 +1511,11 @@ void UWorld::Tick( ELevelTick TickType, float DeltaSeconds )
 		}
 
 		// Tick level sequence actors first
-		for (AActor* LevelSequenceActor : LevelSequenceActors)
+		for (int32 i = LevelSequenceActors.Num() - 1; i >= 0; --i)
 		{
-			if (LevelSequenceActor != nullptr)
+			if (LevelSequenceActors[i] != nullptr)
 			{
-				LevelSequenceActor->Tick(DeltaSeconds);
+				LevelSequenceActors[i]->Tick(DeltaSeconds);
 			}
 		}
 	}
@@ -1646,11 +1663,13 @@ void UWorld::Tick( ELevelTick TickType, float DeltaSeconds )
 			{
 				SCOPE_CYCLE_COUNTER(STAT_TG_PostUpdateWork);
 				SCOPE_TIME_GUARD_MS(TEXT("UWorld::Tick - PostUpdateWork"), 5);
+				CSV_SCOPED_SET_WAIT_STAT(PostUpdateWork);
 				RunTickGroup(TG_PostUpdateWork);
 			}
 			{
 				SCOPE_CYCLE_COUNTER(STAT_TG_LastDemotable);
 				SCOPE_TIME_GUARD_MS(TEXT("UWorld::Tick - TG_LastDemotable"), 5);
+				CSV_SCOPED_SET_WAIT_STAT(LastDemotable);
 				RunTickGroup(TG_LastDemotable);
 			}
 
@@ -1737,7 +1756,7 @@ void UWorld::Tick( ELevelTick TickType, float DeltaSeconds )
 #endif
 
 #if (CSV_PROFILER && !UE_BUILD_SHIPPING)
-	RecordWorldCountsToCSV(this);
+	RecordWorldCountsToCSV(this, bDoingActorTicks);
 #endif // (CSV_PROFILER && !UE_BUILD_SHIPPING)
 
 #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)

@@ -28,6 +28,7 @@
 #include "Framework/Application/SlateApplication.h"
 #include "GenericPlatform/GenericApplication.h"
 #include "Misc/PackageName.h"
+#include "Net/ReplayPlaylistTracker.h"
 
 #if WITH_EDITOR
 #include "Settings/LevelEditorPlaySettings.h"
@@ -38,7 +39,6 @@ UGameInstance::UGameInstance(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 	, TimerManager(new FTimerManager(this))
 	, LatentActionManager(new FLatentActionManager())
-	, SubsystemCollection(this)
 {
 }
 
@@ -96,7 +96,7 @@ void UGameInstance::Init()
 		FNetDelegates::OnReceivedNetworkEncryptionAck.BindUObject(this, &ThisClass::ReceivedNetworkEncryptionAck);
 	}
 
-	SubsystemCollection.Initialize();
+	SubsystemCollection.Initialize(this);
 }
 
 void UGameInstance::OnConsoleInput(const FString& Command)
@@ -317,6 +317,14 @@ FGameInstancePIEResult UGameInstance::StartPlayInEditorGameInstance(ULocalPlayer
 			URLString += FString::Printf(TEXT(":%hu"), ServerPort);
 		}
 
+		if (PlayInSettings->IsNetworkEmulationEnabled())
+		{
+			if (PlayInSettings->NetworkEmulationSettings.IsEmulationEnabledForTarget(NetworkEmulationTarget::Client))
+			{
+				URLString += PlayInSettings->NetworkEmulationSettings.BuildPacketSettingsForURL();
+			}
+		}
+
 		if (EditorEngine->Browse(*WorldContext, FURL(&BaseURL, *URLString, (ETravelType)TRAVEL_Absolute), Error) == EBrowseReturnVal::Pending)
 		{
 			EditorEngine->TransitionType = ETransitionType::WaitingToConnect;
@@ -331,13 +339,26 @@ FGameInstancePIEResult UGameInstance::StartPlayInEditorGameInstance(ULocalPlayer
 		// we're going to be playing in the current world, get it ready for play
 		UWorld* const PlayWorld = GetWorld();
 
+		FString ExtraURLOptions;
+		if (PlayInSettings->IsNetworkEmulationEnabled())
+		{
+			NetworkEmulationTarget CurrentTarget = PlayNetMode == PIE_ListenServer ? NetworkEmulationTarget::Server : NetworkEmulationTarget::Client;
+			if (PlayInSettings->NetworkEmulationSettings.IsEmulationEnabledForTarget(CurrentTarget))
+			{
+				ExtraURLOptions += PlayInSettings->NetworkEmulationSettings.BuildPacketSettingsForURL();
+			}
+		}
+
 		// make a URL
 		FURL URL;
 		// If the user wants to start in spectator mode, do not use the custom play world for now
 		if (EditorEngine->UserEditedPlayWorldURL.Len() > 0 && !Params.bStartInSpectatorMode)
 		{
+			FString UserURL = EditorEngine->UserEditedPlayWorldURL;
+			UserURL += ExtraURLOptions;
+
 			// If the user edited the play world url. Verify that the map name is the same as the currently loaded map.
-			URL = FURL(NULL, *EditorEngine->UserEditedPlayWorldURL, TRAVEL_Absolute);
+			URL = FURL(NULL, *UserURL, TRAVEL_Absolute);
 			if (URL.Map != PIEMapName)
 			{
 				// Ensure the URL map name is the same as the generated play world map name.
@@ -347,7 +368,7 @@ FGameInstancePIEResult UGameInstance::StartPlayInEditorGameInstance(ULocalPlayer
 		else
 		{
 			// The user did not edit the url, just build one from scratch.
-			URL = FURL(NULL, *EditorEngine->BuildPlayWorldURL(*PIEMapName, Params.bStartInSpectatorMode), TRAVEL_Absolute);
+			URL = FURL(NULL, *EditorEngine->BuildPlayWorldURL(*PIEMapName, Params.bStartInSpectatorMode, ExtraURLOptions), TRAVEL_Absolute);
 		}
 
 		// If a start location is specified, spawn a temporary PlayerStartPIE actor at the start location and use it as the portal.
@@ -474,11 +495,22 @@ void UGameInstance::StartGameInstance()
 #if !UE_SERVER
 	// Parse replay name if specified on cmdline
 	FString ReplayCommand;
-	if ( FParse::Value( Tmp, TEXT( "-REPLAY=" ), ReplayCommand ) )
+	if (FParse::Value(Tmp, TEXT("-REPLAY="), ReplayCommand))
 	{
-		if(PlayReplay( ReplayCommand ))
+		if (PlayReplay(ReplayCommand))
 		{
 			return;
+		}
+	}
+	else if (FParse::Value(Tmp, TEXT("-REPLAYPLAYLIST="), ReplayCommand, false))
+	{
+		FReplayPlaylistParams Params;
+		if (ReplayCommand.ParseIntoArray(Params.Playlist, TEXT(",")))
+		{
+			if (PlayReplayPlaylist(Params))
+			{
+				return;
+			}
 		}
 	}
 #endif // !UE_SERVER
@@ -710,7 +742,7 @@ bool UGameInstance::RemoveLocalPlayer(ULocalPlayer* ExistingPlayer)
 	// FIXME: Notify server we want to leave the game if this is an online game
 	if (ExistingPlayer->PlayerController != nullptr)
 	{
-		bool bShouldRemovePlayer = (ExistingPlayer->PlayerController->Role == ROLE_Authority);
+		bool bShouldRemovePlayer = (ExistingPlayer->PlayerController->GetLocalRole() == ROLE_Authority);
 
 		// FIXME: Do this all inside PlayerRemoved?
 		ExistingPlayer->PlayerController->CleanupGameViewport();
@@ -1099,6 +1131,27 @@ bool UGameInstance::PlayReplay(const FString& Name, UWorld* WorldOverride, const
 	}
 
 	return true;
+}
+
+class FGameInstanceReplayPlaylistHelper
+{
+private:
+
+	friend class UGameInstance;
+
+	static const bool StartReplay(const FReplayPlaylistParams& PlaylistParams, UGameInstance* GameInstance)
+	{
+		// Can't use MakeShared directly since the PlaylistTracker constructor is private.
+		// Also, the Playlist Tracker will manage holding onto references to itself.
+		return TSharedRef<FReplayPlaylistTracker>(new FReplayPlaylistTracker(PlaylistParams, GameInstance))->Start();
+	}
+};
+
+bool UGameInstance::PlayReplayPlaylist(const FReplayPlaylistParams& PlaylistParams)
+{
+	LLM_SCOPE(ELLMTag::Networking);
+
+	return FGameInstanceReplayPlaylistHelper::StartReplay(PlaylistParams, this);
 }
 
 void UGameInstance::AddUserToReplay(const FString& UserString)

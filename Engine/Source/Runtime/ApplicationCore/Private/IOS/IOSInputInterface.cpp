@@ -25,9 +25,10 @@ static TAutoConsoleVariable<float> CVarHapticsRest(TEXT("ios.VibrationHapticsRes
 //
 //@end
 
-TArray<TouchInput> FIOSInputInterface::TouchInputStack = TArray<TouchInput>();
-TArray<int32> FIOSInputInterface::KeyInputStack;
-FCriticalSection FIOSInputInterface::CriticalSection;
+// protects the input stack used on 2 threads
+static FCriticalSection CriticalSection;
+static TArray<TouchInput> TouchInputStack;
+static TArray<int32> KeyInputStack;
 
 TSharedRef< FIOSInputInterface > FIOSInputInterface::Create(  const TSharedRef< FGenericApplicationMessageHandler >& InMessageHandler )
 {
@@ -137,7 +138,7 @@ void FIOSInputInterface::HandleConnection(GCController* Controller)
 
 	// find a good controller index to use
 	bool bFoundSlot = false;
-	for (int32 ControllerIndex = 0; ControllerIndex < ARRAY_COUNT(Controllers); ControllerIndex++)
+	for (int32 ControllerIndex = 0; ControllerIndex < UE_ARRAY_COUNT(Controllers); ControllerIndex++)
 	{
 		// is this one already connected for this type of controller?
 		if ((!bIsTreatedAsGamepad && Controllers[ControllerIndex].bIsRemoteConnected == false) ||
@@ -258,11 +259,11 @@ void ModifyVectorByOrientation(FVector& Vec, bool bIsRotation)
 }
 #endif
 
-void FIOSInputInterface::ProcessTouchesAndKeys(uint32 ControllerId)
+void FIOSInputInterface::ProcessTouchesAndKeys(uint32 ControllerId, const TArray<TouchInput>& InTouchInputStack, const TArray<int32>& InKeyInputStack)
 {
-	for(int i = 0; i < TouchInputStack.Num(); ++i)
+	for(int i = 0; i < InTouchInputStack.Num(); ++i)
 	{
-		const TouchInput& Touch = TouchInputStack[i];
+		const TouchInput& Touch = InTouchInputStack[i];
 		
 		// send input to handler
 		if (Touch.Type == TouchBegan)
@@ -287,30 +288,32 @@ void FIOSInputInterface::ProcessTouchesAndKeys(uint32 ControllerId)
 		}
 	}
 	
-	TouchInputStack.Empty(0);
-	
-	
 	// these come in pairs
-	for(int32 KeyIndex = 0; KeyIndex < KeyInputStack.Num(); KeyIndex+=2)
+	for(int32 KeyIndex = 0; KeyIndex < InKeyInputStack.Num(); KeyIndex+=2)
 	{
-		int32 KeyCode = KeyInputStack[KeyIndex];
-		int32 CharCode = KeyInputStack[KeyIndex + 1];
+		int32 KeyCode = InKeyInputStack[KeyIndex];
+		int32 CharCode = InKeyInputStack[KeyIndex + 1];
 		MessageHandler->OnKeyDown(KeyCode, CharCode, false);
 		MessageHandler->OnKeyChar(CharCode,  false);
 		MessageHandler->OnKeyUp  (KeyCode, CharCode, false);
 	}
-	KeyInputStack.Empty(0);
 }
 
 void FIOSInputInterface::SendControllerEvents()
 {
-	FScopeLock Lock(&CriticalSection);
-
+	TArray<TouchInput> LocalTouchInputStack;
+	TArray<int32> LocalKeyInputStack;
+	{
+		FScopeLock Lock(&CriticalSection);
+		Exchange(LocalTouchInputStack, TouchInputStack);
+		Exchange(LocalKeyInputStack, KeyInputStack);
+	}
+	
 	int32 ControllerIndex = -1;
 	
 #if !PLATFORM_TVOS
 	// on ios, touches always go go player 0
-	ProcessTouchesAndKeys(0);
+	ProcessTouchesAndKeys(0, LocalTouchInputStack, LocalKeyInputStack);
 #endif
 
 	
@@ -467,13 +470,11 @@ if ((Controller.Previous##Gamepad != nil && Gamepad.GCAxis.value != Controller.P
 				HANDLE_BUTTON(MicroGamepad, dpad.down,	FGamepadKeyNames::LeftStickDown);
 				HANDLE_BUTTON(MicroGamepad, dpad.right,	FGamepadKeyNames::LeftStickRight);
 				HANDLE_BUTTON(MicroGamepad, dpad.left,	FGamepadKeyNames::LeftStickLeft);
-
-				TouchInputStack.Empty(0);
 			}
 			// otherwise, process touches like ios for the remote's index
 			else
 			{
-				ProcessTouchesAndKeys(Cont.playerIndex);
+				ProcessTouchesAndKeys(Cont.playerIndex, LocalTouchInputStack, LocalKeyInputStack);
 			}
 			
 			HANDLE_BUTTON(MicroGamepad, buttonA,	FGamepadKeyNames::FaceButtonBottom);
@@ -542,7 +543,7 @@ void FIOSInputInterface::QueueTouchInput(const TArray<TouchInput>& InTouchEvents
 {
 	FScopeLock Lock(&CriticalSection);
 
-	FIOSInputInterface::TouchInputStack.Append(InTouchEvents);
+	TouchInputStack.Append(InTouchEvents);
 }
 
 void FIOSInputInterface::QueueKeyInput(int32 Key, int32 Char)
@@ -550,8 +551,8 @@ void FIOSInputInterface::QueueKeyInput(int32 Key, int32 Char)
 	FScopeLock Lock(&CriticalSection);
 
 	// put the key and char into the array
-	FIOSInputInterface::KeyInputStack.Add(Key);
-	FIOSInputInterface::KeyInputStack.Add(Char);
+	KeyInputStack.Add(Key);
+	KeyInputStack.Add(Char);
 }
 
 void FIOSInputInterface::EnableMotionData(bool bEnable)
@@ -685,7 +686,7 @@ void FIOSInputInterface::CalibrateMotion(uint32 PlayerIndex)
 	}
 #endif
 
-	if (PlayerIndex >= 0 && PlayerIndex < ARRAY_COUNT(Controllers))
+	if (PlayerIndex >= 0 && PlayerIndex < UE_ARRAY_COUNT(Controllers))
 	{
 		Controllers[PlayerIndex].bNeedsReferenceAttitude = true;
 	}
@@ -707,7 +708,7 @@ bool FIOSInputInterface::Exec(UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& 
 }
 bool FIOSInputInterface::IsControllerAssignedToGamepad(int32 ControllerId) const
 {
-	return ControllerId < ARRAY_COUNT(Controllers) &&
+	return ControllerId < UE_ARRAY_COUNT(Controllers) &&
 		(Controllers[ControllerId].bIsGamepadConnected ||
 		 Controllers[ControllerId].bIsRemoteConnected);
 }
@@ -715,7 +716,7 @@ bool FIOSInputInterface::IsControllerAssignedToGamepad(int32 ControllerId) const
 bool FIOSInputInterface::IsGamepadAttached() const
 {
 	bool bIsAttached = false;
-	for(int32 i = 0; i < ARRAY_COUNT(Controllers); ++i)
+	for(int32 i = 0; i < UE_ARRAY_COUNT(Controllers); ++i)
 	{
 		bIsAttached |= IsControllerAssignedToGamepad(i);
 	}

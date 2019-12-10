@@ -165,6 +165,9 @@ protected:
 	/** What was the time of the mouse for the previous frame? Used to calculate a per-frame delta. */
 	FFrameTime MouseTimePrev;
 
+	/** The position of the mouse when the last section move occurred */
+	TOptional<float> PrevMousePosY;
+
 	struct FRelativeOffset
 	{
 		FRelativeOffset()
@@ -202,6 +205,9 @@ protected:
 
 	/** Optional snap field to use when dragging */
 	TOptional<FSequencerSnapField> SnapField;
+
+	/** If we expanded a parent track while dragging, track it here so we can re-collapse it if not dropping on it. */
+	TSharedPtr<FSequencerTrackNode> ExpandedParentTrack;
 
 	/** If the user is moving them via clicking on the Section then we'll allow vertical re-arranging, otherwise not. */
 	bool bHotspotWasSection;

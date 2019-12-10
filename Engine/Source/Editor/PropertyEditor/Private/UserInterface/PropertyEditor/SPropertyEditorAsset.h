@@ -46,22 +46,21 @@ public:
 	SLATE_BEGIN_ARGS( SPropertyEditorAsset )
 		: _AssetFont( FEditorStyle::GetFontStyle("PropertyEditor.AssetName.Font") ) 
 		, _ClassFont( FEditorStyle::GetFontStyle("PropertyEditor.AssetClass.Font") ) 
-		, _AllowClear(true)
 		, _DisplayThumbnail(true)
 		, _DisplayUseSelected(true)
 		, _DisplayBrowse(true)
 		, _EnableContentPicker(true)
 		, _DisplayCompactSize(false)
-		, _ThumbnailPool(NULL)
-		, _ThumbnailSize( FIntPoint(64, 64) )
+		, _ThumbnailPool(nullptr)
+		, _ThumbnailSize(FIntPoint(64, 64))
 		, _ObjectPath()
-		, _Class(NULL)
+		, _Class(nullptr)
 		, _CustomContentSlot()
 		, _ResetToDefaultSlot()
 		{}
 		SLATE_ATTRIBUTE( FSlateFontInfo, AssetFont )
 		SLATE_ATTRIBUTE( FSlateFontInfo, ClassFont )
-		SLATE_ARGUMENT( bool, AllowClear )
+		SLATE_ARGUMENT( TOptional<bool>, AllowClear )
 		SLATE_ARGUMENT( bool, DisplayThumbnail )
 		SLATE_ARGUMENT( bool, DisplayUseSelected )
 		SLATE_ARGUMENT( bool, DisplayBrowse )
@@ -77,6 +76,7 @@ public:
 		SLATE_NAMED_SLOT( FArguments, CustomContentSlot )
 		SLATE_NAMED_SLOT( FArguments, ResetToDefaultSlot )
 		SLATE_ARGUMENT( TSharedPtr<IPropertyHandle>, PropertyHandle )
+		SLATE_ARGUMENT( TArray<FAssetData>, OwnerAssetDataArray)
 
 	SLATE_END_ARGS()
 
@@ -304,6 +304,12 @@ private:
 	/** @return true if the passed in AssetData can be used to set the property based on the list of custom classes */
 	bool CanSetBasedOnCustomClasses( const FAssetData& InAssetData ) const;
 
+	/** @return true if the passed in AssetData can be used to set the property based on the game specific asset reference filter */
+	bool CanSetBasedOnAssetReferenceFilter( const FAssetData& InAssetData, FText* OutOptionalFailureReason = nullptr ) const;
+
+	/** @return Returns the property handle most relevant */
+	TSharedPtr<class IPropertyHandle> GetMostSpecificPropertyHandle() const;
+
 	/**
 	 * Gets the class of the supplied property for use within the PropertyEditorAsset widget. Asserts if the property
 	 * is not supported by the widget.
@@ -312,6 +318,15 @@ private:
 	 * @return	The class of the property. Asserts if this tries to return null.
 	 */
 	static UClass* GetObjectPropertyClass(const UProperty* Property);
+
+	/**
+	 * Initialize the AllowedClasses and DisallowedClasses arrays based on the property metadata.
+	 */
+	void InitializeClassFilters(const UProperty* Property);
+
+	/** Check if the given class is allowed by the AllowedClasses and DisallowedClasses as defined in the property metadata. */
+	bool IsClassAllowed(const UClass* InClass) const;
+
 private:
 
 	/** Main combobutton */
@@ -347,6 +362,9 @@ private:
 	/** Whether the object we are editing is an Actor (i.e. requires a Scene Outliner to be displayed) */
 	bool bIsActor;
 
+	/** Whether the classes in the AllowedClassFilters list are exact or whether valid classes can be derived. */
+	bool bExactClass;
+
 	/** Delegate to call when our object value is set */
 	FOnSetObject OnSetObject;
 
@@ -358,4 +376,10 @@ private:
 
 	/** The property handle, if any */
 	TSharedPtr<class IPropertyHandle> PropertyHandle;
+
+	/*
+	 * The reference object on which the picker will assign the picked asset, if any.
+	 * The system will test first the PropertyHandle follow by the PropertyEditor and if nothing this array of assets
+	 */
+	TArray<FAssetData> OwnerAssetDataArray;
 };

@@ -24,7 +24,7 @@ class FStaticPrimitiveDrawInterface;
 class UPrimitiveComponent;
 class URuntimeVirtualTexture;
 class UTexture2D;
-enum class ERuntimeVirtualTextureMaterialType;
+enum class ERuntimeVirtualTextureMaterialType : uint8;
 struct FMeshBatch;
 class FColorVertexBuffer;
 
@@ -123,7 +123,7 @@ extern bool CacheShadowDepthsFromPrimitivesUsingWPO();
  * Encapsulates the data which is mirrored to render a UPrimitiveComponent parallel to the game thread.
  * This is intended to be subclassed to support different primitive types.  
  */
-class FPrimitiveSceneProxy
+class ENGINE_VTABLE FPrimitiveSceneProxy
 {
 public:
 
@@ -311,6 +311,13 @@ public:
 	virtual void CreateRenderThreadResources() {}
 
 	/**
+	 *	Called when the rendering thread removes the proxy from the scene.
+	 *	This function allows for removing renderer-side resources.
+	 *	Called in the rendering thread.
+	 */
+	virtual void DestroyRenderThreadResources() {}
+
+	/**
 	 * Called by the rendering thread to notify the proxy when a light is no longer
 	 * associated with the proxy, so that it can clean up any cached resources.
 	 * @param Light - The light to be removed.
@@ -492,6 +499,7 @@ public:
 	inline bool IsVisibleInReflectionCaptures() const { return bVisibleInReflectionCaptures; }
 	inline bool IsVisibleInRayTracing() const { return bVisibleInRayTracing; }
 	inline bool ShouldRenderInMainPass() const { return bRenderInMainPass; }
+	inline bool ShouldRenderInDepthPass() const { return bRenderInMainPass || bRenderInDepthPass; }
 	inline bool IsCollisionEnabled() const { return bCollisionEnabled; }
 	inline bool IsHovered() const { return bHovered; }
 	inline bool IsOwnedBy(const AActor* Actor) const { return Owners.Find(Actor) != INDEX_NONE; }
@@ -501,6 +509,7 @@ public:
 	inline bool CastsStaticShadow() const { return bCastStaticShadow; }
 	inline bool CastsDynamicShadow() const { return bCastDynamicShadow; }
 	inline bool WritesVirtualTexture() const{ return RuntimeVirtualTextures.Num() > 0; }
+	inline bool WritesVirtualTexture(URuntimeVirtualTexture* VirtualTexture) const { return RuntimeVirtualTextures.Find(VirtualTexture) != INDEX_NONE; }
 	inline bool AffectsDynamicIndirectLighting() const { return bAffectDynamicIndirectLighting; }
 	inline bool AffectsDistanceFieldLighting() const { return bAffectDistanceFieldLighting; }
 	inline float GetLpvBiasMultiplier() const { return LpvBiasMultiplier; }
@@ -820,6 +829,9 @@ private:
 	/** If true, this component will be visible in ray tracing effects. Turning this off will remove it from ray traced reflections, shadows, etc. */
 	uint8 bVisibleInRayTracing : 1;
 
+	/** If true this primitive Renders in the depthPass */
+	uint8 bRenderInDepthPass : 1;
+
 	/** If true this primitive Renders in the mainPass */
 	uint8 bRenderInMainPass : 1;
 
@@ -923,7 +935,7 @@ protected:
 	 * Whether this proxy ever draws with vertex factories that require a primitive uniform buffer. 
 	 * When false, updating the primitive uniform buffer can be skipped since vertex factories always use GPUScene instead.
 	 */
-	uint32 bVFRequiresPrimitiveUniformBuffer : 1;
+	uint8 bVFRequiresPrimitiveUniformBuffer : 1;
 
 	/** Whether the primitive should always be considered to have velocities, even if it hasn't moved. */
 	uint8 bAlwaysHasVelocity : 1;
@@ -978,6 +990,13 @@ protected:
 	/** Quality of interpolated indirect lighting for Movable components. */
 	TEnumAsByte<EIndirectLightingCacheQuality> IndirectLightingCacheQuality;
 
+	/** Geometry Lod bias when rendering to runtime virtual texture. */
+	int8 VirtualTextureLodBias;
+	/** Number of low mips to skip when rendering to runtime virtual texture. */
+	int8 VirtualTextureCullMips;
+	/** Log2 of minimum estimated pixel coverage before culling from runtime virtual texture. */
+	int8 VirtualTextureMinCoverage;
+
 	/** The bias applied to LPV injection */
 	float LpvBiasMultiplier;
 
@@ -989,14 +1008,7 @@ protected:
 	/** Array of runtime virtual textures that this proxy should render to. */
 	TArray<URuntimeVirtualTexture*> RuntimeVirtualTextures;
 	/** Set of unique runtime virtual texture material types referenced by RuntimeVirtualTextures. */
-	TSet<ERuntimeVirtualTextureMaterialType> RuntimeVirtualTextureMaterialTypes;
-
-	/** Geometry Lod bias when rendering to runtime virtual texture. */
-	int8 VirtualTextureLodBias;
-	/** Number of low mips to skip when rendering to runtime virtual texture. */
-	int8 VirtualTextureCullMips;
-	/** Log2 of minimum estimated pixel coverage before culling from runtime virtual texture. */
-	int8 VirtualTextureMinCoverage;
+	TArray<ERuntimeVirtualTextureMaterialType> RuntimeVirtualTextureMaterialTypes;
 
 private:
 	/** The hierarchy of owners of this primitive.  These must not be dereferenced on the rendering thread, but the pointer values can be used for identification.  */
@@ -1041,6 +1053,8 @@ private:
 
 	/** Whether this should only draw in any editing mode*/
 	uint32 DrawInAnyEditMode : 1;
+
+	uint32 bIsFoliage : 1;
 #endif
 
 	/** Used for precomputed visibility */

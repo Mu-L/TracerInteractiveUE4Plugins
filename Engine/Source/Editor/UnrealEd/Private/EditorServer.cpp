@@ -100,7 +100,7 @@
 #include "Engine/LevelStreaming.h"
 #include "LevelUtils.h"
 #include "LevelEditorViewport.h"
-#include "Layers/ILayers.h"
+#include "Layers/LayersSubsystem.h"
 #include "ScopedTransaction.h"
 #include "SurfaceIterators.h"
 #include "LightMap.h"
@@ -1690,7 +1690,7 @@ void UEditorEngine::RebuildMap(UWorld* InWorld, EMapRebuildType RebuildType)
 	RedrawLevelEditingViewports();
 
 	// Building the map can cause actors be created, so trigger a notification for that
-	FEditorDelegates::MapChange.Broadcast(MapChangeEventFlags::MapRebuild );
+	FEditorDelegates::MapChange.Broadcast(MapChangeEventFlags::MapRebuild);
 	GEngine->BroadcastLevelActorListChanged();
 	
 	GWarn->EndSlowTask();
@@ -2262,7 +2262,7 @@ UWorld* UEditorEngine::NewMap()
 	// Starting a new map will wipe existing actors and add some defaults actors to the scene, so we need
 	// to notify other systems about this
 	GEngine->BroadcastLevelActorListChanged();
-	FEditorDelegates::MapChange.Broadcast(MapChangeEventFlags::NewMap );
+	FEditorDelegates::MapChange.Broadcast(MapChangeEventFlags::NewMap);
 
 	FMessageLog("LoadErrors").NewPage(LOCTEXT("NewMapLogPage", "New Map"));
 	FEditorDelegates::DisplayLoadErrors.Broadcast();
@@ -2501,7 +2501,7 @@ bool UEditorEngine::Map_Load(const TCHAR* Str, FOutputDevice& Ar)
 				const int32 MAX_STREAMLVL_SIZE = 16384;  // max cmd line size (16kb)
 				TCHAR StreamLvlBuf[MAX_STREAMLVL_SIZE]; //There can be a lot of streaming levels with very large path names
 
-				if(FParse::Value(Str, TEXT("STREAMLVL="), StreamLvlBuf, ARRAY_COUNT(StreamLvlBuf)))
+				if(FParse::Value(Str, TEXT("STREAMLVL="), StreamLvlBuf, UE_ARRAY_COUNT(StreamLvlBuf)))
 				{
 					TCHAR *ContextStr = NULL;
 					
@@ -2533,6 +2533,7 @@ bool UEditorEngine::Map_Load(const TCHAR* Str, FOutputDevice& Ar)
 					const FName WorldPackageFName = WorldPackage->GetFName();
 					UWorld::WorldTypePreLoadMap.FindOrAdd(WorldPackageFName) = EWorldType::Editor;
 					WorldPackage = LoadPackage( WorldPackage, *LongTempFname, LoadFlags );
+					WorldPackage->SetPackageFlags(PKG_NewlyCreated);
 					UWorld::WorldTypePreLoadMap.Remove(WorldPackageFName);
 				}
 				else
@@ -2597,6 +2598,9 @@ bool UEditorEngine::Map_Load(const TCHAR* Str, FOutputDevice& Ar)
 					// Inactive worlds are already initialized but lack these two objects for memory reasons.
 					World->ClearWorldComponents();
 
+					// If the world was inactive subsystems would not have been initialized.  When we transition to the editor world initialize them
+					World->InitializeSubsystems();
+
 					if (World->FeatureLevel == FeatureLevelIndex)
 					{
 						if (World->GetPhysicsScene() == nullptr)
@@ -2659,7 +2663,7 @@ bool UEditorEngine::Map_Load(const TCHAR* Str, FOutputDevice& Ar)
 
 					// A new level was loaded into the editor, so we need to let other systems know about the new
 					// actors in the scene
-					FEditorDelegates::MapChange.Broadcast(MapChangeEventFlags::NewMap );
+					FEditorDelegates::MapChange.Broadcast(MapChangeEventFlags::NewMap);
 					GEngine->BroadcastLevelActorListChanged();
 
 					NoteSelectionChange();
@@ -2707,8 +2711,8 @@ bool UEditorEngine::Map_Load(const TCHAR* Str, FOutputDevice& Ar)
 					ULightComponent::ReassignStationaryLightChannels(Context.World(), false, NULL);
 
 					// Process Layers
-					if (Layers.IsValid())
 					{
+						ULayersSubsystem* LayersSubsystem = GEditor->GetEditorSubsystem<ULayersSubsystem>();
 						for( auto LayerIter = Context.World()->Layers.CreateIterator(); LayerIter; ++LayerIter )
 						{
 							// Clear away any previously cached actor stats
@@ -2721,7 +2725,7 @@ bool UEditorEngine::Map_Load(const TCHAR* Str, FOutputDevice& Ar)
 						{
 							TWeakObjectPtr< AActor > Actor = *It;
 
-							if( !Layers->IsActorValidForLayer( Actor ) )
+							if( !LayersSubsystem->IsActorValidForLayer( Actor.Get() ) )
 							{
 								continue;
 							}
@@ -2729,10 +2733,9 @@ bool UEditorEngine::Map_Load(const TCHAR* Str, FOutputDevice& Ar)
 							for( auto NameIt = Actor->Layers.CreateConstIterator(); NameIt; ++NameIt )
 							{
 								auto Name = *NameIt;
-								TWeakObjectPtr< ULayer > Layer;
-								if( !Layers->TryGetLayer( Name, Layer ) )
+								if( !LayersSubsystem->IsLayer( Name ) )
 								{
-									Layers->CreateLayer( Name );
+									LayersSubsystem->CreateLayer( Name );
 
 									// The layers created here need to be hidden.
 									LayersToHide.AddUnique( Name );
@@ -2741,11 +2744,11 @@ bool UEditorEngine::Map_Load(const TCHAR* Str, FOutputDevice& Ar)
 								Actor->Layers.AddUnique( Name );
 							}
 
-							Layers->InitializeNewActorLayers( Actor );
+							LayersSubsystem->InitializeNewActorLayers( Actor.Get() );
 						}
 
 						const bool bIsVisible = false;
-						Layers->SetLayersVisibility( LayersToHide, bIsVisible );
+						LayersSubsystem->SetLayersVisibility( LayersToHide, bIsVisible );
 					}
 
 					InitializingFeedback.EnterProgressFrame();
@@ -4056,7 +4059,7 @@ bool UEditorEngine::Map_Scale( UWorld* InWorld, const TCHAR* Str, FOutputDevice&
 			}
 			else if( Actor->GetRootComponent() != NULL )
 			{
-				Actor->GetRootComponent()->SetRelativeScale3D( Actor->GetRootComponent()->RelativeScale3D * Factor );
+				Actor->GetRootComponent()->SetRelativeScale3D(Actor->GetRootComponent()->GetRelativeScale3D() * Factor);
 			}
 
 			if( bScaleLocations )
@@ -4993,13 +4996,7 @@ bool UEditorEngine::SnapObjectTo( FActorOrComponent Object, const bool InAlign, 
 			RebuildAlteredBSP();
 		}
 
-		TArray<FEdMode*> ActiveModes; 
-		GCurrentLevelEditingViewportClient->GetModeTools()->GetActiveModes(ActiveModes);
-		for( int32 ModeIndex = 0; ModeIndex < ActiveModes.Num(); ++ModeIndex )
-		{
-			// Notify active modes
-			ActiveModes[ModeIndex]->ActorMoveNotify();
-		}
+		GCurrentLevelEditingViewportClient->GetModeTools()->ActorMoveNotify();
 
 		return true;
 	}
@@ -5108,33 +5105,43 @@ bool UEditorEngine::Exec_Camera( const TCHAR* Str, FOutputDevice& Ar )
 		}
 		else 
 		{
-			TArray<AActor*> Actors;
-			for ( FSelectionIterator It( GetSelectedActorIterator() ) ; It ; ++It )
-			{
-				AActor* Actor = static_cast<AActor*>( *It );
-				checkSlow( Actor->IsA(AActor::StaticClass()) );
-				Actors.Add( Actor );
-			}
+			FBox ComponentVisBoundingBox;
+			bool bComponentVisHasFocusOnSelectionBoundingBox = GUnrealEd && GUnrealEd->ComponentVisManager.HasFocusOnSelectionBoundingBox(ComponentVisBoundingBox);
 
-			TArray<UPrimitiveComponent*> SelectedComponents;
-			for( FSelectionIterator It( GetSelectedComponentIterator() ); It; ++It )
+			if (bComponentVisHasFocusOnSelectionBoundingBox)
 			{
-				UPrimitiveComponent* PrimitiveComp = Cast<UPrimitiveComponent>( *It );
-				if( PrimitiveComp )
-				{
-					SelectedComponents.Add( PrimitiveComp );
-				}
-			}
-
-			if( Actors.Num() || SelectedComponents.Num() )
-			{
-				MoveViewportCamerasToActor( Actors, SelectedComponents, bActiveViewportOnly );
-				return true;
+				MoveViewportCamerasToBox(ComponentVisBoundingBox, bActiveViewportOnly);
 			}
 			else
 			{
-				Ar.Log( TEXT("Can't find target actor or component.") );
-				return false;
+				TArray<AActor*> Actors;
+				for (FSelectionIterator It(GetSelectedActorIterator()); It; ++It)
+				{
+					AActor* Actor = static_cast<AActor*>(*It);
+					checkSlow(Actor->IsA(AActor::StaticClass()));
+					Actors.Add(Actor);
+				}
+
+				TArray<UPrimitiveComponent*> SelectedComponents;
+				for (FSelectionIterator It(GetSelectedComponentIterator()); It; ++It)
+				{
+					UPrimitiveComponent* PrimitiveComp = Cast<UPrimitiveComponent>(*It);
+					if (PrimitiveComp)
+					{
+						SelectedComponents.Add(PrimitiveComp);
+					}
+				}
+
+				if (Actors.Num() || SelectedComponents.Num())
+				{
+					MoveViewportCamerasToActor(Actors, SelectedComponents, bActiveViewportOnly);
+					return true;
+				}
+				else
+				{
+					Ar.Log(TEXT("Can't find target actor or component."));
+					return false;
+				}
 			}
 		}
 	}
@@ -5201,6 +5208,9 @@ bool UEditorEngine::Exec_Particle(const TCHAR* Str, FOutputDevice& Ar)
 {
 	bool bHandled = false;
 	UE_LOG(LogEditorServer, Log, TEXT("Exec Particle!"));
+	
+	// Store off the input string here, as it is adjusted by subsequent parsing commands...
+	const TCHAR* InputStr = Str;
 	if (FParse::Command(&Str,TEXT("RESET")))
 	{
 		TArray<AEmitter*> EmittersToReset;
@@ -5228,6 +5238,12 @@ bool UEditorEngine::Exec_Particle(const TCHAR* Str, FOutputDevice& Ar)
 				Emitter->ResetInLevel();
 			}
 		}
+	}
+
+	// Invoke any downstream handlers (like the Niagara editor plugin)
+	if (ExecParticleInvokedEvent.IsBound())
+	{
+		ExecParticleInvokedEvent.Broadcast(InputStr);
 	}
 	return bHandled;
 }
@@ -5443,6 +5459,7 @@ void ListMapPackageDependencies(const TCHAR* InStr)
 	{
 		FName CheckTexture2DName(TEXT("Texture2D"));
 		FName CheckCubeTextureName(TEXT("TextureCube"));
+		FName CheckTexture2DArrayName(TEXT("Texture2DArray"));
 		FName CheckLightmap2DName(TEXT("Lightmap2D"));
 		FName CheckShadowmap2DName(TEXT("Shadowmap2D"));
 		
@@ -5791,6 +5808,10 @@ bool UEditorEngine::Exec( UWorld* InWorld, const TCHAR* Stream, FOutputDevice& A
 	else if( FParse::Command(&Str,TEXT("JUMPTO")) )
 	{
 		return HandleJumpToCommand( Str, Ar );
+	}
+	else if (FParse::Command(&Str, TEXT("BugIt")))
+	{
+		return HandleBugItCommand(Str, Ar);
 	}
 	else if( FParse::Command(&Str,TEXT("BugItGo")) )
 	{
@@ -6266,6 +6287,25 @@ bool UEditorEngine::HandleJumpToCommand( const TCHAR* Str, FOutputDevice& Ar )
 	return true;
 }
 
+
+bool UEditorEngine::HandleBugItCommand(const TCHAR* Str, FOutputDevice& Ar)
+{
+	if(GCurrentLevelEditingViewportClient && !PlayWorld)
+	{
+		FVector ViewLocation = GCurrentLevelEditingViewportClient->GetViewLocation();
+		FRotator ViewRotation = GCurrentLevelEditingViewportClient->GetViewRotation();
+
+		FString GoString = FString::Printf(TEXT("BugItGo %f %f %f %f %f %f"), ViewLocation.X, ViewLocation.Y, ViewLocation.Z, ViewRotation.Pitch, ViewRotation.Yaw, ViewRotation.Roll);
+		UE_LOG(LogEditorServer, Log, TEXT("%s"), *GoString);
+
+		FPlatformApplicationMisc::ClipboardCopy(*GoString);
+
+		return true;
+	}
+
+	return false;
+}
+
 bool UEditorEngine::HandleBugItGoCommand( const TCHAR* Str, FOutputDevice& Ar )
 {
 	if (PlayWorld)
@@ -6300,6 +6340,8 @@ bool UEditorEngine::HandleBugItGoCommand( const TCHAR* Str, FOutputDevice& Ar )
 	Stream = GetFROTATORSpaceDelimited( Stream, Rot, 1.0f );
 	if( Stream != NULL )
 	{
+		// Zero out roll as the editor camera should not roll 
+		Rot.Roll = 0;
 		for(FLevelEditorViewportClient* ViewportClient : GetLevelViewportClients())
 		{
 			ViewportClient->SetViewRotation( Rot );

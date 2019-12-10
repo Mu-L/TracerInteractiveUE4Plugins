@@ -36,10 +36,7 @@ IMPLEMENT_GLOBAL_SHADER(FGenerateMipsCS, "/Engine/Private/ComputeGenerateMips.us
 
 //Initialise the texture for usage with RenderGraph and ComputeGenerateMips shader
 FGenerateMipsStruct* FGenerateMips::SetupTexture(FRHITexture* InTexture,
-	ESamplerFilter InFilter,
-	ESamplerAddressMode InAddressU,
-	ESamplerAddressMode InAddressV,
-	ESamplerAddressMode InAddressW)
+	const FGenerateMipsParams& InParams)
 {
 	//Currently only 2D textures supported
 	check(InTexture->GetTexture2D());
@@ -65,11 +62,14 @@ FGenerateMipsStruct* FGenerateMips::SetupTexture(FRHITexture* InTexture,
 		RenderTexture.TargetableTexture = InTexture;
 		RenderTexture.ShaderResourceTexture = InTexture;
 
-		RenderTexture.MipSRVs.SetNum(Desc.NumMips);
+		RenderTexture.SRVs.Reserve(Desc.NumMips);
 		RenderTexture.MipUAVs.Reserve(Desc.NumMips);
 		for (uint8 MipLevel = 0; MipLevel < Desc.NumMips; MipLevel++)
 		{
-			RenderTexture.MipSRVs[MipLevel] = RHICreateShaderResourceView((FTexture2DRHIRef&)InTexture, MipLevel);
+			FRHITextureSRVCreateInfo SRVDesc;
+			SRVDesc.MipLevel = MipLevel;
+			RenderTexture.SRVs.Add(SRVDesc, RHICreateShaderResourceView((FTexture2DRHIRef&)InTexture, SRVDesc));
+
 			RenderTexture.MipUAVs.Add(RHICreateUnorderedAccessView(InTexture, MipLevel));
 		}
 		RHIBindDebugLabelName(RenderTexture.TargetableTexture, Desc.DebugName);
@@ -79,10 +79,10 @@ FGenerateMipsStruct* FGenerateMips::SetupTexture(FRHITexture* InTexture,
 		GRenderTargetPool.CreateUntrackedElement(Desc, InTexture->GenMipsStruct->RenderTarget, RenderTexture);
 
 		//Specify the Sampler details based on the input.
-		InTexture->GenMipsStruct->Sampler.Filter = InFilter;
-		InTexture->GenMipsStruct->Sampler.AddressU = InAddressU;
-		InTexture->GenMipsStruct->Sampler.AddressV = InAddressV;
-		InTexture->GenMipsStruct->Sampler.AddressW = InAddressW;
+		InTexture->GenMipsStruct->Sampler.Filter = InParams.Filter;
+		InTexture->GenMipsStruct->Sampler.AddressU = InParams.AddressU;
+		InTexture->GenMipsStruct->Sampler.AddressV = InParams.AddressV;
+		InTexture->GenMipsStruct->Sampler.AddressW = InParams.AddressW;
 	}
 
 	//Return the raw pointer
@@ -112,7 +112,7 @@ void FGenerateMips::Compute(FRHICommandListImmediate& RHIImmCmdList, FRHITexture
 		int DestTextureSizeY = InTexture->GetSizeXYZ().Y >> MipLevel;
 
 		//Create the RDG viewable SRV, of a complete Mip, to read from
-		FRDGTextureSRVDesc SRVDesc(GraphTexture, MipLevel - 1);
+		FRDGTextureSRVDesc SRVDesc = FRDGTextureSRVDesc::CreateForMipLevel(GraphTexture, MipLevel - 1);
 		//Create the RDG writeable UAV for the next mip level to be written to.
 		FRDGTextureUAVDesc UAVDesc(GraphTexture, MipLevel);
 
@@ -146,10 +146,7 @@ void FGenerateMips::Compute(FRHICommandListImmediate& RHIImmCmdList, FRHITexture
 
 //Public execute function for calling the generate mips compute shader. Handles everything per platform.
 void FGenerateMips::Execute(FRHICommandListImmediate& RHICmdList, FRHITexture* InTexture,
-	ESamplerFilter InFilter,
-	ESamplerAddressMode InAddressU,
-	ESamplerAddressMode InAddressV,
-	ESamplerAddressMode InAddressW)
+	const FGenerateMipsParams& InParams)
 {
 	//Only executes if mips are required.
 	if (InTexture->GetNumMips() > 1)
@@ -160,7 +157,7 @@ void FGenerateMips::Execute(FRHICommandListImmediate& RHICmdList, FRHITexture* I
 			//Generate the RenderGraph texture if required.
 			if (!InTexture->GenMipsStruct)
 			{
-				SetupTexture(InTexture, InFilter, InAddressU, InAddressV, InAddressW);
+				SetupTexture(InTexture, InParams);
 			}
 			Compute(RHICmdList, InTexture);
 		}
@@ -168,5 +165,53 @@ void FGenerateMips::Execute(FRHICommandListImmediate& RHICmdList, FRHITexture* I
 		{
 			RHICmdList.GenerateMips(InTexture);
 		}
+	}
+}
+
+void FGenerateMips::Execute(FRDGBuilder* GraphBuilder, FRDGTextureRef InGraphTexture, FRHISamplerState* InSampler)
+{
+	check(IsInRenderingThread());
+	check(GraphBuilder);
+	check(InGraphTexture);
+	check(InSampler);
+
+	TShaderMapRef<FGenerateMipsCS> ComputeShader(GetGlobalShaderMap(ERHIFeatureLevel::SM5));
+	
+	//Loop through each level of the mips that require creation and add a dispatch pass per level,.
+	for (uint8 MipLevel = 1; MipLevel < InGraphTexture->Desc.NumMips; MipLevel++)
+	{
+		int DestTextureSizeX = InGraphTexture->Desc.Extent.X >> MipLevel;
+		int DestTextureSizeY = InGraphTexture->Desc.Extent.Y >> MipLevel;
+
+		//Create the RDG viewable SRV, of a complete Mip, to read from
+		FRDGTextureSRVDesc SRVDesc = FRDGTextureSRVDesc::CreateForMipLevel(InGraphTexture, MipLevel - 1);
+		//Create the RDG writeable UAV for the next mip level to be written to.
+		FRDGTextureUAVDesc UAVDesc(InGraphTexture, MipLevel);
+
+		FGenerateMipsCS::FParameters* PassParameters = GraphBuilder->AllocParameters<FGenerateMipsCS::FParameters>();
+		//Texel size is 1/the total length of a side.
+		PassParameters->TexelSize = FVector2D(1.0f / DestTextureSizeX, 1.0f / DestTextureSizeY);
+		PassParameters->MipInSRV = GraphBuilder->CreateSRV(SRVDesc);
+		PassParameters->MipOutUAV = GraphBuilder->CreateUAV(UAVDesc);
+		PassParameters->MipSampler = InSampler;
+
+		//Dispatch count is the destination's mip texture dimensions, so only the number required is executed.
+		FIntVector GenMipsGroupCount(
+			FMath::Max((DestTextureSizeX + MIPSSHADER_NUMTHREADS -1)/ MIPSSHADER_NUMTHREADS, 1),
+			FMath::Max((DestTextureSizeY + MIPSSHADER_NUMTHREADS -1)/ MIPSSHADER_NUMTHREADS, 1),
+			1);
+		
+		//Pass added per mip level to be written.
+		ClearUnusedGraphResources(*ComputeShader, PassParameters);
+
+		GraphBuilder->AddPass(
+			RDG_EVENT_NAME("Generate2DTextureMips DestMipLevel=%d", MipLevel),
+			PassParameters,
+			ERDGPassFlags::Compute | ERDGPassFlags::GenerateMips,
+			[PassParameters, ComputeShader, GenMipsGroupCount](FRHICommandList& RHICmdList)
+		{
+			FComputeShaderUtils::Dispatch(RHICmdList, *ComputeShader, *PassParameters, GenMipsGroupCount);
+		});
+
 	}
 }

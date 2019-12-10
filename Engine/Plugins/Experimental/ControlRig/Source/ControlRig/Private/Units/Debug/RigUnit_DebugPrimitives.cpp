@@ -3,8 +3,9 @@
 #include "Units/Debug/RigUnit_DebugPrimitives.h"
 #include "Units/RigUnitContext.h"
 
-void FRigUnit_DebugRectangle::Execute(const FRigUnitContext& Context)
+FRigUnit_DebugRectangle_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	if (Context.State == EControlRigState::Init)
 	{
 		return;
@@ -16,16 +17,17 @@ void FRigUnit_DebugRectangle::Execute(const FRigUnitContext& Context)
 	}
 
 	FTransform DrawTransform = Transform;
-	if (Space != NAME_None && Context.HierarchyReference.Get() != nullptr)
+	if (Space != NAME_None && Context.GetBones() != nullptr)
 	{
-		DrawTransform = Context.HierarchyReference.Get()->GetGlobalTransform(Space) * DrawTransform;
+		DrawTransform = DrawTransform * Context.GetBones()->GetGlobalTransform(Space);
 	}
 
 	Context.DrawInterface->DrawRectangle(WorldOffset, DrawTransform, Scale, Color, Thickness);
 }
 
-void FRigUnit_DebugArc::Execute(const FRigUnitContext& Context)
+FRigUnit_DebugArc_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	if (Context.State == EControlRigState::Init)
 	{
 		return;
@@ -37,9 +39,9 @@ void FRigUnit_DebugArc::Execute(const FRigUnitContext& Context)
 	}
 
 	FTransform DrawTransform = Transform;
-	if (Space != NAME_None && Context.HierarchyReference.Get() != nullptr)
+	if (Space != NAME_None && Context.GetBones() != nullptr)
 	{
-		DrawTransform = Context.HierarchyReference.Get()->GetGlobalTransform(Space) * DrawTransform;
+		DrawTransform = DrawTransform * Context.GetBones()->GetGlobalTransform(Space);
 	}
 
 	Context.DrawInterface->DrawArc(WorldOffset, DrawTransform, Radius, FMath::DegreesToRadians(MinimumDegrees), FMath::DegreesToRadians(MaximumDegrees), Color, Thickness, Detail);

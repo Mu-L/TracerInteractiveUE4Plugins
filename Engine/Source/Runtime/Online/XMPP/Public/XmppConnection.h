@@ -55,6 +55,7 @@ public:
 		, PingTimeout(30.0f)
 		, MaxPingRetries(1)
 		, bPrivateChatFriendsOnly(false)
+		, bResetPingTimeoutOnReceiveStanza(true)
 	{}
 
 	/** ip/host to connect to */
@@ -83,6 +84,8 @@ public:
 	int32 MaxPingRetries;
 	/** limit private chat to friends only */
 	bool bPrivateChatFriendsOnly;
+	/** reset ping timeout on received stanzas */
+	bool bResetPingTimeoutOnReceiveStanza;
 };
 
 /**
@@ -285,6 +288,9 @@ public:
 	* @param LoginState new login state (see EXmppLoginStatus)
 	*/
 	DECLARE_MULTICAST_DELEGATE_TwoParams(FOnXmppLoginChanged, const FXmppUserJid& /*UserJid*/, EXmppLoginStatus::Type /*LoginState*/);
+
+	/** Alias for old typo, remove in 4.24 */
+	using FOnXmppLogingChanged UE_DEPRECATED(4.23, "Please update usages of 'FOnXmppLogingChanged' to 'FOnXmppLoginChanged'") = FOnXmppLoginChanged;
 
 	/** @return login complete delegate */
 	virtual FOnXmppLoginComplete& OnLoginComplete() = 0;

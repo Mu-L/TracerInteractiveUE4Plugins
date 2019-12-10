@@ -7,10 +7,8 @@ Level.cpp: Level-related functions
 #include "Engine/Level.h"
 #include "Misc/ScopedSlowTask.h"
 #include "UObject/RenderingObjectVersion.h"
-#include "Templates/ScopedPointer.h"
 #include "Templates/UnrealTemplate.h"
 #include "UObject/Package.h"
-#include "Serialization/AsyncLoading.h"
 #include "EngineStats.h"
 #include "Engine/Blueprint.h"
 #include "GameFramework/Actor.h"
@@ -47,6 +45,7 @@ Level.cpp: Level-related functions
 #include "PhysicsEngine/BodySetup.h"
 #include "EngineGlobals.h"
 #include "Engine/LevelBounds.h"
+#include "UnrealEngine.h"
 #if WITH_EDITOR
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Kismet2/BlueprintEditorUtils.h"
@@ -455,7 +454,7 @@ bool ULevel::IsNetActor(const AActor* Actor)
 
 	// If this is a server, use RemoteRole.
 	// If this is a client, use Role.
-	const ENetRole NetRole = (!Actor->IsNetMode(NM_Client)) ? Actor->GetRemoteRole() : (ENetRole)Actor->Role;
+	const ENetRole NetRole = (!Actor->IsNetMode(NM_Client)) ? Actor->GetRemoteRole() : (ENetRole)Actor->GetLocalRole();
 
 	// This test will return true on clients for actors with ROLE_Authority, which might be counterintuitive,
 	// but clients will need to consider these actors in some cases, such as if their bTearOff flag is true.
@@ -596,7 +595,7 @@ void ULevel::PostLoad()
 	}
 
 	// Fixup deprecated stuff in levels simplification settings
-	for (int32 Index = 0; Index < ARRAY_COUNT(LevelSimplification); ++Index)
+	for (int32 Index = 0; Index < UE_ARRAY_COUNT(LevelSimplification); ++Index)
 	{
 		LevelSimplification[Index].PostLoadDeprecated();
 	}
@@ -764,78 +763,6 @@ void ULevel::UpdateLevelComponents(bool bRerunConstructionScripts)
 	IncrementalUpdateComponents( 0, bRerunConstructionScripts );
 }
 
-namespace FLevelSortUtils
-{
-	void AddToListSafe(AActor* TestActor, TArray<AActor*>& List)
-	{
-		if (TestActor)
-		{
-			const bool bAlreadyAdded = List.Contains(TestActor);
-			if (bAlreadyAdded)
-			{
-				FString ListItemDesc;
-				for (int32 Idx = 0; Idx < List.Num(); Idx++)
-				{
-					if (Idx > 0)
-					{
-						ListItemDesc += TEXT(", ");
-					}
-
-					ListItemDesc += GetNameSafe(List[Idx]);
-				}
-
-				UE_LOG(LogLevel, Warning, TEXT("Found a cycle in actor's parent chain: %s"), *ListItemDesc);
-			}
-			else
-			{
-				List.Add(TestActor);
-			}
-		}
-	}
-
-	// Finds list of parents from an entry in ParentMap, returns them in provided array and removes from map
-	// Logs an error when cycle is found
-	void FindAndRemoveParentChain(TMap<AActor*, AActor*>& ParentMap, TArray<AActor*>& ParentChain)
-	{
-		check(ParentMap.Num());
-		
-		// seed from first entry
-		TMap<AActor*, AActor*>::TIterator It(ParentMap);
-		ParentChain.Add(It.Key());
-		ParentChain.Add(It.Value());
-		It.RemoveCurrent();
-
-		// fill chain's parent nodes
-		bool bLoop = true;
-		while (bLoop)
-		{
-			AActor* MapValue = nullptr;
-			bLoop = ParentMap.RemoveAndCopyValue(ParentChain.Last(), MapValue);
-			AddToListSafe(MapValue, ParentChain);
-		}
-
-		// find chain's child nodes, ignore cycle detection since it would've triggered already from previous loop
-		for (AActor* const* MapKey = ParentMap.FindKey(ParentChain[0]); MapKey; MapKey = ParentMap.FindKey(ParentChain[0]))
-		{
-			AActor* MapValue = nullptr;
-			ParentMap.RemoveAndCopyValue((AActor*)MapKey, MapValue);
-			ParentChain.Insert(MapValue, 0);
-		}
-	}
-
-	struct FDepthSort
-	{
-		TMap<AActor*, int32>* DepthMap;
-
-		bool operator()(AActor* A, AActor* B) const
-		{
-			const int32 DepthA = A ? DepthMap->FindRef(A) : MAX_int32;
-			const int32 DepthB = B ? DepthMap->FindRef(B) : MAX_int32;
-			return DepthA < DepthB;
-		}
-	};
-}
-
 /**
  *	Sorts actors such that parent actors will appear before children actors in the list
  *	Stable sort
@@ -844,53 +771,60 @@ static void SortActorsHierarchy(TArray<AActor*>& Actors, UObject* Level)
 {
 	const double StartTime = FPlatformTime::Seconds();
 
-	// Precalculate parent map to avoid processing cycles during sort
-	TMap<AActor*, AActor*> ParentMap;
-	for (int32 Idx = 0; Idx < Actors.Num(); Idx++)
+	TMap<AActor*, int32> DepthMap;
+	TArray<AActor*, TInlineAllocator<10>> VisitedActors;
+
+	TFunction<int32(AActor*)> CalcAttachDepth = [&DepthMap, &VisitedActors, &CalcAttachDepth](AActor* Actor)
 	{
-		if (Actors[Idx])
+		int32 Depth = 0;
+		if (int32* FoundDepth = DepthMap.Find(Actor))
 		{
-			AActor* ParentActor = Actors[Idx]->GetAttachParentActor();
-			if (ParentActor)
-			{
-				ParentMap.Add(Actors[Idx], ParentActor);
-			}
+			Depth = *FoundDepth;
 		}
-	}
-
-	if (ParentMap.Num())
-	{
-		TMap<AActor*, int32> DepthMap;
-		FLevelSortUtils::FDepthSort DepthSorter;
-		DepthSorter.DepthMap = &DepthMap;
-
-		TArray<AActor*> ParentChain;
-		while (ParentMap.Num())
+		else
 		{
-			ParentChain.Reset();
-			FLevelSortUtils::FindAndRemoveParentChain(ParentMap, ParentChain);
-
-			// Topmost parent in found parent chain might have its parent already removed
-			// so we need to use it's stored depth as a base depth for whole chain
-			int32 ParentChainStartDepth = 0;
-			if (ParentChain.Num() > 0)
+			if (AActor* ParentActor = Actor->GetAttachParentActor())
 			{
-				if (int32* StartDepthPtr = DepthMap.Find(ParentChain.Last()))
+				if (VisitedActors.Contains(ParentActor))
 				{
-					ParentChainStartDepth = *StartDepthPtr;
+					FString VisitedActorLoop;
+					for (AActor* VisitedActor : VisitedActors)
+					{
+						VisitedActorLoop += VisitedActor->GetName() + TEXT(" -> ");
+					}
+					VisitedActorLoop += Actor->GetName();
+
+					UE_LOG(LogLevel, Warning, TEXT("Found loop in attachment hierarchy: %s"), *VisitedActorLoop);
+					// Once we find a loop, depth is mostly meaningless, so we'll treat the "end" of the loop as 0
+				}
+				else
+				{
+					VisitedActors.Add(Actor);
+					Depth = CalcAttachDepth(ParentActor) + 1;
 				}
 			}
-
-			for (int32 Idx = 0; Idx < ParentChain.Num(); Idx++)
-			{
-				DepthMap.Add(ParentChain[Idx], ParentChainStartDepth + ParentChain.Num() - Idx - 1);
-			}
+			DepthMap.Add(Actor, Depth);
 		}
+		return Depth;
+	};
 
-		// Unfortunately TArray.StableSort assumes no null entries in the array
-		// So it forces me to use internal unrestricted version
-		StableSortInternal(Actors.GetData(), Actors.Num(), DepthSorter);
+	for (AActor* Actor : Actors)
+	{
+		if (Actor)
+		{
+			CalcAttachDepth(Actor);
+			VisitedActors.Reset();
+		}
 	}
+
+	auto DepthSorter = [&DepthMap](AActor* A, AActor* B)
+	{
+		const int32 DepthA = A ? DepthMap.FindRef(A) : MAX_int32;
+		const int32 DepthB = B ? DepthMap.FindRef(B) : MAX_int32;
+		return DepthA < DepthB;
+	};
+
+	StableSortInternal(Actors.GetData(), Actors.Num(), DepthSorter);
 
 	const float ElapsedTime = (float)(FPlatformTime::Seconds() - StartTime);
 	if (ElapsedTime > 1.0f)
@@ -1759,7 +1693,7 @@ void ULevel::InitializeRenderingResources()
 {
 	// OwningWorld can be NULL when InitializeRenderingResources is called during undo, where a transient ULevel is created to allow undoing level move operations
 	// At the point at which Pre/PostEditChange is called on that transient ULevel, it is not part of any world and therefore should not have its rendering resources initialized
-	if (OwningWorld && bIsVisible)
+	if (OwningWorld && bIsVisible && FApp::CanEverRender())
 	{
 		ULevel* ActiveLightingScenario = OwningWorld->GetActiveLightingScenario();
 		UMapBuildDataRegistry* EffectiveMapBuildData = MapBuildData;
@@ -1776,7 +1710,7 @@ void ULevel::InitializeRenderingResources()
 
 		if (!PrecomputedVolumetricLightmap->IsAddedToScene())
 		{
-			PrecomputedVolumetricLightmap->AddToScene(OwningWorld->Scene, EffectiveMapBuildData, LevelBuildDataId);
+			PrecomputedVolumetricLightmap->AddToScene(OwningWorld->Scene, EffectiveMapBuildData, LevelBuildDataId, IsPersistentLevel());
 		}
 
 		if (OwningWorld->Scene && EffectiveMapBuildData)
@@ -1788,14 +1722,17 @@ void ULevel::InitializeRenderingResources()
 
 void ULevel::ReleaseRenderingResources()
 {
-	if (OwningWorld && PrecomputedLightVolume)
+	if (OwningWorld && FApp::CanEverRender())
 	{
-		PrecomputedLightVolume->RemoveFromScene(OwningWorld->Scene);
-	}
+		if (PrecomputedLightVolume)
+		{
+			PrecomputedLightVolume->RemoveFromScene(OwningWorld->Scene);
+		}
 
-	if (OwningWorld && PrecomputedVolumetricLightmap)
-	{
-		PrecomputedVolumetricLightmap->RemoveFromScene(OwningWorld->Scene);
+		if (PrecomputedVolumetricLightmap)
+		{
+			PrecomputedVolumetricLightmap->RemoveFromScene(OwningWorld->Scene);
+		}
 	}
 }
 
@@ -1836,11 +1773,6 @@ void ULevel::RouteActorInitialize()
 					ActorsToBeginPlay.Add(Actor);
 				}
 			}
-
-			// Components are all set up, init touching state.
-			// Note: Not doing notifies here since loading or streaming in isn't actually conceptually beginning a touch.
-			//	     Rather, it was always touching and the mechanics of loading is just an implementation detail.
-			Actor->UpdateOverlaps(Actor->bGenerateOverlapEventsDuringLevelStreaming);
 		}
 	}
 
@@ -1849,7 +1781,7 @@ void ULevel::RouteActorInitialize()
 	{
 		AActor* Actor = ActorsToBeginPlay[ActorIndex];
 		SCOPE_CYCLE_COUNTER(STAT_ActorBeginPlay);
-		Actor->DispatchBeginPlay();
+		Actor->DispatchBeginPlay(/*bFromLevelStreaming*/ true);
 	}
 }
 
@@ -2051,7 +1983,7 @@ void ULevel::BeginCacheForCookedPlatformData(const ITargetPlatform *TargetPlatfo
 
 void ULevel::FixupForPIE(int32 PIEInstanceID)
 {
-	TGuardValue<int32> SetPlayInEditorID(GPlayInEditorID, PIEInstanceID);
+	FTemporaryPlayInEditorIDOverride SetPlayInEditorID(PIEInstanceID);
 
 	struct FSoftPathPIEFixupSerializer : public FArchiveUObject
 	{

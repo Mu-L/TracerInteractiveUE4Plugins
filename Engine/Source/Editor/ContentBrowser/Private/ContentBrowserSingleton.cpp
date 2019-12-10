@@ -29,6 +29,7 @@
 #include "EmptyFolderVisibilityManager.h"
 #include "CollectionAssetRegistryBridge.h"
 #include "ContentBrowserCommands.h"
+#include "CoreGlobals.h"
 
 #define LOCTEXT_NAMESPACE "ContentBrowser"
 
@@ -46,7 +47,7 @@ FContentBrowserSingleton::FContentBrowserSingleton()
 		ContentBrowserIcon,
 		true);
 
-	for ( int32 BrowserIdx = 0; BrowserIdx < ARRAY_COUNT(ContentBrowserTabIDs); BrowserIdx++ )
+	for ( int32 BrowserIdx = 0; BrowserIdx < UE_ARRAY_COUNT(ContentBrowserTabIDs); BrowserIdx++ )
 	{
 		const FName TabID = FName(*FString::Printf(TEXT("ContentBrowserTab%d"), BrowserIdx + 1));
 		ContentBrowserTabIDs[BrowserIdx] = TabID;
@@ -68,6 +69,8 @@ FContentBrowserSingleton::FContentBrowserSingleton()
 	FEditorDelegates::LoadSelectedAssetsIfNeeded.AddRaw(this, &FContentBrowserSingleton::OnEditorLoadSelectedAssetsIfNeeded);
 
 	FContentBrowserCommands::Register();
+
+	PopulateConfigValues();
 }
 
 FContentBrowserSingleton::~FContentBrowserSingleton()
@@ -76,7 +79,7 @@ FContentBrowserSingleton::~FContentBrowserSingleton()
 
 	if ( FSlateApplication::IsInitialized() )
 	{
-		for ( int32 BrowserIdx = 0; BrowserIdx < ARRAY_COUNT(ContentBrowserTabIDs); BrowserIdx++ )
+		for ( int32 BrowserIdx = 0; BrowserIdx < UE_ARRAY_COUNT(ContentBrowserTabIDs); BrowserIdx++ )
 		{
 			FGlobalTabmanager::Get()->UnregisterNomadTabSpawner( ContentBrowserTabIDs[BrowserIdx] );
 		}
@@ -453,6 +456,18 @@ TSharedRef<FEmptyFolderVisibilityManager> FContentBrowserSingleton::GetEmptyFold
 	return EmptyFolderVisibilityManager;
 }
 
+const FContentBrowserPluginSettings& FContentBrowserSingleton::GetPluginSettings(FName PluginName) const
+{
+	const FContentBrowserPluginSettings* LocalSettings = PluginSettings.FindByPredicate([PluginName](const FContentBrowserPluginSettings& Setting) { return Setting.PluginName == PluginName; });
+	if (LocalSettings)
+	{
+		return *LocalSettings;
+	}
+
+	static FContentBrowserPluginSettings DefaultSettings;
+	return DefaultSettings;
+}
+
 void FContentBrowserSingleton::SharedCreateAssetDialogWindow(const TSharedRef<SAssetDialog>& AssetDialog, const FSharedAssetDialogConfig& InConfig, bool bModal) const
 {
 	const FVector2D DefaultWindowSize(1152.0f, 648.0f);
@@ -542,7 +557,7 @@ FName FContentBrowserSingleton::SummonNewBrowser(bool bAllowLockedBrowsers)
 	}
 	
 	FName NewTabName;
-	for ( int32 BrowserIdx = 0; BrowserIdx < ARRAY_COUNT(ContentBrowserTabIDs); BrowserIdx++ )
+	for ( int32 BrowserIdx = 0; BrowserIdx < UE_ARRAY_COUNT(ContentBrowserTabIDs); BrowserIdx++ )
 	{
 		FName TestTabID = ContentBrowserTabIDs[BrowserIdx];
 		if ( !OpenBrowserIDs.Contains(TestTabID) && (bAllowLockedBrowsers || !IsLocked(TestTabID)) )
@@ -703,6 +718,27 @@ void FContentBrowserSingleton::ForceShowPluginContent(bool bEnginePlugin)
 	if (PrimaryContentBrowser.IsValid())
 	{
 		PrimaryContentBrowser.Pin()->ForceShowPluginContent(bEnginePlugin);
+	}
+}
+
+void FContentBrowserSingleton::PopulateConfigValues()
+{
+	const FString ContentBrowserSection = TEXT("ContentBrowser");
+
+	// PluginSettings
+	{
+		const FString PluginSettingsName = TEXT("PluginSettings");
+		TArray<FString> PluginSettingsStrings;
+		GConfig->GetArray(*ContentBrowserSection, *PluginSettingsName, PluginSettingsStrings, GEditorIni);
+		for (const FString& PluginSettingString : PluginSettingsStrings)
+		{
+			FContentBrowserPluginSettings PluginSetting;
+			const TCHAR* Result = FContentBrowserPluginSettings::StaticStruct()->ImportText(*PluginSettingString, &PluginSetting, nullptr, PPF_None, GLog, PluginSettingsName);
+			if (Result != nullptr)
+			{
+				PluginSettings.Emplace(PluginSetting);
+			}
+		}
 	}
 }
 

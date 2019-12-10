@@ -328,6 +328,9 @@ public:
 	 */
 	void Construct( const FArguments& InArgs );
 
+	// SWidget interface
+	virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override;
+
 	/**
 	 * Creates FOutputLogMessage objects from FOutputDevice log callback
 	 *
@@ -341,6 +344,16 @@ public:
 	 */
 	static bool CreateLogMessages(const TCHAR* V, ELogVerbosity::Type Verbosity, const class FName& Category, TArray< TSharedPtr<FOutputLogMessage> >& OutMessages);
 
+	/**
+	* Called when delete all is selected
+	*/
+	void OnClearLog();
+
+	/**
+	 * Called to determine whether delete all is currently a valid command
+	 */
+	bool CanClearLog() const;
+
 protected:
 
 	virtual void Serialize( const TCHAR* V, ELogVerbosity::Type Verbosity, const class FName& Category ) override;
@@ -353,21 +366,11 @@ protected:
 	 * Extends the context menu used by the text box
 	 */
 	void ExtendTextBoxMenu(FMenuBuilder& Builder);
-
-	/**
-	 * Called when delete all is selected
-	 */
-	void OnClearLog();
-
+	
 	/**
 	 * Called when the user scrolls the log window vertically
 	 */
 	void OnUserScrolled(float ScrollOffset);
-
-	/**
-	 * Called to determine whether delete all is currently a valid command
-	 */
-	bool CanClearLog() const;
 
 	/** Called when a console command is entered for this output log */
 	void OnConsoleCommandExecuted();
@@ -433,9 +436,27 @@ private:
 	/** Forces re-population of the messages list */
 	void Refresh();
 
+	bool IsWordWrapEnabled() const;
+
+	void SetWordWrapEnabled(ECheckBoxState InValue);
+
+	bool IsClearOnPIEEnabled() const;
+
+	void SetClearOnPIE(ECheckBoxState InValue);
+
+	FSlateColor GetViewButtonForegroundColor() const;
+
+	TSharedRef<SWidget> GetViewButtonContent();
+
+	void OpenLogFileInExplorer();
+
+	void OpenLogFileInExternalEditor();
+
 public:
 	/** Visible messages filter */
 	FOutputLogFilter Filter;
+
+	TSharedPtr<class SComboButton> ViewOptionsComboButton;
 };
 
 /** Output log text marshaller to convert an array of FOutputLogMessages into styled lines to be consumed by an FTextLayout */
@@ -451,7 +472,8 @@ public:
 	virtual void SetText(const FString& SourceString, FTextLayout& TargetTextLayout) override;
 	virtual void GetText(FString& TargetString, const FTextLayout& SourceTextLayout) override;
 
-	bool AppendMessage(const TCHAR* InText, const ELogVerbosity::Type InVerbosity, const FName& InCategory);
+	bool AppendPendingMessage(const TCHAR* InText, const ELogVerbosity::Type InVerbosity, const FName& InCategory);
+	bool SubmitPendingMessages();
 	void ClearMessages();
 
 	void CountMessages();
@@ -465,11 +487,13 @@ protected:
 
 	FOutputLogTextLayoutMarshaller(TArray< TSharedPtr<FOutputLogMessage> > InMessages, FOutputLogFilter* InFilter);
 
-	void AppendMessageToTextLayout(const TSharedPtr<FOutputLogMessage>& InMessage);
-	void AppendMessagesToTextLayout(const TArray<TSharedPtr<FOutputLogMessage>>& InMessages);
+	void AppendPendingMessagesToTextLayout();
 
 	/** All log messages to show in the text box */
 	TArray< TSharedPtr<FOutputLogMessage> > Messages;
+
+	/** Index of the next entry in the Messages array that is pending submission to the text layout */
+	int32 NextPendingMessageIndex;
 
 	/** Holds cached numbers of messages to avoid unnecessary re-filtering */
 	int32 CachedNumMessages;

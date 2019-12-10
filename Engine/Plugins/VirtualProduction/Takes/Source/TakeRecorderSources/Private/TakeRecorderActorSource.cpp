@@ -653,7 +653,7 @@ TArray<UTakeRecorderSource*> UTakeRecorderActorSource::PostRecording(ULevelSeque
 	// Force to authority role in case of capturing replicated actors
 	if (CachedObjectTemplate.IsValid() && !CachedObjectTemplate->HasAuthority())
 	{
-		CachedObjectTemplate->Role = ROLE_Authority;
+		CachedObjectTemplate->SetRole(ROLE_Authority);
 	}
 
 	// No longer need to track the Object Template that was created inside the level sequence.
@@ -1173,7 +1173,7 @@ void UTakeRecorderActorSource::PostProcessCreatedObjectTemplateImpl(AActor* Obje
 	 	SkeletalMeshComponent->SetAnimationMode(EAnimationMode::AnimationSingleNode);
 	 	SkeletalMeshComponent->bEnableUpdateRateOptimizations = false;
 	 	SkeletalMeshComponent->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
-	 	SkeletalMeshComponent->ForcedLodModel = 1;
+	 	SkeletalMeshComponent->SetForcedLOD(1);
 	 }
 
 	// Disable auto-possession on recorded Pawns so that when the Spawnable is spawned it doesn't auto-possess the player

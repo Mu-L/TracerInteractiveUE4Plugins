@@ -61,8 +61,8 @@ void UPackage::SetDirtyFlag( bool bIsDirty )
 	if ( GetOutermost() != GetTransientPackage() )
 	{
 		if ( GUndo != NULL
-		// PIE world objects should never end up in the transaction buffer as we cannot undo during gameplay.
-		&& !GetOutermost()->HasAnyPackageFlags(PKG_PlayInEditor|PKG_ContainsScript) )
+		// PIE and script/class packages should never end up in the transaction buffer as we cannot undo during gameplay.
+		&& !GetOutermost()->HasAnyPackageFlags(PKG_PlayInEditor|PKG_ContainsScript|PKG_CompiledIn) )
 		{
 			// make sure we're marked as transactional
 			SetFlags(RF_Transactional);
@@ -123,6 +123,23 @@ void UPackage::AddReferencedObjects(UObject* InThis, FReferenceCollector& Collec
 #endif
 	Super::AddReferencedObjects(This, Collector);
 }
+
+#if WITH_EDITORONLY_DATA
+bool UPackage::IsOwned() const
+{
+	return OwnerPersistentGuid.IsValid();
+}
+
+bool UPackage::IsOwnedBy(const UPackage* Package) const
+{
+	return OwnerPersistentGuid.IsValid() && (OwnerPersistentGuid == Package->GetPersistentGuid());
+}
+
+bool UPackage::HasSameOwner(const UPackage* Package) const
+{
+	return OwnerPersistentGuid.IsValid() && (OwnerPersistentGuid == Package->OwnerPersistentGuid);
+}
+#endif
 
 /**
  * Gets (after possibly creating) a metadata object for this package

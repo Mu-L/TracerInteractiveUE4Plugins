@@ -30,15 +30,13 @@ public class MeshUtilities : ModuleRules
 				"HierarchicalLODUtilities",
 				"Landscape",
 				"LevelEditor",
-				"AnimationBlueprintEditor",
-				"AnimationEditor",
-				"SkeletalMeshEditor",
 				"PropertyEditor",
 				"EditorStyle",
                 "GraphColor",
-                "MeshBuilder",
+                "MeshBuilderCommon",
                 "MeshUtilitiesCommon",
                 "MeshDescription",
+				"StaticMeshDescription",
                 "MeshDescriptionOperations"
             }
 		);
@@ -51,15 +49,22 @@ public class MeshUtilities : ModuleRules
 
         PrivateIncludePathModuleNames.AddRange(
           new string[] {
+				"AnimationBlueprintEditor",
+				"AnimationEditor",
                 "MeshMergeUtilities",
                 "MaterialBaking",
+				"Persona",
+				"SkeletalMeshEditor",
           }
       );
 
         DynamicallyLoadedModuleNames.AddRange(
             new string[] {
+				"AnimationBlueprintEditor",
+				"AnimationEditor",
                 "MeshMergeUtilities",
                 "MaterialBaking",
+				"SkeletalMeshEditor",
             }
         );
 
@@ -80,8 +85,7 @@ public class MeshUtilities : ModuleRules
             string SDKDir = Target.UEThirdPartySourceDirectory + "IntelEmbree/Embree2140/Win64/";
 
             PublicIncludePaths.Add(SDKDir + "include");
-            PublicLibraryPaths.Add(SDKDir + "lib");
-            PublicAdditionalLibraries.Add("embree.2.14.0.lib");
+            PublicAdditionalLibraries.Add(SDKDir + "lib/embree.2.14.0.lib");
             RuntimeDependencies.Add("$(TargetOutputDir)/embree.2.14.0.dll", SDKDir + "lib/embree.2.14.0.dll");
             RuntimeDependencies.Add("$(TargetOutputDir)/tbb.dll", SDKDir + "lib/tbb.dll");
 			RuntimeDependencies.Add("$(TargetOutputDir)/tbbmalloc.dll", SDKDir + "lib/tbbmalloc.dll");

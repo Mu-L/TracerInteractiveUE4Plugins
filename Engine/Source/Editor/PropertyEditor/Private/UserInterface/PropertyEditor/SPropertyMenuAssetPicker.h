@@ -18,6 +18,8 @@ public:
 		, _AllowClear(true)
 	{}
 		SLATE_ARGUMENT( FAssetData, InitialObject )
+		SLATE_ARGUMENT( TSharedPtr<IPropertyHandle>, PropertyHandle )
+		SLATE_ARGUMENT( TArray<FAssetData>, OwnerAssetArray)
 		SLATE_ARGUMENT( bool, AllowClear )
 		SLATE_ARGUMENT( bool, AllowCopyPaste )
 		SLATE_ARGUMENT( TArray<const UClass*>, AllowedClasses )
@@ -88,6 +90,9 @@ private:
 
 private:
 	FAssetData CurrentObject;
+	
+	/** The property this asset picker will modify (if any) */
+	TSharedPtr<IPropertyHandle> PropertyHandle;
 
 	/** Whether the asset can be 'None' in this case */
 	bool bAllowClear;

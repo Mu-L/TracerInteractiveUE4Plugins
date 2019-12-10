@@ -26,6 +26,7 @@ struct FMovieSceneEvaluationTrack;
 class UMovieSceneUserImportFBXSettings;
 struct FMovieSceneFloatValue;
 class INodeNameAdapter;
+struct FMovieSceneSequenceTransform;
 template<typename ChannelType> struct TMovieSceneChannelData;
 
 namespace fbxsdk
@@ -58,16 +59,18 @@ public:
 	 * @param Sections The sections to trim
 	 * @param Time	The time at which to trim
 	 * @param bTrimLeft Trim left or trim right
+	 * @param bDeleteKeys Delete keys outside the split ranges
 	 */
-	static void TrimSection(const TSet<TWeakObjectPtr<UMovieSceneSection>>& Sections, FQualifiedFrameTime Time, bool bTrimLeft);
+	static void TrimSection(const TSet<TWeakObjectPtr<UMovieSceneSection>>& Sections, FQualifiedFrameTime Time, bool bTrimLeft, bool bDeleteKeys);
 
 	/**
 	 * Splits sections at the given time
 	 *
 	 * @param Sections The sections to split
 	 * @param Time	The time at which to split
+	 * @param bDeleteKeys Delete keys outside the split ranges
 	 */
-	static void SplitSection(const TSet<TWeakObjectPtr<UMovieSceneSection>>& Sections, FQualifiedFrameTime Time);
+	static void SplitSection(const TSet<TWeakObjectPtr<UMovieSceneSection>>& Sections, FQualifiedFrameTime Time, bool bDeleteKeys);
 
 	/**
 	 * Parse a shot name into its components.
@@ -112,20 +115,30 @@ public:
 	 * Gather takes - level sequence assets that have the same shot prefix and shot number in the same asset path (directory)
 	 * 
 	 * @param Section The section to gather takes from
-	 * @param TakeNumbers The gathered take numbers
-	 * @param CurrentTakeNumber The current take number of the section
+	 * @param AssetData The gathered asset take data
+	 * @param OutCurrentTakeNumber The current take number of the section
 	 */
-	static void GatherTakes(const UMovieSceneSection* Section, TArray<uint32>& TakeNumbers, uint32& CurrentTakeNumber);
+	static void GatherTakes(const UMovieSceneSection* Section, TArray<FAssetData>& AssetData, uint32& OutCurrentTakeNumber);
 
 
 	/**
-	 * Get the asset associated with the take number
+	 * Get the take number for the given asset
 	 *
-	 * @param Section The section to gather the take from
-	 * @param TakeNumber The take number to get
-	 * @return The asset
+	 * @param Section The section to gather the take number from
+	 * @param AssetData The take asset to search for
+	 * @param OutTakeNumber The take number for the given asset
+	 * @return Whether the take number was found
 	 */
-	static UObject* GetTake(const UMovieSceneSection* Section, uint32 TakeNumber);
+	static bool GetTakeNumber(const UMovieSceneSection* Section, FAssetData AssetData, uint32& OutTakeNumber);
+
+	/**
+	 * Set the take number for the given asset
+	 *
+	 * @param Section The section to set the take number on
+	 * @param InTakeNumber The take number for the given asset
+	 * @return Whether the take number could be set
+	 */
+	static bool SetTakeNumber(const UMovieSceneSection* Section, uint32 InTakeNumber);
 
 	/**
 	 * Get the next available row index for the section so that it doesn't overlap any other sections in time.
@@ -219,9 +232,10 @@ public:
 	* @param NodeNameAdaptor Adaptor to look up actor names.
 	* @param InFBXFileName the fbx file name.
 	* @param Template Movie scene sequence id.
+	* @param RootToLocalTransform The root to local transform time.
 	* @return Whether the export was successful
 	*/
-	static bool ExportFBX(UWorld* World, UMovieScene* MovieScene, IMovieScenePlayer* Player, TArray<FGuid>& Bindings, INodeNameAdapter& NodeNameAdapter, FMovieSceneSequenceIDRef& Template,  const FString& InFBXFileName);
+	static bool ExportFBX(UWorld* World, UMovieScene* MovieScene, IMovieScenePlayer* Player, TArray<FGuid>& Bindings, INodeNameAdapter& NodeNameAdapter, FMovieSceneSequenceIDRef& Template,  const FString& InFBXFileName, FMovieSceneSequenceTransform& RootToLocalTransform);
 
 	/**
 	* Import FBX with dialog

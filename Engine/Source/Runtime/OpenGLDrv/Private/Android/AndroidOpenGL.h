@@ -78,6 +78,9 @@ extern PFNBLITFRAMEBUFFERNVPROC					glBlitFramebufferNV ;
 #define GL_SAMPLES_PASSED_EXT					0x8914
 #define GL_ANY_SAMPLES_PASSED_EXT				0x8C2F
 
+#ifndef GL_MAX_TEXTURE_BUFFER_SIZE
+#define GL_MAX_TEXTURE_BUFFER_SIZE				0x8C2B
+#endif
 
 typedef void (GL_APIENTRYP PFNGLGENQUERIESEXTPROC) (GLsizei n, GLuint *ids);
 typedef void (GL_APIENTRYP PFNGLDELETEQUERIESEXTPROC) (GLsizei n, const GLuint *ids);
@@ -125,6 +128,7 @@ extern PFNGLLABELOBJECTEXTPROC			glLabelObjectEXT;
 extern PFNGLGETOBJECTLABELEXTPROC		glGetObjectLabelEXT;
 extern PFNGLPOPGROUPMARKEREXTPROC 		glPopGroupMarkerEXT;
 extern PFNGLTEXSTORAGE2DPROC			glTexStorage2D;
+extern PFNGLTEXSTORAGE3DPROC			glTexStorage3D;
 extern PFNGLDEBUGMESSAGECONTROLKHRPROC	glDebugMessageControlKHR;
 extern PFNGLDEBUGMESSAGEINSERTKHRPROC	glDebugMessageInsertKHR;
 extern PFNGLDEBUGMESSAGECALLBACKKHRPROC	glDebugMessageCallbackKHR;
@@ -222,6 +226,12 @@ extern "C"
 	extern PFNeglQueryTimestampSupportedANDROID eglGetCompositorTimingSupportedANDROID_p;
 	extern PFNeglQueryTimestampSupportedANDROID eglGetFrameTimestampsSupportedANDROID_p;
 }
+
+#ifndef GL_FRAMEBUFFER_FETCH_NONCOHERENT_QCOM
+#define GL_FRAMEBUFFER_FETCH_NONCOHERENT_QCOM	0x96A2
+#endif
+typedef void (GL_APIENTRYP PFNGLFRAMEBUFFERFETCHBARRIERQCOMPROC) (void);
+extern PFNGLFRAMEBUFFERFETCHBARRIERQCOMPROC	glFramebufferFetchBarrierQCOM;
 
 struct FAndroidOpenGL : public FOpenGLES2
 {
@@ -404,23 +414,30 @@ struct FAndroidOpenGL : public FOpenGLES2
 	
 	static FORCEINLINE void TexStorage3D(GLenum Target, GLint Levels, GLint InternalFormat, GLsizei Width, GLsizei Height, GLsizei Depth, GLenum Format, GLenum Type)
 	{
-		const bool bArrayTexture = Target == GL_TEXTURE_2D_ARRAY || Target == GL_TEXTURE_CUBE_MAP_ARRAY;
-		for(uint32 MipIndex = 0; MipIndex < uint32(Levels); MipIndex++)
+		if (glTexStorage3D)
 		{
-			glTexImage3D(
-				Target,
-				MipIndex,
-				InternalFormat,
-				FMath::Max<uint32>(1,(Width >> MipIndex)),
-				FMath::Max<uint32>(1,(Height >> MipIndex)),
-				(bArrayTexture) ? Depth : FMath::Max<uint32>(1,(Depth >> MipIndex)),
-				0,
-				Format,
-				Type,
-				NULL
-				);
+			glTexStorage3D( Target, Levels, InternalFormat, Width, Height, Depth);
+		}
+		else
+		{
+			const bool bArrayTexture = Target == GL_TEXTURE_2D_ARRAY || Target == GL_TEXTURE_CUBE_MAP_ARRAY;
+			for(uint32 MipIndex = 0; MipIndex < uint32(Levels); MipIndex++)
+			{
+				glTexImage3D(
+					Target,
+					MipIndex,
+					InternalFormat,
+					FMath::Max<uint32>(1,(Width >> MipIndex)),
+					FMath::Max<uint32>(1,(Height >> MipIndex)),
+					(bArrayTexture) ? Depth : FMath::Max<uint32>(1,(Depth >> MipIndex)),
+					0,
+					Format,
+					Type,
+					NULL
+					);
 
-			VERIFY_GL(TexImage_3D);
+				VERIFY_GL(TexImage_3D);
+			}
 		}
 	}
 	
@@ -666,8 +683,18 @@ struct FAndroidOpenGL : public FOpenGLES2
 
 	static FORCEINLINE GLint GetMaxComputeTextureImageUnits() { check(MaxComputeTextureImageUnits != -1); return MaxComputeTextureImageUnits; }
 	static FORCEINLINE GLint GetMaxComputeUniformComponents() { check(MaxComputeUniformComponents != -1); return MaxComputeUniformComponents; }
-	
+
+	static FORCEINLINE void FrameBufferFetchBarrier()
+	{
+		if (glFramebufferFetchBarrierQCOM)
+		{
+			glFramebufferFetchBarrierQCOM();
+		}
+	}
+			
 	static void ProcessExtensions(const FString& ExtensionsString);
+	static void SetupDefaultGLContextState(const FString& ExtensionsString);
+
 
 	// whether to use ES 3.0 function glTexStorage2D to allocate storage for GL_HALF_FLOAT_OES render target textures
 	static bool bUseHalfFloatTexStorage;

@@ -163,8 +163,6 @@ bool FSkeletalMeshMerge::FinalizeMesh()
 	// If things are going ok so far...
 	if (Result)
 	{
-		// force 16 bit UVs if supported on hardware
-		MergeMesh->bUseFullPrecisionUVs = GVertexElementTypeSupport.IsSupported(VET_Half2) ? false : true;
 
 		// Array of per-lod number of UV sets
 		TArray<uint32> PerLODNumUVSets;
@@ -194,7 +192,9 @@ bool FSkeletalMeshMerge::FinalizeMesh()
 		MergeMesh->AllocateResourceForRendering();
 		for (int32 LODIdx = 0; LODIdx < MaxNumLODs; LODIdx++)
 		{
-			if (!MergeMesh->bUseFullPrecisionUVs)
+			const FSkeletalMeshLODInfo* LODInfoPtr = MergeMesh->GetLODInfo(LODIdx);
+			bool bUseFullPrecisionUVs = LODInfoPtr ? LODInfoPtr->BuildSettings.bUseFullPrecisionUVs : GVertexElementTypeSupport.IsSupported(VET_Half2) ? false : true;
+			if (!bUseFullPrecisionUVs)
 			{
 				if (PerLODExtraBoneInfluences[LODIdx])
 				{
@@ -302,11 +302,10 @@ void FSkeletalMeshMerge::GenerateNewSectionArray( TArray<FNewSectionInfo>& NewSe
 
 				// get the material for this section
 				int32 MaterialIndex = Section.MaterialIndex;
-				// use the remapping of material indices for all LODs besides the base LOD 
-				if( LODIdx > 0 && 
-					SrcLODInfo.LODMaterialMap.IsValidIndex(Section.MaterialIndex) )
+				// use the remapping of material indices if there is a valid value
+				if(SrcLODInfo.LODMaterialMap.IsValidIndex(SectionIdx) && SrcLODInfo.LODMaterialMap[SectionIdx] != INDEX_NONE)
 				{
-					MaterialIndex = FMath::Clamp<int32>( SrcLODInfo.LODMaterialMap[Section.MaterialIndex], 0, SrcMesh->Materials.Num() );
+					MaterialIndex = FMath::Clamp<int32>( SrcLODInfo.LODMaterialMap[SectionIdx], 0, SrcMesh->Materials.Num() );
 				}
 				UMaterialInterface* Material = SrcMesh->Materials[MaterialIndex].MaterialInterface;
 
@@ -564,6 +563,9 @@ void FSkeletalMeshMerge::GenerateLODModel( int32 LODIdx )
 				}
 			}
 #endif
+			MergeLODInfo.BuildSettings.bUseFullPrecisionUVs |= SrcLODInfo.BuildSettings.bUseFullPrecisionUVs;
+			MergeLODInfo.BuildSettings.bUseHighPrecisionTangentBasis |= SrcLODInfo.BuildSettings.bUseHighPrecisionTangentBasis;
+
 			MergeLODInfo.LODHysteresis = FMath::Min<float>(MergeLODInfo.LODHysteresis,SrcLODInfo.LODHysteresis);
 
 			// get the source skel LOD model from this merge entry
@@ -730,9 +732,9 @@ void FSkeletalMeshMerge::GenerateLODModel( int32 LODIdx )
 	// sort required bone array in strictly increasing order
 	MergeLODData.RequiredBones.Sort();
 	MergeMesh->RefSkeleton.EnsureParentsExistAndSort(MergeLODData.ActiveBoneIndices);
-
+	
 	// copy the new vertices and indices to the vertex buffer for the new model
-	MergeLODData.StaticVertexBuffers.StaticMeshVertexBuffer.SetUseFullPrecisionUVs(MergeMesh->bUseFullPrecisionUVs);
+	MergeLODData.StaticVertexBuffers.StaticMeshVertexBuffer.SetUseFullPrecisionUVs(MergeLODInfo.BuildSettings.bUseFullPrecisionUVs);
 
 	MergeLODData.StaticVertexBuffers.PositionVertexBuffer.Init(MergedVertexBuffer.Num(), bNeedsCPUAccess);
 	MergeLODData.StaticVertexBuffers.StaticMeshVertexBuffer.Init(MergedVertexBuffer.Num(), TotalNumUVs, bNeedsCPUAccess);

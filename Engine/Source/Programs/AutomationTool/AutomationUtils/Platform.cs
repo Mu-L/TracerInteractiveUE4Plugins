@@ -41,8 +41,6 @@ namespace AutomationTool
 	/// </summary>
 	public class Platform : CommandUtils
 	{
-		#region Intialization
-
 		private static Dictionary<TargetPlatformDescriptor, Platform> AllPlatforms = new Dictionary<TargetPlatformDescriptor, Platform>();
 		internal static void InitializePlatforms(Assembly[] AssembliesWithPlatforms = null)
 		{
@@ -120,8 +118,6 @@ namespace AutomationTool
 			}
 		}
 
-		#endregion
-
 		protected UnrealTargetPlatform TargetPlatformType;
 		protected UnrealTargetPlatform TargetIniPlatformType;
 
@@ -185,15 +181,15 @@ namespace AutomationTool
 			LogWarning("{0} does not implement GetConnectedDevices", PlatformType);
 		}
 
-        /// <summary>
-        /// Allow platform specific work prior to touching the staging directory
-        /// </summary>
-        /// <param name="Params"></param>
-        /// <param name="SC"></param>
-        public virtual void PreStage(ProjectParams Params, DeploymentContext SC)
-        {
-            // do nothing on most platforms
-        }
+		/// <summary>
+		/// Allow platform specific work prior to touching the staging directory
+		/// </summary>
+		/// <param name="Params"></param>
+		/// <param name="SC"></param>
+		public virtual void PreStage(ProjectParams Params, DeploymentContext SC)
+		{
+			// do nothing on most platforms
+		}
 
 
 		/// <summary>
@@ -381,14 +377,14 @@ namespace AutomationTool
 		{
 			return LocalPath;
 		}
-        /// <summary>
-        /// Returns a list of the compiler produced debug file extensions
-        /// </summary>
-        /// <returns>a list of the compiler produced debug file extensions</returns>
-        public virtual List<string> GetDebugFileExtensions()
-        {
-            return new List<string>();
-        }
+		/// <summary>
+		/// Returns a list of the compiler produced debug file extensions
+		/// </summary>
+		/// <returns>a list of the compiler produced debug file extensions</returns>
+		public virtual List<string> GetDebugFileExtensions()
+		{
+			return new List<string>();
+		}
 
 		/// <summary>
 		/// UnrealTargetPlatform type for this platform.
@@ -559,8 +555,6 @@ namespace AutomationTool
 			get { return true; }
 		}
 
-		#region Hooks
-
 		public virtual void PreBuildAgenda(UE4Build Build, UE4Build.BuildAgenda Agenda, ProjectParams Params)
 		{
 
@@ -617,10 +611,6 @@ namespace AutomationTool
 			return new UnrealTargetPlatform[] { PlatformType };
 		}
 
-		#endregion
-
-		#region Utilities
-
 		// let the platform set the exe extension if it chooses (otherwise, use
 		// the switch statement in GetExeExtension below)
 		protected virtual string GetPlatformExeExtension()
@@ -649,13 +639,9 @@ namespace AutomationTool
 			{
 				return ".stub";
 			}
-			if (Target == UnrealTargetPlatform.Linux)
+			if (Target == UnrealTargetPlatform.Linux || Target == UnrealTargetPlatform.LinuxAArch64)
 			{
 				return "";
-			}
-			if (Target == UnrealTargetPlatform.HTML5)
-			{
-				return ".js";
 			}
 			if (Target == UnrealTargetPlatform.Mac)
 			{
@@ -714,7 +700,5 @@ namespace AutomationTool
 
 			return ValidPlatforms;
 		}
-
-		#endregion
 	}
 }

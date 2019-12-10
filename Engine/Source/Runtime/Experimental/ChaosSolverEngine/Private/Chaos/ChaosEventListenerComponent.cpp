@@ -1,7 +1,7 @@
 // Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
 
 #include "Chaos/ChaosEventListenerComponent.h"
-#include "PBDRigidsSolver.h"
+#include "PhysicsSolver.h"
 #include "Chaos/ChaosSolverActor.h"
 
 UChaosEventListenerComponent::UChaosEventListenerComponent()
@@ -21,8 +21,7 @@ const AChaosSolverActor* UChaosEventListenerComponent::GetSolverActor() const
 	return GetTypedOuter<AChaosSolverActor>();
 }
 
-#if INCLUDE_CHAOS
-const Chaos::FPBDRigidsSolver* UChaosEventListenerComponent::GetSolver() const
+const Chaos::FPhysicsSolver* UChaosEventListenerComponent::GetSolver() const
 {
 	const AChaosSolverActor* A = GetSolverActor();
 	return A ? A->GetSolver() : nullptr;
@@ -33,4 +32,3 @@ const TSharedPtr<FPhysScene_Chaos> UChaosEventListenerComponent::GetPhysicsScene
 	const AChaosSolverActor* A = GetSolverActor();
 	return A ? A->GetPhysicsScene() : nullptr;
 }
-#endif

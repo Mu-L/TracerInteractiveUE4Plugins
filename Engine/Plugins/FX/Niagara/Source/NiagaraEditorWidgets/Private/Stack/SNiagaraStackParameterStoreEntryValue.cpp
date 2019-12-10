@@ -17,6 +17,8 @@
 #include "PropertyEditorModule.h"
 #include "IStructureDetailsView.h"
 #include "Modules/ModuleManager.h"
+#include "PropertyEditorModule.h"
+#include "PropertyCustomizationHelpers.h"
 
 #define LOCTEXT_NAMESPACE "NiagaraStackParameterStoreEntryValue"
 
@@ -62,21 +64,6 @@ void SNiagaraStackParameterStoreEntryValue::Construct(const FArguments& InArgs, 
 					ConstructValueStructWidget()
 				]
 			]
-		]
-
-		// Handle drop-down button
-		+ SHorizontalBox::Slot()
-		.AutoWidth()
-		.VAlign(VAlign_Center)
-		.Padding(3, 0, 0, 0)
-		[
-			SNew(SComboButton)
-			.ButtonStyle(FEditorStyle::Get(), "HoverHintOnly")
-			.ForegroundColor(FSlateColor::UseForeground())
-			.OnGetMenuContent(this, &SNiagaraStackParameterStoreEntryValue::OnGetAvailableHandleMenu)
-			.ContentPadding(FMargin(2))
-			.HAlign(HAlign_Center)
-			.VAlign(VAlign_Center)
 		]
 
 		// Reset Button
@@ -133,12 +120,18 @@ FReply SNiagaraStackParameterStoreEntryValue::DeleteClicked()
 	return FReply::Handled();
 }
 
-TSharedRef<SWidget> SNiagaraStackParameterStoreEntryValue::OnGetAvailableHandleMenu()
-{
-	// TODO: This will need to be adjusted based on the current stack being edited, i.e. system vs emitter vs particle.
-	FMenuBuilder MenuBuilder(true, nullptr);
-	return MenuBuilder.MakeWidget();
+void SNiagaraStackParameterStoreEntryValue::OnAssetSelectedFromPicker(const FAssetData& InAssetData)
+{	
+	UMaterialInterface* Mat = Cast<UMaterialInterface>(InAssetData.GetAsset());
+	StackEntry->ReplaceValueObject(Mat);
 }
+
+FString SNiagaraStackParameterStoreEntryValue::GetCurrentAssetPath() const
+{
+	UObject* Obj = StackEntry->GetValueObject();
+	return  Obj != nullptr ? Obj->GetPathName() : FString();
+}
+
 
 TSharedRef<SWidget> SNiagaraStackParameterStoreEntryValue::ConstructValueStructWidget()
 {
@@ -182,6 +175,30 @@ TSharedRef<SWidget> SNiagaraStackParameterStoreEntryValue::ConstructValueStructW
 
 			ValueStructDetailsView = StructureDetailsView;
 			return StructureDetailsView->GetWidget().ToSharedRef();
+		}
+	}
+	else if (StackEntry->GetInputType().GetClass() != nullptr)
+	{
+		if (StackEntry->GetInputType().GetClass()->IsChildOf(UMaterialInterface::StaticClass()))
+		{
+			TArray<const UClass*> AllowedClasses;
+			AllowedClasses.Add(UMaterialInterface::StaticClass());
+			
+			return SNew(SObjectPropertyEntryBox)
+				.ObjectPath_Raw(this, &SNiagaraStackParameterStoreEntryValue::GetCurrentAssetPath)
+				.AllowedClass(UMaterialInterface::StaticClass())
+				.OnObjectChanged_Raw(this, &SNiagaraStackParameterStoreEntryValue::OnAssetSelectedFromPicker)
+				.AllowClear(false)
+				.DisplayUseSelected(true)
+				.DisplayBrowse(true)
+				.DisplayThumbnail(true)
+				.NewAssetFactories(TArray<UFactory*>());
+
+		}
+		else
+		{
+			return SNew(STextBlock)
+				.Text(StackEntry->GetInputType().GetClass()->GetDisplayNameText());
 		}
 	}
 	else

@@ -41,7 +41,7 @@ UNiagaraSystem* UNiagaraNodeEmitter::GetOwnerSystem() const
 void UNiagaraNodeEmitter::SetOwnerSystem(UNiagaraSystem* InOwnerSystem)
 {
 	OwnerSystem = InOwnerSystem;
-	DisplayName = GetNameFromEmitter();
+	RefreshFromExternalChanges();
 }
 
 FGuid UNiagaraNodeEmitter::GetEmitterHandleId() const
@@ -226,7 +226,29 @@ UNiagaraGraph* UNiagaraNodeEmitter::GetCalledGraph() const
 bool UNiagaraNodeEmitter::RefreshFromExternalChanges()
 {
 	DisplayName = GetNameFromEmitter();
+	SyncEnabledState();
 	return true;
+}
+
+void UNiagaraNodeEmitter::SyncEnabledState()
+{
+	if (OwnerSystem != nullptr && EmitterHandleId.IsValid())
+	{
+		for (const FNiagaraEmitterHandle& EmitterHandle : OwnerSystem->GetEmitterHandles())
+		{
+			if (EmitterHandle.GetId() == EmitterHandleId)
+			{
+				if (EmitterHandle.GetIsEnabled() == false)
+				{
+					SetEnabledState(ENodeEnabledState::Disabled, false);
+				}
+				else
+				{
+					SetEnabledState(ENodeEnabledState::Enabled, false);
+				}
+			}
+		}
+	}
 }
 
 void UNiagaraNodeEmitter::SetCachedVariablesForCompilation(const FName& InUniqueName, UNiagaraGraph* InGraph, UNiagaraScriptSourceBase* InSource)
@@ -245,13 +267,13 @@ FText UNiagaraNodeEmitter::GetNameFromEmitter()
 		{
 			if (EmitterHandle.GetId() == EmitterHandleId)
 			{
-				return FText::FromName(EmitterHandle.GetName());
+				return FText::AsCultureInvariant(EmitterHandle.GetName().ToString());
 			}
 		}
 	}
 	else if (CachedUniqueName.IsValid())
 	{
-		return FText::FromName(CachedUniqueName);
+		return FText::AsCultureInvariant(CachedUniqueName.ToString());
 	}
 	return FText();
 }
@@ -387,10 +409,29 @@ void UNiagaraNodeEmitter::Compile(FHlslNiagaraTranslator *Translator, TArray<int
 	Options.bFilterDuplicates = true;
 	Options.bFilterByScriptUsage = true;
 	Options.TargetScriptUsage = Translator->GetTargetUsage() == ENiagaraScriptUsage::SystemSpawnScript ? ENiagaraScriptUsage::EmitterSpawnScript : ENiagaraScriptUsage::EmitterUpdateScript;
-	CalledGraph->FindInputNodes(InputsNodes, Options);
+	
+	if (CalledGraph && IsNodeEnabled()) // Called graph may be null on an disabled emitter
+	{
+		CalledGraph->FindInputNodes(InputsNodes, Options);
+	}
 
 	TArray<int32> CompileInputs;
-	CompileInputs.Reserve(InputsNodes.Num());
+	
+	if (InputPins.Num() > 1)
+	{
+		Translator->Error(LOCTEXT("TooManyOutputPinsError", "Too many input pins on node."), this, nullptr);
+		return;
+	}
+
+	int32 InputPinCompiled = Translator->CompilePin(InputPins[0]);
+	if (!IsNodeEnabled())
+	{
+		// Do the minimal amount of work necessary if we are disabled.
+		CompileInputs.Reserve(1);
+		CompileInputs.Add(InputPinCompiled);
+		Translator->Emitter(this, CompileInputs, Outputs);
+		return;
+	}
 
 	if (InputsNodes.Num() <= 0)
 	{
@@ -398,18 +439,14 @@ void UNiagaraNodeEmitter::Compile(FHlslNiagaraTranslator *Translator, TArray<int
 		return;
 	}
 
-	if (InputPins.Num() > 1)
-	{
-		Translator->Error(LOCTEXT("TooManyOutputPinsError", "Too many input pins on node."), this, nullptr);
-		return;
-	}
+	CompileInputs.Reserve(InputsNodes.Num());
 
 	bool bError = false;
 	for (UNiagaraNodeInput* EmitterInputNode : InputsNodes)
 	{
 		if (EmitterInputNode->Input.IsEquivalent(FNiagaraVariable(FNiagaraTypeDefinition::GetParameterMapDef(), TEXT("InputMap"))))
 		{
-			CompileInputs.Add(Translator->CompilePin(InputPins[0]));
+			CompileInputs.Add(InputPinCompiled);
 		}
 		else
 		{
@@ -423,16 +460,16 @@ void UNiagaraNodeEmitter::Compile(FHlslNiagaraTranslator *Translator, TArray<int
 	}
 }
 
-void UNiagaraNodeEmitter::GatherExternalDependencyIDs(ENiagaraScriptUsage InMasterUsage, const FGuid& InMasterUsageId, TArray<FNiagaraCompileHash>& InReferencedCompileHashes, TArray<FGuid>& InReferencedIDs, TArray<UObject*>& InReferencedObjs) const
+void UNiagaraNodeEmitter::GatherExternalDependencyData(ENiagaraScriptUsage InMasterUsage, const FGuid& InMasterUsageId, TArray<FNiagaraCompileHash>& InReferencedCompileHashes, TArray<UObject*>& InReferencedObjs) const
 {
 	UNiagaraGraph* CalledGraph = GetCalledGraph();
 
-	if (CalledGraph)
+	if (CalledGraph && IsNodeEnabled()) // Skip if disabled
 	{
 		ENiagaraScriptUsage TargetUsage = InMasterUsage == ENiagaraScriptUsage::SystemSpawnScript ? ENiagaraScriptUsage::EmitterSpawnScript : ENiagaraScriptUsage::EmitterUpdateScript;
 		InReferencedCompileHashes.Add(CalledGraph->GetCompileDataHash(TargetUsage, FGuid(0,0,0,0)));
 		InReferencedObjs.Add(CalledGraph);
-		CalledGraph->GatherExternalDependencyIDs(TargetUsage, FGuid(0, 0, 0, 0), InReferencedCompileHashes, InReferencedIDs, InReferencedObjs);
+		CalledGraph->GatherExternalDependencyData(TargetUsage, FGuid(0, 0, 0, 0), InReferencedCompileHashes, InReferencedObjs);
 	}
 }
 

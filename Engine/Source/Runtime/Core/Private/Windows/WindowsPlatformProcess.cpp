@@ -31,15 +31,6 @@
 	#include <LM.h>
 	#include <Psapi.h>
 	#include <TlHelp32.h>
-
-	namespace ProcessConstants
-	{
-		uint32 WIN_STD_INPUT_HANDLE = STD_INPUT_HANDLE;
-		uint32 WIN_STD_OUTPUT_HANDLE = STD_OUTPUT_HANDLE;
-		uint32 WIN_ATTACH_PARENT_PROCESS = ATTACH_PARENT_PROCESS;		
-		uint32 WIN_STILL_ACTIVE = STILL_ACTIVE;
-	}
-
 #include "Windows/HideWindowsPlatformTypes.h"
 #include "Windows/WindowsPlatformMisc.h"
 
@@ -105,15 +96,15 @@ void FWindowsPlatformProcess::FreeDllHandle( void* DllHandle )
 	::FreeLibrary((HMODULE)DllHandle);
 }
 
-FString FWindowsPlatformProcess::GenerateApplicationPath( const FString& AppName, EBuildConfigurations::Type BuildConfiguration)
+FString FWindowsPlatformProcess::GenerateApplicationPath( const FString& AppName, EBuildConfiguration BuildConfiguration)
 {
 	FString PlatformName = GetBinariesSubdirectory();
 	FString ExecutablePath = FPaths::EngineDir() / FString::Printf(TEXT("Binaries/%s/%s"), *PlatformName, *AppName);
 	FPaths::MakePlatformFilename(ExecutablePath);
 
-	if (BuildConfiguration != EBuildConfigurations::Development)
+	if (BuildConfiguration != EBuildConfiguration::Development)
 	{
-		ExecutablePath += FString::Printf(TEXT("-%s-%s"), *PlatformName, EBuildConfigurations::ToString(BuildConfiguration));
+		ExecutablePath += FString::Printf(TEXT("-%s-%s"), *PlatformName, LexToString(BuildConfiguration));
 	}
 
 	ExecutablePath += TEXT(".exe");
@@ -471,7 +462,16 @@ void FWindowsPlatformProcess::SetThreadAffinityMask( uint64 AffinityMask )
 
 bool FWindowsPlatformProcess::GetProcReturnCode( FProcHandle & ProcHandle, int32* ReturnCode )
 {
-	return ::GetExitCodeProcess( ProcHandle.Get(), (::DWORD *)ReturnCode ) && *((uint32*)ReturnCode) != ProcessConstants::WIN_STILL_ACTIVE;
+	DWORD ExitCode = 0;
+	if (::GetExitCodeProcess(ProcHandle.Get(), &ExitCode) && ExitCode != STILL_ACTIVE)
+	{
+		if (ReturnCode)
+		{
+			*ReturnCode = (int32)ExitCode;
+		}
+		return true;
+	}
+	return false;
 }
 
 bool FWindowsPlatformProcess::GetApplicationMemoryUsage(uint32 ProcessId, SIZE_T* OutMemoryUsage)
@@ -654,13 +654,19 @@ FString FWindowsPlatformProcess::GetApplicationName( uint32 ProcessId )
 		int32 InOutSize = ProcessNameBufferSize;
 		static_assert(sizeof(::DWORD) == sizeof(int32), "DWORD size doesn't match int32. Is it the future or the past?");
 
+		if(
 #if WINVER == 0x0502
-		GetProcessImageFileName(ProcessHandle, ProcessNameBuffer, InOutSize);
+		GetProcessImageFileName(ProcessHandle, ProcessNameBuffer, InOutSize)
 #else
-		QueryFullProcessImageName(ProcessHandle, 0, ProcessNameBuffer, (PDWORD)(&InOutSize));
+		QueryFullProcessImageName(ProcessHandle, 0, ProcessNameBuffer, (PDWORD)(&InOutSize))
 #endif
+			)
+		{
+			// TODO no null termination guarantee on GetProcessImageFileName?  it returns size as well, whereas QueryFullProcessImageName just returns non-zero on success
+			Output = ProcessNameBuffer;
+		}
 
-		Output = ProcessNameBuffer;
+		::CloseHandle(ProcessHandle);
 	}
 
 	return Output;
@@ -725,22 +731,64 @@ bool FWindowsPlatformProcess::ExecProcess(const TCHAR* URL, const TCHAR* Params,
 
 	bool bSuccess = false;
 
-	FString CommandLine = FString::Printf(TEXT("%s %s"), URL, Params);
+	FString CommandLine;
+	if (URL[0] != '\"') // Don't quote executable name if it's already quoted
+	{
+		CommandLine = FString::Printf(TEXT("\"%s\" %s"), URL, Params); 
+	}
+	else
+	{
+		CommandLine = FString::Printf(TEXT("%s %s"), URL, Params);
+	}
+
+	// We only want to add the EXTENDED_STARTUPINFO_PRESENT flag if StartupInfoEx.lpAttributeList is actually setup.
+	// If StartupInfoEx.lpAttributeList is NULL when the EXTENDED_STARTUPINFO_PRESENT flag is used, then CreateProcess causes an Access Violation crash on some Win32 configurations.
+	// This is specific to when the call is redirected to APIHook_CreateProcessW in AcLayers.dll rather than the standard CreateProcessW implementation in kernel32.dll.
+	uint32 CreateFlags = NORMAL_PRIORITY_CLASS | DETACHED_PROCESS;
+	if (StartupInfoEx.lpAttributeList != NULL)
+	{
+		CreateFlags |= EXTENDED_STARTUPINFO_PRESENT;
+	}
 
 	PROCESS_INFORMATION ProcInfo;
-	if (CreateProcess(NULL, CommandLine.GetCharArray().GetData(), NULL, NULL, TRUE, NORMAL_PRIORITY_CLASS | DETACHED_PROCESS | EXTENDED_STARTUPINFO_PRESENT, NULL, OptionalWorkingDirectory, &StartupInfoEx.StartupInfo, &ProcInfo))
+	if (CreateProcess(NULL, CommandLine.GetCharArray().GetData(), NULL, NULL, TRUE, CreateFlags, NULL, OptionalWorkingDirectory, &StartupInfoEx.StartupInfo, &ProcInfo))
 	{
 		if (hStdOutRead != NULL)
 		{
 			HANDLE ReadablePipes[2] = { hStdOutRead, hStdErrRead };
 			FString* OutStrings[2] = { OutStdOut, OutStdErr };
+			TArray<uint8> PipeBytes[2];
+
+			auto ReadPipes = [&]()
+			{
+				for (int32 PipeIndex = 0; PipeIndex < 2; ++PipeIndex)
+				{
+					if (ReadablePipes[PipeIndex] && OutStrings[PipeIndex])
+					{
+						TArray<uint8> BinaryData;
+						ReadPipeToArray(ReadablePipes[PipeIndex], BinaryData);
+						PipeBytes[PipeIndex].Append(BinaryData);
+					}
+				}
+			};
+
 			FProcHandle ProcHandle(ProcInfo.hProcess);
 			do 
 			{
-				ReadFromPipes(OutStrings, ReadablePipes, 2);
+				ReadPipes();
 				FPlatformProcess::Sleep(0);
 			} while (IsProcRunning(ProcHandle));
-			ReadFromPipes(OutStrings, ReadablePipes, 2);
+			ReadPipes();
+
+			// Convert only after all bytes are available to prevent string corruption
+			for (int32 PipeIndex = 0; PipeIndex < 2; ++PipeIndex)
+			{
+				if (OutStrings[PipeIndex] && PipeBytes[PipeIndex].Num() > 0)
+				{
+					PipeBytes[PipeIndex].Add('\0');
+					*OutStrings[PipeIndex] = FUTF8ToTCHAR((const ANSICHAR*)PipeBytes[PipeIndex].GetData()).Get();
+				}
+			}
 		}
 		else
 		{
@@ -865,7 +913,7 @@ const TCHAR* FWindowsPlatformProcess::BaseDir()
 			{
 				hCurrentModule = hInstance;
 			}
-			GetModuleFileName(hCurrentModule, Result, ARRAY_COUNT(Result));
+			GetModuleFileName(hCurrentModule, Result, UE_ARRAY_COUNT(Result));
 			FString TempResult(Result);
 			TempResult = TempResult.Replace(TEXT("\\"), TEXT("/"));
 			FCString::Strcpy(Result, *TempResult);
@@ -980,7 +1028,7 @@ const TCHAR* FWindowsPlatformProcess::ComputerName()
 	static TCHAR Result[256]=TEXT("");
 	if( !Result[0] )
 	{
-		uint32 Size=ARRAY_COUNT(Result);
+		uint32 Size=UE_ARRAY_COUNT(Result);
 		GetComputerName( Result, (::DWORD*)&Size );
 	}
 	return Result;
@@ -994,7 +1042,7 @@ const TCHAR* FWindowsPlatformProcess::UserName(bool bOnlyAlphaNumeric/* = true*/
 	{
 		if( !ResultAlpha[0] )
 		{
-			uint32 Size=ARRAY_COUNT(ResultAlpha);
+			uint32 Size=UE_ARRAY_COUNT(ResultAlpha);
 			GetUserName( ResultAlpha, (::DWORD*)&Size );
 			TCHAR *c, *d;
 			for( c=ResultAlpha, d=ResultAlpha; *c!=0; c++ )
@@ -1008,7 +1056,7 @@ const TCHAR* FWindowsPlatformProcess::UserName(bool bOnlyAlphaNumeric/* = true*/
 	{
 		if( !Result[0] )
 		{
-			uint32 Size=ARRAY_COUNT(Result);
+			uint32 Size=UE_ARRAY_COUNT(Result);
 			GetUserName( Result, (::DWORD*)&Size );
 		}
 		return Result;
@@ -1017,8 +1065,12 @@ const TCHAR* FWindowsPlatformProcess::UserName(bool bOnlyAlphaNumeric/* = true*/
 
 void FWindowsPlatformProcess::SetCurrentWorkingDirectoryToBaseDir()
 {
+#if defined(DISABLE_CWD_CHANGES) && DISABLE_CWD_CHANGES != 0
+	check(false);
+#else
 	FPlatformMisc::CacheLaunchDir();
 	verify(SetCurrentDirectoryW(BaseDir()));
+#endif
 }
 
 /** Get the current working directory (only really makes sense on desktop platforms) */
@@ -1057,7 +1109,7 @@ const TCHAR* FWindowsPlatformProcess::ExecutablePath()
 	static TCHAR Result[512]=TEXT("");
 	if( !Result[0] )
 	{
-		if ( !GetModuleFileName( hInstance, Result, ARRAY_COUNT(Result) ) )
+		if ( !GetModuleFileName( hInstance, Result, UE_ARRAY_COUNT(Result) ) )
 		{
 			Result[0] = 0;
 		}
@@ -1072,13 +1124,13 @@ const TCHAR* FWindowsPlatformProcess::ExecutableName(bool bRemoveExtension)
 	if( !Result[0] )
 	{
 		// Get complete path for the executable
-		if ( GetModuleFileName( hInstance, Result, ARRAY_COUNT(Result) ) != 0 )
+		if ( GetModuleFileName( hInstance, Result, UE_ARRAY_COUNT(Result) ) != 0 )
 		{
 			// Remove all of the path information by finding the base filename
 			FString FileName = Result;
 			FString FileNameWithExt = Result;
-			FCString::Strncpy( Result, *( FPaths::GetBaseFilename(FileName) ), ARRAY_COUNT(Result) );
-			FCString::Strncpy( ResultWithExt, *( FPaths::GetCleanFilename(FileNameWithExt) ), ARRAY_COUNT(ResultWithExt) );
+			FCString::Strncpy( Result, *( FPaths::GetBaseFilename(FileName) ), UE_ARRAY_COUNT(Result) );
+			FCString::Strncpy( ResultWithExt, *( FPaths::GetCleanFilename(FileNameWithExt) ), UE_ARRAY_COUNT(ResultWithExt) );
 		}
 		// If the call failed, zero out the memory to be safe
 		else
@@ -1107,8 +1159,8 @@ const TCHAR* FWindowsPlatformProcess::GetBinariesSubdirectory()
 
 const FString FWindowsPlatformProcess::GetModulesDirectory()
 {
-	static FString Result;
-	if(Result.Len() == 0)
+	static TCHAR Result[MAX_PATH];
+	if(Result[0] == 0)
 	{
 		// Get the handle to the current module
 		HMODULE hCurrentModule;
@@ -1118,13 +1170,13 @@ const FString FWindowsPlatformProcess::GetModulesDirectory()
 		}
 
 		// Get the directory for it
-		TCHAR Buffer[MAX_PATH] = TEXT("");
-		GetModuleFileName(hCurrentModule, Buffer, ARRAY_COUNT(Buffer));
-		*FCString::Strrchr(Buffer, '\\') = 0;
+		GetModuleFileName(hCurrentModule, Result, UE_ARRAY_COUNT(Result));
+		*FCString::Strrchr(Result, '\\') = 0;
 
 		// Normalize the resulting path
-		Result = Buffer;
-		FPaths::MakeStandardFilename(Result);
+		FString Buffer = Result;
+		FPaths::MakeStandardFilename(Buffer);
+		FCString::Strcpy(Result, *Buffer);
 	}
 	return Result;
 }
@@ -1226,7 +1278,10 @@ void FWindowsPlatformProcess::SleepNoStats(float Seconds)
 	{
 		::SwitchToThread();
 	}
-	::Sleep(Milliseconds);
+	else
+	{
+		::Sleep(Milliseconds);
+	}
 }
 
 void FWindowsPlatformProcess::SleepInfinite()
@@ -1329,6 +1384,7 @@ FString FWindowsPlatformProcess::ReadPipe( void* ReadPipe )
 {
 	FString Output;
 
+	// Note: String becomes corrupted when more than one byte per character and all bytes are not available
 	uint32 BytesAvailable = 0;
 	if (::PeekNamedPipe(ReadPipe, NULL, 0, NULL, (::DWORD*)&BytesAvailable, NULL) && (BytesAvailable > 0))
 	{
@@ -1383,7 +1439,7 @@ bool FWindowsPlatformProcess::WritePipe(void* WritePipe, const FString& Message,
 
 	// Convert input to UTF8CHAR
 	uint32 BytesAvailable = Message.Len();
-	UTF8CHAR * Buffer = new UTF8CHAR[BytesAvailable + 1];
+	UTF8CHAR * Buffer = new UTF8CHAR[BytesAvailable + 2];
 	for (uint32 i = 0; i < BytesAvailable; i++)
 	{
 		Buffer[i] = Message[i];
@@ -1429,9 +1485,15 @@ bool FWindowsPlatformProcess::WritePipe(void* WritePipe, const uint8* Data, cons
 #include "Windows/AllowWindowsPlatformTypes.h"
 
 FWindowsPlatformProcess::FWindowsSemaphore::FWindowsSemaphore(const FString & InName, HANDLE InSemaphore)
-	:	FSemaphore(InName)
-	,	Semaphore(InSemaphore)
+	: FWindowsSemaphore(*InName, InSemaphore)
 {
+}
+
+FWindowsPlatformProcess::FWindowsSemaphore::FWindowsSemaphore(const TCHAR* InName, Windows::HANDLE InSemaphore)
+	: FSemaphore(InName)
+	, Semaphore(InSemaphore)
+{
+
 }
 
 FWindowsPlatformProcess::FWindowsSemaphore::~FWindowsSemaphore()
@@ -1482,19 +1544,24 @@ void FWindowsPlatformProcess::FWindowsSemaphore::Unlock()
 	}
 }
 
-FWindowsPlatformProcess::FSemaphore * FWindowsPlatformProcess::NewInterprocessSynchObject(const FString & Name, bool bCreate, uint32 MaxLocks)
+FWindowsPlatformProcess::FSemaphore* FWindowsPlatformProcess::NewInterprocessSynchObject(const FString & Name, bool bCreate, uint32 MaxLocks)
+{
+	return NewInterprocessSynchObject(*Name, bCreate, MaxLocks);
+}
+
+FWindowsPlatformProcess::FSemaphore* FWindowsPlatformProcess::NewInterprocessSynchObject(const TCHAR* Name, bool bCreate, uint32 MaxLocks)
 {
 	HANDLE Semaphore = NULL;
 	
 	if (bCreate)
 	{
-		Semaphore = CreateSemaphore(NULL, MaxLocks, MaxLocks, *Name);
+		Semaphore = CreateSemaphore(NULL, MaxLocks, MaxLocks, Name);
 		if (NULL == Semaphore)
 		{
 			DWORD ErrNo = GetLastError();
 			UE_LOG(LogHAL, Warning, TEXT("CreateSemaphore(Attrs=NULL, InitialValue=%d, MaxValue=%d, Name='%s') failed with LastError = %d"),
 				MaxLocks, MaxLocks,
-				*Name,
+				Name,
 				ErrNo);
 			return NULL;
 		}
@@ -1502,13 +1569,13 @@ FWindowsPlatformProcess::FSemaphore * FWindowsPlatformProcess::NewInterprocessSy
 	else
 	{
 		DWORD AccessRights = SYNCHRONIZE | SEMAPHORE_MODIFY_STATE;
-		Semaphore = OpenSemaphore(AccessRights, false, *Name);
+		Semaphore = OpenSemaphore(AccessRights, false, Name);
 		if (NULL == Semaphore)
 		{
 			DWORD ErrNo = GetLastError();
 			UE_LOG(LogHAL, Warning, TEXT("OpenSemaphore(AccessRights=0x%08x, bInherit=false, Name='%s') failed with LastError = %d"),
 				AccessRights,
-				*Name,
+				Name,
 				ErrNo);
 			return NULL;
 		}

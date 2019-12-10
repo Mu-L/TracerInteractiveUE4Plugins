@@ -809,7 +809,7 @@ void FCanvas::Flush_GameThread(bool bForce)
 	bool bEmitCanvasDrawEvents = GetEmitDrawEvents();
 
 	// Only create these render commands if we actually have something to draw.
-	if(SortedElements.Num() > 0)
+	if(SortedElements.Num() > 0 && !GUsingNullRHI)
 	{
 		FRenderThreadScope RenderThreadScope;
 		RenderThreadScope.EnqueueRenderCommand(
@@ -1382,22 +1382,39 @@ void UCanvas::UpdateSafeZoneData()
 
 		SafeZonePadX = (CachedDisplayWidth - (CachedDisplayWidth * SafeRegionPercentage.X))/2.f;
 		SafeZonePadY = (CachedDisplayHeight - (CachedDisplayHeight * SafeRegionPercentage.Y))/2.f;
-		SafeZonePadX = SafeZonePadEX;
-		SafeZonePadY = SafeZonePadEY;
+		SafeZonePadEX = SafeZonePadX;
+		SafeZonePadEY = SafeZonePadY;
 	}
 	else if(FSlateApplication::IsInitialized())
 	{
 		FDisplayMetrics DisplayMetrics;
+		FSlateApplication::Get().GetDisplayMetrics(DisplayMetrics);
+ 		CachedDisplayWidth = DisplayMetrics.PrimaryDisplayWidth;
+ 		CachedDisplayHeight = DisplayMetrics.PrimaryDisplayHeight;
 
-		FSlateApplication::Get().GetCachedDisplayMetrics(DisplayMetrics);
+#if PLATFORM_DESKTOP
+		TSharedPtr<SWindow> Window = FSlateApplication::Get().GetActiveTopLevelWindow();
+		if (Window.IsValid())
+		{
+			FVector2D WindowSize = Window->GetClientSizeInScreen();
+			if (ISlateViewport* SlateViewport = Window->GetViewport().Get())
+			{
+				WindowSize = SlateViewport->GetSize();
+			}
 
-		SafeZonePadX = FMath::CeilToInt(DisplayMetrics.TitleSafePaddingSize.X);
-		SafeZonePadY = FMath::CeilToInt(DisplayMetrics.TitleSafePaddingSize.Y);
-		SafeZonePadEX = FMath::CeilToInt(DisplayMetrics.TitleSafePaddingSize.Z);
-		SafeZonePadEY = FMath::CeilToInt(DisplayMetrics.TitleSafePaddingSize.W);
+			CachedDisplayWidth = WindowSize.X;
+			CachedDisplayHeight = WindowSize.Y;
+		}
+#endif
 
-		CachedDisplayWidth = DisplayMetrics.PrimaryDisplayWidth;
-		CachedDisplayHeight = DisplayMetrics.PrimaryDisplayHeight;
+		const FVector2D EffectiveScreenSize = FVector2D(CachedDisplayWidth, CachedDisplayHeight);
+		FMargin SafeZone;
+		FSlateApplication::Get().GetSafeZoneSize(/*out*/ SafeZone, EffectiveScreenSize);
+
+		SafeZonePadX = FMath::CeilToInt(SafeZone.Left);
+		SafeZonePadY = FMath::CeilToInt(SafeZone.Top);
+		SafeZonePadEX = FMath::CeilToInt(SafeZone.Right);
+		SafeZonePadEY = FMath::CeilToInt(SafeZone.Bottom);
 	}
 
 }
@@ -1534,7 +1551,7 @@ void UCanvas::ClippedStrLen( const UFont* Font, float ScaleX, float ScaleY, int3
 void VARARGS UCanvas::WrappedStrLenf( const UFont* Font, float ScaleX, float ScaleY, int32& XL, int32& YL, const TCHAR* Fmt, ... ) 
 {
 	TCHAR Text[4096];
-	GET_VARARGS( Text, ARRAY_COUNT(Text), ARRAY_COUNT(Text)-1, Fmt, Fmt );
+	GET_VARARGS( Text, UE_ARRAY_COUNT(Text), UE_ARRAY_COUNT(Text)-1, Fmt, Fmt );
 
 	FFontRenderInfo Info;
 	WrappedPrint( false, 0.0f, 0.0f, XL, YL, Font, ScaleX, ScaleY, false, false, Text, Info ); 
@@ -1903,7 +1920,7 @@ void UCanvas::SetView(FSceneView* InView)
 	SceneView = InView;
 	if (InView)
 	{
-		if (GEngine->StereoRenderingDevice.IsValid() && InView->StereoPass != eSSP_FULL)
+		if (GEngine->StereoRenderingDevice.IsValid() && IStereoRendering::IsStereoEyeView(*InView))
 		{
 			GEngine->StereoRenderingDevice->InitCanvasFromView(InView, this);
 		}

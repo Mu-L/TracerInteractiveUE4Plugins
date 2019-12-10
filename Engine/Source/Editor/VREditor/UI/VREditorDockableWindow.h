@@ -23,7 +23,7 @@ class AVREditorDockableWindow : public AVREditorFloatingUI, public IViewportInte
 public:
 
 	/** Default constructor */
-	AVREditorDockableWindow();
+	AVREditorDockableWindow(const FObjectInitializer& ObjectInitializer);
 	virtual void PostActorCreated() override;
 
 	/** Updates the meshes for the UI */
@@ -64,6 +64,9 @@ protected:
 	virtual void SetCollision(const ECollisionEnabled::Type InCollisionType, const ECollisionResponse InCollisionResponse, const ECollisionChannel InCollisionChannel) override;
 
 private:
+
+	/** Set the static mesh for the main window that backs our content */
+	void SetWindowMesh(UStaticMesh* WindowMesh);
 
 	/** Set the color on the dynamic materials of the selection bar */
 	void SetSelectionBarColor( const FLinearColor& LinearColor );

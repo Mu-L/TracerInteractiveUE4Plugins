@@ -61,7 +61,7 @@ protected:
 
 	void SetSearchMofN();
 
-	void SelectedEmitterHandlesChanged();
+	void SystemSelectionChanged();
 	void OnTabChanged(uint32 Tab);
 	bool GetTabCheckedState(uint32 Tab) const;
 	EVisibility GetViewVisibility(uint32 Tab) const;

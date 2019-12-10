@@ -1860,20 +1860,27 @@ namespace VivoxClientApi {
 			config->pf_on_audio_unit_before_capture_audio_sent = &sOnAudioUnitBeforeCaptureAudioSent;
 			config->pf_on_audio_unit_before_recv_audio_rendered = &sOnAudioUnitBeforeRecvAudioRendered;
 
+            m_app = app;
             retval = vx_initialize3(config, configSize);
             if(retval != 0) {
+                m_app = nullptr;
                 return VCSStatus(retval);
             }
-            m_app = app;
             
             /// Load local cache of audio input and output device member variables
             RequestAudioInputDevices();
             RequestAudioOutputDevices();
 
-            while ( !m_audioInputDeviceListPopulated ||
-                    !m_audioOutputDeviceListPopulated ){
+            unsigned int ElapsedTime = 0;
+            const unsigned int SleepDuration = 20000;
+            const unsigned int MaxElapsedTime = 25 * SleepDuration;
+            OnResponseOrEventFromSdkUiThread();
+            if ((!m_audioInputDeviceListPopulated || !m_audioOutputDeviceListPopulated)
+                && ElapsedTime < MaxElapsedTime)
+            {
+                sleepMicroseconds(SleepDuration);
+                ElapsedTime += SleepDuration;
                 OnResponseOrEventFromSdkUiThread();
-                sleepMicroseconds(100000);
             }
 
             return VCSStatus(0);
@@ -1885,10 +1892,14 @@ namespace VivoxClientApi {
                 if(m_currentState == ConnectorStateInitialized || m_currentState == ConnectorStateInitializing) {
                     Disconnect(m_currentServer);
                 }
-                while(m_currentState == ConnectorStateUninitializing) {
+                unsigned int ElapsedTime = 0;
+                const unsigned int SleepDuration = 20000;
+                const unsigned int MaxElapsedTime = 25 * SleepDuration;
+                while(m_currentState == ConnectorStateUninitializing && ElapsedTime < MaxElapsedTime) {
                     // wait for the the response
                     WaitForShutdownResponse();
-                    sleepMicroseconds(30000);
+                    sleepMicroseconds(SleepDuration);
+                    ElapsedTime += SleepDuration;
                 }
                 vx_uninitialize();
                 m_app = NULL;
@@ -2614,23 +2625,26 @@ namespace VivoxClientApi {
 
         void OnLogMessage(vx_log_level level, const char *source, const char* message)
         {
-            stringstream ss;
-            ss << source << " - " << message;
+            if (m_app)
+            {
+                stringstream ss;
+                ss << source << " - " << message;
 #ifdef WIN32
-            FILETIME ft;
-            GetSystemTimeAsFileTime(&ft);
-            ULARGE_INTEGER ul;
-            ul.HighPart = ft.dwHighDateTime;
-            ul.LowPart = ft.dwLowDateTime;
-            m_app->onLogStatementEmitted((IClientApiEventHandler::LogLevel)level, ul.QuadPart, GetCurrentThreadId(), ss.str().c_str());
+                FILETIME ft;
+                GetSystemTimeAsFileTime(&ft);
+                ULARGE_INTEGER ul;
+                ul.HighPart = ft.dwHighDateTime;
+                ul.LowPart = ft.dwLowDateTime;
+                m_app->onLogStatementEmitted((IClientApiEventHandler::LogLevel)level, ul.QuadPart, GetCurrentThreadId(), ss.str().c_str());
 #else
-            struct timeval tv;
-            gettimeofday(&tv, NULL);
-            long long tmp = tv.tv_sec;
-            tmp *= 1000000;
-            tmp += tv.tv_usec;
-            m_app->onLogStatementEmitted((IClientApiEventHandler::LogLevel)level, tmp, 0, ss.str().c_str());
+                struct timeval tv;
+                gettimeofday(&tv, NULL);
+                long long tmp = tv.tv_sec;
+                tmp *= 1000000;
+                tmp += tv.tv_usec;
+                m_app->onLogStatementEmitted((IClientApiEventHandler::LogLevel)level, tmp, 0, ss.str().c_str());
 #endif
+            }
         }
 
         void OnResponseOrEventFromSdk()

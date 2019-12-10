@@ -18,7 +18,7 @@ static const TArray<FString>& GetDataDrivenIniFilenames()
 
 		// look for the special files in any congfig subdirectories
 		IFileManager::Get().FindFilesRecursive(DataDrivenIniFilenames, *FPaths::EngineConfigDir(), TEXT("DataDrivenPlatformInfo.ini"), true, false);
-		IFileManager::Get().FindFilesRecursive(DataDrivenIniFilenames, *FPaths::PlatformExtensionsDir(), TEXT("DataDrivenPlatformInfo.ini"), true, false, false);
+		IFileManager::Get().FindFilesRecursive(DataDrivenIniFilenames, *FPaths::EnginePlatformExtensionsDir(), TEXT("DataDrivenPlatformInfo.ini"), true, false, false);
 	}
 
 	return DataDrivenIniFilenames;
@@ -44,10 +44,10 @@ bool FDataDrivenPlatformInfoRegistry::LoadDataDrivenIniFile(int32 Index, FConfig
 	{
 		IniFile.ProcessInputFileContents(IniContents);
 
-		// platform extension paths are different (platform/engine/config, not engine/config/platform)
-		if (IniFilenames[Index].StartsWith(FPaths::PlatformExtensionsDir()))
+		// platform extension paths are different (engine/platforms/platform/config, not engine/config/platform)
+		if (IniFilenames[Index].StartsWith(FPaths::EnginePlatformExtensionsDir()))
 		{
-			PlatformName = FPaths::GetCleanFilename(FPaths::GetPath(FPaths::GetPath(FPaths::GetPath(IniFilenames[Index]))));
+			PlatformName = FPaths::GetCleanFilename(FPaths::GetPath(FPaths::GetPath(IniFilenames[Index])));
 		}
 		else
 		{
@@ -64,7 +64,7 @@ bool FDataDrivenPlatformInfoRegistry::LoadDataDrivenIniFile(int32 Index, FConfig
 /**
 * Get the global set of data driven platform information
 */
-static const TMap<FString, FDataDrivenPlatformInfoRegistry::FPlatformInfo>& GetAllPlatformInfos()
+const TMap<FString, FDataDrivenPlatformInfoRegistry::FPlatformInfo>& FDataDrivenPlatformInfoRegistry::GetAllPlatformInfos()
 {
 	static bool bHasSearchedForPlatforms = false;
 	static TMap<FString, FDataDrivenPlatformInfoRegistry::FPlatformInfo> DataDrivenPlatforms;
@@ -91,6 +91,7 @@ static const TMap<FString, FDataDrivenPlatformInfoRegistry::FPlatformInfo>& GetA
 				FDataDrivenPlatformInfoRegistry::FPlatformInfo& Info = DataDrivenPlatforms.Add(PlatformName, FDataDrivenPlatformInfoRegistry::FPlatformInfo());
 				IniFile.GetBool(TEXT("DataDrivenPlatformInfo"), TEXT("bIsConfidential"), Info.bIsConfidential);
 				IniFile.GetBool(TEXT("DataDrivenPlatformInfo"), TEXT("bRestrictLocalization"), Info.bRestrictLocalization);
+				IniFile.GetArray(TEXT("DataDrivenPlatformInfo"), TEXT("AdditionalRestrictedFolders"), Info.AdditionalRestrictedFolders);
 
 				// get the parent to build list later
 				FString IniParent;

@@ -21,6 +21,7 @@
 #include "Components/TimelineComponent.h"
 #include "Engine/TimelineTemplate.h"
 #include "Engine/UserDefinedStruct.h"
+#include "Blueprint/BlueprintExtension.h"
 #include "EdGraphUtilities.h"
 #include "K2Node_CallFunction.h"
 #include "K2Node_Composite.h"
@@ -64,8 +65,6 @@ FSimpleMulticastDelegate FKismetCompilerContext::OnPostCompile;
 
 #define LOCTEXT_NAMESPACE "KismetCompiler"
 
-extern COREUOBJECT_API bool GBlueprintUseCompilationManager;
-
 //////////////////////////////////////////////////////////////////////////
 // Stats for this module
 DECLARE_CYCLE_STAT(TEXT("Create Schema"), EKismetCompilerStats_CreateSchema, STATGROUP_KismetCompiler );
@@ -73,6 +72,7 @@ DECLARE_CYCLE_STAT(TEXT("Create Function List"), EKismetCompilerStats_CreateFunc
 DECLARE_CYCLE_STAT(TEXT("Expansion"), EKismetCompilerStats_Expansion, STATGROUP_KismetCompiler )
 DECLARE_CYCLE_STAT(TEXT("Process uber"), EKismetCompilerStats_ProcessUbergraph, STATGROUP_KismetCompiler );
 DECLARE_CYCLE_STAT(TEXT("Process func"), EKismetCompilerStats_ProcessFunctionGraph, STATGROUP_KismetCompiler );
+DECLARE_CYCLE_STAT(TEXT("Generate Function Graph"), EKismetCompilerStats_GenerateFunctionGraphs, STATGROUP_KismetCompiler );
 DECLARE_CYCLE_STAT(TEXT("Precompile Function"), EKismetCompilerStats_PrecompileFunction, STATGROUP_KismetCompiler );
 DECLARE_CYCLE_STAT(TEXT("Compile Function"), EKismetCompilerStats_CompileFunction, STATGROUP_KismetCompiler );
 DECLARE_CYCLE_STAT(TEXT("Postcompile Function"), EKismetCompilerStats_PostcompileFunction, STATGROUP_KismetCompiler );
@@ -130,16 +130,16 @@ FKismetCompilerContext::FKismetCompilerContext(UBlueprint* SourceSketch, FCompil
 	, CompileOptions(InCompilerOptions)
 	, Blueprint(SourceSketch)
 	, NewClass(NULL)
+	, OldClass(nullptr)
 	, ConsolidatedEventGraph(NULL)
 	, UbergraphContext(NULL)
 	, bIsFullCompile(false)
-	, bIsSkeletonOnly(false)
 	, OldCDO(nullptr)
 	, OldGenLinkerIdx(INDEX_NONE)
 	, OldLinker(nullptr)
 	, TargetClass(nullptr)
 	, bAssignDelegateSignatureFunction(false)
-	, bGenerateSubInstanceVariables(false)
+	, bGenerateLinkedAnimGraphVariables(false)
 {
 	MacroRowMaxHeight = 0;
 
@@ -273,9 +273,19 @@ void FKismetCompilerContext::CleanAndSanitizeClass(UBlueprintGeneratedClass* Cla
 		ClassSubObjects.RemoveAllSwap(SubObjectsToSave);
 	}
 
-	for( auto SubObjIt = ClassSubObjects.CreateIterator(); SubObjIt; ++SubObjIt )
+	UClass* InheritableComponentHandlerClass = UInheritableComponentHandler::StaticClass();
+
+	for( UObject* CurrSubObj : ClassSubObjects )
 	{
-		UObject* CurrSubObj = *SubObjIt;
+		// ICH and ICH templates do not need to be destroyed in this way.. doing so will invalidate
+		// transaction buffer references to these UObjects. The UBlueprint may not have a reference to
+		// the ICH at the moment, and therefore might not have added it to SubObjectsToSave (and
+		// removed the ICH from ClassSubObjects):
+		if(Cast<UInheritableComponentHandler>(CurrSubObj) || CurrSubObj->IsInA(InheritableComponentHandlerClass))
+		{
+			continue;
+		}
+
 		FName NewSubobjectName = MakeUniqueObjectName(TransientClass, CurrSubObj->GetClass(), CurrSubObj->GetFName());
 		CurrSubObj->Rename(*NewSubobjectName.ToString(), TransientClass, RenFlags);
 		if( UProperty* Prop = Cast<UProperty>(CurrSubObj) )
@@ -586,6 +596,44 @@ void FKismetCompilerContext::ValidateVariableNames()
 				);
 				TGuardValue<bool> LockDependencies(Blueprint->bCachedDependenciesUpToDate, Blueprint->bCachedDependenciesUpToDate);
 				FBlueprintEditorUtils::RenameMemberVariable(Blueprint, OldVarName, NewVarName);
+			}
+		}
+	}
+}
+
+void FKismetCompilerContext::ValidateComponentClassOverrides()
+{
+	if (UClass* ParentClass = Blueprint->ParentClass)
+	{
+		if (UObject* CDO = ParentClass->GetDefaultObject(false))
+		{
+			for (auto It(Blueprint->ComponentClassOverrides.CreateIterator()); It; ++It)
+			{
+				const FBPComponentClassOverride& Override = *It;
+				if (UObject* OverridenObject = (UObject*)FindObjectWithOuter(CDO, nullptr, Override.ComponentName))
+				{
+					if (Override.ComponentClass && !Override.ComponentClass->IsChildOf(OverridenObject->GetClass()))
+					{
+						MessageLog.Error(
+							*FText::Format(
+								LOCTEXT("InvalidOverride", "{0} is not a legal override for component {1} because it does not derive from {2}."),
+								FText::FromName(Override.ComponentClass->GetFName()),
+								FText::FromName(Override.ComponentName),
+								FText::FromName(OverridenObject->GetClass()->GetFName())
+								).ToString()
+						);
+					}
+				}
+				else
+				{
+					MessageLog.Note(
+						*FText::Format(
+							LOCTEXT("UnneededOverride", "Removing class override for component {0} that no longer exists."),
+							FText::FromName(Override.ComponentName)
+						).ToString()
+					);
+					It.RemoveCurrent();
+				}
 			}
 		}
 	}
@@ -2172,6 +2220,17 @@ void FKismetCompilerContext::FinishCompilingFunction(FKismetFunctionContext& Con
 	if( NewClass->UberGraphFunction == Context.Function )
 	{
 		NewClass->UberGraphFunctionKey = IncrementUberGraphSerialNumber();
+
+		// if the old class uber graph function matches, just reuse that ID, this check means
+		// that if child types aren't reinstanced we can still validate their uber graph:
+		if(NewClass->UberGraphFunction && OldClass)
+		{
+			bool bSameLayout = FStructUtils::TheSameLayout(OldClass->UberGraphFunction, NewClass->UberGraphFunction);
+			if(bSameLayout)
+			{
+				NewClass->UberGraphFunctionKey = OldClass->UberGraphFunctionKey;
+			}
+		}
 	}
 #endif//VALIDATE_UBER_GRAPH_PERSISTENT_FRAME
 }
@@ -2404,10 +2463,18 @@ void FKismetCompilerContext::FinishCompilingClass(UClass* Class)
 	Class->ClassFlags |= (CLASS_Parsed | CLASS_CompiledFromBlueprint);
 	Class->ClassFlags &= ~CLASS_ReplicationDataIsSetUp;
 
-	// Look for OnRep 
+	// This function mostly mirrors PostParsingClassSetup, opportunity to refactor:
 	for( TFieldIterator<UProperty> It(Class, EFieldIteratorFlags::ExcludeSuper); It; ++It)
 	{
 		UProperty *Property = *It;
+		
+		// If any property is instanced, then the class needs to also have CLASS_HasInstancedReference flag
+		if (Property->ContainsInstancedObjectProperty())
+		{
+			Class->ClassFlags |= CLASS_HasInstancedReference;
+		}
+		
+		// Look for OnRep 
 		if (Property->HasAnyPropertyFlags(CPF_Net))
 		{
 			// Verify rep notifies are valid, if not, clear them
@@ -2449,6 +2516,7 @@ void FKismetCompilerContext::FinishCompilingClass(UClass* Class)
 		BPGClass->Timelines = Blueprint->Timelines;
 		BPGClass->SimpleConstructionScript = Blueprint->SimpleConstructionScript;
 		BPGClass->InheritableComponentHandler = Blueprint->InheritableComponentHandler;
+		BPGClass->ComponentClassOverrides = Blueprint->ComponentClassOverrides;
 	}
 
 	//@TODO: Not sure if doing this again is actually necessary
@@ -3696,6 +3764,7 @@ void FKismetCompilerContext::ProcessOneFunctionGraph(UEdGraph* SourceGraph, bool
 	//       skeleton-only compiles (that's why we have that check second) 
 	//       because it would most likely result in errors (the function hasn't
 	//       been added to the class yet, etc.)
+	check(CompileOptions.CompileType != EKismetCompileType::SkeletonOnly);
 	if ((CompileOptions.CompileType == EKismetCompileType::SkeletonOnly) || ValidateGraphIsWellFormed(FunctionGraph))
 	{
 		const UEdGraphSchema_K2* FunctionGraphSchema = CastChecked<const UEdGraphSchema_K2>(FunctionGraph->GetSchema());
@@ -3741,9 +3810,11 @@ void FKismetCompilerContext::ValidateFunctionGraphNames()
 
 	if(ParentBPNameValidator.IsValid())
 	{
-		for (int32 FunctionIndex=0; FunctionIndex < Blueprint->FunctionGraphs.Num(); ++FunctionIndex)
+		TArray<UEdGraph*> AllFunctionGraphs(Blueprint->FunctionGraphs);
+		AllFunctionGraphs += GeneratedFunctionGraphs;
+
+		for (UEdGraph* FunctionGraph : AllFunctionGraphs)
 		{
-			UEdGraph* FunctionGraph = Blueprint->FunctionGraphs[FunctionIndex];
 			if(FunctionGraph->GetFName() != UEdGraphSchema_K2::FN_UserConstructionScript)
 			{
 				if( ParentBPNameValidator->IsValid(FunctionGraph->GetName()) != EValidatorResult::Ok )
@@ -3768,6 +3839,16 @@ void FKismetCompilerContext::ValidateFunctionGraphNames()
 // Creates a copy of the graph to allow further transformations to occur
 void FKismetCompilerContext::CreateFunctionList()
 {
+	{
+		BP_SCOPED_COMPILER_EVENT_STAT(EKismetCompilerStats_GenerateFunctionGraphs);
+
+		// Allow blueprint extensions for the blueprint to generate function graphs
+		for (UBlueprintExtension* Extension : Blueprint->Extensions)
+		{
+			Extension->GenerateFunctionGraphs(this);
+		}
+	}
+
 	BP_SCOPED_COMPILER_EVENT_STAT(EKismetCompilerStats_CreateFunctionList);
 
 	// Process the ubergraph if one should be present
@@ -3785,6 +3866,11 @@ void FKismetCompilerContext::CreateFunctionList()
 		for (int32 i = 0; i < Blueprint->FunctionGraphs.Num(); ++i)
 		{
 			ProcessOneFunctionGraph(Blueprint->FunctionGraphs[i]);
+		}
+
+		for (UEdGraph* FunctionGraph : GeneratedFunctionGraphs)
+		{
+			ProcessOneFunctionGraph(FunctionGraph);
 		}
 
 		for (int32 i = 0; i < Blueprint->DelegateSignatureGraphs.Num(); ++i)
@@ -3841,8 +3927,7 @@ void FKismetCompilerContext::CompileClassLayout(EInternalCompilerFlags InternalF
 	// Make sure the parent class exists and can be used
 	check(Blueprint->ParentClass && Blueprint->ParentClass->GetPropertiesSize());
 
-	bIsSkeletonOnly = (CompileOptions.CompileType == EKismetCompileType::SkeletonOnly);
-	UClass* TargetUClass = bIsSkeletonOnly ? Blueprint->SkeletonGeneratedClass : Blueprint->GeneratedClass;
+	UClass* TargetUClass = Blueprint->GeneratedClass;
 
 	// >>> Backwards Compatibility:  Make sure this is an actual UBlueprintGeneratedClass / UAnimBlueprintGeneratedClass, as opposed to the old UClass
 	EnsureProperGeneratedClass(TargetUClass);
@@ -3850,45 +3935,8 @@ void FKismetCompilerContext::CompileClassLayout(EInternalCompilerFlags InternalF
 
 	TargetClass = Cast<UBlueprintGeneratedClass>(TargetUClass);
 
-	// >>> Backwards Compatibility: Make sure that skeleton generated classes have the proper "SKEL_" naming convention
-	const FString SkeletonPrefix(TEXT("SKEL_"));
-	if( bIsSkeletonOnly && TargetClass && !TargetClass->GetName().StartsWith(SkeletonPrefix) )
-	{
-		FString NewName = SkeletonPrefix + TargetClass->GetName();
- 
-		// Ensure we have a free name for this class
-		UClass* AnyClassWithGoodName = (UClass*)StaticFindObject(UClass::StaticClass(), Blueprint->GetOutermost(), *NewName, false);
-		if( AnyClassWithGoodName )
-		{
-			// Special Case:  If the CDO of the class has become dissociated from its actual CDO, attempt to find the proper named CDO, and get rid of it.
-			if( AnyClassWithGoodName->ClassDefaultObject == TargetClass->ClassDefaultObject )
-			{
-				AnyClassWithGoodName->ClassDefaultObject = NULL;
-				FString DefaultObjectName = FString(DEFAULT_OBJECT_PREFIX) + NewName;
-				AnyClassWithGoodName->ClassDefaultObject = (UObject*)StaticFindObject(UObject::StaticClass(), Blueprint->GetOutermost(), *DefaultObjectName, false);
-			}
- 
-			// Get rid of the old class to make room for renaming our class to the final SKEL name
-			FKismetCompilerUtilities::ConsignToOblivion(AnyClassWithGoodName, Blueprint->bIsRegeneratingOnLoad);
-
-			// Update the refs to the old SKC
-			TMap<UObject*, UObject*> ClassReplacementMap;
-			ClassReplacementMap.Add(AnyClassWithGoodName, TargetClass);
-			TArray<UEdGraph*> AllGraphs;
-			Blueprint->GetAllGraphs(AllGraphs);
-			for (int32 i = 0; i < AllGraphs.Num(); ++i)
-			{
-				FArchiveReplaceObjectRef<UObject> ReplaceInBlueprintAr(AllGraphs[i], ClassReplacementMap, /*bNullPrivateRefs=*/ false, /*bIgnoreOuterRef=*/ false, /*bIgnoreArchetypeRef=*/ false);
-			}
-		}
- 
-		ERenameFlags RenameFlags = (REN_DontCreateRedirectors|REN_NonTransactional|((Blueprint->bIsRegeneratingOnLoad)? REN_ForceNoResetLoaders : 0));
-		TargetClass->Rename(*NewName, NULL, RenameFlags);
-	}
-	// <<< End Backwards Compatibility
-
 	// >>> Backwards compatibility:  If SkeletonGeneratedClass == GeneratedClass, we need to make a new generated class the first time we need it
-	if( !bIsSkeletonOnly && (Blueprint->SkeletonGeneratedClass == Blueprint->GeneratedClass) )
+	if( Blueprint->SkeletonGeneratedClass == Blueprint->GeneratedClass )
 	{
 		Blueprint->GeneratedClass = NULL;
 		TargetClass = NULL;
@@ -3899,31 +3947,13 @@ void FKismetCompilerContext::CompileClassLayout(EInternalCompilerFlags InternalF
 	{
 		FName NewSkelClassName, NewGenClassName;
 		Blueprint->GetBlueprintClassNames(NewGenClassName, NewSkelClassName);
-		SpawnNewClass( bIsSkeletonOnly ? NewSkelClassName.ToString() : NewGenClassName.ToString() );
+		SpawnNewClass( NewGenClassName.ToString() );
 		check(NewClass);
 
 		TargetClass = NewClass;
 
 		// Fix up the reference in the blueprint to the new class
-		if( bIsSkeletonOnly )
-		{
-			Blueprint->SkeletonGeneratedClass = TargetClass;
-		}
-		else
-		{
-			Blueprint->GeneratedClass = TargetClass;
-		}
-	}
-
-	if (CompileOptions.DoesRequireBytecodeGeneration() && !GBlueprintUseCompilationManager)
-	{
-		TArray<UEdGraph*> AllGraphs;
-		Blueprint->GetAllGraphs(AllGraphs);
-		for (int32 i = 0; i < AllGraphs.Num(); i++)
-		{
-			//Reset error flags associated with nodes in each graph
-			ResetErrorFlags(AllGraphs[i]);
-		}
+		Blueprint->GeneratedClass = TargetClass;
 	}
 
 	// Early validation
@@ -3951,6 +3981,8 @@ void FKismetCompilerContext::CompileClassLayout(EInternalCompilerFlags InternalF
 	// Ensure that member variable names are valid and that there are no collisions with a parent class
 	// This validation requires CDO object.
 	ValidateVariableNames();
+
+	ValidateComponentClassOverrides();
 
 	OldCDO = NULL;
 	OldGenLinkerIdx = INDEX_NONE;
@@ -4074,13 +4106,26 @@ void FKismetCompilerContext::CompileFunctions(EInternalCompilerFlags InternalFla
 	// This is phase two, so we want to generated locals if PostponeLocalsGenerationUntilPhaseTwo is set:
 	const bool bGenerateLocals = !!(InternalFlags & EInternalCompilerFlags::PostponeLocalsGenerationUntilPhaseTwo);
 	// Don't propagate values to CDO if we're going to do that in reinstancing:
-	const bool bPropagateValuesToCDO = !(InternalFlags & EInternalCompilerFlags::PostponeDefaultObjectAssignmentUntilReinstancing);
+	bool bPropagateValuesToCDO = !(InternalFlags & EInternalCompilerFlags::PostponeDefaultObjectAssignmentUntilReinstancing);
 	// Don't RefreshExternalBlueprintDependencyNodes if the calling code has done so already:
 	const bool bSkipRefreshExternalBlueprintDependencyNodes = !!(InternalFlags & EInternalCompilerFlags::SkipRefreshExternalBlueprintDependencyNodes);
 	FKismetCompilerVMBackend Backend_VM(Blueprint, Schema, *this);
 
-	// Determine whether or not to skip generated class validation. This requires CDO value propagation to occur first.
-	bool bSkipGeneratedClassValidation = !bPropagateValuesToCDO || CompileOptions.CompileType == EKismetCompileType::Cpp;
+	// Determine whether or not to skip generated class validation.
+	bool bSkipGeneratedClassValidation;
+	if (CompileOptions.DoesRequireCppCodeGeneration())
+	{
+		// CPP codegen requires default value assignment to occur as part of the compilation phase, so we override it here.
+		bPropagateValuesToCDO = true;
+
+		// Also skip generated class validation since it may result in errors and we don't really need to keep the generated class.
+		bSkipGeneratedClassValidation = true;
+	}
+	else
+	{
+		// In all other cases, validation requires CDO value propagation to occur first.
+		bSkipGeneratedClassValidation = !bPropagateValuesToCDO;
+	}
 
 	if( bGenerateLocals )
 	{
@@ -4138,6 +4183,8 @@ void FKismetCompilerContext::CompileFunctions(EInternalCompilerFlags InternalFla
 			}
 		}
 	}
+
+	FunctionListCompiledEvent.Broadcast(this);
 
 	// Save off intermediate build products if requested
 	if (bIsFullCompile && CompileOptions.bSaveIntermediateProducts && !Blueprint->bIsRegeneratingOnLoad)
@@ -4357,20 +4404,6 @@ void FKismetCompilerContext::CompileFunctions(EInternalCompilerFlags InternalFla
 		}
 	}
 
-	// If this was a skeleton compile, make sure everything is RF_Transient
-	if (bIsSkeletonOnly)
-	{
-		ForEachObjectWithOuter(NewClass, [](UObject* Child)
-		{
-			Child->SetFlags(RF_Transient);
-		});
-
-		NewClass->SetFlags(RF_Transient);
-
-		check(NewClass->ClassDefaultObject != nullptr);
-		NewClass->ClassDefaultObject->SetFlags(RF_Transient);
-	}
-
 	// For full compiles, find other blueprints that may need refreshing, and mark them dirty, in case they try to run
 	if( bIsFullCompile && !Blueprint->bIsRegeneratingOnLoad && !bSkipRefreshExternalBlueprintDependencyNodes )
 	{
@@ -4577,6 +4610,21 @@ bool FKismetCompilerContext::ValidateGeneratedClass(UBlueprintGeneratedClass* Cl
 	return UBlueprint::ValidateGeneratedClass(Class);
 }
 
+UEdGraph* FKismetCompilerContext::SpawnIntermediateFunctionGraph(const FString& InDesiredFunctionName)
+{
+	FName UniqueGraphName = FBlueprintEditorUtils::FindUniqueKismetName(Blueprint, InDesiredFunctionName);
+
+	UEdGraph* GeneratedFunctionGraph = FBlueprintEditorUtils::CreateNewGraph(Blueprint, UniqueGraphName, UEdGraph::StaticClass(), UEdGraphSchema_K2::StaticClass());
+	GeneratedFunctionGraph->SetFlags(RF_Transient);
+	GeneratedFunctionGraph->bEditable = false;
+
+	FBlueprintEditorUtils::CreateFunctionGraph(Blueprint, GeneratedFunctionGraph, false, (UClass*)nullptr);
+
+	// Add the function graph to the list of generated graphs for this compile
+	GeneratedFunctionGraphs.Add(GeneratedFunctionGraph);
+	return GeneratedFunctionGraph;
+}
+
 const UK2Node_FunctionEntry* FKismetCompilerContext::FindLocalEntryPoint(const UFunction* Function) const
 {
 	for (int32 i = 0; i < FunctionList.Num(); ++i)
@@ -4686,8 +4734,10 @@ void FKismetCompilerContext::SetCanEverTick() const
 
 	if (TickFunction->bCanEverTick != bOldFlag)
 	{
+		const FCoreTexts& CoreTexts = FCoreTexts::Get();
+
 		UE_LOG(LogK2Compiler, Verbose, TEXT("Overridden flag for class '%s': CanEverTick %s "), *NewClass->GetName(),
-			TickFunction->bCanEverTick ? *(GTrue.ToString()) : *(GFalse.ToString()) );
+			TickFunction->bCanEverTick ? *(CoreTexts.True.ToString()) : *(CoreTexts.False.ToString()) );
 	}
 }
 

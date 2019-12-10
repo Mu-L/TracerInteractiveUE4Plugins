@@ -37,6 +37,65 @@
 #include "Tests/TestExternalUIInterface.h"
 #include "Tests/TestPresenceInterface.h"
 
+
+static FAutoConsoleCommand GSendRemoteTalkersToEndpointCommand(
+	TEXT("voice.sendRemoteTalkersToEndpoint"),
+	TEXT("This will send audio output for all incoming voip audio to the named endpoint. if given no arguments, this will route voice output through the game engine."),
+	FConsoleCommandWithArgsDelegate::CreateStatic(
+		[](const TArray< FString >& Args)
+{
+	IOnlineSubsystem* PlatformSubsystem = IOnlineSubsystem::Get();
+	IOnlineVoicePtr PlatformVoiceInterface = PlatformSubsystem ? PlatformSubsystem->GetVoiceInterface() : nullptr;
+
+	check(PlatformVoiceInterface.IsValid());
+
+	if (Args.Num() == 0)
+	{
+		PlatformVoiceInterface->DisconnectAllEndpoints();
+	}
+	else
+	{
+		FString DeviceName;
+		for (int32 Index = 0; Index < Args.Num(); Index++)
+		{
+			DeviceName.Append(Args[Index]);
+			DeviceName.Append(TEXT(" "), 1);
+		}
+
+		PlatformVoiceInterface->PatchRemoteTalkerOutputToEndpoint(DeviceName);
+	}
+})
+);
+
+static FAutoConsoleCommand GSendLocalTalkersToEndpointCommand(
+	TEXT("voice.sendLocalTalkersToEndpoint"),
+	TEXT("This will send audio output for all outgoing voip audio to the named endpoint. if given no arguments, this will disconnect all external endpoints."),
+	FConsoleCommandWithArgsDelegate::CreateStatic(
+		[](const TArray< FString >& Args)
+{
+	IOnlineSubsystem* PlatformSubsystem = IOnlineSubsystem::Get();
+	IOnlineVoicePtr PlatformVoiceInterface = PlatformSubsystem ? PlatformSubsystem->GetVoiceInterface() : nullptr;
+
+	check(PlatformVoiceInterface.IsValid());
+
+	if (Args.Num() == 0)
+	{
+		PlatformVoiceInterface->DisconnectAllEndpoints();
+	}
+	else
+	{
+		FString DeviceName;
+		for (int32 Index = 0; Index < Args.Num(); Index++)
+		{
+			DeviceName.Append(Args[Index]);
+			DeviceName.Append(TEXT(" "), 1);
+		}
+
+		PlatformVoiceInterface->PatchLocalTalkerOutputToEndpoint(DeviceName);
+	}
+})
+);
+
 UAudioComponent* CreateVoiceAudioComponent(uint32 SampleRate, int32 NumChannels)
 {
 	UAudioComponent* AudioComponent = nullptr;
@@ -218,9 +277,14 @@ int32 GetClientPeerIp(FName InstanceName, const FUniqueNetId& UserId)
 				if (ClientConnection && 
 					ClientConnection->PlayerId.ToString() == UserId.ToString())
 				{
-					PRAGMA_DISABLE_DEPRECATION_WARNINGS
-					PeerIp = ClientConnection->GetAddrAsInt();
-					PRAGMA_ENABLE_DEPRECATION_WARNINGS
+					TSharedPtr<const FInternetAddr> ClientAddr = ClientConnection->GetRemoteAddr();
+					if (ClientAddr.IsValid())
+					{
+						uint32 TempAddr = 0;
+						ClientAddr->GetIp(TempAddr);
+						PeerIp = static_cast<int32>(TempAddr);
+					}
+
 					break;
 				}
 			}

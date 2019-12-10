@@ -45,6 +45,7 @@ PFNGLMAPBUFFEROESPROC					glMapBufferOESa = NULL;
 PFNGLUNMAPBUFFEROESPROC					glUnmapBufferOESa = NULL;
 
 PFNGLTEXSTORAGE2DPROC					glTexStorage2D = NULL;
+PFNGLTEXSTORAGE3DPROC					glTexStorage3D = NULL;
 
 // KHR_debug
 PFNGLDEBUGMESSAGECONTROLKHRPROC			glDebugMessageControlKHR = NULL;
@@ -110,6 +111,7 @@ PFNeglQueryTimestampSupportedANDROID eglQueryTimestampSupportedANDROID_p = NULL;
 PFNeglQueryTimestampSupportedANDROID eglGetCompositorTimingSupportedANDROID_p = NULL;
 PFNeglQueryTimestampSupportedANDROID eglGetFrameTimestampsSupportedANDROID_p = NULL;
 
+PFNGLFRAMEBUFFERFETCHBARRIERQCOMPROC glFramebufferFetchBarrierQCOM = NULL;
 
 int32 FAndroidOpenGL::GLMajorVerion = 0;
 int32 FAndroidOpenGL::GLMinorVersion = 0;
@@ -236,7 +238,7 @@ void PlatformSharedContextSetup(FPlatformOpenGLDevice* Device)
 
 void PlatformNULLContextSetup()
 {
-	AndroidEGL::GetInstance()->SetCurrentContext(EGL_NO_CONTEXT, EGL_NO_SURFACE);
+	AndroidEGL::GetInstance()->ReleaseContextOwnership();
 }
 
 EOpenGLCurrentContext PlatformOpenGLCurrentContext(FPlatformOpenGLDevice* Device)
@@ -471,7 +473,7 @@ void PlatformDestroyOpenGLDevice(FPlatformOpenGLDevice* Device)
 
 void FPlatformOpenGLDevice::SetCurrentRenderingContext()
 {
-	AndroidEGL::GetInstance()->SetCurrentRenderingContext();
+	AndroidEGL::GetInstance()->AcquireCurrentRenderingContext();
 }
 
 void PlatformLabelObjects()
@@ -828,6 +830,16 @@ FAndroidOpenGL::EFeatureLevelSupport FAndroidOpenGL::CurrentFeatureLevelSupport 
 extern bool AndroidThunkCpp_GetMetaDataBoolean(const FString& Key);
 extern FString AndroidThunkCpp_GetMetaDataString(const FString& Key);
 
+void FAndroidOpenGL::SetupDefaultGLContextState(const FString& ExtensionsString)
+{
+	// Enable QCOM non-coherent framebuffer fetch if supported
+	if (ExtensionsString.Contains(TEXT("GL_QCOM_shader_framebuffer_fetch_noncoherent")) && 
+		ExtensionsString.Contains(TEXT("GL_EXT_shader_framebuffer_fetch")))
+	{
+		glEnable(GL_FRAMEBUFFER_FETCH_NONCOHERENT_QCOM);
+	}
+}
+
 void FAndroidOpenGL::ProcessExtensions(const FString& ExtensionsString)
 {
 	FOpenGLES2::ProcessExtensions(ExtensionsString);
@@ -1070,6 +1082,8 @@ void FAndroidOpenGL::ProcessExtensions(const FString& ExtensionsString)
 		glBindSampler = (PFNGLBINDSAMPLERPROC)((void*)eglGetProcAddress("glBindSampler"));
 		glProgramParameteri = (PFNGLPROGRAMPARAMETERIPROC)((void*)eglGetProcAddress("glProgramParameteri"));
 
+		glTexStorage3D = (PFNGLTEXSTORAGE3DPROC)((void*)eglGetProcAddress("glTexStorage3D"));
+		
 		// Required by the ES3 spec
 		bSupportsInstancing = true;
 		bSupportsTextureFloat = true;
@@ -1294,6 +1308,17 @@ void FAndroidOpenGL::ProcessExtensions(const FString& ExtensionsString)
 			}
 		}
 		bSupportsCopyImage = (glCopyImageSubData != nullptr);
+	}
+
+	// Qualcomm non-coherent framebuffer_fetch
+	if (ExtensionsString.Contains(TEXT("GL_QCOM_shader_framebuffer_fetch_noncoherent")) && 
+		ExtensionsString.Contains(TEXT("GL_EXT_shader_framebuffer_fetch")))
+	{
+		glFramebufferFetchBarrierQCOM = (PFNGLFRAMEBUFFERFETCHBARRIERQCOMPROC)((void*)eglGetProcAddress("glFramebufferFetchBarrierQCOM"));
+		if (glFramebufferFetchBarrierQCOM != nullptr)
+		{
+			UE_LOG(LogRHI, Log, TEXT("Using QCOM_shader_framebuffer_fetch_noncoherent"));
+		}
 	}
 }
 

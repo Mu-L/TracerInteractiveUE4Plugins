@@ -31,6 +31,10 @@ public:
 		// this uses generic, non-platform-specific .ini files
 		return "";
 	}
+	static FORCEINLINE const TCHAR* GetRuntimeSettingsClassName()
+	{
+		return TEXT("");
+	}
 	static FORCEINLINE bool HasEditorOnlyData()
 	{
 		return false;
@@ -112,7 +116,7 @@ public:
 		return true;
 	}
 
-	virtual int32 CheckRequirements(const FString& ProjectPath, bool bProjectHasCode, FString& OutTutorialPath, FString& OutDocumenationPath, FText& CustomizedLogMessage) const override
+	virtual int32 CheckRequirements(bool bProjectHasCode, EBuildConfiguration Configuration, bool bRequiresAssetNativization, FString& OutTutorialPath, FString& OutDocumentationPath, FText& CustomizedLogMessage) const override
 	{
 		return ETargetPlatformReadyStatus::Ready;
 	}

@@ -58,8 +58,8 @@ ENGINE_API TAutoConsoleVariable<int32> CVarReflectionCaptureSize(
 	TEXT("Set the resolution for all reflection capture cubemaps. Should be set via project's Render Settings. Must be power of 2. Defaults to 128.\n")
 	);
 
-TAutoConsoleVariable<int32> CVarUpdateReflectionCaptureEveryFrame(
-	TEXT("r.UpdateReflectionCaptureEveryFrame"),
+TAutoConsoleVariable<int32> CVarReflectionCaptureUpdateEveryFrame(
+	TEXT("r.ReflectionCaptureUpdateEveryFrame"),
 	0,
 	TEXT("When set, reflection captures will constantly be scheduled for update.\n")
 );
@@ -145,9 +145,9 @@ AReflectionCapture::AReflectionCapture(const FObjectInitializer& ObjectInitializ
 		static FConstructorStatics ConstructorStatics;
 
 		SpriteComponent->Sprite = ConstructorStatics.DecalTexture.Get();
-		SpriteComponent->RelativeScale3D = FVector(0.5f, 0.5f, 0.5f);
+		SpriteComponent->SetRelativeScale3D_Direct(FVector(0.5f, 0.5f, 0.5f));
 		SpriteComponent->bHiddenInGame = true;
-		SpriteComponent->bAbsoluteScale = true;
+		SpriteComponent->SetUsingAbsoluteScale(true);
 		SpriteComponent->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
 		SpriteComponent->bIsScreenSizeScaled = true;
 	}
@@ -169,9 +169,9 @@ AReflectionCapture::AReflectionCapture(const FObjectInitializer& ObjectInitializ
 		static FConstructorStatics ConstructorStatics;
 
 		CaptureOffsetComponent->Sprite = ConstructorStatics.DecalTexture.Get();
-		CaptureOffsetComponent->RelativeScale3D = FVector(0.2f, 0.2f, 0.2f);
+		CaptureOffsetComponent->SetRelativeScale3D_Direct(FVector(0.2f, 0.2f, 0.2f));
 		CaptureOffsetComponent->bHiddenInGame = true;
-		CaptureOffsetComponent->bAbsoluteScale = true;
+		CaptureOffsetComponent->SetUsingAbsoluteScale(true);
 		CaptureOffsetComponent->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
 		CaptureOffsetComponent->bIsScreenSizeScaled = true;
 	}
@@ -241,7 +241,7 @@ ABoxReflectionCapture::ABoxReflectionCapture(const FObjectInitializer& ObjectIni
 	: Super(ObjectInitializer.SetDefaultSubobjectClass<UBoxReflectionCaptureComponent>(TEXT("NewReflectionComponent")))
 {
 	UBoxReflectionCaptureComponent* BoxComponent = CastChecked<UBoxReflectionCaptureComponent>(GetCaptureComponent());
-	BoxComponent->RelativeScale3D = FVector(1000, 1000, 400);
+	BoxComponent->SetRelativeScale3D_Direct(FVector(1000, 1000, 400));
 	RootComponent = BoxComponent;
 #if WITH_EDITORONLY_DATA
 	if (GetSpriteComponent())
@@ -275,7 +275,7 @@ APlaneReflectionCapture::APlaneReflectionCapture(const FObjectInitializer& Objec
 	: Super(ObjectInitializer.SetDefaultSubobjectClass<UPlaneReflectionCaptureComponent>(TEXT("NewReflectionComponent")))
 {
 	UPlaneReflectionCaptureComponent* PlaneComponent = CastChecked<UPlaneReflectionCaptureComponent>(GetCaptureComponent());
-	PlaneComponent->RelativeScale3D = FVector(1, 1000, 1000);
+	PlaneComponent->SetRelativeScale3D_Direct(FVector(1, 1000, 1000));
 	RootComponent = PlaneComponent;
 #if WITH_EDITORONLY_DATA
 	if (GetSpriteComponent())
@@ -290,7 +290,7 @@ APlaneReflectionCapture::APlaneReflectionCapture(const FObjectInitializer& Objec
 	UDrawSphereComponent* DrawInfluenceRadius = CreateDefaultSubobject<UDrawSphereComponent>(TEXT("DrawRadius0"));
 	DrawInfluenceRadius->SetupAttachment(GetCaptureComponent());
 	DrawInfluenceRadius->bDrawOnlyIfSelected = true;
-	DrawInfluenceRadius->bAbsoluteScale = true;
+	DrawInfluenceRadius->SetUsingAbsoluteScale(true);
 	DrawInfluenceRadius->bUseEditorCompositing = true;
 	DrawInfluenceRadius->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
 	PlaneComponent->PreviewInfluenceRadius = DrawInfluenceRadius;
@@ -948,7 +948,7 @@ void UReflectionCaptureComponent::UpdatePreviewShape()
 {
 	if (CaptureOffsetComponent)
 	{
-		CaptureOffsetComponent->RelativeLocation = CaptureOffset / GetComponentTransform().GetScale3D();
+		CaptureOffsetComponent->SetRelativeLocation_Direct(CaptureOffset / GetComponentTransform().GetScale3D());
 	}
 }
 
@@ -968,6 +968,13 @@ bool UReflectionCaptureComponent::CanEditChange(const UProperty* Property) const
 
 void UReflectionCaptureComponent::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
+	if (PropertyChangedEvent.GetPropertyName() == GET_MEMBER_NAME_CHECKED(UReflectionCaptureComponent, Cubemap) ||
+		PropertyChangedEvent.GetPropertyName() == GET_MEMBER_NAME_CHECKED(UReflectionCaptureComponent, SourceCubemapAngle) ||
+		PropertyChangedEvent.GetPropertyName() == GET_MEMBER_NAME_CHECKED(UReflectionCaptureComponent, ReflectionSourceType))
+	{
+		MarkDirtyForRecapture();
+	}
+
 	Super::PostEditChangeProperty(PropertyChangedEvent);
 }
 
@@ -1020,7 +1027,7 @@ void UReflectionCaptureComponent::FinishDestroy()
 
 void UReflectionCaptureComponent::MarkDirtyForRecaptureOrUpload() 
 { 
-	if (bVisible)
+	if (GetVisibleFlag())
 	{
 		ReflectionCapturesToUpdate.AddUnique(this);
 		bNeedsRecaptureOrUpload = true; 
@@ -1029,7 +1036,7 @@ void UReflectionCaptureComponent::MarkDirtyForRecaptureOrUpload()
 
 void UReflectionCaptureComponent::MarkDirtyForRecapture() 
 { 
-	if (bVisible)
+	if (GetVisibleFlag())
 	{
 		MarkPackageDirty();
 		MapBuildDataId = FGuid::NewGuid();
@@ -1049,7 +1056,7 @@ void UReflectionCaptureComponent::UpdateReflectionCaptureContents(UWorld* WorldT
 		//guarantee that all render proxies are up to date before kicking off this render
 		WorldToUpdate->SendAllEndOfFrameUpdates();
 
-		if (CVarUpdateReflectionCaptureEveryFrame.GetValueOnGameThread())
+		if (CVarReflectionCaptureUpdateEveryFrame.GetValueOnGameThread())
 		{
 			for (FActorIterator It(WorldToUpdate); It; ++It)
 			{
@@ -1277,7 +1284,6 @@ void FReflectionCaptureProxy::SetTransform(const FMatrix& InTransform)
 
 void FReflectionCaptureProxy::UpdateMobileUniformBuffer()
 {
-	float InvBrightness = FMath::Max(FMath::Min(1.0f / EncodedHDRAverageBrightness, 65504.f), -65504.f);
 	FTexture* CaptureTexture = GBlackTextureCube;
 	if (EncodedHDRCubemap)
 	{
@@ -1286,7 +1292,8 @@ void FReflectionCaptureProxy::UpdateMobileUniformBuffer()
 	}
 		
 	FMobileReflectionCaptureShaderParameters Parameters;
-	Parameters.Params = FVector4(InvBrightness, 0.f, 0.f, 0.f);
+	//To keep ImageBasedReflectionLighting coherence with PC, use AverageBrightness instead of InvAverageBrightness to calculate the IBL contribution
+	Parameters.Params = FVector4(EncodedHDRAverageBrightness, 0.f, 0.f, 0.f);
 	Parameters.Texture = CaptureTexture->TextureRHI;
 	Parameters.TextureSampler = CaptureTexture->SamplerStateRHI;
 

@@ -2,14 +2,12 @@ Availability: NoPublish
 Title: Build Configuration Properties Page
 Crumbs:
 Description: This is a procedurally generated markdown page.
-Version: 4.23
+Version: 4.24
 
 ### Read/Write Properties
 $ Type (ModuleType): Type of module
 
 $ BinariesSubFolder (String): Subfolder of Binaries/PLATFORM folder to put this module in when building DLLs. This should only be used by modules that are found via searching like the TargetPlatform or ShaderFormat modules. If FindModules is not used to track them down, the modules will not be found.
-
-$ OptimizeCode (CodeOptimization): When this module's code should be optimized.
 
 $ PrivatePCHHeaderFile (String): Explicit private PCH for this module. Implies that this module will not use a shared PCH.
 
@@ -17,11 +15,7 @@ $ SharedPCHHeaderFile (String): Header file name for a shared PCH provided by th
 
 $ ShortName (String): Specifies an alternate name for intermediate directories and files for intermediates of this module. Useful when hitting path length limitations.
 
-$ PCHUsage (PCHUsageMode): Precompiled header usage for this module
-
 $ bTreatAsEngineModule (Boolean): Whether this module should be treated as an engine module (eg. using engine definitions, PCHs, compiled with optimizations enabled in DebugGame configurations, etc...). Initialized to a default based on the rules assembly it was created from.
-
-$ bUseBackwardsCompatibleDefaults (Boolean): Whether to use backwards compatible defaults for this module. By default, engine modules always use the latest default settings, while project modules do not (to support an easier migration path).
 
 $ bUseRTTI (Boolean): Use run time type information
 
@@ -33,11 +27,7 @@ $ bEnableExceptions (Boolean): Enable exception handling
 
 $ bEnableObjCExceptions (Boolean): Enable objective C exception handling
 
-$ bEnableShadowVariableWarnings (Boolean): Enable warnings for shadowed variables
-
 $ bEnableUndefinedIdentifierWarnings (Boolean): Enable warnings for using undefined identifiers in #if expressions
-
-$ bFasterWithoutUnity (Boolean): If true and unity builds are enabled, this module will build without unity.
 
 $ MinSourceFilesForUnityBuildOverride (Int32): The number of source files in this module before unity build will be activated for that module.  If set to anything besides -1, will override the default setting which is controlled by MinGameModuleSourceFilesForUnityBuild
 
@@ -47,7 +37,7 @@ $ bBuildLocallyWithSNDBS (Boolean): Module uses a #import so must be built local
 
 $ IsRedistributableOverride (Nullable&lt;Boolean&gt;): Redistribution override flag for this module.
 
-$ bOutputPubliclyDistributable (Boolean): Whether the output from this module can be publicly distributed, even if it has code/ dependencies on modules that are not (i.e. CarefullyRedist, NotForLicensees, NoRedist). This should be used when you plan to release binaries but not source.
+$ bLegalToDistributeObjectCode (Boolean): Whether the output from this module can be publicly distributed, even if it has code/ dependencies on modules that are not (i.e. CarefullyRedist, NotForLicensees, NoRedist). This should be used when you plan to release binaries but not source.
 
 $ WhitelistRestrictedFolders (List&lt;String&gt;): List of folders which are whitelisted to be referenced when compiling this binary, without propagating restricted folder names
 
@@ -79,13 +69,15 @@ $ PublicIncludePaths (List&lt;String&gt;): (This setting is currently not need a
 
 $ PrivateIncludePaths (List&lt;String&gt;): List of all paths to this module's internal include files, not exposed to other modules (at least one include to the 'Private' path, more if we want to avoid relative paths)
 
-$ PublicLibraryPaths (List&lt;String&gt;): List of system/library paths (directory of .lib files) - typically used for External (third party) modules
+$ PublicSystemLibraryPaths (List&lt;String&gt;): List of system library paths (directory of .lib files) - for External (third party) modules please use the PublicAdditionalLibaries instead
 
 $ PrivateRuntimeLibraryPaths (List&lt;String&gt;): List of search paths for libraries at runtime (eg. .so files)
 
 $ PublicRuntimeLibraryPaths (List&lt;String&gt;): List of search paths for libraries at runtime (eg. .so files)
 
 $ PublicAdditionalLibraries (List&lt;String&gt;): List of additional libraries (names of the .lib files including extension) - typically used for External (third party) modules
+
+$ PublicSystemLibraries (List&lt;String&gt;): List of system libraries to use - these are typically referenced via name and then found via the system paths. If you need to reference a .lib file use the PublicAdditionalLibraries instead
 
 $ PublicFrameworks (List&lt;String&gt;): List of XCode frameworks (iOS and MacOS)
 
@@ -113,9 +105,9 @@ $ PrecompileForTargets (PrecompileTargetsType): Which targets this module should
 
 $ ExternalDependencies (List&lt;String&gt;): External files which invalidate the makefile if modified. Relative paths are resolved relative to the .build.cs file.
 
-$ bRequiresImplementModule (Nullable&lt;Boolean&gt;): Whether this module requires the IMPLEMENT_MODULE macro to be implemented. Most UE4 modules require this, since we use the IMPLEMENT_MODULE macro to do other global overloads (eg. operator new/delete forwarding to GMalloc).
+$ SubclassRules (List&lt;String&gt;): Subclass rules files which invalidate the makefile if modified.
 
-$ bLegacyPublicIncludePaths (Nullable&lt;Boolean&gt;): Whether this module qualifies included headers from other modules relative to the root of their 'Public' folder. This reduces the number of search paths that have to be passed to the compiler, improving performance and reducing the length of the compiler command line.
+$ bRequiresImplementModule (Nullable&lt;Boolean&gt;): Whether this module requires the IMPLEMENT_MODULE macro to be implemented. Most UE4 modules require this, since we use the IMPLEMENT_MODULE macro to do other global overloads (eg. operator new/delete forwarding to GMalloc).
 
 $ CppStandard (CppStandardVersion): Which stanard to use for compiling this module
 

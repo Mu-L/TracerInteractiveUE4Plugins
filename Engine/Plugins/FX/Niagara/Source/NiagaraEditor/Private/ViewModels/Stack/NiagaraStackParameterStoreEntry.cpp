@@ -104,7 +104,7 @@ TSharedPtr<FStructOnScope> UNiagaraStackParameterStoreEntry::GetValueStruct()
 	return LocalValueStruct;
 }
 
-UNiagaraDataInterface* UNiagaraStackParameterStoreEntry::GetValueObject()
+UObject* UNiagaraStackParameterStoreEntry::GetValueObject()
 {
 	return ValueObject;
 }
@@ -154,8 +154,15 @@ void UNiagaraStackParameterStoreEntry::Reset()
 	}
 	else
 	{
-		UNiagaraDataInterface* DefaultObject = NewObject<UNiagaraDataInterface>(this, const_cast<UClass*>(InputType.GetClass()));
-		DefaultObject->CopyTo(ParameterStore->GetDataInterface(Var));
+		if (Var.IsDataInterface())
+		{
+			UNiagaraDataInterface* DefaultObject = NewObject<UNiagaraDataInterface>(this, const_cast<UClass*>(InputType.GetClass()));
+			DefaultObject->CopyTo(ParameterStore->GetDataInterface(Var));
+		}
+		else if (Var.IsUObject())
+		{
+			ParameterStore->SetUObject(nullptr, Var);
+		}
 	}
 	RefreshValueAndHandle();
 	RefreshChildren();
@@ -274,6 +281,22 @@ void UNiagaraStackParameterStoreEntry::RenameInput(FString NewName)
 	}
 }
 
+void UNiagaraStackParameterStoreEntry::ReplaceValueObject(UObject* Obj)
+{
+	NotifyBeginValueChange();
+	FNiagaraVariable Var(InputType, ParameterName);
+	if (Obj == nullptr || Obj->GetClass()->IsChildOf(GetInputType().GetClass()))
+	{
+		ParameterStore->SetUObject(Obj, Var);
+
+		RefreshValueAndHandle();
+		RefreshChildren();
+	}
+	NotifyEndValueChange();
+	GetSystemViewModel()->ResetSystem();
+}
+
+
 void UNiagaraStackParameterStoreEntry::Delete()
 {
 	FScopedTransaction ScopedTransaction(LOCTEXT("RemoveUserParameter", "Remove user parameter"));
@@ -285,7 +308,7 @@ void UNiagaraStackParameterStoreEntry::Delete()
 	//remove from store
 	Owner->Modify();
 	ParameterStore->RemoveParameter(FNiagaraVariable(InputType, ParameterName));
-	if (InputType.GetClass() != nullptr)
+	if (InputType.IsDataInterface())
 	{
 		UNiagaraDataInterface* DataInterface = NewObject<UNiagaraDataInterface>(this, const_cast<UClass*>(InputType.GetClass()));
 		if (DataInterface != nullptr)
@@ -323,11 +346,17 @@ void UNiagaraStackParameterStoreEntry::RemovePins(TArray<UEdGraphPin*> OwningPin
 			}
 			else
 			{
-				UNiagaraDataInterface* OverrideObj = NewObject<UNiagaraDataInterface>(this, const_cast<UClass*>(InputType.GetClass()));
-				FNiagaraStackGraphUtilities::SetDataValueObjectForFunctionInput(*OverridePin, const_cast<UClass*>(InputType.GetClass()), GetCurrentValueObject()->GetName(), OverrideObj);
-				GetCurrentValueObject()->CopyTo(OverrideObj);
+				if (InputType.IsDataInterface())
+				{
+					UNiagaraDataInterface* CurrentValueDataInterface = Cast<UNiagaraDataInterface>(GetCurrentValueObject());
+					if (CurrentValueDataInterface != nullptr)
+					{
+						UNiagaraDataInterface* OverrideObj = NewObject<UNiagaraDataInterface>(this, const_cast<UClass*>(InputType.GetClass()));
+						FNiagaraStackGraphUtilities::SetDataValueObjectForFunctionInput(*OverridePin, const_cast<UClass*>(InputType.GetClass()), CurrentValueDataInterface->GetName(), OverrideObj);
+						CurrentValueDataInterface->CopyTo(OverrideObj);
+					}
+				}
 			}
-			
 		}
 		// now also remove node
 		Graph->RemoveNode(GraphPin->GetOwningNode());
@@ -359,12 +388,19 @@ TSharedPtr<FNiagaraVariable> UNiagaraStackParameterStoreEntry::GetCurrentValueVa
 	return TSharedPtr<FNiagaraVariable>();
 }
 
-UNiagaraDataInterface* UNiagaraStackParameterStoreEntry::GetCurrentValueObject()
+UObject* UNiagaraStackParameterStoreEntry::GetCurrentValueObject()
 {
 	if (InputType.GetClass() != nullptr)
 	{
 		FNiagaraVariable DefaultVariable(InputType, ParameterName);
-		return ParameterStore->GetDataInterface(DefaultVariable);
+		if (DefaultVariable.IsDataInterface())
+		{
+			return ParameterStore->GetDataInterface(DefaultVariable);
+		}
+		else if (DefaultVariable.IsUObject())
+		{
+			return ParameterStore->GetUObject(DefaultVariable);
+		}
 	}
 	return nullptr;
 }

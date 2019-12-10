@@ -3,41 +3,43 @@
 #include "RenderGraphEvent.h"
 #include "RenderGraphBuilder.h"
 
-extern bool GetEmitRDGEvents();
 
 #if RDG_EVENTS == RDG_EVENTS_STRING_COPY
 
-FRDGEventName::FRDGEventName(const TCHAR* EventFormat, ...)
+FRDGEventName::FRDGEventName(const TCHAR* InEventFormat, ...)
+	: EventFormat(InEventFormat)
 {
 	if (GetEmitRDGEvents())
 	{
 		va_list VAList;
-		va_start(VAList, EventFormat);
+		va_start(VAList, InEventFormat);
 		TCHAR TempStr[256];
 		// Build the string in the temp buffer
-		FCString::GetVarArgs(TempStr, ARRAY_COUNT(TempStr), EventFormat, VAList);
+		FCString::GetVarArgs(TempStr, UE_ARRAY_COUNT(TempStr), InEventFormat, VAList);
 		va_end(VAList);
 
-		EventNameStorage = TempStr;
-		EventName = *EventNameStorage;
-	}
-	else
-	{
-		EventName = TEXT("!!!Unavailable RDG event name: try r.RDG.EmitWarnings=1 or -rdgdebug!!!");
+		FormatedEventName = TempStr;
 	}
 }
 
 #endif
 
-FRDGEventScopeGuard::FRDGEventScopeGuard(FRDGBuilder& InGraphBuilder, FRDGEventName&& ScopeName)
+FRDGEventScopeGuard::FRDGEventScopeGuard(FRDGBuilder& InGraphBuilder, FRDGEventName&& ScopeName, bool InbCondition)
 	: GraphBuilder(InGraphBuilder)
+	, bCondition(InbCondition)
 {
-	GraphBuilder.BeginEventScope(MoveTemp(ScopeName));
+	if (bCondition)
+	{
+		GraphBuilder.BeginEventScope(MoveTemp(ScopeName));
+	}
 }
 
 FRDGEventScopeGuard::~FRDGEventScopeGuard()
 {
-	GraphBuilder.EndEventScope();
+	if (bCondition)
+	{
+		GraphBuilder.EndEventScope();
+	}
 }
 
 static void OnPushEvent(FRHICommandListImmediate& RHICmdList, const FRDGEventScope* Scope)
@@ -93,20 +95,7 @@ void FRDGEventScopeStack::BeginExecutePass(const FRDGPass* Pass)
 	{
 		ScopeStack.BeginExecutePass(Pass->GetEventScope());
 
-		// Push the pass event with some color.
-		FColor Color(0, 0, 0);
-
-		if (Pass->IsCompute())
-		{
-			// Green for compute.
-			Color = FColor(128, 255, 128);
-		}
-		else
-		{
-			// Red for rasterizer.
-			Color = FColor(255, 128, 128);
-		}
-
+		FColor Color(255, 255, 255);
 		ScopeStack.RHICmdList.PushEvent(Pass->GetName(), Color);
 	}
 }

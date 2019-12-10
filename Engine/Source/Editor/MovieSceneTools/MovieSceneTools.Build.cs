@@ -43,6 +43,7 @@ public class MovieSceneTools : ModuleRules
 				"MovieScene",
 				"MovieSceneTracks",
 				"BlueprintGraph",
+				"Kismet",
 				"KismetCompiler",
                 "GraphEditor",
                 "ContentBrowser",
@@ -59,6 +60,7 @@ public class MovieSceneTools : ModuleRules
                 "AnimationCore",
 				"TimeManagement",
                 "XmlParser",
+				"ToolMenus",
 			}
 		);
 

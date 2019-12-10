@@ -137,7 +137,7 @@ class FMaterialList
 	, public TSharedFromThis<FMaterialList>
 {
 public:
-	PROPERTYEDITOR_API FMaterialList( IDetailLayoutBuilder& InDetailLayoutBuilder, FMaterialListDelegates& MaterialListDelegates, bool bInAllowCollapse = false, bool bInShowUsedTextures = true, bool bInDisplayCompactSize = false);
+	PROPERTYEDITOR_API FMaterialList( IDetailLayoutBuilder& InDetailLayoutBuilder, FMaterialListDelegates& MaterialListDelegates, const TArray<FAssetData>& InOwnerAssetDataArray, bool bInAllowCollapse = false, bool bInShowUsedTextures = true, bool bInDisplayCompactSize = false);
 
 	/**
 	 * @return true if materials are being displayed.                                                          
@@ -215,5 +215,7 @@ private:
 	bool bShowUsedTextures;
 	/** Whether or not to display a compact form of material entry*/
 	bool bDisplayCompactSize;
+	/** The mesh asset that owns these materials */
+	TArray<FAssetData> OwnerAssetDataArray;
 };
 

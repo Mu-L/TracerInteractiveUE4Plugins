@@ -5,6 +5,7 @@
 #include "EditorStyleSet.h"
 #include "DisplayNodes/SequencerSectionKeyAreaNode.h"
 #include "DisplayNodes/SequencerTrackNode.h"
+#include "DisplayNodes/SequencerObjectBindingNode.h"
 #include "SequencerCommonHelpers.h"
 #include "SSequencer.h"
 #include "SectionLayout.h"
@@ -252,6 +253,13 @@ void FSectionContextMenu::PopulateMenu(FMenuBuilder& MenuBuilder)
 	// Copy a reference to the context menu by value into each lambda handler to ensure the type stays alive until the menu is closed
 	TSharedRef<FSectionContextMenu> Shared = AsShared();
 
+	// Clean SectionGroups to prevent any potential stale references from affecting the context menu entries
+	Sequencer->GetFocusedMovieSceneSequence()->GetMovieScene()->CleanSectionGroups();
+	
+	// These are potentially expensive checks in large sequences, and won't change while context menu is open
+	const bool bCanGroup = Sequencer->CanGroupSelectedSections();
+	const bool bCanUngroup = Sequencer->CanUngroupSelectedSections();
+
 	ISequencerModule& SequencerModule = FModuleManager::LoadModuleChecked<ISequencerModule>("Sequencer");
 
 	for (auto& Pair : ChannelsByType)
@@ -385,6 +393,30 @@ void FSectionContextMenu::PopulateMenu(FMenuBuilder& MenuBuilder)
 			EUserInterfaceActionType::ToggleButton
 		);
 
+		MenuBuilder.AddMenuEntry(
+			LOCTEXT("GroupSections", "Group"),
+			LOCTEXT("GroupSectionsTooltip", "Group selected sections together so that when any section is moved, all sections in that group move together."),
+			FSlateIcon(),
+			FUIAction(
+				FExecuteAction::CreateSP(Sequencer, &FSequencer::GroupSelectedSections),
+				FCanExecuteAction::CreateLambda([bCanGroup] { return bCanGroup; })
+			),
+			NAME_None,
+			EUserInterfaceActionType::Button
+		);
+
+		MenuBuilder.AddMenuEntry(
+			LOCTEXT("UngroupSections", "Ungroup"),
+			LOCTEXT("UngroupSectionsTooltip", "Ungroup selected sections"),
+			FSlateIcon(),
+			FUIAction(
+				FExecuteAction::CreateSP(Sequencer, &FSequencer::UngroupSelectedSections),
+				FCanExecuteAction::CreateLambda([bCanUngroup] { return bCanUngroup; })
+			),
+			NAME_None,
+			EUserInterfaceActionType::Button
+		);
+
 		// @todo Sequencer this should delete all selected sections
 		// delete/selection needs to be rethought in general
 		MenuBuilder.AddMenuEntry(
@@ -414,6 +446,8 @@ void FSectionContextMenu::AddEditMenu(FMenuBuilder& MenuBuilder)
 	// Copy a reference to the context menu by value into each lambda handler to ensure the type stays alive until the menu is closed
 	TSharedRef<FSectionContextMenu> Shared = AsShared();
 
+	MenuBuilder.BeginSection("Trimming", LOCTEXT("TrimmingSectionMenu", "Trimming"));
+
 	MenuBuilder.AddMenuEntry(
 		LOCTEXT("TrimSectionLeft", "Trim Left"),
 		LOCTEXT("TrimSectionLeftTooltip", "Trim section at current MouseDownTime to the left"),
@@ -437,10 +471,26 @@ void FSectionContextMenu::AddEditMenu(FMenuBuilder& MenuBuilder)
 		LOCTEXT("SplitSectionTooltip", "Split section at current MouseDownTime"),
 		FSlateIcon(),
 		FUIAction(
-			FExecuteAction::CreateLambda([=]{ Shared->SplitSection(); }),
-			FCanExecuteAction::CreateLambda([=]{ return Shared->IsTrimmable(); }))
+			FExecuteAction::CreateLambda([=] { Shared->SplitSection(); }),
+			FCanExecuteAction::CreateLambda([=] { return Shared->IsTrimmable(); }))
 	);
+
+	MenuBuilder.AddMenuEntry(
+		LOCTEXT("DeleteKeysWhenTrimming", "Delete Keys"),
+		LOCTEXT("DeleteKeysWhenTrimmingTooltip", "Delete keys outside of the trimmed range"),
+		FSlateIcon(),
+		FUIAction(
+			FExecuteAction::CreateLambda([=] { Sequencer->GetSequencerSettings()->SetDeleteKeysWhenTrimming(!Sequencer->GetSequencerSettings()->GetDeleteKeysWhenTrimming()); }),
+			FCanExecuteAction(),
+			FIsActionChecked::CreateLambda([=] { return Sequencer->GetSequencerSettings()->GetDeleteKeysWhenTrimming(); })),
+		NAME_None,
+		EUserInterfaceActionType::ToggleButton
+	);
+
+	MenuBuilder.EndSection();
 		
+	MenuBuilder.AddMenuSeparator();
+
 	MenuBuilder.AddMenuEntry(
 		LOCTEXT("AutoSizeSection", "Auto Size"),
 		LOCTEXT("AutoSizeSectionTooltip", "Auto size the section length to the duration of the source of this section (ie. audio, animation or shot length)"),
@@ -536,7 +586,7 @@ void FSectionContextMenu::AddPropertiesMenu(FMenuBuilder& MenuBuilder)
 
 	TArray<TWeakObjectPtr<UObject>> Sections;
 	{
-		for (auto Section : Sequencer->GetSelection().GetSelectedSections())
+		for (TWeakObjectPtr<UMovieSceneSection> Section : Sequencer->GetSelection().GetSelectedSections())
 		{
 			if (Section.IsValid())
 			{
@@ -554,6 +604,27 @@ void FSectionContextMenu::AddPropertiesMenu(FMenuBuilder& MenuBuilder)
 	DetailsView->RegisterInstancedCustomPropertyLayout(UMovieSceneSection::StaticClass(), FOnGetDetailCustomizationInstance::CreateLambda([=]() {
 		return MakeShared<FMovieSceneSectionDetailsCustomization>(Sequencer->GetNumericTypeInterface(), CurrentScene); }));
 
+	// Let section interfaces further customize the properties details view.
+	TSharedRef<FSequencerNodeTree> SequencerNodeTree = Sequencer->GetNodeTree();
+	for (TWeakObjectPtr<UObject> Section : Sections)
+	{
+		if (Section.IsValid())
+		{
+			TOptional<FSectionHandle> SectionHandle = SequencerNodeTree->GetSectionHandle(Cast<UMovieSceneSection>(Section));
+			if (SectionHandle)
+			{
+				TSharedRef<ISequencerSection> SectionInterface = SectionHandle->GetSectionInterface();
+				FSequencerSectionPropertyDetailsViewCustomizationParams CustomizationDetails(
+					SectionInterface, Sequencer, SectionHandle->GetTrackNode()->GetTrackEditor());
+				TSharedPtr<FSequencerObjectBindingNode> ParentObjectBindingNode = SectionHandle->GetTrackNode()->FindParentObjectBindingNode();
+				if (ParentObjectBindingNode.IsValid())
+				{
+					CustomizationDetails.ParentObjectBindingGuid = ParentObjectBindingNode->GetObjectBinding();
+				}
+				SectionInterface->CustomizePropertiesDetailsView(DetailsView, CustomizationDetails);
+			}
+		}
+	}
 
 	Sequencer->OnInitializeDetailsPanel().Broadcast(DetailsView, Sequencer);
 	DetailsView->SetObjects(Sections);
@@ -686,7 +757,7 @@ void FSectionContextMenu::SetSectionToKey()
 	{
 		if (UMovieSceneSection* Section = WeakSection.Get())
 		{
-			UMovieScenePropertyTrack* Track = Section->GetTypedOuter<UMovieScenePropertyTrack>();
+			UMovieSceneTrack* Track = Section->GetTypedOuter<UMovieSceneTrack>();
 			if (Track)
 			{
 				FScopedTransaction Transaction(LOCTEXT("SetSectionToKey", "Set Section To Key"));
@@ -709,7 +780,7 @@ bool FSectionContextMenu::CanSetSectionToKey() const
 	{
 		if (UMovieSceneSection* Section = WeakSection.Get())
 		{
-			UMovieScenePropertyTrack* Track = Section->GetTypedOuter<UMovieScenePropertyTrack>();
+			UMovieSceneTrack* Track = Section->GetTypedOuter<UMovieSceneTrack>();
 			if (Track && Section->GetBlendType().IsValid() && (Section->GetBlendType().Get() == EMovieSceneBlendType::Absolute || Section->GetBlendType().Get() == EMovieSceneBlendType::Additive))
 			{
 				return true;
@@ -741,7 +812,7 @@ void FSectionContextMenu::TrimSection(bool bTrimLeft)
 {
 	FScopedTransaction TrimSectionTransaction(LOCTEXT("TrimSection_Transaction", "Trim Section"));
 
-	MovieSceneToolHelpers::TrimSection(Sequencer->GetSelection().GetSelectedSections(), Sequencer->GetLocalTime(), bTrimLeft);
+	MovieSceneToolHelpers::TrimSection(Sequencer->GetSelection().GetSelectedSections(), Sequencer->GetLocalTime(), bTrimLeft, Sequencer->GetSequencerSettings()->GetDeleteKeysWhenTrimming());
 	Sequencer->NotifyMovieSceneDataChanged( EMovieSceneDataChangeType::TrackValueChanged );
 }
 
@@ -753,7 +824,7 @@ void FSectionContextMenu::SplitSection()
 	FFrameNumber CurrentFrame = Sequencer->GetLocalTime().Time.FrameNumber;
 	FQualifiedFrameTime SplitFrame = FQualifiedFrameTime(CurrentFrame, Sequencer->GetFocusedTickResolution());
 
-	MovieSceneToolHelpers::SplitSection(Sequencer->GetSelection().GetSelectedSections(), SplitFrame);
+	MovieSceneToolHelpers::SplitSection(Sequencer->GetSelection().GetSelectedSections(), SplitFrame, Sequencer->GetSequencerSettings()->GetDeleteKeysWhenTrimming());
 	Sequencer->NotifyMovieSceneDataChanged( EMovieSceneDataChangeType::RefreshAllImmediately );
 }
 

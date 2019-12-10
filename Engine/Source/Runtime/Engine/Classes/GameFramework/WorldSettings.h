@@ -287,7 +287,7 @@ struct ENGINE_API FHierarchicalSimplification
 	UPROPERTY(Category = FHierarchicalSimplification, EditAnywhere)
 	uint8 bSimplifyMesh:1;
 
-	/** Min number of actors to build LODActor */
+	/** Only generate clusters for HLOD volumes */
 	UPROPERTY(EditAnywhere, Category = FHierarchicalSimplification, AdvancedDisplay, meta = (editcondition = "!bReusePreviousLevelClusters", DisplayAfter="MinNumberOfActorsToBuild"))
 	uint8 bOnlyGenerateClustersForVolumes:1;
 
@@ -634,7 +634,7 @@ public:
 
 protected:
 	/** Hierarchical LOD Setup */
-	UPROPERTY(EditAnywhere, Category=LODSystem, config, meta=(editcondition = "bEnableHierarchicalLODSystem"))
+	UPROPERTY(EditAnywhere, Category=LODSystem, config)
 	TArray<struct FHierarchicalSimplification>	HierarchicalLODSetup;
 
 public:
@@ -736,7 +736,6 @@ public:
 #endif // WITH_EDITOR
 	virtual void PostInitProperties() override;
 	virtual void PreInitializeComponents() override;
-	virtual void PostInitializeComponents() override;
 	virtual void PostRegisterAllComponents() override;
 	//~ End AActor Interface.
 

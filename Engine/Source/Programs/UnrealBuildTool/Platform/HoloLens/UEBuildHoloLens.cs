@@ -478,7 +478,8 @@ namespace UnrealBuildTool
 				// The HoloLensSDK module handles proper paths and libs for HoloLens.
 				// However, the D3D11RHI module will include the DX11 module.
 				Rules.PublicIncludePaths.Clear();
-				Rules.PublicLibraryPaths.Clear();
+				Rules.PublicSystemLibraryPaths.Clear();
+				Rules.PublicSystemLibraries.Clear();
 				Rules.PublicAdditionalLibraries.Clear();
 				Rules.PublicDefinitions.Remove("WITH_D3DX_LIBS=1");
 				Rules.PublicDefinitions.Add("WITH_D3DX_LIBS=0");
@@ -491,7 +492,7 @@ namespace UnrealBuildTool
 				Rules.PublicDefinitions.Add("XAUDIO_SUPPORTS_DEVICE_DETAILS=0");
 				Rules.PublicDefinitions.Add("XAUDIO2_SUPPORTS_MUSIC=0");
 				Rules.PublicDefinitions.Add("XAUDIO2_SUPPORTS_SENDLIST=1");
-				Rules.PublicAdditionalLibraries.Add("XAudio2.lib");
+				Rules.PublicSystemLibraries.Add("XAudio2.lib");
 			}
 			else if (ModuleName == "DX11Audio")
 			{

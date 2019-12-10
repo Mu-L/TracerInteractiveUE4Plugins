@@ -732,7 +732,7 @@ TSharedPtr<FStreamableHandle> UGameplayCueManager::InitObjectLibrary(FGameplayCu
 	// Instantiate the UObjectLibraries if they aren't there already
 	if (!Lib.StaticObjectLibrary)
 	{
-		Lib.StaticObjectLibrary = UObjectLibrary::CreateLibrary(AGameplayCueNotify_Actor::StaticClass(), true, GIsEditor && !IsRunningCommandlet());
+		Lib.StaticObjectLibrary = UObjectLibrary::CreateLibrary(UGameplayCueNotify_Static::StaticClass(), true, GIsEditor && !IsRunningCommandlet());
 		if (GIsEditor)
 		{
 			Lib.StaticObjectLibrary->bIncludeOnlyOnDiskAssets = false;
@@ -740,7 +740,7 @@ TSharedPtr<FStreamableHandle> UGameplayCueManager::InitObjectLibrary(FGameplayCu
 	}
 	if (!Lib.ActorObjectLibrary)
 	{
-		Lib.ActorObjectLibrary = UObjectLibrary::CreateLibrary(UGameplayCueNotify_Static::StaticClass(), true, GIsEditor && !IsRunningCommandlet());
+		Lib.ActorObjectLibrary = UObjectLibrary::CreateLibrary(AGameplayCueNotify_Actor::StaticClass(), true, GIsEditor && !IsRunningCommandlet());
 		if (GIsEditor)
 		{
 			Lib.ActorObjectLibrary->bIncludeOnlyOnDiskAssets = false;
@@ -827,13 +827,14 @@ TSharedPtr<FStreamableHandle> UGameplayCueManager::InitObjectLibrary(FGameplayCu
 
 		if (AssetsToLoad.Num() > 0)
 		{
-			GameplayCueAssetHandle = StreamableManager.RequestAsyncLoad(AssetsToLoad, FStreamableDelegate::CreateStatic( ForwardLambda, AssetsToLoad, Lib.OnLoaded), Lib.AsyncPriority);
+			FStreamableDelegate Del = FStreamableDelegate::CreateStatic(ForwardLambda, AssetsToLoad, Lib.OnLoaded);
+			GameplayCueAssetHandle = StreamableManager.RequestAsyncLoad(MoveTemp(AssetsToLoad), MoveTemp(Del), Lib.AsyncPriority);
 			RetVal = GameplayCueAssetHandle;
 		}
 		else
 		{
 			// Still fire the delegate even if nothing was found to load
-			Lib.OnLoaded.ExecuteIfBound(AssetsToLoad);
+			Lib.OnLoaded.ExecuteIfBound(MoveTemp(AssetsToLoad));
 		}
 	}
 
@@ -1633,6 +1634,22 @@ void UGameplayCueManager::OnWorldCleanup(UWorld* World, bool bSessionEnded, bool
 	}
 
 	IGameplayCueInterface::ClearTagToFunctionMap();
+}
+
+void UGameplayCueManager::AddReferencedObjects(UObject* InThis, FReferenceCollector& Collector)
+{
+	Super::AddReferencedObjects(InThis, Collector);
+
+	UGameplayCueManager* GCManager = Cast<UGameplayCueManager>(InThis);
+	for (int32 idx = 0; idx < GCManager->PreallocationInfoList_Internal.Num(); ++idx)
+	{
+		FPreallocationInfo& Info = GCManager->PreallocationInfoList_Internal[idx];
+		for (auto &It : Info.PreallocatedInstances)
+		{
+			TArray<AGameplayCueNotify_Actor*>& GameplayCueArray = It.Value;
+			Collector.AddReferencedObjects(GameplayCueArray);
+		}
+	}
 }
 
 void UGameplayCueManager::DumpPreallocationStats(UWorld* World)

@@ -3,15 +3,61 @@
 #pragma once
 
 #include "PropertyPathHelpers.h"
-#include "Hierarchy.h"
+#include "Rigs/RigHierarchyContainer.h"
+#include "Rigs/RigCurveContainer.h"
+#include "Stats/StatsHierarchical.h"
 #include "ControlRigDefines.generated.h"
+
+#define DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
+//	DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
 
 USTRUCT()
 struct FControlRigExecuteContext
 {
 	GENERATED_BODY()
+
+	FControlRigExecuteContext()
+		: Hierarchy(nullptr)
+	{
+	}
 		
-	FRigHierarchyRef HierarchyReference;
+	FRigHierarchyContainer* Hierarchy;
+
+	FRigBoneHierarchy* GetBones()
+	{
+		if (Hierarchy != nullptr)
+		{
+			return &Hierarchy->BoneHierarchy;
+		}
+		return nullptr;
+	}
+
+	FRigSpaceHierarchy* GetSpaces()
+	{
+		if (Hierarchy != nullptr)
+		{
+			return &Hierarchy->SpaceHierarchy;
+		}
+		return nullptr;
+	}
+
+	FRigControlHierarchy* GetControls()
+	{
+		if (Hierarchy != nullptr)
+		{
+			return &Hierarchy->ControlHierarchy;
+		}
+		return nullptr;
+	}
+
+	FRigCurveContainer* GetCurves()
+	{
+		if (Hierarchy != nullptr)
+		{
+			return &Hierarchy->CurveContainer;
+		}
+		return nullptr;
+	}
 };
 
 UENUM()
@@ -32,6 +78,17 @@ enum class ETransformSpaceMode : uint8
 	/** MAX - invalid */
 	Max UMETA(Hidden),
 };
+
+UENUM()
+namespace EControlRigClampSpatialMode
+{
+	enum Type
+	{
+		Plane,
+		Cylinder,
+		Sphere
+	};
+}
 
 UENUM()
 enum class ETransformGetterType : uint8

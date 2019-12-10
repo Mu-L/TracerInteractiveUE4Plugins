@@ -11,7 +11,7 @@
 #include "Sound/SoundWaveProcedural.h"
 #include "Components/SynthComponent.h"
 #include "Engine/Classes/Sound/SoundWave.h"
-#include "DSP/SoundWaveDecoder.h"
+#include "SoundWaveDecoder.h"
 #include "Engine/Public/AudioDevice.h"
 #include "Math/RandomStream.h"
 #include "DSP/EventQuantizer.h"
@@ -646,7 +646,7 @@ private:
 
 	int32 CurrentPoolSize;
 
-	// Array of free indicies int he playing clip pool
+	// Array of free indices in the playing clip pool
 	TArray<int32> FreePlayingClipIndices_AudioRenderThread;
 	TArray<int32> ActivePlayingClipIndices_AudioRenderThread;
 	

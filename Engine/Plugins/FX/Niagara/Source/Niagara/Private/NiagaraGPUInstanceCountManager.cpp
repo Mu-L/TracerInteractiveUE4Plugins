@@ -3,6 +3,7 @@
 #include "NiagaraGPUInstanceCountManager.h"
 #include "NiagaraStats.h"
 #include "Containers/DynamicRHIResourceArray.h"
+#include "NiagaraSortingGPU.h" // FNiagaraCopyIntBufferRegionCS
 
 int32 GNiagaraMinGPUInstanceCount = 2048;
 static FAutoConsoleVariableRef CVarNiagaraMinGPUInstanceCount(
@@ -27,7 +28,9 @@ DECLARE_DWORD_COUNTER_STAT(TEXT("Max Num GPU Renderers"), STAT_NiagaraMaxNumGPUR
 //*****************************************************************************
 
 FNiagaraGPUInstanceCountManager::FNiagaraGPUInstanceCountManager() 
-{}
+{
+	NumRegisteredGPURenderers = new FNiagaraGPURendererCount();
+}
 
 FNiagaraGPUInstanceCountManager::~FNiagaraGPUInstanceCountManager()
 {
@@ -89,9 +92,10 @@ void FNiagaraGPUInstanceCountManager::FreeEntry(uint32& BufferOffset)
 	}
 }
 
-void FNiagaraGPUInstanceCountManager::ResizeBuffers(int32 ReservedInstanceCounts)
+void FNiagaraGPUInstanceCountManager::ResizeBuffers(FRHICommandListImmediate& RHICmdList, ERHIFeatureLevel::Type FeatureLevel, int32 ReservedInstanceCounts)
 {
 	const int32 RequiredInstanceCounts = UsedInstanceCounts + FMath::Max<int32>(ReservedInstanceCounts - FreeEntries.Num(), 0);
+	const int32 MaxDrawIndirectArgs = NumRegisteredGPURenderers->Value;
 	if (RequiredInstanceCounts > 0 || MaxDrawIndirectArgs > 0)
 	{
 		const int32 RecommendedInstanceCounts = FMath::Max(GNiagaraMinGPUInstanceCount, (int32)(RequiredInstanceCounts * BufferSlack));
@@ -106,7 +110,32 @@ void FNiagaraGPUInstanceCountManager::ResizeBuffers(int32 ReservedInstanceCounts
 		// If we need to increase the buffer size to RecommendedInstanceCounts because the buffer is too small.
 		else if (RequiredInstanceCounts > AllocatedInstanceCounts)
 		{
-			check(false); // @TODO : reallocate and copy current data, filling new space with 0s.
+			// Init a bigger buffer filled with 0.
+			TResourceArray<uint32> InitData;
+			InitData.AddZeroed(RecommendedInstanceCounts);
+			FRWBuffer NextCountBuffer;
+			NextCountBuffer.Initialize(sizeof(uint32), RecommendedInstanceCounts, EPixelFormat::PF_R32_UINT, BUF_Static | BUF_KeepCPUAccessible, TEXT("NiagaraGPUInstanceCounts"), &InitData);
+
+			// Because the shader works with SINT, we need to temporarily create view for the shader to work. Those will be (deferred) deleted at end of the scope.
+			FUnorderedAccessViewRHIRef NextCountBufferUAVAsInt = RHICreateUnorderedAccessView(NextCountBuffer.Buffer, EPixelFormat::PF_R32_SINT);
+			FShaderResourceViewRHIRef CountBufferSRVAsInt = RHICreateShaderResourceView(CountBuffer.Buffer, sizeof(uint32), EPixelFormat::PF_R32_SINT);
+
+			// Copy the current buffer in the next buffer.
+			TShaderMapRef<FNiagaraCopyIntBufferRegionCS> CopyBufferCS(GetGlobalShaderMap(FeatureLevel));
+			RHICmdList.SetComputeShader(CopyBufferCS->GetComputeShader());
+			FRHIUnorderedAccessView* UAVs[NIAGARA_COPY_BUFFER_BUFFER_COUNT] = {};
+			int32 UsedIndexCounts[NIAGARA_COPY_BUFFER_BUFFER_COUNT] = {};
+			UAVs[0] = NextCountBufferUAVAsInt;
+			UsedIndexCounts[0] = AllocatedInstanceCounts;
+			RHICmdList.TransitionResources(EResourceTransitionAccess::ERWBarrier, EResourceTransitionPipeline::EComputeToCompute, UAVs, 1);
+			CopyBufferCS->SetParameters(RHICmdList, CountBufferSRVAsInt, UAVs, UsedIndexCounts, 0, 1);
+			DispatchComputeShader(RHICmdList, *CopyBufferCS, FMath::DivideAndRoundUp(AllocatedInstanceCounts, NIAGARA_COPY_BUFFER_THREAD_COUNT), 1, 1);
+			RHICmdList.TransitionResources(EResourceTransitionAccess::ERWBarrier, EResourceTransitionPipeline::EComputeToGfx, UAVs, 1);
+			CopyBufferCS->UnbindBuffers(RHICmdList);
+
+			// Swap the buffers
+			AllocatedInstanceCounts = RecommendedInstanceCounts;
+			FMemory::Memswap(&NextCountBuffer, &CountBuffer, sizeof(NextCountBuffer));
 		}
 		// If we need to shrink the buffer size because use way to much buffer size.
 		else if ((int32)(RecommendedInstanceCounts * BufferSlack) < AllocatedInstanceCounts)
@@ -146,6 +175,7 @@ uint32 FNiagaraGPUInstanceCountManager::AddDrawIndirect(uint32 InstanceCountBuff
 	else if (DrawIndirectArgGenTasks.Num() < AllocatedDrawIndirectArgs)
 	{
 #if !UE_BUILD_SHIPPING
+		const int32 MaxDrawIndirectArgs = NumRegisteredGPURenderers->Value;
 		if (DrawIndirectArgGenTasks.Num() >= MaxDrawIndirectArgs)
 		{
 			UE_LOG(LogNiagara, Warning, TEXT("More draw indirect args then expected (%d / %d)"), DrawIndirectArgGenTasks.Num() + 1, MaxDrawIndirectArgs);
@@ -166,36 +196,38 @@ void FNiagaraGPUInstanceCountManager::UpdateDrawIndirectBuffer(FRHICommandList& 
 {
 	if (DrawIndirectArgGenTasks.Num() || InstanceCountClearTasks.Num())
 	{
-		RHICmdList.TransitionResource(EResourceTransitionAccess::ERWBarrier, EResourceTransitionPipeline::EComputeToCompute, CountBuffer.UAV);
-
-		FReadBuffer TaskInfosBuffer;
+		if (NiagaraSupportsComputeShaders(GShaderPlatformForFeatureLevel[FeatureLevel]))
 		{
-			// All draw indirect args task are run first because of the binding between the task ID and arg write offset.
-			const uint32 ArgGenSize = DrawIndirectArgGenTasks.Num() * sizeof(FArgGenTaskInfo);
-			const uint32 InstanceCountClearSize = InstanceCountClearTasks.Num() * sizeof(uint32);
-			const uint32 TaskBufferSize = ArgGenSize + InstanceCountClearSize;
-			TaskInfosBuffer.Initialize(sizeof(uint32), TaskBufferSize / sizeof(uint32), EPixelFormat::PF_R32_UINT, BUF_Volatile);
-			uint8* TaskBufferData = (uint8*)RHILockVertexBuffer(TaskInfosBuffer.Buffer, 0, TaskBufferSize, RLM_WriteOnly);
-			FMemory::Memcpy(TaskBufferData, DrawIndirectArgGenTasks.GetData(), ArgGenSize);
-			FMemory::Memcpy(TaskBufferData + ArgGenSize, InstanceCountClearTasks.GetData(), InstanceCountClearSize);
-			RHIUnlockVertexBuffer(TaskInfosBuffer.Buffer);
+			RHICmdList.TransitionResource(EResourceTransitionAccess::ERWBarrier, EResourceTransitionPipeline::EComputeToCompute, CountBuffer.UAV);
+
+			FReadBuffer TaskInfosBuffer;
+			{
+				// All draw indirect args task are run first because of the binding between the task ID and arg write offset.
+				const uint32 ArgGenSize = DrawIndirectArgGenTasks.Num() * sizeof(FArgGenTaskInfo);
+				const uint32 InstanceCountClearSize = InstanceCountClearTasks.Num() * sizeof(uint32);
+				const uint32 TaskBufferSize = ArgGenSize + InstanceCountClearSize;
+				TaskInfosBuffer.Initialize(sizeof(uint32), TaskBufferSize / sizeof(uint32), EPixelFormat::PF_R32_UINT, BUF_Volatile);
+				uint8* TaskBufferData = (uint8*)RHILockVertexBuffer(TaskInfosBuffer.Buffer, 0, TaskBufferSize, RLM_WriteOnly);
+				FMemory::Memcpy(TaskBufferData, DrawIndirectArgGenTasks.GetData(), ArgGenSize);
+				FMemory::Memcpy(TaskBufferData + ArgGenSize, InstanceCountClearTasks.GetData(), InstanceCountClearSize);
+				RHIUnlockVertexBuffer(TaskInfosBuffer.Buffer);
+			}
+
+			RHICmdList.TransitionResource(EResourceTransitionAccess::EWritable, EResourceTransitionPipeline::EGfxToCompute, DrawIndirectBuffer.UAV);
+
+			FNiagaraDrawIndirectArgsGenCS::FPermutationDomain PermutationVector;
+			TShaderMapRef<FNiagaraDrawIndirectArgsGenCS> DrawIndirectArgsGenCS(GetGlobalShaderMap(FeatureLevel), PermutationVector);
+			RHICmdList.SetComputeShader(DrawIndirectArgsGenCS->GetComputeShader());
+			DrawIndirectArgsGenCS->SetOutput(RHICmdList, DrawIndirectBuffer.UAV, CountBuffer.UAV);
+			DrawIndirectArgsGenCS->SetParameters(RHICmdList, TaskInfosBuffer.SRV, DrawIndirectArgGenTasks.Num(), InstanceCountClearTasks.Num());
+			DispatchComputeShader(RHICmdList, *DrawIndirectArgsGenCS, FMath::DivideAndRoundUp(DrawIndirectArgGenTasks.Num() + InstanceCountClearTasks.Num(), NIAGARA_DRAW_INDIRECT_ARGS_GEN_THREAD_COUNT), 1, 1);
+			DrawIndirectArgsGenCS->UnbindBuffers(RHICmdList);
+
+			// Sync after clear.
+			RHICmdList.TransitionResource(EResourceTransitionAccess::ERWBarrier, EResourceTransitionPipeline::EComputeToCompute, CountBuffer.UAV);
+			// Transition draw indirect to readable for gfx draw indirect.
+			RHICmdList.TransitionResource(EResourceTransitionAccess::EReadable, EResourceTransitionPipeline::EComputeToGfx, DrawIndirectBuffer.UAV);
 		}
-
-		RHICmdList.TransitionResource(EResourceTransitionAccess::EWritable, EResourceTransitionPipeline::EGfxToCompute, DrawIndirectBuffer.UAV);
-
-		FNiagaraDrawIndirectArgsGenCS::FPermutationDomain PermutationVector;
-		TShaderMapRef<FNiagaraDrawIndirectArgsGenCS> DrawIndirectArgsGenCS(GetGlobalShaderMap(FeatureLevel), PermutationVector);
-		RHICmdList.SetComputeShader(DrawIndirectArgsGenCS->GetComputeShader());
-		DrawIndirectArgsGenCS->SetOutput(RHICmdList, DrawIndirectBuffer.UAV, CountBuffer.UAV);
-		DrawIndirectArgsGenCS->SetParameters(RHICmdList, TaskInfosBuffer.SRV, DrawIndirectArgGenTasks.Num(), InstanceCountClearTasks.Num());
-		DispatchComputeShader(RHICmdList, *DrawIndirectArgsGenCS, FMath::DivideAndRoundUp(DrawIndirectArgGenTasks.Num() + InstanceCountClearTasks.Num(), NIAGARA_DRAW_INDIRECT_ARGS_GEN_THREAD_COUNT), 1, 1);
-		DrawIndirectArgsGenCS->UnbindBuffers(RHICmdList);
-
-		// Sync after clear.
-		RHICmdList.TransitionResource(EResourceTransitionAccess::ERWBarrier, EResourceTransitionPipeline::EComputeToCompute, CountBuffer.UAV);
-		// Transition draw indirect to readable for gfx draw indirect.
-		RHICmdList.TransitionResource(EResourceTransitionAccess::EReadable, EResourceTransitionPipeline::EComputeToGfx, DrawIndirectBuffer.UAV);
-
 		// Once cleared to 0, the count are reusable.
 		FreeEntries.Append(InstanceCountClearTasks);
 

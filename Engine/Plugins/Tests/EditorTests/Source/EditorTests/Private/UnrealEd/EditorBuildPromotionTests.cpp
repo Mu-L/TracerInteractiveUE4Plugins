@@ -67,7 +67,7 @@
 #include "PackageHelperFunctions.h"
 
 //Materials
-#include "Toolkits/AssetEditorManager.h"
+
 #include "Editor/MaterialEditor/Private/MaterialEditor.h"
 #include "Materials/MaterialExpressionConstant3Vector.h"
 
@@ -101,6 +101,7 @@
 
 #include "LevelEditor.h"
 #include "ObjectTools.h"
+#include "Subsystems/AssetEditorSubsystem.h"
 
 
 #define LOCTEXT_NAMESPACE "EditorBuildPromotionTests"
@@ -393,7 +394,7 @@ namespace EditorBuildPromotionTestUtils
 	static void StartPIE(bool bSimulateInEditor)
 	{
 		FLevelEditorModule& LevelEditorModule = FModuleManager::Get().GetModuleChecked<FLevelEditorModule>(TEXT("LevelEditor"));
-		TSharedPtr<class ILevelViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
+		TSharedPtr<class IAssetViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
 
 		GUnrealEd->RequestPlaySession(false, ActiveLevelViewport, bSimulateInEditor, NULL, NULL, -1, false);
 	}
@@ -756,7 +757,7 @@ namespace BuildPromotionTestHelper
 		void OpenAssetEditor()
 		{
 			UObject* CurrentAsset = Assets[AssetIndex].Asset;
-			if (FAssetEditorManager::Get().OpenEditorForAsset(CurrentAsset))
+			if (GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(CurrentAsset))
 			{
 				CurrentStage = EState::WaitForEditor;
 			}
@@ -784,7 +785,7 @@ namespace BuildPromotionTestHelper
 				if (!ActiveWindowTitle.StartsWith(CurrentAsset->GetName()))
 				{
 					//Bring the asset editor to the front
-					FAssetEditorManager::Get().FindEditorForAsset(CurrentAsset, true);
+					GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->FindEditorForAsset(CurrentAsset, true);
 				}
 
 				UE_LOG(LogEditorBuildPromotionTests, Display, TEXT("Opened asset (%s)"), *CurrentAsset->GetClass()->GetName());
@@ -874,7 +875,7 @@ namespace BuildPromotionTestHelper
 			}
 
 			//close editor
-			FAssetEditorManager::Get().CloseAllAssetEditors();
+			GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->CloseAllAssetEditors();
 
 			//Add to level
 			FVector PlaceLocation(-1090,970,160);
@@ -1287,7 +1288,7 @@ namespace BuildPromotionTestHelper
 				const FString SurroundChannels[] = { TEXT("_fl"), TEXT("_fr"), TEXT("_fc"), TEXT("_lf"), TEXT("_sl"), TEXT("_sr"), TEXT("_bl"), TEXT("_br") };
 
 				USoundWave* ImportedSound = NULL;
-				for (int32 ChannelID = 0; ChannelID < ARRAY_COUNT(SurroundChannels); ++ChannelID)
+				for (int32 ChannelID = 0; ChannelID < UE_ARRAY_COUNT(SurroundChannels); ++ChannelID)
 				{
 					const FString ChannelFileName = FString::Printf(TEXT("%s%s.WAV"),*BaseFileName,*SurroundChannels[ChannelID]);
 					if (FPaths::FileExists(ChannelFileName))
@@ -1381,7 +1382,7 @@ namespace BuildPromotionTestHelper
 				if (SCTestMat)
 				{
 					//Open the asset editor
-					FAssetEditorManager::Get().OpenEditorForAsset(SCTestMat);
+					GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(SCTestMat);
 					UE_LOG(LogEditorBuildPromotionTests, Display, TEXT("Opened the material editor for: %s"), *SCTestMat->GetName());
 
 					FString PackageFileName = FPackageName::LongPackageNameToFilename(MaterialData.PackageName.ToString(), FPackageName::GetAssetPackageExtension());
@@ -1463,7 +1464,7 @@ namespace BuildPromotionTestHelper
 				UAutomationTestSettings const* AutomationTestSettings = GetDefault<UAutomationTestSettings>();
 				check(AutomationTestSettings);
 
-				IAssetEditorInstance* AssetEditor = FAssetEditorManager::Get().FindEditorForAsset(SCTestMat, true);
+				IAssetEditorInstance* AssetEditor = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->FindEditorForAsset(SCTestMat, true);
 				FMaterialEditor* MaterialEditor = (FMaterialEditor*)AssetEditor;
 
 				//Pick a random color
@@ -1476,7 +1477,7 @@ namespace BuildPromotionTestHelper
 					TEXT("Black"),	TEXT("(R=0.0f,G=0.0f,B=0.0f)"),
 					TEXT("White"),	TEXT("(R=1.0f,G=1.0f,B=1.0f)") };
 
-				const int32 ChosenIndex = FMath::RandHelper(ARRAY_COUNT(AvailableColors) / 2);
+				const int32 ChosenIndex = FMath::RandHelper(UE_ARRAY_COUNT(AvailableColors) / 2);
 				ChosenMaterialColor = AvailableColors[ChosenIndex * 2];
 				const FString ColorValue = AvailableColors[(ChosenIndex * 2)+1];
 
@@ -1566,7 +1567,7 @@ namespace BuildPromotionTestHelper
 		bool ContentBrowser_SourceControl_Part5()
 		{
 			UE_LOG(LogEditorBuildPromotionTests, Display, TEXT("Closed the material editor"));
-			FAssetEditorManager::Get().CloseAllAssetEditors();
+			GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->CloseAllAssetEditors();
 			return true;
 		}
 
@@ -1775,7 +1776,7 @@ namespace BuildPromotionTestHelper
 		bool ContentBrowser_AssignAMaterial()
 		{
 			// SETUP
-			FAssetEditorManager::Get().CloseAllAssetEditors();
+			GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->CloseAllAssetEditors();
 			UAutomationTestSettings const* AutomationTestSettings = GetDefault<UAutomationTestSettings>();
 			check(AutomationTestSettings);
 
@@ -2064,7 +2065,7 @@ namespace BuildPromotionTestHelper
 			{
 				//Open the level script blueprint
 				ULevelScriptBlueprint* LSB = PlacedBlueprint->GetLevel()->GetLevelScriptBlueprint(false);
-				FAssetEditorManager::Get().OpenEditorForAsset(LSB);
+				GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(LSB);
 				Test->AddInfo(TEXT("Opened the level script blueprint"));
 			}
 			return true;
@@ -2081,7 +2082,7 @@ namespace BuildPromotionTestHelper
 		{
 			if (BlueprintObject)
 			{
-				IAssetEditorInstance* AssetEditor = FAssetEditorManager::Get().FindEditorForAsset(BlueprintObject, true);
+				IAssetEditorInstance* AssetEditor = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->FindEditorForAsset(BlueprintObject, true);
 				FBlueprintEditor* BlueprintEditor = (FBlueprintEditor*)AssetEditor;
 
 				UEdGraph* EventGraph = FBlueprintEditorUtils::FindEventGraph(BlueprintObject);
@@ -2182,7 +2183,7 @@ namespace BuildPromotionTestHelper
 			if (BlueprintObject)
 			{
 				Test->AddInfo(TEXT("Closing the blueprint editor"));
-				FAssetEditorManager::Get().CloseAllAssetEditors();
+				GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->CloseAllAssetEditors();
 				//UE_LOG(LogEditorBuildPromotionTests, Display, TEXT("Saving the blueprint"));
 				//SaveBlueprint();
 			}

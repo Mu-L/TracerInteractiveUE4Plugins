@@ -14,6 +14,7 @@
 UENUM()
 enum class ESplineBoneAxis : uint8
 {
+	None = 0 UMETA(Hidden),
 	X = 1,
 	Y = 2,
 	Z = 3,
@@ -105,6 +106,7 @@ struct ANIMGRAPHRUNTIME_API FAnimNode_SplineIK : public FAnimNode_SkeletalContro
 	// FAnimNode_Base interface
 	virtual void GatherDebugData(FNodeDebugData& DebugData) override;
 	virtual void OnInitializeAnimInstance(const FAnimInstanceProxy* InProxy, const UAnimInstance* InAnimInstance) override;
+	virtual bool NeedsOnInitializeAnimInstance() const override { return true; }
 	// End of FAnimNode_Base interface
 
 	// FAnimNode_SkeletalControlBase interface

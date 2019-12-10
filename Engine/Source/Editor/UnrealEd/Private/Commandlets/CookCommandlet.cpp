@@ -286,7 +286,7 @@ namespace DetailedCookStats
 			UE_LOG(LogCookCommandlet, Display, TEXT("================="));
 			for (const auto& Attr : DDCSummaryStats)
 			{
-				UE_LOG(LogCookCommandlet, Display, TEXT("%-14s=%10s"), *Attr.Key, *Attr.Value);
+				UE_LOG(LogCookCommandlet, Display, TEXT("%-16s=%10s"), *Attr.Key, *Attr.Value);
 			}
 		}
 		if (DDCResourceUsageStats.Num() > 0)
@@ -462,7 +462,7 @@ bool UCookCommandlet::CookOnTheFly( FGuid InstanceId, int32 Timeout, bool bForce
 	FDateTime LastConnectionTime = FDateTime::UtcNow();
 	bool bHadConnection = false;
 
-	while (!GIsRequestingExit)
+	while (!IsEngineExitRequested())
 	{
 		uint32 CookedPkgCount = 0;
 		uint32 TickResults = CookOnTheFlyServer->TickCookOnTheSide(/*TimeSlice =*/10.f, CookedPkgCount, ShowProgress ? ECookTickFlags::None : ECookTickFlags::HideProgressDisplay);
@@ -477,7 +477,7 @@ bool UCookCommandlet::CookOnTheFly( FGuid InstanceId, int32 Timeout, bool bForce
 		CookOnTheFlyServer->TickRecompileShaderRequests();
 		GShaderCompilingManager->ProcessAsyncResults(true, false);
 
-		while ( (CookOnTheFlyServer->HasCookRequests() == false) && !GIsRequestingExit)
+		while ( (CookOnTheFlyServer->HasCookRequests() == false) && !IsEngineExitRequested())
 		{
 			CookOnTheFlyServer->TickRecompileShaderRequests();
 
@@ -505,12 +505,12 @@ bool UCookCommandlet::CookOnTheFly( FGuid InstanceId, int32 Timeout, bool bForce
 					}
 					else
 					{
-						GIsRequestingExit = true;
+						RequestEngineExit(TEXT("Cook file server idle"));
 					}
 				}
 				else if (bHadConnection && (CookOnTheFlyServer->NumConnections() == 0) && bForceClose) // immediately shut down if we previously had a connection and now do not
 				{
-					GIsRequestingExit = true;
+					RequestEngineExit(TEXT("Cook file server lost last connection"));
 				}
 			}
 
@@ -597,7 +597,7 @@ int32 UCookCommandlet::Main(const FString& CmdLineParams)
 
 bool UCookCommandlet::CookByTheBook( const TArray<ITargetPlatform*>& Platforms, TArray<FString>& FilesInPath )
 {
-	TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(TEXT("CookByTheBook"));
+	TRACE_CPUPROFILER_EVENT_SCOPE(CookByTheBook);
 
 	COOK_STAT(FScopedDurationTimer CookByTheBookTimer(DetailedCookStats::CookByTheBookTimeSec));
 	UCookOnTheFlyServer *CookOnTheFlyServer = NewObject<UCookOnTheFlyServer>();
@@ -813,6 +813,7 @@ bool UCookCommandlet::CookByTheBook( const TArray<ITargetPlatform*>& Platforms, 
 	CookOptions |= Switches.Contains(TEXT("MAPSONLY")) ? ECookByTheBookOptions::MapsOnly : ECookByTheBookOptions::None;
 	CookOptions |= Switches.Contains(TEXT("NODEV")) ? ECookByTheBookOptions::NoDevContent : ECookByTheBookOptions::None;
 	CookOptions |= Switches.Contains(TEXT("FullLoadAndSave")) ? ECookByTheBookOptions::FullLoadAndSave : ECookByTheBookOptions::None;
+	CookOptions |= Switches.Contains(TEXT("PackageStore")) ? ECookByTheBookOptions::PackageStore : ECookByTheBookOptions::None;
 
 	const ECookByTheBookOptions SinglePackageFlags = ECookByTheBookOptions::NoAlwaysCookMaps | ECookByTheBookOptions::NoDefaultMaps | ECookByTheBookOptions::NoGameAlwaysCookPackages | ECookByTheBookOptions::NoInputPackages | ECookByTheBookOptions::NoSlatePackages | ECookByTheBookOptions::DisableUnsolicitedPackages | ECookByTheBookOptions::ForceDisableSaveGlobalShaders;
 	CookOptions |= bCookSinglePackage ? SinglePackageFlags : ECookByTheBookOptions::None;
@@ -991,7 +992,7 @@ bool UCookCommandlet::CookByTheBook( const TArray<ITargetPlatform*>& Platforms, 
 						bShouldGC = false;
 
 						int32 NumObjectsBeforeGC = GUObjectArray.GetObjectArrayNumMinusAvailable();
-						int32 NumObjectsAvailableBeforeGC = GUObjectArray.GetObjectArrayNum();
+						int32 NumObjectsAvailableBeforeGC = GUObjectArray.GetObjectArrayEstimatedAvailable();
 
 						UE_LOG(LogCookCommandlet, Display, TEXT("GarbageCollection... (%s)"), *GCReason);
 						GCReason = FString();
@@ -1003,7 +1004,7 @@ bool UCookCommandlet::CookByTheBook( const TArray<ITargetPlatform*>& Platforms, 
 						CollectGarbage(RF_NoFlags);
 
 						int32 NumObjectsAfterGC = GUObjectArray.GetObjectArrayNumMinusAvailable();
-						int32 NumObjectsAvailableAfterGC = GUObjectArray.GetObjectArrayNum();
+						int32 NumObjectsAvailableAfterGC = GUObjectArray.GetObjectArrayEstimatedAvailable();
 						UE_LOG(LogCookCommandlet, Display, TEXT("Full GC before %d available %d after %d available %d"), NumObjectsBeforeGC, NumObjectsAvailableBeforeGC, NumObjectsAfterGC, NumObjectsAvailableAfterGC);
 
 						DumpMemStats();

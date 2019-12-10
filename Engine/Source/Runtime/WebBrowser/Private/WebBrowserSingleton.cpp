@@ -54,7 +54,7 @@ THIRD_PARTY_INCLUDES_END
 #	include <IOS/IOSPlatformWebBrowser.h>
 #	include <IOS/IOSCookieManager.h>
 #elif PLATFORM_PS4
-#	include <PS4/PS4PlatformWebBrowser.h>
+#	include "PS4PlatformWebBrowser.h"
 #endif
 
 // Define some platform-dependent file locations
@@ -109,7 +109,7 @@ namespace {
 			uint32 dwFlags;		// Reserved for future use, must be zero.
 		};
 
-		THREADNAME_INFO ThreadNameInfo = {0x1000, ThreadName, -1, 0};
+		THREADNAME_INFO ThreadNameInfo = {0x1000, ThreadName, (uint32)-1, 0};
 
 		__try
 		{
@@ -299,6 +299,20 @@ FWebBrowserSingleton::FWebBrowserSingleton(const FWebBrowserInitSettings& WebBro
 		UE_LOG(LogWebBrowser, Error, TEXT("Chromium Locales information not found at: %s."), *LocalesPath);
 	}
 	CefString(&Settings.locales_dir_path) = TCHAR_TO_WCHAR(*LocalesPath);
+#else
+	// LocaleCode may contain region, which for some languages may make CEF unable to find the locale pak files
+	// In that case use the language name for CEF locale
+	FString LocalePakPath = ResourcesPath + TEXT("/") + LocaleCode.Replace(TEXT("-"), TEXT("_")) + TEXT(".lproj/locale.pak");
+	if (!FPaths::FileExists(LocalePakPath))
+	{
+		FCultureRef Culture = FInternationalization::Get().GetCurrentCulture();
+		LocaleCode = Culture->GetTwoLetterISOLanguageName();
+		LocalePakPath = ResourcesPath + TEXT("/") + LocaleCode + TEXT(".lproj/locale.pak");
+		if (FPaths::FileExists(LocalePakPath))
+		{
+			CefString(&Settings.locale) = TCHAR_TO_WCHAR(*LocaleCode);
+		}
+	}
 #endif
 
 	// Specify path to sub process exe
@@ -411,6 +425,7 @@ TSharedPtr<IWebBrowserWindow> FWebBrowserSingleton::CreateBrowserWindow(
 		FScopeLock Lock(&WindowInterfacesCS);
 		WindowInterfaces.Add(NewBrowserWindow);
 	}
+	NewBrowserWindow->GetCefBrowser()->GetHost()->SetWindowlessFrameRate(BrowserWindowParent->GetCefBrowser()->GetHost()->GetWindowlessFrameRate());
 	return NewBrowserWindow;
 #endif
 	return nullptr;
@@ -430,11 +445,11 @@ TSharedPtr<IWebBrowserWindow> FWebBrowserSingleton::CreateBrowserWindow(
 	FCreateBrowserWindowSettings Settings;
 	Settings.OSWindowHandle = OSWindowHandle;
 	Settings.InitialURL = InitialURL;
-	Settings.bUseTransparency = bUseTransparency;
+	Settings.bUseTransparency = false;// bUseTransparency;
 	Settings.bThumbMouseButtonNavigation = bThumbMouseButtonNavigation;
 	Settings.ContentsToLoad = ContentsToLoad;
 	Settings.bShowErrorMessage = ShowErrorMessage;
-	Settings.BackgroundColor = BackgroundColor;
+	Settings.BackgroundColor = FColor::Black;// BackgroundColor;
 	Settings.BrowserFrameRate = BrowserFrameRate;
 	Settings.AltRetryDomains = AltRetryDomains;
 
@@ -537,7 +552,7 @@ TSharedPtr<IWebBrowserWindow> FWebBrowserSingleton::CreateBrowserWindow(const FC
 				FScopeLock Lock(&WindowInterfacesCS);
 				WindowInterfaces.Add(NewBrowserWindow);
 			}
-			
+
 			return NewBrowserWindow;
 		}
 	}

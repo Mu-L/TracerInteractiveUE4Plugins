@@ -26,11 +26,11 @@ protected:
 private:
 	class URuntimeVirtualTexture* VirtualTexture;
 
-	TSharedPtr<class STextBlock> SizeText;
+	TSharedPtr<class STextBlock> TileCountText;
 	TSharedPtr<class STextBlock> TileSizeText;
 	TSharedPtr<class STextBlock> TileBorderSizeText;
-	TSharedPtr<class STextBlock> RemoveLowMipsText;
 
+	TSharedPtr<class STextBlock> SizeText;
 	TSharedPtr<class STextBlock> PageTableTextureMemoryText;
 	TSharedPtr<class STextBlock> PhysicalTextureMemoryText;
 };
@@ -49,6 +49,10 @@ protected:
 	FReply SetRotation();
 	/** Callback for Copy Bounds button */
 	FReply SetTransformToBounds();
+	/** Callback for Build button */
+	FReply BuildStreamedMips();
+	/** Callback for Build Debug button */
+	FReply BuildLowMipsDebug();
 
 	//~ Begin IDetailCustomization Interface.
 	virtual void CustomizeDetails(IDetailLayoutBuilder& DetailBuilder) override;

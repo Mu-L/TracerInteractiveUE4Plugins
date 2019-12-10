@@ -8,10 +8,10 @@ FString FRigUnit_SetBoneTranslation::GetUnitLabel() const
 	return FString::Printf(TEXT("Set Translation %s"), *Bone.ToString());
 }
 
-void FRigUnit_SetBoneTranslation::Execute(const FRigUnitContext& Context)
+FRigUnit_SetBoneTranslation_Execute()
 {
-	FRigHierarchyRef& HierarchyRef = ExecuteContext.HierarchyReference;
-	FRigHierarchy* Hierarchy = HierarchyRef.Get();
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
+	FRigBoneHierarchy* Hierarchy = ExecuteContext.GetBones();
 	if (Hierarchy)
 	{
 		switch (Context.State)
@@ -30,14 +30,34 @@ void FRigUnit_SetBoneTranslation::Execute(const FRigUnitContext& Context)
 						case EBoneGetterSetterMode::GlobalSpace:
 						{
 							FTransform Transform = Hierarchy->GetGlobalTransform(CachedBoneIndex);
-							Transform.SetTranslation(Translation);
+
+							if (FMath::IsNearlyEqual(Weight, 1.f))
+							{
+								Transform.SetTranslation(Translation);
+							}
+							else
+							{
+								float T = FMath::Clamp<float>(Weight, 0.f, 1.f);
+								Transform.SetTranslation(FMath::Lerp<FVector>(Transform.GetTranslation(), Translation, T));
+							}
+
 							Hierarchy->SetGlobalTransform(CachedBoneIndex, Transform, bPropagateToChildren);
 							break;
 						}
 						case EBoneGetterSetterMode::LocalSpace:
 						{
 							FTransform Transform = Hierarchy->GetLocalTransform(CachedBoneIndex);
-							Transform.SetTranslation(Translation);
+
+							if (FMath::IsNearlyEqual(Weight, 1.f))
+							{
+								Transform.SetTranslation(Translation);
+							}
+							else
+							{
+								float T = FMath::Clamp<float>(Weight, 0.f, 1.f);
+								Transform.SetTranslation(FMath::Lerp<FVector>(Transform.GetTranslation(), Translation, T));
+							}
+
 							Hierarchy->SetLocalTransform(CachedBoneIndex, Transform, bPropagateToChildren);
 							break;
 						}

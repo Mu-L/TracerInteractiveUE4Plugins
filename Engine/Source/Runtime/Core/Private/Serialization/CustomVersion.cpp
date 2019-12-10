@@ -5,13 +5,22 @@
 =============================================================================*/
 
 #include "Serialization/CustomVersion.h"
-#include "Serialization/StructuredArchiveFromArchive.h"
+#include "Serialization/StructuredArchive.h"
 #include "Algo/Sort.h"
+#include "Containers/Map.h"
+#include "Misc/ScopeRWLock.h"
+#include "CoreGlobals.h"
 
 namespace
 {
-	FCustomVersion UnusedCustomVersion(FGuid(0, 0, 0, 0xF99D40C1), 0, TEXT("Unused custom version"));
+	static const FGuid UnusedCustomVersionKey(0, 0, 0, 0xF99D40C1);
 
+	static const FCustomVersion& GetUnusedCustomVersion()
+	{
+		static const FCustomVersion UnusedCustomVersion(UnusedCustomVersionKey, 0, TEXT("Unused custom version"));
+		return UnusedCustomVersion;
+	}
+	
 	struct FEnumCustomVersion_DEPRECATED
 	{
 		uint32 Tag;
@@ -28,8 +37,8 @@ namespace
 	{
 		// Serialize keys
 		FStructuredArchive::FRecord Record = Slot.EnterRecord();
-		Record << NAMED_ITEM("Tag", Version.Tag);
-		Record << NAMED_ITEM("Version", Version.Version);
+		Record << SA_VALUE(TEXT("Tag"), Version.Tag);
+		Record << SA_VALUE(TEXT("Version"), Version.Version);
 	}
 
 	FArchive& operator<<(FArchive& Ar, FEnumCustomVersion_DEPRECATED& Version)
@@ -54,9 +63,9 @@ namespace
 	void operator<<(FStructuredArchive::FSlot Slot, FGuidCustomVersion_DEPRECATED& Version)
 	{
 		FStructuredArchive::FRecord Record = Slot.EnterRecord();
-		Record << NAMED_ITEM("Key", Version.Key);
-		Record << NAMED_ITEM("Version", Version.Version);
-		Record << NAMED_ITEM("FriendlyName", Version.FriendlyName);
+		Record << SA_VALUE(TEXT("Key"), Version.Key);
+		Record << SA_VALUE(TEXT("Version"), Version.Version);
+		Record << SA_VALUE(TEXT("FriendlyName"), Version.FriendlyName);
 	}
 
 	FArchive& operator<<(FArchive& Ar, FGuidCustomVersion_DEPRECATED& Version)
@@ -66,18 +75,189 @@ namespace
 	}
 }
 
+/** Defer FName creation and allocations from static FCustomVersionRegistrations that may never be needed */
+struct FStaticCustomVersionRegistry
+{
+	struct FPendingRegistration
+	{
+		int32 Version;
+		const TCHAR* FriendlyName;
+	};
+	typedef TMap<FGuid, FPendingRegistration, TInlineSetAllocator<64>> RegistrationQueue;
+
+	FRWLock Lock;
+	FCustomVersionContainer Registered;
+	RegistrationQueue Queue;
+
+	static FStaticCustomVersionRegistry& Get()
+	{
+		static FStaticCustomVersionRegistry Singleton;
+		return Singleton;
+	}
+
+	TOptional<FCustomVersion> Find(const FGuid& Guid) const
+	{
+		if (const FCustomVersion* RegisteredVersion = Registered.GetVersion(Guid))
+		{
+			return *RegisteredVersion;
+		}
+
+		if (const FPendingRegistration* Pending = Queue.Find(Guid))
+		{
+			return FCustomVersion(Guid, Pending->Version, Pending->FriendlyName);
+		}
+
+		return TOptional<FCustomVersion>();
+	}
+
+	void RegisterQueue()
+	{
+		if (Queue.Num())
+		{
+			for (const TPair<FGuid, FPendingRegistration>& Queued : Queue)
+			{
+				// Check if this tag hasn't already been registered
+				if (FCustomVersion* ExistingRegistration = Registered.Versions.FindByKey(Queued.Key))
+				{
+					// We don't allow the registration details to change across registrations - this code path only exists to support hotreload
+
+					// If you hit this then you've probably either:
+					// * Changed registration details during hotreload.
+					// * Accidentally copy-and-pasted an FCustomVersionRegistration object.
+					ensureMsgf(
+						ExistingRegistration->Version == Queued.Value.Version && ExistingRegistration->GetFriendlyName() == Queued.Value.FriendlyName,
+						TEXT("Custom version registrations cannot change between hotreloads - \"%s\" version %d is being reregistered as \"%s\" version %d"),
+						*ExistingRegistration->GetFriendlyName().ToString(),
+						ExistingRegistration->Version,
+						Queued.Value.FriendlyName,
+						Queued.Value.Version
+					);
+
+					++ExistingRegistration->ReferenceCount;
+				}
+				else
+				{
+					Registered.Versions.Add(FCustomVersion(Queued.Key, Queued.Value.Version, Queued.Value.FriendlyName));
+				}
+			}
+
+			Queue.Empty();
+		}
+	}
+
+	void Unregister(FGuid Key)
+	{
+		if (Queue.Remove(Key) == 0)
+		{
+			const int32 KeyIndex = Registered.Versions.IndexOfByKey(Key);
+
+			// Ensure this tag has been registered
+			check(KeyIndex != INDEX_NONE);
+
+			FCustomVersion* FoundKey = &Registered.Versions[KeyIndex];
+
+			--FoundKey->ReferenceCount;
+			if (FoundKey->ReferenceCount == 0)
+			{
+				Registered.Versions.RemoveAtSwap(KeyIndex);
+			}
+		}
+	}
+};
+
+FCustomVersionContainer FCurrentCustomVersions::GetAll()
+{
+	FStaticCustomVersionRegistry& Registry = FStaticCustomVersionRegistry::Get();
+
+	{
+		FReadScopeLock Scope(Registry.Lock);
+
+		if (Registry.Queue.Num() == 0)
+		{
+			return Registry.Registered;
+		}
+	}
+
+	FWriteScopeLock Scope(Registry.Lock);
+	Registry.RegisterQueue();
+	return Registry.Registered;
+}
+
+TOptional<FCustomVersion> FCurrentCustomVersions::Get(const FGuid& Guid)
+{
+	FStaticCustomVersionRegistry& Registry = FStaticCustomVersionRegistry::Get();
+
+	FReadScopeLock Scope(Registry.Lock);
+	return Registry.Find(Guid);
+}
+
+TArray<FCustomVersionDifference> FCurrentCustomVersions::Compare(const FCustomVersionArray& CompareVersions)
+{
+	TArray<FCustomVersionDifference> Result;
+
+	if (CompareVersions.Num())
+	{
+		FStaticCustomVersionRegistry& Registry = FStaticCustomVersionRegistry::Get();
+
+		FReadScopeLock Scope(Registry.Lock);
+
+		for (const FCustomVersion& CompareVersion : CompareVersions)
+		{
+			if (TOptional<FCustomVersion> CurrentVersion = Registry.Find(CompareVersion.Key))
+			{
+				if (int Delta = CurrentVersion.GetValue().Version - CompareVersion.Version)
+				{
+					Result.Add({ Delta < 0	? ECustomVersionDifference::Newer 
+											: ECustomVersionDifference::Older, &CompareVersion });
+				}
+			}
+			else
+			{
+				Result.Add({ ECustomVersionDifference::Missing, &CompareVersion });
+			}			
+		}
+	}
+
+	return Result;
+}
+
+void FCurrentCustomVersions::Register(const FGuid& Key, int32 Version, const TCHAR* Name)
+{
+	FStaticCustomVersionRegistry& Registry = FStaticCustomVersionRegistry::Get();
+
+	FWriteScopeLock Scope(Registry.Lock);
+	check(Registry.Queue.Find(Key) == nullptr);
+	Registry.Queue.Add(Key, { Version, Name });
+}
+
+void FCurrentCustomVersions::Unregister(const FGuid& Key)
+{
+	FStaticCustomVersionRegistry& Registry = FStaticCustomVersionRegistry::Get();
+
+	FWriteScopeLock Scope(Registry.Lock);
+	Registry.Unregister(Key);
+}
+
 const FName FCustomVersion::GetFriendlyName() const
 {
 	if (FriendlyName == NAME_None)
 	{
-		FriendlyName = FCustomVersionContainer::GetRegistered().GetFriendlyName(Key);
+		if (TOptional<FCustomVersion> CurrentVersion = FCurrentCustomVersions::Get(Key))
+		{
+			FriendlyName = CurrentVersion.GetValue().GetFriendlyName();
+		}
 	}
 	return FriendlyName;
 }
 
 const FCustomVersionContainer& FCustomVersionContainer::GetRegistered()
 {
-	return GetInstance();
+	FStaticCustomVersionRegistry& Registry = FStaticCustomVersionRegistry::Get();
+
+	// Even though returning a reference isn't thread-safe, we can still synchronize access to the queue
+	FWriteScopeLock Scope(Registry.Lock);
+	Registry.RegisterQueue();
+	return Registry.Registered;
 }
 
 void FCustomVersionContainer::Empty()
@@ -102,13 +282,6 @@ FString FCustomVersionContainer::ToString(const FString& Indent) const
 	return VersionsAsString;
 }
 
-FCustomVersionContainer& FCustomVersionContainer::GetInstance()
-{
-	static FCustomVersionContainer Singleton;
-
-	return Singleton;
-}
-
 FArchive& operator<<(FArchive& Ar, FCustomVersion& Version)
 {
 	FStructuredArchiveFromArchive(Ar).GetSlot() << Version;
@@ -118,8 +291,8 @@ FArchive& operator<<(FArchive& Ar, FCustomVersion& Version)
 void operator<<(FStructuredArchive::FSlot Slot, FCustomVersion& Version)
 {
 	FStructuredArchive::FRecord Record = Slot.EnterRecord();
-	Record << NAMED_ITEM("Key", Version.Key);
-	Record << NAMED_ITEM("Version", Version.Version);
+	Record << SA_VALUE(TEXT("Key"), Version.Key);
+	Record << SA_VALUE(TEXT("Version"), Version.Version);
 }
 
 void FCustomVersionContainer::Serialize(FArchive& Ar, ECustomVersionSerializationFormat::Type Format)
@@ -176,9 +349,9 @@ const FCustomVersion* FCustomVersionContainer::GetVersion(FGuid Key) const
 {
 	// A testing tag was written out to a few archives during testing so we need to
 	// handle the existence of it to ensure that those archives can still be loaded.
-	if (Key == UnusedCustomVersion.Key)
+	if (Key == UnusedCustomVersionKey)
 	{
-		return &UnusedCustomVersion;
+		return &GetUnusedCustomVersion();
 	}
 
 	return Versions.FindByKey(Key);
@@ -197,7 +370,7 @@ const FName FCustomVersionContainer::GetFriendlyName(FGuid Key) const
 
 void FCustomVersionContainer::SetVersion(FGuid CustomKey, int32 Version, FName FriendlyName)
 {
-	if (CustomKey == UnusedCustomVersion.Key)
+	if (CustomKey == UnusedCustomVersionKey)
 	{
 		return;
 	}
@@ -210,54 +383,5 @@ void FCustomVersionContainer::SetVersion(FGuid CustomKey, int32 Version, FName F
 	else
 	{
 		Versions.Add(FCustomVersion(CustomKey, Version, FriendlyName));
-	}
-}
-
-FCustomVersionRegistration::FCustomVersionRegistration(FGuid InKey, int32 InVersion, FName InFriendlyName)
-{
-	FCustomVersionArray& Versions = FCustomVersionContainer::GetInstance().Versions;
-
-	// Check if this tag hasn't already been registered
-	if (FCustomVersion* ExistingRegistration = Versions.FindByKey(InKey))
-	{
-		// We don't allow the registration details to change across registrations - this code path only exists to support hotreload
-
-		// If you hit this then you've probably either:
-		// * Changed registration details during hotreload.
-		// * Accidentally copy-and-pasted an FCustomVersionRegistration object.
-		ensureMsgf(
-			ExistingRegistration->Version == InVersion && ExistingRegistration->GetFriendlyName() == InFriendlyName,
-			TEXT("Custom version registrations cannot change between hotreloads - \"%s\" version %d is being reregistered as \"%s\" version %d"),
-			*ExistingRegistration->GetFriendlyName().ToString(),
-			ExistingRegistration->Version,
-			*InFriendlyName.ToString(),
-			InVersion
-		);
-
-		++ExistingRegistration->ReferenceCount;
-	}
-	else
-	{
-		Versions.Add(FCustomVersion(InKey, InVersion, InFriendlyName));
-	}
-
-	Key = InKey;
-}
-
-FCustomVersionRegistration::~FCustomVersionRegistration()
-{
-	FCustomVersionArray& Versions = FCustomVersionContainer::GetInstance().Versions;
-
-	const int32 KeyIndex = Versions.IndexOfByKey(Key);
-
-	// Ensure this tag has been registered
-	check(KeyIndex != INDEX_NONE);
-
-	FCustomVersion* FoundKey = &Versions[KeyIndex];
-
-	--FoundKey->ReferenceCount;
-	if (FoundKey->ReferenceCount == 0)
-	{
-		Versions.RemoveAtSwap(KeyIndex);
 	}
 }

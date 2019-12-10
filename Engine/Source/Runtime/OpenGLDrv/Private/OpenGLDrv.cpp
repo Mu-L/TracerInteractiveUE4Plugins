@@ -19,6 +19,7 @@ IMPLEMENT_MODULE(FOpenGLDynamicRHIModule, OpenGLDrv);
 
 #include "Shader.h"
 #include "OneColorShader.h"
+#include "OpenGLShaders.h"
 
 /** OpenGL Logging. */
 DEFINE_LOG_CATEGORY(LogOpenGL);
@@ -570,6 +571,11 @@ void FOpenGLBase::ProcessExtensions( const FString& ExtensionsString )
 #endif
 }
 
+void PE_GetCurrentOpenGLShaderDeviceCapabilities(FOpenGLShaderDeviceCapabilities& Capabilities)
+{
+	Capabilities.TargetPlatform = EOpenGLShaderTargetPlatform::OGLSTP_Unknown;
+}
+
 void GetExtensionsString( FString& ExtensionsString)
 {
 	GLint ExtensionCount = 0;
@@ -640,6 +646,9 @@ void InitDefaultGLContextState(void)
 		glClipControl(GL_UPPER_LEFT, GL_ZERO_TO_ONE);
 	}
 #endif
+
+	// optional per platform setup
+	FOpenGL::SetupDefaultGLContextState(ExtensionsString);
 }
 
 #undef LOCTEXT_NAMESPACE

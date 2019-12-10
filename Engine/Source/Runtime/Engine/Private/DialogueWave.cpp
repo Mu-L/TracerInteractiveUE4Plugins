@@ -27,7 +27,7 @@ const FString FDialogueConstants::PropertyName_GrammaticalPlurality		= TEXT("Plu
 const FString FDialogueConstants::PropertyName_TargetGrammaticalGender	= TEXT("TargetGender");
 const FString FDialogueConstants::PropertyName_TargetGrammaticalNumber	= TEXT("TargetPlurality");
 const FString FDialogueConstants::PropertyName_DialogueContext			= TEXT("Context");
-const FString FDialogueConstants::PropertyName_IsMature					= FLocMetadataObject::COMPARISON_MODIFIER_PREFIX + TEXT("IsMature");
+const FString FDialogueConstants::PropertyName_IsMature					= FString(FLocMetadataObject::COMPARISON_MODIFIER_PREFIX) + TEXT("IsMature");
 #endif //WITH_EDITORONLY_DATA
 
 #if WITH_EDITORONLY_DATA
@@ -809,7 +809,7 @@ void UDialogueWave::UpdateMappingProxy(FDialogueContextMapping& ContextMapping)
 	{
 		// Copy the properties that the proxy shares with the sound in case it's used as a SoundBase
 		ContextMapping.Proxy->SoundWave = ContextMapping.SoundWave;
-		UEngine::CopyPropertiesForUnrelatedObjects(ContextMapping.SoundWave, ContextMapping.Proxy);
+		CopySoundBasePropertiesToProxy(ContextMapping.SoundWave, ContextMapping.Proxy);
 
 		FSubtitleCue NewSubtitleCue;
 		NewSubtitleCue.Text = GetLocalizedSubtitle(ContextMapping);
@@ -818,4 +818,28 @@ void UDialogueWave::UpdateMappingProxy(FDialogueContextMapping& ContextMapping)
 		ContextMapping.Proxy->Subtitles.Empty();
 		ContextMapping.Proxy->Subtitles.Add(NewSubtitleCue);
 	}
+}
+
+void UDialogueWave::CopySoundBasePropertiesToProxy(const USoundBase* InSoundBase, USoundBase* Proxy)
+{
+	Proxy->SoundClassObject = InSoundBase->SoundClassObject;
+	Proxy->bDebug = InSoundBase->bDebug;
+	Proxy->bOverrideConcurrency = InSoundBase->bOverrideConcurrency;
+	Proxy->bOutputToBusOnly = InSoundBase->bOutputToBusOnly;
+	Proxy->bHasDelayNode = InSoundBase->bHasDelayNode;
+	Proxy->bHasConcatenatorNode = InSoundBase->bHasConcatenatorNode;
+	Proxy->VirtualizationMode = InSoundBase->VirtualizationMode;
+	Proxy->bBypassVolumeScaleForPriority = InSoundBase->bBypassVolumeScaleForPriority;
+	Proxy->ConcurrencySet = InSoundBase->ConcurrencySet;
+	Proxy->ConcurrencyOverrides = InSoundBase->ConcurrencyOverrides;
+	Proxy->Duration = InSoundBase->Duration;
+	Proxy->MaxDistance = InSoundBase->MaxDistance;
+	Proxy->TotalSamples = InSoundBase->TotalSamples;
+	Proxy->Priority = InSoundBase->Priority;
+	Proxy->AttenuationSettings = InSoundBase->AttenuationSettings;
+	Proxy->SoundSubmixObject = InSoundBase->SoundSubmixObject;
+	Proxy->SoundSubmixSends = InSoundBase->SoundSubmixSends;
+	Proxy->SourceEffectChain = InSoundBase->SourceEffectChain;
+	Proxy->BusSends = InSoundBase->BusSends;
+	Proxy->PreEffectBusSends = InSoundBase->PreEffectBusSends;
 }

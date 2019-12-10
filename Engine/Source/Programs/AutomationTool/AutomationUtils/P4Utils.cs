@@ -930,8 +930,6 @@ namespace AutomationTool
 
 	public partial class CommandUtils
 	{
-		#region Environment Setup
-
 		static private P4Connection PerforceConnection;
 		static private P4Environment PerforceEnvironment;
 
@@ -984,8 +982,6 @@ namespace AutomationTool
 		{
 			PerforceConnection = new P4Connection(User: P4Env.User, Client: P4Env.Client, ServerAndPort: P4Env.ServerAndPort);
 		}
-
-		#endregion
 
 		/// <summary>
 		/// Check if P4 is supported.
@@ -3210,6 +3206,25 @@ namespace AutomationTool
 		}
 
 		/// <summary>
+		/// Formats a tagged record as a string
+		/// </summary>
+		/// <param name="Record">The record to format</param>
+		/// <returns>Single string containing the record</returns>
+		public static string FormatTaggedOutput(Dictionary<string, string> Record)
+		{
+			StringBuilder Result = new StringBuilder();
+			foreach (KeyValuePair<string, string> Pair in Record)
+			{
+				if (Result.Length > 0)
+				{
+					Result.Append('\n');
+				}
+				Result.AppendFormat("{0}: {1}", Pair.Key, Pair.Value);
+			}
+			return Result.ToString();
+		}
+
+		/// <summary>
 		/// Checks if the client exists in P4.
 		/// </summary>
 		/// <param name="ClientName">Client name</param>
@@ -3947,8 +3962,6 @@ namespace AutomationTool
 			return null;
 		}
 
-		#region Utilities
-
 		private static object[] OldStyleBinaryFlags = new object[]
 		{
 			P4FileAttributes.Uncompressed,
@@ -4074,7 +4087,5 @@ namespace AutomationTool
 			}
 			return Text;
 		}
-
-		#endregion
 	}
 }

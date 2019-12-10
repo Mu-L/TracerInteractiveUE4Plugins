@@ -209,7 +209,7 @@ bool FIOSTargetPlatform::IsSdkInstalled(bool bProjectHasCode, FString& OutTutori
 	return biOSSDKInstalled;
 }
 
-int32 FIOSTargetPlatform::CheckRequirements(const FString& ProjectPath, bool bProjectHasCode, FString& OutTutorialPath, FString& OutDocumentationPath, FText& CustomizedLogMessage) const
+int32 FIOSTargetPlatform::CheckRequirements(bool bProjectHasCode, EBuildConfiguration Configuration, bool bRequiresAssetNativization, FString& OutTutorialPath, FString& OutDocumentationPath, FText& CustomizedLogMessage) const
 {
 	OutDocumentationPath = TEXT("Platforms/iOS/QuickStart/6");
 
@@ -229,7 +229,9 @@ int32 FIOSTargetPlatform::CheckRequirements(const FString& ProjectPath, bool bPr
 			OutTutorialPath = FString("/Engine/Tutorial/Mobile/iOSonPCRestrictions.iOSonPCRestrictions");
 			bReadyToBuild |= ETargetPlatformReadyStatus::CodeUnsupported;
 		}
-		if (!IProjectManager::Get().HasDefaultPluginSettings())
+
+		FText Reason;
+		if (RequiresTempTarget(bProjectHasCode, Configuration, bRequiresAssetNativization, Reason))
 		{
 			OutTutorialPath = FString("/Engine/Tutorial/Mobile/iOSonPCValidPlugins.iOSonPCValidPlugins");
 			bReadyToBuild |= ETargetPlatformReadyStatus::PluginsUnsupported;
@@ -253,6 +255,7 @@ int32 FIOSTargetPlatform::CheckRequirements(const FString& ProjectPath, bool bPr
 	FString TeamID;
 	GConfig->GetString(TEXT("/Script/IOSRuntimeSettings.IOSRuntimeSettings"), TEXT("IOSTeamID"), TeamID, GEngineIni);
 
+	FString ProjectPath = FPaths::ConvertRelativePathToFull(FPaths::GetProjectFilePath());
 #if PLATFORM_MAC
     FString CmdExe = TEXT("/bin/sh");
     FString ScriptPath = FPaths::ConvertRelativePathToFull(FPaths::EngineDir() / TEXT("Build/BatchFiles/Mac/RunMono.sh"));
@@ -445,14 +448,6 @@ bool FIOSTargetPlatform::HandleTicker(float DeltaTime)
 /* ITargetPlatform interface
  *****************************************************************************/
 
-static bool SupportsES2()
-{
-	// default to supporting ES2
-	bool bSupportsOpenGLES2 = true;
-	GConfig->GetBool(TEXT("/Script/IOSRuntimeSettings.IOSRuntimeSettings"), TEXT("bSupportsOpenGLES2"), bSupportsOpenGLES2, GEngineIni);
-	return bSupportsOpenGLES2;
-}
-
 static bool SupportsMetal()
 {
 	// default to NOT supporting metal
@@ -509,7 +504,7 @@ bool FIOSTargetPlatform::SupportsFeature( ETargetPlatformFeatures Feature ) cons
 
 		case ETargetPlatformFeatures::MobileRendering:
 		case ETargetPlatformFeatures::LowQualityLightmaps:
-			return SupportsES2() || SupportsMetal();
+			return SupportsMetal();
 			
 		case ETargetPlatformFeatures::DeferredRendering:
 		case ETargetPlatformFeatures::HighQualityLightmaps:
@@ -531,7 +526,6 @@ bool FIOSTargetPlatform::SupportsFeature( ETargetPlatformFeatures Feature ) cons
 
 void FIOSTargetPlatform::GetAllPossibleShaderFormats( TArray<FName>& OutFormats ) const
 {
-	static FName NAME_GLSL_ES2_IOS(TEXT("GLSL_ES2_IOS"));
 	static FName NAME_SF_METAL(TEXT("SF_METAL"));
 	static FName NAME_SF_METAL_MRT(TEXT("SF_METAL_MRT"));
 	static FName NAME_SF_METAL_TVOS(TEXT("SF_METAL_TVOS"));
@@ -553,11 +547,6 @@ void FIOSTargetPlatform::GetAllPossibleShaderFormats( TArray<FName>& OutFormats 
 	}
 	else
 	{
-		if (SupportsES2())
-		{
-			OutFormats.AddUnique(NAME_GLSL_ES2_IOS);
-		}
-
 		if (SupportsMetal())
 		{
 			OutFormats.AddUnique(NAME_SF_METAL);
@@ -636,7 +625,7 @@ void FIOSTargetPlatform::GetTextureFormats( const UTexture* Texture, TArray< TAr
 		TArray<FName> TextureFormatNamesASTC(TextureFormatNames);
 		for (FName& TextureFormatName : TextureFormatNamesASTC)
 		{
-			for (int32 RemapIndex = 0; RemapIndex < ARRAY_COUNT(FormatRemap); RemapIndex += 3)
+			for (int32 RemapIndex = 0; RemapIndex < UE_ARRAY_COUNT(FormatRemap); RemapIndex += 3)
 			{
 				if (TextureFormatName == FormatRemap[RemapIndex])
 				{
@@ -653,7 +642,7 @@ void FIOSTargetPlatform::GetTextureFormats( const UTexture* Texture, TArray< TAr
 		TArray<FName> TextureFormatNamesPVRTC(TextureFormatNames);
 		for (FName& TextureFormatName : TextureFormatNamesPVRTC)
 		{
-			for (int32 RemapIndex = 0; RemapIndex < ARRAY_COUNT(FormatRemap); RemapIndex += 3)
+			for (int32 RemapIndex = 0; RemapIndex < UE_ARRAY_COUNT(FormatRemap); RemapIndex += 3)
 			{
 				if (TextureFormatName == FormatRemap[RemapIndex])
 				{
@@ -685,7 +674,7 @@ void FIOSTargetPlatform::GetAllTextureFormats(TArray<FName>& OutFormats) const
 
 	GetAllDefaultTextureFormats(this, OutFormats, false);
 
-	for (int32 RemapIndex = 0; RemapIndex < ARRAY_COUNT(FormatRemap); RemapIndex += 3)
+	for (int32 RemapIndex = 0; RemapIndex < UE_ARRAY_COUNT(FormatRemap); RemapIndex += 3)
 	{
 		OutFormats.Remove(FormatRemap[RemapIndex+0]);
 	}
@@ -693,14 +682,14 @@ void FIOSTargetPlatform::GetAllTextureFormats(TArray<FName>& OutFormats) const
 	// include the formats we want (use ASTC first so that it is preferred at runtime if they both exist and it's supported)
 	if (bIncludeASTC)
 	{
-		for (int32 RemapIndex = 0; RemapIndex < ARRAY_COUNT(FormatRemap); RemapIndex += 3)
+		for (int32 RemapIndex = 0; RemapIndex < UE_ARRAY_COUNT(FormatRemap); RemapIndex += 3)
 		{
 			OutFormats.AddUnique(FormatRemap[RemapIndex + 2]);
 		}
 	}
 	if (bIncludePVRTC)
 	{
-		for (int32 RemapIndex = 0; RemapIndex < ARRAY_COUNT(FormatRemap); RemapIndex += 3)
+		for (int32 RemapIndex = 0; RemapIndex < UE_ARRAY_COUNT(FormatRemap); RemapIndex += 3)
 		{
 			OutFormats.AddUnique(FormatRemap[RemapIndex + 1]);
 		}
@@ -727,11 +716,32 @@ void FIOSTargetPlatform::GetAllWaveFormats(TArray<FName>& OutFormat) const
 	OutFormat.Add(NAME_ADPCM);
 }
 
-namespace
+namespace IOS
 {
 	void CachePlatformAudioCookOverrides(FPlatformAudioCookOverrides& OutOverrides)
 	{
 		const TCHAR* CategoryName = TEXT("/Script/IOSRuntimeSettings.IOSRuntimeSettings");
+
+		int32 SoundCueQualityIndex = INDEX_NONE;
+		if (GConfig->GetInt(CategoryName, TEXT("SoundCueCookQualityIndex"), SoundCueQualityIndex, GEngineIni))
+		{
+			OutOverrides.SoundCueCookQualityIndex = SoundCueQualityIndex;
+		}
+
+		int32 RetrievedChunkSizeKB = 256;
+		GConfig->GetInt(CategoryName, TEXT("ChunkSizeKB"), RetrievedChunkSizeKB, GEngineIni);
+		OutOverrides.StreamChunkSizeKB = RetrievedChunkSizeKB;
+
+		GConfig->GetBool(CategoryName, TEXT("bUseAudioStreamCaching"), OutOverrides.bUseStreamCaching, GEngineIni);
+
+		/** Memory Load On Demand Settings */
+		if (OutOverrides.bUseStreamCaching)
+		{
+			// Cache size:
+			int32 RetrievedCacheSize = 32 * 1024;
+			GConfig->GetInt(CategoryName, TEXT("CacheSizeKB"), RetrievedCacheSize, GEngineIni);
+			OutOverrides.StreamCachingSettings.CacheSizeKB = RetrievedCacheSize;
+		}
 
 		GConfig->GetBool(CategoryName, TEXT("bResampleForDevice"), OutOverrides.bResampleForDevice, GEngineIni);
 
@@ -834,17 +844,13 @@ FPlatformAudioCookOverrides* FIOSTargetPlatform::GetAudioCompressionSettings() c
 {
 	static FPlatformAudioCookOverrides Settings;
 
-#if !WITH_EDITOR
 	static bool bCachedPlatformSettings = false;
 
 	if (!bCachedPlatformSettings)
 	{
-		CachePlatformAudioCookOverrides(Settings);
+		IOS::CachePlatformAudioCookOverrides(Settings);
 		bCachedPlatformSettings = true;
 	}
-#else
-	CachePlatformAudioCookOverrides(Settings);
-#endif
 
 	return &Settings;
 }

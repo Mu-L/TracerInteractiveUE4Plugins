@@ -1,12 +1,14 @@
 // Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
 
 #include "MeshDescriptionBuilder.h"
-#include "MeshAttributes.h"
+#include "StaticMeshAttributes.h"
 #include "VectorTypes.h"
 #include "BoxTypes.h"
 
 #include "DynamicMesh3.h"
 #include "DynamicMeshAttributeSet.h"
+
+#include "MeshNormals.h"
 
 namespace ExtendedMeshAttribute
 {
@@ -88,7 +90,7 @@ FVector FMeshDescriptionBuilder::GetPosition(const FVertexID& VertexID)
 
 FVector FMeshDescriptionBuilder::GetPosition(const FVertexInstanceID& InstanceID)
 {
-	return VertexPositions.Get(MeshDescription->GetVertexInstance(InstanceID).VertexID, 0);
+	return VertexPositions.Get(MeshDescription->GetVertexInstanceVertex(InstanceID), 0);
 }
 
 
@@ -110,6 +112,24 @@ void FMeshDescriptionBuilder::SetInstanceNormal(const FVertexInstanceID& Instanc
 	if (InstanceNormals.IsValid())
 	{
 		InstanceNormals.Set(InstanceID, Normal);
+	}
+}
+
+
+void FMeshDescriptionBuilder::SetInstanceUV(const FVertexInstanceID& InstanceID, const FVector2D& InstanceUV, int32 UVLayerIndex)
+{
+	if (InstanceUVs.IsValid() && ensure(UVLayerIndex < InstanceUVs.GetNumIndices()))
+	{
+		InstanceUVs.Set(InstanceID, UVLayerIndex, InstanceUV); 
+	}
+}
+
+
+void FMeshDescriptionBuilder::SetNumUVLayers(int32 NumUVLayers)
+{
+	if (ensure(InstanceUVs.IsValid()))
+	{
+		InstanceUVs.SetNumIndices(NumUVLayers);
 	}
 }
 
@@ -179,10 +199,6 @@ FPolygonID FMeshDescriptionBuilder::AppendPolygon(const TArray<FVertexID>& Verti
 
 	const FPolygonID NewPolygonID = MeshDescription->CreatePolygon(PolygonGroup, Polygon);
 
-	// compute triangulation
-	FMeshPolygon& NewPolygon = MeshDescription->GetPolygon(NewPolygonID);
-	MeshDescription->ComputePolygonTriangulation(NewPolygonID, NewPolygon.Triangles);
-
 	return NewPolygonID;
 }
 
@@ -197,10 +213,6 @@ FPolygonID FMeshDescriptionBuilder::AppendTriangle(const FVertexInstanceID& Inst
 	Polygon.Add(Instance2);
 
 	const FPolygonID NewPolygonID = MeshDescription->CreatePolygon(PolygonGroup, Polygon);
-
-	// compute triangulation
-	FMeshPolygon& NewPolygon = MeshDescription->GetPolygon(NewPolygonID);
-	MeshDescription->ComputePolygonTriangulation(NewPolygonID, NewPolygon.Triangles);
 
 	return NewPolygonID;
 }
@@ -217,81 +229,6 @@ void FMeshDescriptionBuilder::SetPolyGroupID(const FPolygonID& PolygonID, int Gr
 
 
 
-
-void FMeshDescriptionBuilder::AppendMesh(const FDynamicMesh3* Mesh, bool bSetPolyGroups)
-{
-	// create vertices
-	TArray<FVertexID> MapV;
-	MapV.SetNum(Mesh->MaxVertexID());
-	for (int VertID : Mesh->VertexIndicesItr())
-	{
-		FVector3d v = Mesh->GetVertex(VertID);
-		MapV[VertID] = AppendVertex(v);
-	}
-
-	bool bDoTransferPolyGroups = false;
-	if (bSetPolyGroups)
-	{
-		EnablePolyGroups();
-		bDoTransferPolyGroups = Mesh->HasTriangleGroups();
-	}
-
-	FPolygonGroupID AllGroupID = AppendPolygonGroup();
-
-	bool bHasVertexColors = Mesh->HasVertexColors();
-	bool bHasVertexNormals = Mesh->HasVertexNormals();
-	const FDynamicMeshUVOverlay* UVOverlay = Mesh->HasAttributes() ? Mesh->Attributes()->PrimaryUV() : nullptr;
-	const FDynamicMeshNormalOverlay* NormalOverlay = Mesh->HasAttributes() ? Mesh->Attributes()->PrimaryNormals() : nullptr;
-	//FDynamicMeshUVOverlay* UVOverlay = nullptr;
-	//FDynamicMeshNormalOverlay* NormalOverlay = nullptr;
-
-
-	// create new instances when seen
-	TMap<FIndex3i, FVertexInstanceID> InstanceList;
-	for (int TriID : Mesh->TriangleIndicesItr())
-	{
-		// @todo support additional overlays (requires IndexNi...)
-		FIndex3i Triangle = Mesh->GetTriangle(TriID);
-		FIndex3i UVTriangle = (UVOverlay != nullptr) ? UVOverlay->GetTriangle(TriID) : FIndex3i(-1, -1, -1);
-		FIndex3i NormalTriangle = (NormalOverlay != nullptr) ? NormalOverlay->GetTriangle(TriID) : FIndex3i(-1, -1, -1);
-		FVertexInstanceID InstanceTri[3];
-		for (int j = 0; j < 3; ++j)
-		{
-			FIndex3i InstanceElem(Triangle[j], UVTriangle[j], NormalTriangle[j]);
-			if (InstanceList.Contains(InstanceElem) == false)
-			{
-				FVertexInstanceID NewInstanceID = AppendInstance(MapV[Triangle[j]]);
-				InstanceList.Add(InstanceElem, NewInstanceID);
-				SetInstance(NewInstanceID,
-					(UVTriangle[j] == -1 || UVOverlay == nullptr) ? FVector2f::Zero() : UVOverlay->GetElement(UVTriangle[j]),
-					(NormalTriangle[j] == -1 || NormalOverlay == nullptr) ? FVector3f::UnitY() : NormalOverlay->GetElement(NormalTriangle[j]));
-			}
-			InstanceTri[j] = InstanceList[InstanceElem];
-		}
-
-		FPolygonID NewPolyID = AppendTriangle(InstanceTri[0], InstanceTri[1], InstanceTri[2], AllGroupID);
-		if (bDoTransferPolyGroups)
-		{
-			SetPolyGroupID(NewPolyID, Mesh->GetTriangleGroup(TriID));
-		}
-
-		if (bHasVertexColors)
-		{
-			for (int j = 0; j < 3; ++j)
-			{
-				FVector3f Color = Mesh->GetVertexColor(Triangle[j]);
-				FVector4 Color4(Color.X, Color.Y, Color.Z, 1.0);
-				SetInstanceColor(InstanceTri[j], Color4);
-			}
-		}
-		if (NormalOverlay == nullptr && bHasVertexNormals)
-		{
-			SetInstanceNormal(InstanceTri[0], Mesh->GetVertexNormal(Triangle[0]));
-			SetInstanceNormal(InstanceTri[1], Mesh->GetVertexNormal(Triangle[1]));
-			SetInstanceNormal(InstanceTri[2], Mesh->GetVertexNormal(Triangle[2]));
-		}
-	}
-}
 
 
 
@@ -320,51 +257,6 @@ void FMeshDescriptionBuilder::SetAllEdgesHardness(bool bHard)
 	}
 }
 
-
-
-void FMeshDescriptionBuilder::RecalculateInstanceNormals()
-{
-	for (int k = 0; k < InstanceNormals.GetNumElements(); ++k)
-	{
-		InstanceNormals.Set(FVertexInstanceID(k), 0, FVector::ZeroVector);
-	}
-
-	const FPolygonArray& Polygons = MeshDescription->Polygons();
-	for (const FPolygonID PolygonID : Polygons.GetElementIDs())
-	{
-		const TArray<FMeshTriangle>& Triangles = MeshDescription->GetPolygonTriangles(PolygonID);
-		for (FMeshTriangle Triangle : Triangles)
-		{
-			FVector3d A = GetPosition(Triangle.VertexInstanceID0);
-			FVector3d B = GetPosition(Triangle.VertexInstanceID1);
-			FVector3d C = GetPosition(Triangle.VertexInstanceID2);
-			double Area = 1.0;
-			FVector FaceNormal = VectorUtil::FastNormalArea(A, B, C, Area);
-			if (Area > FMathf::ZeroTolerance)
-			{
-				FaceNormal *= Area;
-				InstanceNormals.Set(Triangle.VertexInstanceID0,
-					InstanceNormals.Get(Triangle.VertexInstanceID0, 0) + FaceNormal);
-				InstanceNormals.Set(Triangle.VertexInstanceID1,
-					InstanceNormals.Get(Triangle.VertexInstanceID1, 0) + FaceNormal);
-				InstanceNormals.Set(Triangle.VertexInstanceID2,
-					InstanceNormals.Get(Triangle.VertexInstanceID2, 0) + FaceNormal);
-			}
-		}
-	}
-
-
-	for (int k = 0; k < InstanceNormals.GetNumElements(); ++k)
-	{
-		FVector SumNormal = InstanceNormals.Get(FVertexInstanceID(k), 0);
-		SumNormal.Normalize();
-		if ( SumNormal.Size() < 0.99 )
-		{ 
-			SumNormal = FVector(1, 0, 0);
-		}
-		InstanceNormals.Set(FVertexInstanceID(k), 0, SumNormal);
-	}
-}
 
 
 

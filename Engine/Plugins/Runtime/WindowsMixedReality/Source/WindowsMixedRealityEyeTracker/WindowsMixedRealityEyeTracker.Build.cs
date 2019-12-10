@@ -27,6 +27,7 @@ namespace UnrealBuildTool.Rules
 						"MixedRealityInteropLibrary",
 						"InputDevice",
 						"EyeTracker",
+						"WindowsMixedRealityHMD",
 					}
 				);
 
@@ -39,8 +40,6 @@ namespace UnrealBuildTool.Rules
 						"InputCore",
 					}
 				);
-
-				bFasterWithoutUnity = true;
 
                 PublicDefinitions.Add("WITH_WINDOWS_MIXED_REALITY=1");
             }

@@ -17,6 +17,7 @@ class ULandscapeLayerInfoObject;
 class ULevel;
 class UMaterialInstanceConstant;
 struct FLandscapeEditorLayerSettings;
+class ULandscapeHeightfieldCollisionComponent;
 
 /** Structure storing Collision for LandscapeComponent Add */
 #if WITH_EDITORONLY_DATA
@@ -120,6 +121,8 @@ class ULandscapeInfo : public UObject
 public:
 	/** Map of the offsets (in component space) to the component. Valid in editor only. */
 	TMap<FIntPoint, ULandscapeComponent*> XYtoComponentMap;
+    /** Map of the offsets (in component space) to the collision components. Should always be valid. */
+	TMap<FIntPoint, ULandscapeHeightfieldCollisionComponent*> XYtoCollisionComponentMap;
 
 #if WITH_EDITORONLY_DATA
 	/** Lookup map used by the "add component" tool. Only available near valid LandscapeComponents.
@@ -128,7 +131,7 @@ public:
 #endif
 
 	UPROPERTY()
-	TSet<ALandscapeStreamingProxy*> Proxies;
+	TArray<ALandscapeStreamingProxy*> Proxies;
 
 private:
 	TSet<ULandscapeComponent*> SelectedComponents;
@@ -145,13 +148,14 @@ public:
 #if WITH_EDITOR
 	// @todo document 
 	// all below.
+	LANDSCAPE_API bool AreAllComponentsRegistered() const;
 	LANDSCAPE_API void GetComponentsInRegion(int32 X1, int32 Y1, int32 X2, int32 Y2, TSet<ULandscapeComponent*>& OutComponents, bool bOverlap = true) const;
 	LANDSCAPE_API bool GetLandscapeExtent(int32& MinX, int32& MinY, int32& MaxX, int32& MaxY) const;
 	LANDSCAPE_API void ForAllLandscapeComponents(TFunctionRef<void(ULandscapeComponent*)> Fn) const;
 	LANDSCAPE_API void ExportHeightmap(const FString& Filename);
 	LANDSCAPE_API void ExportLayer(ULandscapeLayerInfoObject* LayerInfo, const FString& Filename);
-	LANDSCAPE_API bool ApplySplines(bool bOnlySelected, TSet<ULandscapeComponent*>* OutModifiedComponents = nullptr);
-	bool ApplySplinesInternal(bool bOnlySelected, ALandscapeProxy* Proxy, TSet<ULandscapeComponent*>* OutModifiedComponents);
+	LANDSCAPE_API bool ApplySplines(bool bOnlySelected, TSet<ULandscapeComponent*>* OutModifiedComponents = nullptr, bool bMarkPackageDirty = true);
+	bool ApplySplinesInternal(bool bOnlySelected, ALandscapeProxy* Proxy, TSet<ULandscapeComponent*>* OutModifiedComponents, bool bMarkPackageDirty);
 
 	LANDSCAPE_API bool GetSelectedExtent(int32& MinX, int32& MinY, int32& MaxX, int32& MaxY) const;
 	FVector GetLandscapeCenterPos(float& LengthZ, int32 MinX = MAX_int32, int32 MinY = MAX_int32, int32 MaxX = MIN_int32, int32 MaxY = MIN_int32);
@@ -210,24 +214,6 @@ public:
 	 */
 	LANDSCAPE_API void ForAllLandscapeProxies(TFunctionRef<void(ALandscapeProxy*)> Fn) const;
 
-	/** Associates passed actor with this info object
- 	 *  @param	Proxy		Landscape actor to register
-	 *  @param  bMapCheck	Whether to warn about landscape errors
-	 */
-	LANDSCAPE_API void RegisterActor(ALandscapeProxy* Proxy, bool bMapCheck = false);
-	
-	/** Deassociates passed actor with this info object*/
-	LANDSCAPE_API void UnregisterActor(ALandscapeProxy* Proxy);
-
-	/** Associates passed landscape component with this info object
-	 *  @param	Component	Landscape component to register
-	 *  @param  bMapCheck	Whether to warn about landscape errors
-	 */
-	LANDSCAPE_API void RegisterActorComponent(ULandscapeComponent* Component, bool bMapCheck = false);
-	
-	/** Deassociates passed landscape component with this info object*/
-	LANDSCAPE_API void UnregisterActorComponent(ULandscapeComponent* Component);
-
 	/** Resets all actors, proxies, components registrations */
 	LANDSCAPE_API void Reset();
 
@@ -256,5 +242,29 @@ public:
 
 	/** Will tell if the landscape actor can have some content related to the layer system */
 	LANDSCAPE_API bool CanHaveLayersContent() const;
+
+	/** Will clear all component dirty data */
+	LANDSCAPE_API void ClearDirtyData();
 #endif
+	/** Associates passed actor with this info object
+ *  @param	Proxy		Landscape actor to register
+ *  @param  bMapCheck	Whether to warn about landscape errors
+ */
+	LANDSCAPE_API void RegisterActor(ALandscapeProxy* Proxy, bool bMapCheck = false);
+
+	/** Deassociates passed actor with this info object*/
+	LANDSCAPE_API void UnregisterActor(ALandscapeProxy* Proxy);
+
+	/** Associates passed landscape component with this info object
+	 *  @param	Component	Landscape component to register
+	 *  @param  bMapCheck	Whether to warn about landscape errors
+	 */
+	LANDSCAPE_API void RegisterActorComponent(ULandscapeComponent* Component, bool bMapCheck = false);
+
+	/** Deassociates passed landscape component with this info object*/
+	LANDSCAPE_API void UnregisterActorComponent(ULandscapeComponent* Component);
+
+	/** Server doesn't have ULandscapeComponent use CollisionComponents instead to get height on landscape */
+	LANDSCAPE_API void RegisterCollisionComponent(ULandscapeHeightfieldCollisionComponent* Component);
+	LANDSCAPE_API void UnregisterCollisionComponent(ULandscapeHeightfieldCollisionComponent* Component);
 };

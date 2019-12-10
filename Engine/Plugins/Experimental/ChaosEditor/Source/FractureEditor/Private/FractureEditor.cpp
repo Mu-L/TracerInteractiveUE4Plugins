@@ -28,8 +28,8 @@ void FFractureEditorModule::StartupModule()
 
 	FFractureEditorCommands::Register();
 
-#endif 
-	
+#endif
+
 }
 
 void FFractureEditorModule::ShutdownModule()

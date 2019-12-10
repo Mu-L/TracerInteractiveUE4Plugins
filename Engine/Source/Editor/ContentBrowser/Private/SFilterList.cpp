@@ -17,6 +17,7 @@
 #include "Widgets/Text/STextBlock.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "Widgets/Input/SCheckBox.h"
+#include "Styling/SlateTypes.h"
 #include "EditorStyleSet.h"
 #include "AssetRegistryModule.h"
 #include "IAssetTools.h"
@@ -26,10 +27,30 @@
 
 #define LOCTEXT_NAMESPACE "ContentBrowser"
 
+/** Helper struct to avoid friending the whole of SFilterList */
+struct FFrontendFilterExternalActivationHelper
+{
+	static void BindToFilter(TSharedRef<SFilterList> InFilterList, TSharedRef<FFrontendFilter> InFrontendFilter)
+	{
+		TWeakPtr<FFrontendFilter> WeakFilter = InFrontendFilter;
+		InFrontendFilter->SetActiveEvent.AddSP(&InFilterList.Get(), &SFilterList::OnSetFilterActive, WeakFilter);
+	}
+};
+
 /** A class for check boxes in the filter list. If you double click a filter checkbox, you will enable it and disable all others */
 class SFilterCheckBox : public SCheckBox
 {
 public:
+	void SetOnFilterCtrlClicked(const FOnClicked& NewFilterCtrlClicked)
+	{
+		OnFilterCtrlClicked = NewFilterCtrlClicked;
+	}
+
+	void SetOnFilterAltClicked(const FOnClicked& NewFilteAltClicked)
+	{
+		OnFilterAltClicked = NewFilteAltClicked;
+	}
+
 	void SetOnFilterDoubleClicked( const FOnClicked& NewFilterDoubleClicked )
 	{
 		OnFilterDoubleClicked = NewFilterDoubleClicked;
@@ -54,7 +75,15 @@ public:
 
 	virtual FReply OnMouseButtonUp( const FGeometry& InMyGeometry, const FPointerEvent& InMouseEvent ) override
 	{
-		if( InMouseEvent.GetEffectingButton() == EKeys::MiddleMouseButton && OnFilterMiddleButtonClicked.IsBound() )
+		if (InMouseEvent.IsControlDown() && OnFilterCtrlClicked.IsBound())
+		{
+			return OnFilterCtrlClicked.Execute();
+		}
+		else if (InMouseEvent.IsAltDown() && OnFilterAltClicked.IsBound())
+		{
+			return OnFilterAltClicked.Execute();
+		}
+		else if( InMouseEvent.GetEffectingButton() == EKeys::MiddleMouseButton && OnFilterMiddleButtonClicked.IsBound() )
 		{
 			return OnFilterMiddleButtonClicked.Execute();
 		}
@@ -66,6 +95,8 @@ public:
 	}
 
 private:
+	FOnClicked OnFilterCtrlClicked;
+	FOnClicked OnFilterAltClicked;
 	FOnClicked OnFilterDoubleClicked;
 	FOnClicked OnFilterMiddleButtonClicked;
 };
@@ -78,6 +109,7 @@ class SFilter : public SCompoundWidget
 public:
 	DECLARE_DELEGATE_OneParam( FOnRequestRemove, const TSharedRef<SFilter>& /*FilterToRemove*/ );
 	DECLARE_DELEGATE_OneParam( FOnRequestEnableOnly, const TSharedRef<SFilter>& /*FilterToEnable*/ );
+	DECLARE_DELEGATE( FOnRequestEnableAll );
 	DECLARE_DELEGATE( FOnRequestDisableAll );
 	DECLARE_DELEGATE( FOnRequestRemoveAll );
 
@@ -98,6 +130,9 @@ public:
 		/** Invoked when a request to enable only this filter originated from within this filter */
 		SLATE_EVENT( FOnRequestEnableOnly, OnRequestEnableOnly )
 
+		/** Invoked when a request to enable all filters originated from within this filter */
+		SLATE_EVENT(FOnRequestEnableAll, OnRequestEnableAll)
+
 		/** Invoked when a request to disable all filters originated from within this filter */
 		SLATE_EVENT( FOnRequestDisableAll, OnRequestDisableAll )
 
@@ -114,6 +149,7 @@ public:
 		AssetTypeActions = InArgs._AssetTypeActions;
 		OnRequestRemove = InArgs._OnRequestRemove;
 		OnRequestEnableOnly = InArgs._OnRequestEnableOnly;
+		OnRequestEnableAll = InArgs._OnRequestEnableAll;
 		OnRequestDisableAll = InArgs._OnRequestDisableAll;
 		OnRequestRemoveAll = InArgs._OnRequestRemoveAll;
 		FrontendFilter = InArgs._FrontendFilter;
@@ -159,6 +195,8 @@ public:
 			]
 		];
 
+		ToggleButtonPtr->SetOnFilterCtrlClicked(FOnClicked::CreateSP(this, &SFilter::FilterCtrlClicked));
+		ToggleButtonPtr->SetOnFilterAltClicked(FOnClicked::CreateSP(this, &SFilter::FilterAltClicked));
 		ToggleButtonPtr->SetOnFilterDoubleClicked( FOnClicked::CreateSP(this, &SFilter::FilterDoubleClicked) );
 		ToggleButtonPtr->SetOnFilterMiddleButtonClicked( FOnClicked::CreateSP(this, &SFilter::FilterMiddleButtonClicked) );
 	}
@@ -218,6 +256,20 @@ private:
 		OnFilterChanged.ExecuteIfBound();
 	}
 
+	/** Handler for when the filter checkbox is clicked and a control key is pressed */
+	FReply FilterCtrlClicked()
+	{
+		OnRequestEnableAll.ExecuteIfBound();
+		return FReply::Handled();
+	}
+
+	/** Handler for when the filter checkbox is clicked and an alt key is pressed */
+	FReply FilterAltClicked()
+	{
+		OnRequestDisableAll.ExecuteIfBound();
+		return FReply::Handled();
+	}
+
 	/** Handler for when the filter checkbox is double clicked */
 	FReply FilterDoubleClicked()
 	{
@@ -263,6 +315,13 @@ private:
 		MenuBuilder.BeginSection("FilterBulkOptions", LOCTEXT("BulkFilterContextHeading", "Bulk Filter Options"));
 		{
 			MenuBuilder.AddMenuEntry(
+				LOCTEXT("EnableAllFilters", "Enable All Filters"),
+				LOCTEXT("EnableAllFiltersTooltip", "Enables all filters."),
+				FSlateIcon(),
+				FUIAction(FExecuteAction::CreateSP(this, &SFilter::EnableAllFilters))
+			);
+
+			MenuBuilder.AddMenuEntry(
 				LOCTEXT("DisableAllFilters", "Disable All Filters"),
 				LOCTEXT("DisableAllFiltersTooltip", "Disables all active filters."),
 				FSlateIcon(),
@@ -298,6 +357,12 @@ private:
 	{
 		TSharedRef<SFilter> Self = SharedThis(this);
 		OnRequestEnableOnly.ExecuteIfBound( Self );
+	}
+
+	/** Enables all filters in the list */
+	void EnableAllFilters()
+	{
+		OnRequestEnableAll.ExecuteIfBound();
 	}
 
 	/** Disables all active filters in the list */
@@ -368,6 +433,9 @@ private:
 
 	/** Invoked when a request to enable only this filter originated from within this filter */
 	FOnRequestEnableOnly OnRequestEnableOnly;
+
+	/** Invoked when a request to enable all filters originated from within this filter */
+	FOnRequestEnableAll OnRequestEnableAll;
 
 	/** Invoked when a request to disable all filters originated from within this filter */
 	FOnRequestDisableAll OnRequestDisableAll;
@@ -445,13 +513,11 @@ void SFilterList::Construct( const FArguments& InArgs )
 	}
 
 	// Add in filters specific to this invocation
-	for (auto Iter = InArgs._ExtraFrontendFilters.CreateConstIterator(); Iter; ++Iter)
+	for (const TSharedRef<FFrontendFilter>& Filter : InArgs._ExtraFrontendFilters)
 	{
-		TSharedRef<FFrontendFilter> Filter = (*Iter);
-		TSharedPtr<FFrontendFilterCategory> Category = Filter->GetCategory();
-		if (Category.IsValid())
+		if (TSharedPtr<FFrontendFilterCategory> Category = Filter->GetCategory())
 		{
-			AllFrontendFilterCategories.AddUnique( Category );
+			AllFrontendFilterCategories.AddUnique(Category);
 		}
 
 		AllFrontendFilters.Add(Filter);
@@ -459,10 +525,14 @@ void SFilterList::Construct( const FArguments& InArgs )
 
 	AllFrontendFilterCategories.AddUnique(DefaultCategory);
 
-	// Auto add all inverse filters
-	for (auto FilterIt = AllFrontendFilters.CreateConstIterator(); FilterIt; ++FilterIt)
+	
+	for (const TSharedRef<FFrontendFilter>& Filter : AllFrontendFilters)
 	{
-		SetFrontendFilterActive(*FilterIt, false);
+		// Bind external activation event
+		FFrontendFilterExternalActivationHelper::BindToFilter(SharedThis(this), Filter);
+
+		// Auto add all inverse filters
+		SetFrontendFilterActive(Filter, false);
 	}
 
 	FilterBox = SNew(SWrapBox)
@@ -530,16 +600,14 @@ FARFilter SFilterList::GetCombinedBackendFilter() const
 		FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
 		TArray< TWeakPtr<IAssetTypeActions> > AssetTypeActionsList;
 		AssetToolsModule.Get().GetAssetTypeActionsList(AssetTypeActionsList);
-		for ( auto TypeActionsIt = AssetTypeActionsList.CreateConstIterator(); TypeActionsIt; ++TypeActionsIt )
+		for (const TWeakPtr<IAssetTypeActions>& WeakTypeActions : AssetTypeActionsList)
 		{
-			const TWeakPtr<IAssetTypeActions>& WeakTypeActions = *TypeActionsIt;
-			if ( WeakTypeActions.IsValid() )
+			if (const TSharedPtr<IAssetTypeActions> TypeActions = WeakTypeActions.Pin())
 			{
-				const TSharedPtr<IAssetTypeActions> TypeActions = WeakTypeActions.Pin();
-				if ( TypeActions->CanFilter() )
+				if (TypeActions->CanFilter())
 				{
 					const UClass* TypeClass = TypeActions->GetSupportedClass();
-					if ( !CombinedFilter.ClassNames.Contains(TypeClass->GetFName()) )
+					if (!CombinedFilter.ClassNames.Contains(TypeClass->GetFName()))
 					{
 						CombinedFilter.RecursiveClassesExclusionSet.Add(TypeClass->GetFName());
 					}
@@ -558,16 +626,36 @@ FARFilter SFilterList::GetCombinedBackendFilter() const
 	return CombinedFilter;
 }
 
+TSharedPtr<FFrontendFilter> SFilterList::GetFrontendFilter(const FString& InName) const
+{
+	for (const TSharedRef<FFrontendFilter>& Filter : AllFrontendFilters)
+	{
+		if (Filter->GetName() == InName)
+		{
+			return Filter;
+		}
+	}
+	return TSharedPtr<FFrontendFilter>();
+}
+
 TSharedRef<SWidget> SFilterList::ExternalMakeAddFilterMenu(EAssetTypeCategories::Type MenuExpansion)
 {
 	return MakeAddFilterMenu(MenuExpansion);
 }
 
+void SFilterList::EnableAllFilters()
+{
+	for (auto FilterIt = Filters.CreateConstIterator(); FilterIt; ++FilterIt)
+	{
+		(*FilterIt)->SetEnabled(true);
+	}
+}
+
 void SFilterList::DisableAllFilters()
 {
-	for ( auto FilterIt = Filters.CreateConstIterator(); FilterIt; ++FilterIt )
+	for (const TSharedRef<SFilter>& Filter : Filters)
 	{
-		(*FilterIt)->SetEnabled(false, false);
+		Filter->SetEnabled(false, false);
 	}
 
 	OnFilterChanged.ExecuteIfBound();
@@ -575,17 +663,14 @@ void SFilterList::DisableAllFilters()
 
 void SFilterList::RemoveAllFilters()
 {
-	if ( HasAnyFilters() )
+	if (HasAnyFilters())
 	{
-		for ( auto FilterIt = Filters.CreateConstIterator(); FilterIt; ++FilterIt )
+		// Update the frontend filters collection
+		for (const TSharedRef<SFilter>& FilterToRemove : Filters)
 		{
-			const TSharedRef<SFilter>& FilterToRemove = *FilterIt;
-
-			if (FilterToRemove->GetFrontendFilter().IsValid() )
+			if (const TSharedPtr<FFrontendFilter>& FrontendFilter = FilterToRemove->GetFrontendFilter())
 			{
-				// Update the frontend filters collection
-				const TSharedRef<FFrontendFilter>& FrontendFilter = FilterToRemove->GetFrontendFilter().ToSharedRef();
-				SetFrontendFilterActive(FrontendFilter, false);
+				SetFrontendFilterActive(FrontendFilter.ToSharedRef(), false); // Deactivate.
 			}
 		}
 
@@ -599,7 +684,7 @@ void SFilterList::RemoveAllFilters()
 
 void SFilterList::DisableFiltersThatHideAssets(const TArray<FAssetData>& AssetDataList)
 {
-	if ( HasAnyFilters() )
+	if (HasAnyFilters())
 	{
 		// Determine if we should disable backend filters. If any asset fails the combined backend filter, disable them all.
 		FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
@@ -607,7 +692,7 @@ void SFilterList::DisableFiltersThatHideAssets(const TArray<FAssetData>& AssetDa
 		bool bDisableAllBackendFilters = false;
 		TArray<FAssetData> LocalAssetDataList = AssetDataList;
 		AssetRegistryModule.Get().RunAssetsThroughFilter(LocalAssetDataList, CombinedBackendFilter);
-		if ( LocalAssetDataList.Num() != AssetDataList.Num() )
+		if (LocalAssetDataList.Num() != AssetDataList.Num())
 		{
 			bDisableAllBackendFilters = true;
 		}
@@ -615,17 +700,15 @@ void SFilterList::DisableFiltersThatHideAssets(const TArray<FAssetData>& AssetDa
 		// Iterate over all enabled filters and disable any frontend filters that would hide any of the supplied assets
 		// and disable all backend filters if it was determined that the combined backend filter hides any of the assets
 		bool ExecuteOnFilteChanged = false;
-		for ( auto FilterIt = Filters.CreateConstIterator(); FilterIt; ++FilterIt )
+		for (const TSharedRef<SFilter>& Filter : Filters)
 		{
-			const TSharedRef<SFilter>& Filter = *FilterIt;
-			if ( Filter->IsEnabled() )
+			if (Filter->IsEnabled())
 			{
-				const TSharedPtr<FFrontendFilter>& FrontendFilter = Filter->GetFrontendFilter();
-				if ( FrontendFilter.IsValid() )
+				if (const TSharedPtr<FFrontendFilter>& FrontendFilter = Filter->GetFrontendFilter())
 				{
-					for ( auto AssetIt = AssetDataList.CreateConstIterator(); AssetIt; ++AssetIt )
+					for (const FAssetData& AssetData : AssetDataList)
 					{
-						if (!FrontendFilter->IsInverseFilter() && !FrontendFilter->PassesFilter(*AssetIt))
+						if (!FrontendFilter->IsInverseFilter() && !FrontendFilter->PassesFilter(AssetData))
 						{
 							// This is a frontend filter and at least one asset did not pass.
 							Filter->SetEnabled(false, false);
@@ -634,10 +717,10 @@ void SFilterList::DisableFiltersThatHideAssets(const TArray<FAssetData>& AssetDa
 					}
 				}
 
-				if ( bDisableAllBackendFilters )
+				if (bDisableAllBackendFilters)
 				{
 					FARFilter BackendFilter = Filter->GetBackendFilter();
-					if ( !BackendFilter.IsEmpty() )
+					if (!BackendFilter.IsEmpty())
 					{
 						Filter->SetEnabled(false, false);
 						ExecuteOnFilteChanged = true;
@@ -795,6 +878,48 @@ void SFilterList::LoadSettings(const FString& IniFilename, const FString& IniSec
 	OnFilterChanged.ExecuteIfBound();
 }
 
+void SFilterList::SetFrontendFilterCheckState(const TSharedPtr<FFrontendFilter>& InFrontendFilter, ECheckBoxState InCheckState)
+{
+	if (!InFrontendFilter || InCheckState == ECheckBoxState::Undetermined)
+	{
+		return;
+	}
+
+	// Check if the filter is already checked.
+	TSharedRef<FFrontendFilter> FrontendFilter = InFrontendFilter.ToSharedRef();
+	bool FrontendFilterChecked = IsFrontendFilterInUse(FrontendFilter);
+
+	if (InCheckState == ECheckBoxState::Checked && !FrontendFilterChecked)
+	{
+		AddFilter(FrontendFilter)->SetEnabled(true); // Pin a filter widget on the UI and activate the filter. Same behaviour as FrontendFilterClicked()
+	}
+	else if (InCheckState == ECheckBoxState::Unchecked && FrontendFilterChecked)
+	{
+		RemoveFilter(FrontendFilter); // Unpin the filter widget and deactivate the filter.
+	}
+	// else -> Already in the desired 'check' state.
+}
+
+ECheckBoxState SFilterList::GetFrontendFilterCheckState(const TSharedPtr<FFrontendFilter>& InFrontendFilter) const
+{
+	return InFrontendFilter && IsFrontendFilterInUse(InFrontendFilter.ToSharedRef()) ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+}
+
+bool SFilterList::IsFrontendFilterActive(const TSharedPtr<FFrontendFilter>& InFrontendFilter) const
+{
+	if (InFrontendFilter.IsValid())
+	{
+		for (const TSharedRef<SFilter>& Filter : Filters)
+		{
+			if (InFrontendFilter == Filter->GetFrontendFilter())
+			{
+				return Filter->IsEnabled(); // Is active or not?
+			}
+		}
+	}
+	return false;
+}
+
 void SFilterList::SetFrontendFilterActive(const TSharedRef<FFrontendFilter>& Filter, bool bActive)
 {
 	if(Filter->IsInverseFilter())
@@ -822,6 +947,7 @@ TSharedRef<SFilter> SFilterList::AddFilter(const TWeakPtr<IAssetTypeActions>& As
 		.OnFilterChanged(OnFilterChanged)
 		.OnRequestRemove(this, &SFilterList::RemoveFilterAndUpdate)
 		.OnRequestEnableOnly(this, &SFilterList::EnableOnlyThisFilter)
+		.OnRequestEnableAll(this, &SFilterList::EnableAllFilters)
 		.OnRequestDisableAll(this, &SFilterList::DisableAllFilters)
 		.OnRequestRemoveAll(this, &SFilterList::RemoveAllFilters);
 
@@ -837,6 +963,7 @@ TSharedRef<SFilter> SFilterList::AddFilter(const TSharedRef<FFrontendFilter>& Fr
 		.FrontendFilter(FrontendFilter)
 		.OnFilterChanged( this, &SFilterList::FrontendFilterChanged, FrontendFilter )
 		.OnRequestRemove(this, &SFilterList::RemoveFilterAndUpdate)
+		.OnRequestEnableAll(this, &SFilterList::EnableAllFilters)
 		.OnRequestDisableAll(this, &SFilterList::DisableAllFilters)
 		.OnRequestRemoveAll(this, &SFilterList::RemoveAllFilters);
 
@@ -884,10 +1011,10 @@ void SFilterList::RemoveFilter(const TWeakPtr<IAssetTypeActions>& AssetTypeActio
 
 void SFilterList::EnableOnlyThisFilter(const TSharedRef<SFilter>& FilterToEnable)
 {
-	for ( auto FilterIt = Filters.CreateConstIterator(); FilterIt; ++FilterIt )
+	for (const TSharedRef<SFilter>& Filter : Filters)
 	{
-		bool bEnable = *FilterIt == FilterToEnable;
-		(*FilterIt)->SetEnabled(bEnable, false);
+		bool bEnable = Filter == FilterToEnable;
+		Filter->SetEnabled(bEnable, /*ExecuteOnFilterChange*/false);
 	}
 
 	OnFilterChanged.ExecuteIfBound();
@@ -896,17 +1023,16 @@ void SFilterList::EnableOnlyThisFilter(const TSharedRef<SFilter>& FilterToEnable
 void SFilterList::RemoveFilter(const TSharedRef<FFrontendFilter>& FrontendFilter, bool ExecuteOnFilterChanged)
 {
 	TSharedPtr<SFilter> FilterToRemove;
-	for ( auto FilterIt = Filters.CreateConstIterator(); FilterIt; ++FilterIt )
+	for (const TSharedRef<SFilter>& Filter : Filters)
 	{
-		TSharedPtr<FFrontendFilter> Filter = (*FilterIt)->GetFrontendFilter();
-		if ( Filter.IsValid() && Filter == FrontendFilter )
+		if (Filter->GetFrontendFilter() == FrontendFilter)
 		{
-			FilterToRemove = *FilterIt;
+			FilterToRemove = Filter;
 			break;
 		}
 	}
 
-	if ( FilterToRemove.IsValid() )
+	if (FilterToRemove.IsValid())
 	{
 		if (ExecuteOnFilterChanged)
 		{
@@ -924,11 +1050,10 @@ void SFilterList::RemoveFilter(const TSharedRef<SFilter>& FilterToRemove)
 	FilterBox->RemoveSlot(FilterToRemove);
 	Filters.Remove(FilterToRemove);
 
-	if (FilterToRemove->GetFrontendFilter().IsValid() )
+	if (const TSharedPtr<FFrontendFilter>& FrontendFilter = FilterToRemove->GetFrontendFilter()) // Is valid?
 	{
 		// Update the frontend filters collection
-		const TSharedRef<FFrontendFilter>& FrontendFilter = FilterToRemove->GetFrontendFilter().ToSharedRef();
-		SetFrontendFilterActive(FrontendFilter, false);
+		SetFrontendFilterActive(FrontendFilter.ToSharedRef(), false);
 		OnFilterChanged.ExecuteIfBound();
 	}
 }
@@ -944,20 +1069,18 @@ void SFilterList::RemoveFilterAndUpdate(const TSharedRef<SFilter>& FilterToRemov
 void SFilterList::FrontendFilterChanged(TSharedRef<FFrontendFilter> FrontendFilter)
 {
 	TSharedPtr<SFilter> FilterToUpdate;
-	for ( auto FilterIt = Filters.CreateConstIterator(); FilterIt; ++FilterIt )
+	for (const TSharedRef<SFilter>& Filter : Filters)
 	{
-		TSharedPtr<FFrontendFilter> Filter = (*FilterIt)->GetFrontendFilter();
-		if ( Filter.IsValid() && Filter == FrontendFilter )
+		if (Filter->GetFrontendFilter() == FrontendFilter)
 		{
-			FilterToUpdate = *FilterIt;
+			FilterToUpdate = Filter;
 			break;
 		}
 	}
 
-	if ( FilterToUpdate.IsValid() )
+	if (FilterToUpdate.IsValid())
 	{
 		SetFrontendFilterActive(FrontendFilter, FilterToUpdate->IsEnabled());
-
 		OnFilterChanged.ExecuteIfBound();
 	}
 }
@@ -990,11 +1113,9 @@ void SFilterList::CreateFiltersMenuCategory(FMenuBuilder& MenuBuilder, const TAr
 }
 
 void SFilterList::CreateOtherFiltersMenuCategory(FMenuBuilder& MenuBuilder, TSharedPtr<FFrontendFilterCategory> MenuCategory) const
-{	
-	for ( auto FrontendFilterIt = AllFrontendFilters.CreateConstIterator(); FrontendFilterIt; ++FrontendFilterIt )
+{
+	for (const TSharedRef<FFrontendFilter>& FrontendFilter : AllFrontendFilters)
 	{
-		const TSharedRef<FFrontendFilter>& FrontendFilter = *FrontendFilterIt;
-
 		if(FrontendFilter->GetCategory() == MenuCategory)
 		{
 			MenuBuilder.AddMenuEntry(
@@ -1002,9 +1123,9 @@ void SFilterList::CreateOtherFiltersMenuCategory(FMenuBuilder& MenuBuilder, TSha
 				FrontendFilter->GetToolTipText(),
 				FSlateIcon(FEditorStyle::GetStyleSetName(), FrontendFilter->GetIconName()),
 				FUIAction(
-				FExecuteAction::CreateSP( const_cast<SFilterList*>(this), &SFilterList::FrontendFilterClicked, FrontendFilter ),
+				FExecuteAction::CreateSP(const_cast<SFilterList*>(this), &SFilterList::FrontendFilterClicked, FrontendFilter),
 				FCanExecuteAction(),
-				FIsActionChecked::CreateSP(this, &SFilterList::IsFrontendFilterInUse, FrontendFilter ) ),
+				FIsActionChecked::CreateSP(this, &SFilterList::IsFrontendFilterInUse, FrontendFilter)),
 				NAME_None,
 				EUserInterfaceActionType::ToggleButton
 				);
@@ -1014,13 +1135,13 @@ void SFilterList::CreateOtherFiltersMenuCategory(FMenuBuilder& MenuBuilder, TSha
 
 bool IsFilteredByPicker(TArray<UClass*> FilterClassList, UClass* TestClass)
 {
-	if(FilterClassList.Num() == 0)
+	if (FilterClassList.Num() == 0)
 	{
 		return false;
 	}
-	for(auto Iter = FilterClassList.CreateIterator(); Iter; ++Iter)
+	for (const UClass* Class : FilterClassList)
 	{
-		if(TestClass->IsChildOf(*Iter))
+		if (TestClass->IsChildOf(Class))
 		{
 			return false;
 		}
@@ -1119,13 +1240,13 @@ TSharedRef<SWidget> SFilterList::MakeAddFilterMenu(EAssetTypeCategories::Type Me
 
 	FMenuBuilder MenuBuilder(/*bInShouldCloseWindowAfterMenuSelection=*/true, nullptr, nullptr, /*bCloseSelfOnly=*/true);
 
-	MenuBuilder.BeginSection( "ContentBrowserResetFilters" );
+	MenuBuilder.BeginSection("ContentBrowserResetFilters");
 	{
 		MenuBuilder.AddMenuEntry(
-			LOCTEXT( "FilterListResetFilters", "Reset Filters" ),
-			LOCTEXT( "FilterListResetToolTip", "Resets current filter selection" ),
+			LOCTEXT("FilterListResetFilters", "Reset Filters"),
+			LOCTEXT("FilterListResetToolTip", "Resets current filter selection"),
 			FSlateIcon(),
-			FUIAction( FExecuteAction::CreateSP( this, &SFilterList::OnResetFilters ) )
+			FUIAction(FExecuteAction::CreateSP(this, &SFilterList::OnResetFilters))
 			);
 	}
 	MenuBuilder.EndSection(); //ContentBrowserResetFilters
@@ -1158,27 +1279,25 @@ TSharedRef<SWidget> SFilterList::MakeAddFilterMenu(EAssetTypeCategories::Type Me
 	MenuBuilder.EndSection(); //ContentBrowserFilterBasicAsset
 
 	// Remove the basic category from the map now, as this is treated differently and is no longer needed.
-	ExpandedCategory = NULL;
-	CategoryToMenuMap.Remove( EAssetTypeCategories::Basic );
+	ExpandedCategory = nullptr;
+	CategoryToMenuMap.Remove(EAssetTypeCategories::Basic);
 
 	// If we have expanded Basic, assume we are in full menu mode and add all the other categories
-	MenuBuilder.BeginSection("ContentBrowserFilterAdvancedAsset", LOCTEXT("AdvancedAssetsMenuHeading", "Other Assets") );
+	MenuBuilder.BeginSection("ContentBrowserFilterAdvancedAsset", LOCTEXT("AdvancedAssetsMenuHeading", "Other Assets"));
 	{
 		if(MenuExpansion == EAssetTypeCategories::Basic)
 		{
 			// For all the remaining categories, add them as submenus
-			for ( auto MenuIt = CategoryToMenuMap.CreateIterator(); MenuIt; ++MenuIt )
+			for (const TPair<EAssetTypeCategories::Type, FCategoryMenu>& CategoryMenuPair : CategoryToMenuMap)
 			{
-				FCategoryMenu& Menu = MenuIt.Value();
-
 				MenuBuilder.AddSubMenu(
-					Menu.Name,
-					Menu.Tooltip,
-					FNewMenuDelegate::CreateSP(this, &SFilterList::CreateFiltersMenuCategory, Menu.Assets),
+					CategoryMenuPair.Value.Name,
+					CategoryMenuPair.Value.Tooltip,
+					FNewMenuDelegate::CreateSP(this, &SFilterList::CreateFiltersMenuCategory, CategoryMenuPair.Value.Assets),
 					FUIAction(
-					FExecuteAction::CreateSP( this, &SFilterList::FilterByTypeCategoryClicked, MenuIt.Key() ),
+					FExecuteAction::CreateSP(this, &SFilterList::FilterByTypeCategoryClicked, CategoryMenuPair.Key),
 					FCanExecuteAction(),
-					FIsActionChecked::CreateSP(this, &SFilterList::IsAssetTypeCategoryInUse, MenuIt.Key() ) ),
+					FIsActionChecked::CreateSP(this, &SFilterList::IsAssetTypeCategoryInUse, CategoryMenuPair.Key)),
 					NAME_None,
 					EUserInterfaceActionType::ToggleButton
 					);
@@ -1186,10 +1305,8 @@ TSharedRef<SWidget> SFilterList::MakeAddFilterMenu(EAssetTypeCategories::Type Me
 		}
 
 		// Now add the other filter which aren't assets
-		for(auto Iter = AllFrontendFilterCategories.CreateIterator(); Iter; ++Iter)
+		for (const TSharedPtr<FFrontendFilterCategory>& Category : AllFrontendFilterCategories)
 		{
-			TSharedPtr<FFrontendFilterCategory> Category = (*Iter);
-
 			MenuBuilder.AddSubMenu(
 				Category->Title,
 				Category->Tooltip,
@@ -1227,9 +1344,9 @@ TSharedRef<SWidget> SFilterList::MakeAddFilterMenu(EAssetTypeCategories::Type Me
 
 void SFilterList::FilterByTypeClicked(TWeakPtr<IAssetTypeActions> AssetTypeActions)
 {
-	if ( AssetTypeActions.IsValid() )
+	if (AssetTypeActions.IsValid())
 	{
-		if ( IsAssetTypeActionsInUse(AssetTypeActions) )
+		if (IsAssetTypeActionsInUse(AssetTypeActions))
 		{
 			RemoveFilter(AssetTypeActions);
 		}
@@ -1243,21 +1360,20 @@ void SFilterList::FilterByTypeClicked(TWeakPtr<IAssetTypeActions> AssetTypeActio
 
 bool SFilterList::IsAssetTypeActionsInUse(TWeakPtr<IAssetTypeActions> AssetTypeActions) const
 {
-	if ( !AssetTypeActions.IsValid() )
+	if (!AssetTypeActions.IsValid())
 	{
 		return false;
 	}
 
 	TSharedPtr<IAssetTypeActions> TypeActions = AssetTypeActions.Pin();
-	if ( !TypeActions.IsValid() )
+	if (!TypeActions.IsValid())
 	{
 		return false;
 	}
 
-	for ( auto FilterIt = Filters.CreateConstIterator(); FilterIt; ++FilterIt)
+	for (const TSharedRef<SFilter>& Filter : Filters)
 	{
-		TWeakPtr<IAssetTypeActions> FilterActions = (*FilterIt)->GetAssetTypeActions();
-		if ( FilterActions.IsValid() && FilterActions.Pin() == TypeActions )
+		if (Filter->GetAssetTypeActions().Pin() == TypeActions)
 		{
 			return true;
 		}
@@ -1273,17 +1389,17 @@ void SFilterList::FilterByTypeCategoryClicked(EAssetTypeCategories::Type Categor
 
 	bool bFullCategoryInUse = IsAssetTypeCategoryInUse(Category);
 	bool ExecuteOnFilterChanged = false;
-	for ( auto TypeIt = TypeActionsList.CreateConstIterator(); TypeIt; ++TypeIt )
+
+	for (const TWeakPtr<IAssetTypeActions>& AssetTypeActions : TypeActionsList)
 	{
-		auto AssetTypeActions = (*TypeIt);
-		if ( AssetTypeActions.IsValid() )
+		if (AssetTypeActions.IsValid())
 		{
-			if ( bFullCategoryInUse )
+			if (bFullCategoryInUse)
 			{
 				RemoveFilter(AssetTypeActions);
 				ExecuteOnFilterChanged = true;
 			}
-			else if ( !IsAssetTypeActionsInUse(AssetTypeActions) )
+			else if (!IsAssetTypeActionsInUse(AssetTypeActions))
 			{
 				TSharedRef<SFilter> NewFilter = AddFilter(AssetTypeActions);
 				NewFilter->SetEnabled(true, false);
@@ -1303,12 +1419,11 @@ bool SFilterList::IsAssetTypeCategoryInUse(EAssetTypeCategories::Type Category) 
 	TArray<TWeakPtr<IAssetTypeActions>> TypeActionsList;
 	GetTypeActionsForCategory(Category, TypeActionsList);
 
-	for ( auto TypeIt = TypeActionsList.CreateConstIterator(); TypeIt; ++TypeIt )
+	for (const TWeakPtr<IAssetTypeActions>& AssetTypeActions : TypeActionsList)
 	{
-		auto AssetTypeActions = (*TypeIt);
-		if ( AssetTypeActions.IsValid() )
+		if (AssetTypeActions.IsValid())
 		{
-			if ( !IsAssetTypeActionsInUse(AssetTypeActions) )
+			if (!IsAssetTypeActionsInUse(AssetTypeActions))
 			{
 				return false;
 			}
@@ -1331,7 +1446,7 @@ void SFilterList::GetTypeActionsForCategory(EAssetTypeCategories::Type Category,
 		const TWeakPtr<IAssetTypeActions>& WeakTypeActions = AssetTypeActionsList[ClassIdx];
 		TSharedPtr<IAssetTypeActions> AssetTypeActions = WeakTypeActions.Pin();
 
-		if ( ensure(AssetTypeActions.IsValid()) && AssetTypeActions->CanFilter() && AssetTypeActions->GetCategories() & Category)
+		if (ensure(AssetTypeActions.IsValid()) && AssetTypeActions->CanFilter() && AssetTypeActions->GetCategories() & Category)
 		{
 			TypeActions.Add(WeakTypeActions);
 		}
@@ -1340,7 +1455,7 @@ void SFilterList::GetTypeActionsForCategory(EAssetTypeCategories::Type Category,
 
 void SFilterList::FrontendFilterClicked(TSharedRef<FFrontendFilter> FrontendFilter)
 {
-	if ( IsFrontendFilterInUse(FrontendFilter) )
+	if (IsFrontendFilterInUse(FrontendFilter))
 	{
 		RemoveFilter(FrontendFilter);
 	}
@@ -1353,10 +1468,9 @@ void SFilterList::FrontendFilterClicked(TSharedRef<FFrontendFilter> FrontendFilt
 
 bool SFilterList::IsFrontendFilterInUse(TSharedRef<FFrontendFilter> FrontendFilter) const
 {
-	for ( auto FilterIt = Filters.CreateConstIterator(); FilterIt; ++FilterIt)
+	for (const TSharedRef<SFilter>& Filter : Filters)
 	{
-		TSharedPtr<FFrontendFilter> Filter = (*FilterIt)->GetFrontendFilter();
-		if ( Filter.IsValid() && Filter == FrontendFilter )
+		if (Filter->GetFrontendFilter() == FrontendFilter)
 		{
 			return true;
 		}
@@ -1369,20 +1483,19 @@ void SFilterList::FrontendFilterCategoryClicked(TSharedPtr<FFrontendFilterCatego
 {
 	bool bFullCategoryInUse = IsFrontendFilterCategoryInUse(MenuCategory);
 	bool ExecuteOnFilterChanged = false;
-	for ( auto FrontendFilterIt = AllFrontendFilters.CreateConstIterator(); FrontendFilterIt; ++FrontendFilterIt )
+
+	for (const TSharedRef<FFrontendFilter>& FrontendFilter : AllFrontendFilters)
 	{
-		const TSharedRef<FFrontendFilter>& FrontendFilter = *FrontendFilterIt;
-		
-		if(FrontendFilter->GetCategory() == MenuCategory)
+		if (FrontendFilter->GetCategory() == MenuCategory)
 		{
-			if ( bFullCategoryInUse )
+			if (bFullCategoryInUse)
 			{
-				RemoveFilter( FrontendFilter, false );
+				RemoveFilter(FrontendFilter, false);
 				ExecuteOnFilterChanged = true;
 			}
-			else if ( !IsFrontendFilterInUse( FrontendFilter ) )
+			else if (!IsFrontendFilterInUse(FrontendFilter))
 			{
-				TSharedRef<SFilter> NewFilter = AddFilter( FrontendFilter );
+				TSharedRef<SFilter> NewFilter = AddFilter(FrontendFilter);
 				NewFilter->SetEnabled(true, false);
 				SetFrontendFilterActive(FrontendFilter, NewFilter->IsEnabled());
 				ExecuteOnFilterChanged = true;
@@ -1398,11 +1511,9 @@ void SFilterList::FrontendFilterCategoryClicked(TSharedPtr<FFrontendFilterCatego
 
 bool SFilterList::IsFrontendFilterCategoryInUse(TSharedPtr<FFrontendFilterCategory> MenuCategory) const
 {
-	for ( auto FrontendFilterIt = AllFrontendFilters.CreateConstIterator(); FrontendFilterIt; ++FrontendFilterIt )
+	for (const TSharedRef<FFrontendFilter>& FrontendFilter : AllFrontendFilters)
 	{
-		const TSharedRef<FFrontendFilter>& FrontendFilter = *FrontendFilterIt;
-
-		if ( FrontendFilter->GetCategory() == MenuCategory && !IsFrontendFilterInUse( FrontendFilter ) )
+		if (FrontendFilter->GetCategory() == MenuCategory && !IsFrontendFilterInUse(FrontendFilter))
 		{
 			return false;
 		}
@@ -1414,6 +1525,19 @@ bool SFilterList::IsFrontendFilterCategoryInUse(TSharedPtr<FFrontendFilterCatego
 void SFilterList::OnResetFilters()
 {
 	RemoveAllFilters();
+}
+
+void SFilterList::OnSetFilterActive(bool bInActive, TWeakPtr<FFrontendFilter> InWeakFilter)
+{
+	TSharedPtr<FFrontendFilter> Filter = InWeakFilter.Pin();
+	if (Filter.IsValid())
+	{
+		if (!IsFrontendFilterInUse(Filter.ToSharedRef()))
+		{
+			TSharedRef<SFilter> NewFilter = AddFilter(Filter.ToSharedRef());
+			NewFilter->SetEnabled(bInActive);
+		}
+	}
 }
 
 #undef LOCTEXT_NAMESPACE

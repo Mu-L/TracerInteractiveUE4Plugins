@@ -10,14 +10,14 @@
 	"DocsURL": "",
 	"MarketplaceURL": "",
 	"SupportURL": "",
-	"CanContainContent": true,
+	"CanContainContent": false,
 	"IsBetaVersion": false,
 	"Installed": false,
 	"EnabledByDefault": true,
 	"Modules": [
 		{
 			"Name": "CryptoKeys",
-			"Type": "Developer",
+			"Type": "Editor",
 			"LoadingPhase": "Default",
 			"WhitelistPlatforms": [
 				"Mac",
@@ -27,7 +27,7 @@
 		},
 		{
 			"Name": "CryptoKeysOpenSSL",
-			"Type": "Developer",
+			"Type": "Editor",
 			"LoadingPhase": "Default",
 			"WhitelistPlatforms": [
 				"Mac",

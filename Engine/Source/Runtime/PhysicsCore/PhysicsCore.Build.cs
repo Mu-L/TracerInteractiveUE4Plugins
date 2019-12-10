@@ -11,8 +11,7 @@ public class PhysicsCore: ModuleRules
         PrivateDependencyModuleNames.AddRange(
 			new string[] {
 				"Core",
-				"CoreUObject",
-				"Chaos"
+				"CoreUObject"
 			}
 		);
 
@@ -24,6 +23,11 @@ public class PhysicsCore: ModuleRules
 			// to other modules when PhysX is enabled it requires that its
 			// public files have access to PhysX includes
             PublicDependencyModuleNames.Add("PhysX");
+        }
+
+		if(Target.bCompileAPEX)
+        {
+            PublicDependencyModuleNames.Add("APEX");
         }
 	}
 }

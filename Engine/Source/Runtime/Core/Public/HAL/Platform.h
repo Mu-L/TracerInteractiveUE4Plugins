@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include "Misc/Build.h"
+
 // define all other platforms to be zero
 //@port Define the platform here to be zero when compiling for other platforms
 #if !defined(PLATFORM_WINDOWS)
@@ -57,9 +59,6 @@
 #endif
 #if !defined(PLATFORM_APPLE)
 	#define PLATFORM_APPLE 0
-#endif
-#if !defined(PLATFORM_HTML5)
-	#define PLATFORM_HTML5 0
 #endif
 #if !defined(PLATFORM_LINUX)
 	#define PLATFORM_LINUX 0
@@ -218,11 +217,17 @@
 #ifndef PLATFORM_COMPILER_HAS_DECLTYPE_AUTO
 	#define PLATFORM_COMPILER_HAS_DECLTYPE_AUTO 1
 #endif
+#ifndef PLATFORM_COMPILER_HAS_IF_CONSTEXPR
+	#define PLATFORM_COMPILER_HAS_IF_CONSTEXPR 1
+#endif
 #ifndef PLATFORM_TCHAR_IS_1_BYTE
 	#define PLATFORM_TCHAR_IS_1_BYTE			0
 #endif
 #ifndef PLATFORM_TCHAR_IS_4_BYTES
 	#define PLATFORM_TCHAR_IS_4_BYTES			0
+#endif
+#ifndef PLATFORM_WCHAR_IS_4_BYTES
+	#define PLATFORM_WCHAR_IS_4_BYTES			0
 #endif
 #ifndef PLATFORM_TCHAR_IS_CHAR16
 	#define PLATFORM_TCHAR_IS_CHAR16			0
@@ -283,6 +288,15 @@
 #endif
 #ifndef PLATFORM_HAS_BSD_SOCKET_FEATURE_MSG_DONTWAIT
 	#define PLATFORM_HAS_BSD_SOCKET_FEATURE_MSG_DONTWAIT	0
+#endif
+#ifndef PLATFORM_HAS_BSD_SOCKET_FEATURE_RECVMMSG
+	#define PLATFORM_HAS_BSD_SOCKET_FEATURE_RECVMMSG	0
+#endif
+#ifndef PLATFORM_HAS_BSD_SOCKET_FEATURE_TIMESTAMP
+	#define PLATFORM_HAS_BSD_SOCKET_FEATURE_TIMESTAMP 0
+#endif
+#ifndef PLATFORM_HAS_BSD_SOCKET_FEATURE_NODELAY
+	#define PLATFORM_HAS_BSD_SOCKET_FEATURE_NODELAY	1
 #endif
 #ifndef PLATFORM_HAS_NO_EPROCLIM
 	#define PLATFORM_HAS_NO_EPROCLIM			0
@@ -427,6 +441,58 @@
 	#define PLATFORM_NEEDS_RHIRESOURCELIST 1
 #endif
 
+#ifndef PLATFORM_USE_FULL_TASK_GRAPH
+	#define PLATFORM_USE_FULL_TASK_GRAPH						1
+#endif
+
+#ifndef PLATFORM_USE_ANSI_POSIX_MALLOC
+	#define PLATFORM_USE_ANSI_POSIX_MALLOC						0
+#endif
+
+#ifndef PLATFORM_USE_ANSI_MEMALIGN
+	#define PLATFORM_USE_ANSI_MEMALIGN							0
+#endif
+
+#ifndef PLATFORM_USE_ANSI_POSIX_MALLOC
+	#define PLATFORM_USE_ANSI_POSIX_MALLOC						0
+#endif
+
+#ifndef PLATFORM_IS_ANSI_MALLOC_THREADSAFE
+	#define PLATFORM_IS_ANSI_MALLOC_THREADSAFE					0
+#endif
+
+#ifndef PLATFORM_SUPPORTS_OPUS_CODEC
+	#define PLATFORM_SUPPORTS_OPUS_CODEC						1
+#endif
+
+#ifndef PLATFORM_SUPPORTS_VORBIS_CODEC
+	#define PLATFORM_SUPPORTS_VORBIS_CODEC						1
+#endif
+
+
+#ifndef PLATFORM_USE_MINIMAL_HANG_DETECTION
+	#define PLATFORM_USE_MINIMAL_HANG_DETECTION					0
+#endif
+
+#ifndef PLATFORM_USE_GENERIC_STRING_IMPLEMENTATION
+	#define PLATFORM_USE_GENERIC_STRING_IMPLEMENTATION			1
+#endif
+
+#ifndef PLATFORM_SUPPORTS_LLM
+	#define PLATFORM_SUPPORTS_LLM								1
+#endif
+
+#ifndef PLATFORM_ALLOW_ALLOCATIONS_IN_FASYNCWRITER_SERIALIZEBUFFERTOARCHIVE
+	#define	PLATFORM_ALLOW_ALLOCATIONS_IN_FASYNCWRITER_SERIALIZEBUFFERTOARCHIVE 1
+#endif
+
+#ifndef PLATFORM_HAS_FPlatformVirtualMemoryBlock
+	#define	PLATFORM_HAS_FPlatformVirtualMemoryBlock 1
+#endif
+#ifndef PLATFORM_BYPASS_PAK_PRECACHE
+	#define PLATFORM_BYPASS_PAK_PRECACHE 0
+#endif
+
 #ifndef PLATFORM_SUPPORTS_FLIP_TRACKING
 	#define PLATFORM_SUPPORTS_FLIP_TRACKING 0
 #endif
@@ -465,6 +531,10 @@
 
 #ifndef PLATFORM_USE_GENERIC_STRING_IMPLEMENTATION
 	#define PLATFORM_USE_GENERIC_STRING_IMPLEMENTATION			1
+#endif
+
+#ifndef PLATFORM_USE_SHOWFLAGS_ALWAYS_BITFIELD
+	#define	PLATFORM_USE_SHOWFLAGS_ALWAYS_BITFIELD				1
 #endif
 
 #ifndef PLATFORM_SUPPORTS_LLM
@@ -855,6 +925,9 @@ namespace TypeTests
 	static_assert(!PLATFORM_TCHAR_IS_4_BYTES || sizeof(TCHAR) == 4, "TCHAR size must be 4 bytes.");
 	static_assert(PLATFORM_TCHAR_IS_4_BYTES || sizeof(TCHAR) == 2, "TCHAR size must be 2 bytes.");
 
+	static_assert(!PLATFORM_WCHAR_IS_4_BYTES || sizeof(wchar_t) == 4, "wchar_t size must be 4 bytes.");
+	static_assert(PLATFORM_WCHAR_IS_4_BYTES || sizeof(wchar_t) == 2, "wchar_t size must be 2 bytes.");
+
 	static_assert(PLATFORM_32BITS || PLATFORM_64BITS, "Type tests pointer size failed.");
 	static_assert(PLATFORM_32BITS != PLATFORM_64BITS, "Type tests pointer exclusive failed.");
 	static_assert(!PLATFORM_64BITS || sizeof(void*) == 8, "Pointer size is 64bit, but pointers are short.");
@@ -867,30 +940,30 @@ namespace TypeTests
 	static_assert((!TAreTypesEqual<WIDECHAR, UCS2CHAR>::Value), "WIDECHAR and CHAR16 should be different types.");
 	static_assert((TAreTypesEqual<TCHAR, ANSICHAR>::Value == true || TAreTypesEqual<TCHAR, WIDECHAR>::Value == true), "TCHAR should either be ANSICHAR or WIDECHAR.");
 
-	static_assert(sizeof(uint8) == 1, "BYTE type size test failed.");
-	static_assert(int32(uint8(-1)) == 0xFF, "BYTE type sign test failed.");
+	static_assert(sizeof(uint8) == 1, "uint8 type size test failed.");
+	static_assert(int32(uint8(-1)) == 0xFF, "uint8 type sign test failed.");
 
-	static_assert(sizeof(uint16) == 2, "WORD type size test failed.");
-	static_assert(int32(uint16(-1)) == 0xFFFF, "WORD type sign test failed.");
+	static_assert(sizeof(uint16) == 2, "uint16 type size test failed.");
+	static_assert(int32(uint16(-1)) == 0xFFFF, "uint16 type sign test failed.");
 
-	static_assert(sizeof(uint32) == 4, "DWORD type size test failed.");
-	static_assert(int64(uint32(-1)) == int64(0xFFFFFFFF), "DWORD type sign test failed.");
+	static_assert(sizeof(uint32) == 4, "uint32 type size test failed.");
+	static_assert(int64(uint32(-1)) == int64(0xFFFFFFFF), "uint32 type sign test failed.");
 
-	static_assert(sizeof(uint64) == 8, "QWORD type size test failed.");
-	static_assert(uint64(-1) > uint64(0), "QWORD type sign test failed.");
+	static_assert(sizeof(uint64) == 8, "uint64 type size test failed.");
+	static_assert(uint64(-1) > uint64(0), "uint64 type sign test failed.");
 
 
-	static_assert(sizeof(int8) == 1, "SBYTE type size test failed.");
-	static_assert(int32(int8(-1)) == -1, "SBYTE type sign test failed.");
+	static_assert(sizeof(int8) == 1, "int8 type size test failed.");
+	static_assert(int32(int8(-1)) == -1, "int8 type sign test failed.");
 
-	static_assert(sizeof(int16) == 2, "SWORD type size test failed.");
-	static_assert(int32(int16(-1)) == -1, "SWORD type sign test failed.");
+	static_assert(sizeof(int16) == 2, "int16 type size test failed.");
+	static_assert(int32(int16(-1)) == -1, "int16 type sign test failed.");
 
-	static_assert(sizeof(int32) == 4, "INT type size test failed.");
-	static_assert(int64(int32(-1)) == int64(-1), "INT type sign test failed.");
+	static_assert(sizeof(int32) == 4, "int32 type size test failed.");
+	static_assert(int64(int32(-1)) == int64(-1), "int32 type sign test failed.");
 
-	static_assert(sizeof(int64) == 8, "SQWORD type size test failed.");
-	static_assert(int64(-1) < int64(0), "SQWORD type sign test failed.");
+	static_assert(sizeof(int64) == 8, "int64 type size test failed.");
+	static_assert(int64(-1) < int64(0), "int64 type sign test failed.");
 
 	static_assert(sizeof(ANSICHAR) == 1, "ANSICHAR type size test failed.");
 	static_assert(int32(ANSICHAR(-1)) == -1, "ANSICHAR type sign test failed.");
@@ -898,9 +971,6 @@ namespace TypeTests
 	static_assert(sizeof(WIDECHAR) == 2 || sizeof(WIDECHAR) == 4, "WIDECHAR type size test failed.");
 
 	static_assert(sizeof(UCS2CHAR) == 2, "UCS2CHAR type size test failed.");
-
-	static_assert(sizeof(uint32) == 4, "BITFIELD type size test failed.");
-	static_assert(int64(uint32(-1)) == int64(0xFFFFFFFF), "BITFIELD type sign test failed.");
 
 	static_assert(sizeof(PTRINT) == sizeof(void *), "PTRINT type size test failed.");
 	static_assert(PTRINT(-1) < PTRINT(0), "PTRINT type sign test failed.");
@@ -924,13 +994,6 @@ namespace TypeTests
 		#define TEXT_PASTE(x) L ## x
 	#endif
 		#define TEXT(x) TEXT_PASTE(x)
-#endif
-
-// this function is used to suppress static analysis warnings
-#if PLATFORM_HTML5
-FORCEINLINE bool IsHTML5Platform() { return true; }
-#else
-FORCEINLINE bool IsHTML5Platform() { return false; }
 #endif
 
 

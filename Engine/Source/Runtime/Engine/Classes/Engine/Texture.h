@@ -116,6 +116,8 @@ enum ETextureSourceFormat
 	//@todo: Deprecated!
 	TSF_RGBE8,
 
+	TSF_G16,
+
 	TSF_MAX
 };
 
@@ -183,7 +185,7 @@ struct FTextureSource
 #if WITH_EDITOR
 
 	ENGINE_API static int32 GetBytesPerPixel(ETextureSourceFormat Format);
-	FORCEINLINE static bool IsHDR(ETextureSourceFormat Format) { return Format == TSF_BGRE8 || Format == TSF_RGBA16F; }
+	FORCEINLINE static bool IsHDR(ETextureSourceFormat Format) { return (Format == TSF_BGRE8 || Format == TSF_RGBA16F); }
 
 	ENGINE_API void InitBlocked(const ETextureSourceFormat* InLayerFormats,
 		const FTextureSourceBlock* InBlocks,
@@ -325,6 +327,7 @@ private:
 	friend class UTexture2D;
 	friend class UTextureCube;
 	friend class UVolumeTexture;
+	friend class UTexture2DArray;
 
 	/** The bulk source data. */
 	FByteBulkData BulkData;
@@ -413,6 +416,41 @@ private:
 };
 
 /**
+ * Optional extra fields for texture platform data required by some platforms.
+ * Data in this struct is only serialized if the struct's value is non-default.
+ */
+struct FOptTexturePlatformData
+{
+	/** Arbitrary extra data that the runtime may need. */
+	uint32 ExtData;
+	/** Number of mips making up the mip tail, which must always be resident */
+	uint32 NumMipsInTail;
+
+	FOptTexturePlatformData()
+		: ExtData(0)
+		, NumMipsInTail(0)
+	{}
+
+	inline bool operator == (FOptTexturePlatformData const& RHS) const 
+	{
+		return ExtData == RHS.ExtData
+			&& NumMipsInTail == RHS.NumMipsInTail;
+	}
+
+	inline bool operator != (FOptTexturePlatformData const& RHS) const
+	{
+		return !(*this == RHS);
+	}
+
+	friend inline FArchive& operator << (FArchive& Ar, FOptTexturePlatformData& Data)
+	{
+		Ar << Data.ExtData;
+		Ar << Data.NumMipsInTail;
+		return Ar;
+	}
+};
+
+/**
  * Platform-specific data used by the texture resource at runtime.
  */
 USTRUCT()
@@ -424,10 +462,12 @@ struct FTexturePlatformData
 	int32 SizeX;
 	/** Height of the texture. */
 	int32 SizeY;
-	/** Number of texture slices. */
-	int32 NumSlices;
+	/** Packed bits [b31: CubeMap], [b30: HasOptData], [b29-0: NumSlices]. See bit masks below. */
+	uint32 PackedData;
 	/** Format in which mip data is stored. */
 	EPixelFormat PixelFormat;
+	/** Additional data required by some platforms.*/
+	FOptTexturePlatformData OptData;
 	/** Mip data or VT data. one or the other. */
 	TIndirectArray<struct FTexture2DMipMap> Mips;
 	struct FVirtualTextureBuiltData* VTData;
@@ -450,6 +490,12 @@ struct FTexturePlatformData
 	/** Destructor. */
 	ENGINE_API ~FTexturePlatformData();
 
+private:
+	static constexpr uint32 BitMask_CubeMap    = 1u << 31u;
+	static constexpr uint32 BitMask_HasOptData = 1u << 30u;
+	static constexpr uint32 BitMask_NumSlices  = BitMask_HasOptData - 1u;
+
+public:
 	/** Return whether TryLoadMips() would stall because async loaded mips are not yet available. */
 	bool IsReadyForAsyncPostLoad() const;
 
@@ -474,6 +520,50 @@ struct FTexturePlatformData
 	 * @param bStreamable Store some mips inline, only used during cooking
 	 */
 	void SerializeCooked(FArchive& Ar, class UTexture* Owner, bool bStreamable);
+	
+	inline bool GetHasOptData() const
+	{
+		return (PackedData & BitMask_HasOptData) == BitMask_HasOptData;
+	}
+
+	inline void SetOptData(FOptTexturePlatformData Data)
+	{
+		// Set the opt data flag to true if the specified data is non-default.
+		bool bHasOptData = Data != FOptTexturePlatformData();
+		PackedData = (bHasOptData ? BitMask_HasOptData : 0) | (PackedData & (~BitMask_HasOptData));
+
+		OptData = Data;
+	}
+
+	inline bool IsCubemap() const
+	{
+		return (PackedData & BitMask_CubeMap) == BitMask_CubeMap; 
+	}
+
+	inline void SetIsCubemap(bool bCubemap)
+	{
+		PackedData = (bCubemap ? BitMask_CubeMap : 0) | (PackedData & (~BitMask_CubeMap));
+	}
+	
+	inline int32 GetNumSlices() const 
+	{
+		return (int32)(PackedData & BitMask_NumSlices);
+	}
+
+	inline void SetNumSlices(int32 NumSlices)
+	{
+		PackedData = (NumSlices & BitMask_NumSlices) | (PackedData & (~BitMask_NumSlices));
+	}
+
+	inline int32 GetNumMipsInTail() const
+	{
+		return OptData.NumMipsInTail;
+	}
+
+	inline int32 GetExtData() const
+	{
+		return OptData.ExtData;
+	}
 
 #if WITH_EDITOR
 	void Cache(
@@ -506,6 +596,7 @@ struct FTextureFormatSettings
 		: CompressionSettings(TC_Default)
 		, CompressionNoAlpha(false)
 		, CompressionNone(false)
+		, CompressionYCoCg(false)
 		, SRGB(false)
 	{}
 
@@ -517,6 +608,9 @@ struct FTextureFormatSettings
 
 	UPROPERTY()
 	uint8 CompressionNone : 1;
+
+	UPROPERTY()
+	uint8 CompressionYCoCg : 1;
 
 	UPROPERTY()
 	uint8 SRGB : 1;
@@ -722,6 +816,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Texture, AssetRegistrySearchable, AdvancedDisplay)
 	uint8 VirtualTextureStreaming : 1;
 
+	/** If true the texture stores YCoCg. Blue channel will be filled with a precision scale during compression. */
+	UPROPERTY()
+	uint8 CompressionYCoCg : 1;
+
 private:
 	/** Whether the async resource release process has already been kicked off or not */
 	UPROPERTY(transient)
@@ -792,6 +890,9 @@ public:
 	{
 		return false;
 	}
+
+	/** Returns the virtual texture build settings. */
+	ENGINE_API virtual void GetVirtualTextureBuildSettings(struct FVirtualTextureBuildSettings& OutSettings) const;
 
 	/**
 	 * Textures that use the derived data cache must override this function and

@@ -8,12 +8,15 @@
 #include "Tracks/MovieSceneSubTrack.h"
 #include "Sections/MovieSceneSubSection.h"
 #include "Compilation/MovieSceneCompiler.h"
+#include "Logging/MessageLog.h"
+#include "Misc/UObjectToken.h"
 #include "Interfaces/ITargetPlatform.h"
 
 UMovieSceneSequence::UMovieSceneSequence(const FObjectInitializer& Init)
 	: Super(Init)
 {
 	bParentContextsAreSignificant = false;
+	bPlayableDirectly = true;
 }
 
 #if WITH_EDITORONLY_DATA
@@ -48,6 +51,12 @@ void UMovieSceneSequence::PreSave(const ITargetPlatform* TargetPlatform)
 		{
 			FMovieSceneSequencePrecompiledTemplateStore Store;
 			FMovieSceneCompiler::Compile(*this, Store);
+
+			if (!bPlayableDirectly)
+			{
+				PrecompiledEvaluationTemplate.EvaluationField = FMovieSceneEvaluationField();
+				PrecompiledEvaluationTemplate.ResetFieldData();
+			}
 		}
 		else
 		{
@@ -85,4 +94,30 @@ FGuid UMovieSceneSequence::FindPossessableObjectId(UObject& Object, UObject* Con
 		}
 	}
 	return FGuid();
+}
+
+FMovieSceneObjectBindingID UMovieSceneSequence::FindBindingByTag(FName InBindingName) const
+{
+	for (FMovieSceneObjectBindingID ID : FindBindingsByTag(InBindingName))
+	{
+		return ID;
+	}
+
+	FMessageLog("PIE")
+		.Warning(NSLOCTEXT("UMovieSceneSequence", "FindNamedBinding_Warning", "Attempted to find a named binding that did not exist"))
+		->AddToken(FUObjectToken::Create(this));
+
+	return FMovieSceneObjectBindingID();
+}
+
+const TArray<FMovieSceneObjectBindingID>& UMovieSceneSequence::FindBindingsByTag(FName InBindingName) const
+{
+	const FMovieSceneObjectBindingIDs* BindingIDs = GetMovieScene()->AllTaggedBindings().Find(InBindingName);
+	if (BindingIDs)
+	{
+		return BindingIDs->IDs;
+	}
+
+	static TArray<FMovieSceneObjectBindingID> EmptyBindings;
+	return EmptyBindings;
 }

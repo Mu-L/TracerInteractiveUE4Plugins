@@ -45,6 +45,7 @@ public:
 	virtual void Bind(const FShaderParameterMap& ParameterMap) override
 	{
 		LodValuesParameter.Bind(ParameterMap,TEXT("LodValues"));
+		ForcedLodParameter.Bind(ParameterMap,TEXT("ForcedLod"));
 		LodTessellationParameter.Bind(ParameterMap, TEXT("LodTessellationParams"));
 		NeighborSectionLodParameter.Bind(ParameterMap,TEXT("NeighborSectionLod"));
 		LodBiasParameter.Bind(ParameterMap,TEXT("LodBias"));
@@ -58,6 +59,7 @@ public:
 	virtual void Serialize(FArchive& Ar) override
 	{
 		Ar << LodValuesParameter;
+		Ar << ForcedLodParameter;
 		Ar << LodTessellationParameter;
 		Ar << NeighborSectionLodParameter;
 		Ar << LodBiasParameter;
@@ -106,6 +108,20 @@ public:
 				CameraLocalPos3D.Y + SceneProxy->SectionBase.Y
 			);
 			ShaderBindings.Add(LodBiasParameter, LodBias);
+		}
+
+		if (SceneProxy->bRegistered)
+		{
+			ShaderBindings.Add(Shader->GetUniformBufferParameter<FLandscapeSectionLODUniformParameters>(), LandscapeRenderSystems.FindChecked(SceneProxy->LandscapeKey)->UniformBuffer);
+		}
+		else
+		{
+			ShaderBindings.Add(Shader->GetUniformBufferParameter<FLandscapeSectionLODUniformParameters>(), GNullLandscapeRenderSystemResources.UniformBuffer);
+		}
+
+		if (ForcedLodParameter.IsBound())
+		{
+			ShaderBindings.Add(ForcedLodParameter, BatchElementParams->ForcedLOD);
 		}
 
 		FLandscapeComponentSceneProxy::FViewCustomDataLOD* LODData = (FLandscapeComponentSceneProxy::FViewCustomDataLOD*)InView->GetCustomData(SceneProxy->GetPrimitiveSceneInfo()->GetIndex());
@@ -165,6 +181,7 @@ public:
 	}
 protected:
 	FShaderParameter LodValuesParameter;
+	FShaderParameter ForcedLodParameter;
 	FShaderParameter LodTessellationParameter;
 	FShaderParameter NeighborSectionLodParameter;
 	FShaderParameter LodBiasParameter;
@@ -383,7 +400,7 @@ void FLandscapeComponentSceneProxyMobile::CreateRenderThreadResources()
 
 	if (IsComponentLevelVisible())
 	{
-		RegisterNeighbors();
+		RegisterNeighbors(this);
 	}
 	
 	auto FeatureLevel = GetScene().GetFeatureLevel();

@@ -14,7 +14,8 @@ static FName SButtonTypeName("SButton");
 SButton::SButton()
 {
 #if WITH_ACCESSIBILITY
-	AccessibleData = FAccessibleWidgetData(EAccessibleBehavior::Summary, EAccessibleBehavior::Auto, false);
+	AccessibleBehavior = EAccessibleBehavior::Summary;
+	bCanChildrenBeAccessible = false;
 #endif
 }
 
@@ -107,8 +108,8 @@ int32 SButton::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry
 			AllottedGeometry.ToPaintGeometry(),
 			BrushResource,
 			DrawEffects,
-			BrushResource->GetTint(InWidgetStyle) * InWidgetStyle.GetColorAndOpacityTint() * BorderBackgroundColor.Get().GetColor(InWidgetStyle) * ColorAndOpacity.Get()
-			);
+			BrushResource->GetTint(InWidgetStyle) * InWidgetStyle.GetColorAndOpacityTint() * BorderBackgroundColor.Get().GetColor(InWidgetStyle)
+		);
 	}
 
 	return SCompoundWidget::OnPaint(Args, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bEnabled);
@@ -164,7 +165,7 @@ void SButton::OnFocusLost( const FFocusEvent& InFocusEvent )
 FReply SButton::OnKeyDown( const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent )
 {
 	FReply Reply = FReply::Unhandled();
-	if (IsEnabled() && FSlateApplication::Get().GetNavigationActionForKey(InKeyEvent.GetKey()) == EUINavigationAction::Accept)
+	if (IsEnabled() && FSlateApplication::Get().GetNavigationActionFromKey(InKeyEvent) == EUINavigationAction::Accept)
 	{
 		Press();
 
@@ -194,7 +195,7 @@ FReply SButton::OnKeyUp(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent
 {
 	FReply Reply = FReply::Unhandled();
 
-	if (IsEnabled() && FSlateApplication::Get().GetNavigationActionForKey(InKeyEvent.GetKey()) == EUINavigationAction::Accept)
+	if (IsEnabled() && FSlateApplication::Get().GetNavigationActionFromKey(InKeyEvent) == EUINavigationAction::Accept)
 	{
 		const bool bWasPressed = bIsPressed;
 
@@ -352,6 +353,8 @@ void SButton::OnMouseEnter( const FGeometry& MyGeometry, const FPointerEvent& Mo
 
 void SButton::OnMouseLeave( const FPointerEvent& MouseEvent )
 {
+	const bool bWasHovered = IsHovered();
+	
 	// Call parent implementation
 	SWidget::OnMouseLeave( MouseEvent );
 
@@ -362,7 +365,10 @@ void SButton::OnMouseLeave( const FPointerEvent& MouseEvent )
 		Release();
 	}
 
-	OnUnhovered.ExecuteIfBound();
+	if (bWasHovered)
+	{
+		OnUnhovered.ExecuteIfBound();
+	}
 
 	Invalidate(EInvalidateWidget::Layout);
 }
@@ -510,6 +516,8 @@ void SButton::SetButtonStyle(const FButtonStyle* ButtonStyle)
 
 	HoveredSound = Style->HoveredSlateSound;
 	PressedSound = Style->PressedSlateSound;
+
+	Invalidate(EInvalidateWidget::Layout);
 }
 
 void SButton::SetClickMethod(EButtonClickMethod::Type InClickMethod)

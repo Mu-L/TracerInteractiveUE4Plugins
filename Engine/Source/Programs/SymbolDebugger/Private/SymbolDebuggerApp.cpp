@@ -9,6 +9,8 @@
 #include "ISourceControlModule.h"
 #include "EditorStyleSet.h"
 #include "Interfaces/IEditorStyleModule.h"
+#include "Widgets/SWindow.h"
+#include "Framework/Application/SlateApplication.h"
 
 IMPLEMENT_APPLICATION(SymbolDebugger, "SymbolDebugger");
 
@@ -66,7 +68,7 @@ void RunSymbolDebugger(const TCHAR* CommandLine)
 
 	// loop while the server does the rest
 	double LastTime = FPlatformTime::Seconds();
-	while (!GIsRequestingExit)
+	while (!IsEngineExitRequested())
 	{
 		FSlateApplication::Get().PumpMessages();
 		FSlateApplication::Get().Tick();

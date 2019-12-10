@@ -7,6 +7,7 @@
 #include "RHI.h"
 #include "Modules/ModuleManager.h"
 #include "Misc/ConfigCacheIni.h"
+#include "Misc/MessageDialog.h"
 #include "RHIShaderFormatDefinitions.inl"
 #include "ProfilingDebugging/CsvProfiler.h"
 
@@ -451,7 +452,6 @@ bool GIsRHIInitialized = false;
 int32 GMaxTextureMipCount = MAX_TEXTURE_MIP_COUNT;
 bool GRHISupportsCopyToTextureMultipleMips = false;
 bool GSupportsQuadBufferStereo = false;
-bool GSupportsDepthFetchDuringDepthTest = true;
 FString GRHIAdapterName;
 FString GRHIAdapterInternalDriverVersion;
 FString GRHIAdapterUserDriverVersion;
@@ -472,6 +472,10 @@ bool GHardwareHiddenSurfaceRemoval = false;
 bool GRHISupportsAsyncTextureCreation = false;
 bool GRHISupportsQuadTopology = false;
 bool GRHISupportsRectTopology = false;
+bool GRHISupportsAtomicUInt64 = false;
+bool GRHISupportsResummarizeHTile = false;
+bool GRHISupportsExplicitHTile = false;
+bool GRHISupportsDepthUAV = false;
 bool GSupportsParallelRenderingTasksWithSeparateRHIThread = true;
 bool GRHIThreadNeedsKicking = false;
 int32 GRHIMaximumReccommendedOustandingOcclusionQueries = MAX_int32;
@@ -519,12 +523,14 @@ bool GRHISupportsRHIOnTaskThread = false;
 bool GRHISupportsParallelRHIExecute = false;
 bool GSupportsHDR32bppEncodeModeIntrinsic = false;
 bool GSupportsParallelOcclusionQueries = false;
-bool GSupportsRenderTargetWriteMask = false;
 bool GSupportsTransientResourceAliasing = false;
 bool GRHIRequiresRenderTargetForPixelShaderUAVs = false;
+bool GRHISupportsUAVFormatAliasing = false;
 
 bool GRHISupportsMSAADepthSampleAccess = false;
 bool GRHISupportsResolveCubemapFaces = false;
+
+bool GRHISupportsBackBufferWithCustomDepthStencil = true;
 
 bool GRHIIsHDREnabled = false;
 bool GRHISupportsHDROutput = false;
@@ -540,6 +546,7 @@ FVertexElementTypeSupportInfo GVertexElementTypeSupport;
 RHI_API int32 volatile GCurrentTextureMemorySize = 0;
 RHI_API int32 volatile GCurrentRendertargetMemorySize = 0;
 RHI_API int64 GTexturePoolSize = 0 * 1024 * 1024;
+RHI_API int64 GMaxTextureBufferSize = 0;
 RHI_API int32 GPoolSizeVRAMPercentage = 0;
 
 RHI_API EShaderPlatform GShaderPlatformForFeatureLevel[ERHIFeatureLevel::Num] = {SP_NumPlatforms,SP_NumPlatforms,SP_NumPlatforms,SP_NumPlatforms};
@@ -577,15 +584,15 @@ FName FeatureLevelNames[] =
 {
 	FName(TEXT("ES2")),
 	FName(TEXT("ES3_1")),
-	FName(TEXT("SM4")),
+	FName(TEXT("SM4_REMOVED")),
 	FName(TEXT("SM5")),
 };
 
-static_assert(ARRAY_COUNT(FeatureLevelNames) == ERHIFeatureLevel::Num, "Missing entry from feature level names.");
+static_assert(UE_ARRAY_COUNT(FeatureLevelNames) == ERHIFeatureLevel::Num, "Missing entry from feature level names.");
 
 RHI_API bool GetFeatureLevelFromName(FName Name, ERHIFeatureLevel::Type& OutFeatureLevel)
 {
-	for (int32 NameIndex = 0; NameIndex < ARRAY_COUNT(FeatureLevelNames); NameIndex++)
+	for (int32 NameIndex = 0; NameIndex < UE_ARRAY_COUNT(FeatureLevelNames); NameIndex++)
 	{
 		if (FeatureLevelNames[NameIndex] == Name)
 		{
@@ -600,8 +607,8 @@ RHI_API bool GetFeatureLevelFromName(FName Name, ERHIFeatureLevel::Type& OutFeat
 
 RHI_API void GetFeatureLevelName(ERHIFeatureLevel::Type InFeatureLevel, FString& OutName)
 {
-	check(InFeatureLevel < ARRAY_COUNT(FeatureLevelNames));
-	if (InFeatureLevel < ARRAY_COUNT(FeatureLevelNames))
+	check(InFeatureLevel < UE_ARRAY_COUNT(FeatureLevelNames));
+	if (InFeatureLevel < UE_ARRAY_COUNT(FeatureLevelNames))
 	{
 		FeatureLevelNames[(int32)InFeatureLevel].ToString(OutName);
 	}
@@ -614,8 +621,8 @@ RHI_API void GetFeatureLevelName(ERHIFeatureLevel::Type InFeatureLevel, FString&
 static FName InvalidFeatureLevelName(TEXT("InvalidFeatureLevel"));
 RHI_API void GetFeatureLevelName(ERHIFeatureLevel::Type InFeatureLevel, FName& OutName)
 {
-	check(InFeatureLevel < ARRAY_COUNT(FeatureLevelNames));
-	if (InFeatureLevel < ARRAY_COUNT(FeatureLevelNames))
+	check(InFeatureLevel < UE_ARRAY_COUNT(FeatureLevelNames));
+	if (InFeatureLevel < UE_ARRAY_COUNT(FeatureLevelNames))
 	{
 		OutName = FeatureLevelNames[(int32)InFeatureLevel];
 	}
@@ -633,11 +640,11 @@ FName ShadingPathNames[] =
 	FName(TEXT("Mobile")),
 };
 
-static_assert(ARRAY_COUNT(ShadingPathNames) == ERHIShadingPath::Num, "Missing entry from shading path names.");
+static_assert(UE_ARRAY_COUNT(ShadingPathNames) == ERHIShadingPath::Num, "Missing entry from shading path names.");
 
 RHI_API bool GetShadingPathFromName(FName Name, ERHIShadingPath::Type& OutShadingPath)
 {
-	for (int32 NameIndex = 0; NameIndex < ARRAY_COUNT(ShadingPathNames); NameIndex++)
+	for (int32 NameIndex = 0; NameIndex < UE_ARRAY_COUNT(ShadingPathNames); NameIndex++)
 	{
 		if (ShadingPathNames[NameIndex] == Name)
 		{
@@ -652,8 +659,8 @@ RHI_API bool GetShadingPathFromName(FName Name, ERHIShadingPath::Type& OutShadin
 
 RHI_API void GetShadingPathName(ERHIShadingPath::Type InShadingPath, FString& OutName)
 {
-	check(InShadingPath < ARRAY_COUNT(ShadingPathNames));
-	if (InShadingPath < ARRAY_COUNT(ShadingPathNames))
+	check(InShadingPath < UE_ARRAY_COUNT(ShadingPathNames));
+	if (InShadingPath < UE_ARRAY_COUNT(ShadingPathNames))
 	{
 		ShadingPathNames[(int32)InShadingPath].ToString(OutName);
 	}
@@ -666,8 +673,8 @@ RHI_API void GetShadingPathName(ERHIShadingPath::Type InShadingPath, FString& Ou
 static FName InvalidShadingPathName(TEXT("InvalidShadingPath"));
 RHI_API void GetShadingPathName(ERHIShadingPath::Type InShadingPath, FName& OutName)
 {
-	check(InShadingPath < ARRAY_COUNT(ShadingPathNames));
-	if (InShadingPath < ARRAY_COUNT(ShadingPathNames))
+	check(InShadingPath < UE_ARRAY_COUNT(ShadingPathNames));
+	if (InShadingPath < UE_ARRAY_COUNT(ShadingPathNames))
 	{
 		OutName = ShadingPathNames[(int32)InShadingPath];
 	}
@@ -686,34 +693,65 @@ static FName NAME_PLATFORM_IOS(TEXT("IOS"));
 static FName NAME_PLATFORM_MAC(TEXT("Mac"));
 static FName NAME_PLATFORM_SWITCH(TEXT("Switch"));
 static FName NAME_PLATFORM_TVOS(TEXT("TVOS"));
+static FName NAME_PLATFORM_LUMIN(TEXT("Lumin"));
 
 // @todo platplug: This is still here, only being used now by UMaterialShaderQualitySettings::GetOrCreatePlatformSettings
 // since I have moved the other uses to FindTargetPlatformWithSupport
 // But I'd like to delete it anyway!
 FName ShaderPlatformToPlatformName(EShaderPlatform Platform)
 {
-	switch(Platform)
+	switch (Platform)
 	{
-	case SP_PCD3D_SM4:
-	case SP_PCD3D_SM5: return NAME_PLATFORM_WINDOWS;
-	case SP_PS4: return NAME_PLATFORM_PS4;
-	case SP_XBOXONE_D3D12: return NAME_PLATFORM_XBOXONE;
+	case SP_PCD3D_SM5:
+	case SP_OPENGL_SM4:
+	case SP_OPENGL_PCES2:
+	case SP_OPENGL_SM5:
+	case SP_PCD3D_ES2:
+	case SP_PCD3D_ES3_1:
+	case SP_OPENGL_PCES3_1:
+	case SP_VULKAN_PCES3_1:
+	case SP_VULKAN_SM5:
+		return NAME_PLATFORM_WINDOWS;
+	case SP_PS4:
+		return NAME_PLATFORM_PS4;
+	case SP_XBOXONE_D3D12:
+		return NAME_PLATFORM_XBOXONE;
+	case SP_OPENGL_ES2_ANDROID:
+	case SP_OPENGL_ES31_EXT:
+	case SP_VULKAN_ES3_1_ANDROID:
 	case SP_OPENGL_ES3_1_ANDROID:
-	case SP_VULKAN_ES3_1_ANDROID: return NAME_PLATFORM_ANDROID;
+		return NAME_PLATFORM_ANDROID;
+	case SP_OPENGL_ES2_WEBGL:
+		return FName(TEXT(PREPROCESSOR_TO_STRING(PLATFORM_HEADER_NAME))); // WIP: platform extension magic
 	case SP_METAL:
 	case SP_METAL_MRT:
-        return NAME_PLATFORM_IOS;
-	case SP_METAL_TVOS:
-	case SP_METAL_MRT_TVOS: return NAME_PLATFORM_TVOS;
+		return NAME_PLATFORM_IOS;
 	case SP_METAL_SM5:
 	case SP_METAL_SM5_NOTESS:
 	case SP_METAL_MACES3_1:
 	case SP_METAL_MACES2:
-	case SP_METAL_MRT_MAC: return NAME_PLATFORM_MAC;
+	case SP_METAL_MRT_MAC:
+		return NAME_PLATFORM_MAC;
 	case SP_SWITCH:
-	case SP_SWITCH_FORWARD: return NAME_PLATFORM_SWITCH;
+	case SP_SWITCH_FORWARD:
+		return NAME_PLATFORM_SWITCH;
+	case SP_VULKAN_SM5_LUMIN:
+	case SP_VULKAN_ES3_1_LUMIN:
+		return NAME_PLATFORM_LUMIN;
+	case SP_METAL_TVOS:
+	case SP_METAL_MRT_TVOS:
+		return NAME_PLATFORM_TVOS;
 
-	default: return FName();
+
+	default:
+		if (FStaticShaderPlatformNames::IsStaticPlatform(Platform))
+		{
+			return FStaticShaderPlatformNames::Get().GetPlatformName(Platform);
+		}
+		else
+		{
+			return NAME_None;
+		}
 	}
 }
 
@@ -762,6 +800,24 @@ RHI_API const TCHAR* RHIVendorIdToString()
 	}
 }
 
+RHI_API const TCHAR* RHIVendorIdToString(EGpuVendorId VendorId)
+{
+	switch (VendorId)
+	{
+	case EGpuVendorId::Amd: return TEXT("AMD");
+	case EGpuVendorId::ImgTec: return TEXT("ImgTec");
+	case EGpuVendorId::Nvidia: return TEXT("NVIDIA");
+	case EGpuVendorId::Arm: return TEXT("ARM");
+	case EGpuVendorId::Qualcomm: return TEXT("Qualcomm");
+	case EGpuVendorId::Intel: return TEXT("Intel");
+	case EGpuVendorId::NotQueried: return TEXT("Not Queried");
+	default:
+		break;
+	}
+
+	return TEXT("Unknown");
+}
+
 RHI_API uint32 RHIGetShaderLanguageVersion(const EShaderPlatform Platform)
 {
 	uint32 Version = 0;
@@ -805,7 +861,7 @@ RHI_API bool RHISupportsTessellation(const EShaderPlatform Platform)
 {
 	if (IsFeatureLevelSupported(Platform, ERHIFeatureLevel::SM5))
 	{
-		return (Platform == SP_PCD3D_SM5) || (Platform == SP_XBOXONE_D3D12) || (Platform == SP_OPENGL_SM5) || (Platform == SP_OPENGL_ES31_EXT) || (Platform == SP_METAL_SM5) || (IsVulkanSM5Platform(Platform));
+		return (Platform == SP_PCD3D_SM5) || (Platform == SP_XBOXONE_D3D12) || (Platform == SP_OPENGL_SM5) || (Platform == SP_OPENGL_ES31_EXT) /*|| (Platform == SP_METAL_SM5)*/ || (IsVulkanSM5Platform(Platform));
 	}
 	return false;
 }
@@ -841,6 +897,11 @@ bool RHIGetPreviewFeatureLevel(ERHIFeatureLevel::Type& PreviewFeatureLevelOUT)
 
 	if (bForceFeatureLevelES2)
 	{
+		if (!UE_BUILD_SHIPPING)
+		{
+			FMessageDialog::Open(EAppMsgType::Ok, NSLOCTEXT("RHI", "ES2Deprecated", "Warning: FeatureLevel ES2 is deprecated, please use FeatureLevel ES3.1."));
+		}
+
 		PreviewFeatureLevelOUT = ERHIFeatureLevel::ES2;
 	}
 	else if (bForceFeatureLevelES3_1)
@@ -856,6 +917,15 @@ bool RHIGetPreviewFeatureLevel(ERHIFeatureLevel::Type& PreviewFeatureLevelOUT)
 		return false;
 	}
 	return true;
+}
+
+ RHI_API EPixelFormat RHIPreferredPixelFormatHint(EPixelFormat PreferredPixelFormat)
+{
+	if (GDynamicRHI)
+	{
+		return GDynamicRHI->RHIPreferredPixelFormatHint(PreferredPixelFormat);
+	}
+	return PreferredPixelFormat;
 }
 
 void FRHIRenderPassInfo::ConvertToRenderTargetsInfo(FRHISetRenderTargetsInfo& OutRTInfo) const
@@ -901,6 +971,8 @@ void FRHIRenderPassInfo::ConvertToRenderTargetsInfo(FRHISetRenderTargetsInfo& Ou
 		DepthStencilRenderTarget.ExclusiveDepthStencil);
 	OutRTInfo.bClearDepth = (DepthLoadAction == ERenderTargetLoadAction::EClear);
 	OutRTInfo.bClearStencil = (StencilLoadAction == ERenderTargetLoadAction::EClear);
+
+	OutRTInfo.FoveationTexture = FoveationTexture;
 
 	if (NumUAVs > 0)
 	{
@@ -1055,7 +1127,6 @@ FString LexToString(EShaderPlatform Platform)
 	switch (Platform)
 	{
 	case SP_PCD3D_SM5: return TEXT("PCD3D_SM5");
-	case SP_PCD3D_SM4: return TEXT("PCD3D_SM4");
 	case SP_PCD3D_ES3_1: return TEXT("PCD3D_ES3_1");
 	case SP_PCD3D_ES2: return TEXT("PCD3D_ES2");
 	case SP_OPENGL_SM4: return TEXT("OPENGL_SM4");
@@ -1064,7 +1135,6 @@ FString LexToString(EShaderPlatform Platform)
 	case SP_OPENGL_PCES3_1: return TEXT("OPENGL_PCES3_1");
 	case SP_OPENGL_ES2_ANDROID: return TEXT("OPENGL_ES2_ANDROID");
 	case SP_OPENGL_ES2_WEBGL: return TEXT("OPENGL_ES2_WEBGL");
-	case SP_OPENGL_ES2_IOS: return TEXT("OPENGL_ES2_IOS");
 	case SP_OPENGL_ES31_EXT: return TEXT("OPENGL_ES31_EXT");
 	case SP_OPENGL_ES3_1_ANDROID: return TEXT("OPENGL_ES3_1_ANDROID");
 	case SP_PS4: return TEXT("PS4");
@@ -1083,17 +1153,24 @@ FString LexToString(EShaderPlatform Platform)
 	case SP_VULKAN_ES3_1_ANDROID: return TEXT("VULKAN_ES3_1_ANDROID");
 	case SP_VULKAN_ES3_1_LUMIN: return TEXT("VULKAN_ES3_1_LUMIN");
 	case SP_VULKAN_PCES3_1: return TEXT("VULKAN_PCES3_1");
-	case SP_VULKAN_SM4:	return TEXT("VULKAN_SM4");
 	case SP_VULKAN_SM5: return TEXT("VULKAN_SM5");
 	case SP_VULKAN_SM5_LUMIN: return TEXT("VULKAN_SM5_LUMIN");
 
-#ifdef DDPI_EXTRA_SHADERPLATFORM_LEXTOSTRING
-		DDPI_EXTRA_SHADERPLATFORM_LEXTOSTRING
-#endif
+	case SP_OPENGL_ES2_IOS_DEPRECATED:
+	case SP_VULKAN_SM4_DEPRECATED:
+	case SP_PCD3D_SM4_DEPRECATED:
+		return TEXT("");
 
 	default:
-		checkf(0, TEXT("Unknown EShaderPlatform %d!"), (int32)Platform);
-		return TEXT("");
+		if (Platform >= SP_StaticPlatform_First && Platform <= SP_StaticPlatform_Last)
+		{
+			return FStaticShaderPlatformNames::Get().GetShaderPlatform(Platform).ToString();
+		}
+		else
+		{
+			checkf(0, TEXT("Unknown EShaderPlatform %d!"), (int32)Platform);
+			return TEXT("");
+		}
 	}
 }
 
@@ -1156,6 +1233,10 @@ inline void ParseDataDrivenShaderInfo(const FConfigSection& Section, FDataDriven
 	Info.bSupportsMultiView = GetSectionBool(Section, "bSupportsMultiView");
 	Info.bSupportsMSAA = GetSectionBool(Section, "bSupportsMSAA");
 	Info.bSupports4ComponentUAVReadWrite = GetSectionBool(Section, "bSupports4ComponentUAVReadWrite");
+	Info.bSupportsRenderTargetWriteMask = GetSectionBool(Section, "bSupportsRenderTargetWriteMask");
+	Info.bSupportsRayTracing = GetSectionBool(Section, "bSupportsRayTracing");
+	Info.bSupportsGPUSkinCache = GetSectionBool(Section, "bSupportsGPUSkinCache");
+
 	Info.bTargetsTiledGPU = GetSectionBool(Section, "bTargetsTiledGPU");
 	Info.bNeedsOfflineCompiler = GetSectionBool(Section, "bNeedsOfflineCompiler");
 }
@@ -1183,10 +1264,7 @@ void FDataDrivenShaderPlatformInfo::Initialize()
 				LexFromString(ShaderPlatform, *SectionName.Mid(15));
 				if (ShaderPlatform == EShaderPlatform::SP_NumPlatforms)
 				{
-					if (SectionName.Mid(15) != TEXT("XXX"))
-					{
-						UE_LOG(LogRHI, Warning, TEXT("Found an unknown shader platform %s in a DataDriven ini file"), *SectionName.Mid(15));
-					}
+					UE_LOG(LogRHI, Warning, TEXT("Found an unknown shader platform %s in a DataDriven ini file"), *SectionName.Mid(15));
 					continue;
 				}
 				

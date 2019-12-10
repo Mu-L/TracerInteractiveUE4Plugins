@@ -126,6 +126,13 @@ struct CORE_API FGenericPlatformProcess
 		 */
 		FSemaphore(const FString& InName);
 
+		/**
+		 * Creates and initializes a new instance with the specified name.
+		 *
+		 * @param InName name of the semaphore (all processes should use the same)
+		 */
+		FSemaphore(const TCHAR* InName);
+
 		/** Virtual destructor. */
 		virtual ~FSemaphore() { };
 
@@ -268,14 +275,14 @@ struct CORE_API FGenericPlatformProcess
 	 * Generates the path to the specified application or game.
 	 *
 	 * The application must reside in the Engine's binaries directory. The returned path is relative to this
-	 * executable's directory.For example, calling this method with "UE4" and EBuildConfigurations::Debug
+	 * executable's directory.For example, calling this method with "UE4" and EBuildConfiguration::Debug
 	 * on Windows 64-bit will generate the path "../Win64/UE4Editor-Win64-Debug.exe"
 	 *
 	 * @param AppName The name of the application or game.
 	 * @param BuildConfiguration The build configuration of the game.
 	 * @return The generated application path.
 	 */
-	static FString GenerateApplicationPath( const FString& AppName, EBuildConfigurations::Type BuildConfiguration);
+	static FString GenerateApplicationPath( const FString& AppName, EBuildConfiguration BuildConfiguration);
 
 	/**
 	 * Return the prefix of dynamic library (e.g. lib)
@@ -391,7 +398,7 @@ struct CORE_API FGenericPlatformProcess
 	 *
 	 * WaitAndFork stalls the invoking process and forks child processes when signals are sent to it from an external source.
 	 * Forked child processes will provide a return value of EWaitAndForkResult::Child, while the parent process
-	 * will not return until GIsRequestingExit is true (EWaitAndForkResult::Parent) or there was an error (EWaitAndForkResult::Error)
+	 * will not return until IsEngineExitRequested() is true (EWaitAndForkResult::Parent) or there was an error (EWaitAndForkResult::Error)
 	 * The signal the parent process expects is platform-specific (i.e. SIGRTMIN+1 on Linux). 
 	 */
 	static EWaitAndForkResult WaitAndFork();
@@ -580,8 +587,19 @@ struct CORE_API FGenericPlatformProcess
 	 * @param Name name (so we can use it across processes).
 	 * @param bCreate If true, the function will try to create, otherwise will try to open existing.
 	 * @param MaxLocks Maximum amount of locks that the semaphore can have (pass 1 to make it act as mutex).
+	 * @return Pointer to heap allocated semaphore object. Caller is responsible for deletion.
 	 */
 	static FSemaphore* NewInterprocessSynchObject(const FString& Name, bool bCreate, uint32 MaxLocks = 1);
+
+	/**
+	 * Creates or opens an interprocess synchronization object.
+	 *
+	 * @param Name name (so we can use it across processes).
+	 * @param bCreate If true, the function will try to create, otherwise will try to open existing.
+	 * @param MaxLocks Maximum amount of locks that the semaphore can have (pass 1 to make it act as mutex).
+	 * @return Pointer to heap allocated semaphore object. Caller is responsible for deletion.
+	 */
+	static FSemaphore* NewInterprocessSynchObject(const TCHAR* Name, bool bCreate, uint32 MaxLocks = 1);
 
 	/**
 	 * Deletes an interprocess synchronization object.
@@ -601,6 +619,16 @@ struct CORE_API FGenericPlatformProcess
 	 * Checks if we're the first instance. An instance can become first if the previous first instance quits before it.
 	 */
 	static bool IsFirstInstance();
+
+	/**
+	 * Tears down allocated process resources.
+	 */
+	static void TearDown();
+
+	/**
+	 * force skip calling FThreadStats::WaitForStats()
+	 */
+	static bool SkipWaitForStats() { return false; }
 };
 
 

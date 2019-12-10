@@ -121,21 +121,18 @@ void FHoloLensTargetPlatform::GetAllTextureFormats(TArray<FName>& OutFormats) co
 }
 
 static FName NAME_PCD3D_ES3_1(TEXT("PCD3D_ES31"));
-static FName NAME_PCD3D_SM4(TEXT("PCD3D_SM4"));
 static FName NAME_PCD3D_SM5(TEXT("PCD3D_SM5"));
 
 void FHoloLensTargetPlatform::GetAllPossibleShaderFormats(TArray<FName>& OutFormats) const
 {
 	OutFormats.AddUnique(NAME_PCD3D_ES3_1);
 	OutFormats.AddUnique(NAME_PCD3D_SM5);
-	OutFormats.AddUnique(NAME_PCD3D_SM4);
 }
 
 void FHoloLensTargetPlatform::GetAllTargetedShaderFormats(TArray<FName>& OutFormats) const
 {
 	OutFormats.AddUnique(NAME_PCD3D_ES3_1);
 	OutFormats.AddUnique(NAME_PCD3D_SM5);
-	OutFormats.AddUnique(NAME_PCD3D_SM4);
 }
 
 #endif
@@ -158,9 +155,9 @@ void FHoloLensTargetPlatform::OnDeviceDetected(const FHoloLensDeviceInfo& Info)
 	}
 }
 
-bool FHoloLensTargetPlatform::SupportsBuildTarget(EBuildTargets::Type BuildTarget) const
+bool FHoloLensTargetPlatform::SupportsBuildTarget(EBuildTargetType TargetType) const
 {
-	return BuildTarget == EBuildTargets::Game;
+	return TargetType == EBuildTargetType::Game;
 }
 
 bool FHoloLensTargetPlatform::IsSdkInstalled(bool bProjectHasCode, FString& OutDocumentationPath) const
@@ -171,7 +168,7 @@ bool FHoloLensTargetPlatform::IsSdkInstalled(bool bProjectHasCode, FString& OutD
 	return SDKVersions.Num() > 0;
 }
 
-int32 FHoloLensTargetPlatform::CheckRequirements(const FString& ProjectPath, bool bProjectHasCode, FString& OutTutorialPath, FString& OutDocumentationPath, FText& CustomizedLogMessage) const
+int32 FHoloLensTargetPlatform::CheckRequirements(bool bProjectHasCode, EBuildConfiguration Configuration, bool bRequiresAssetNativization, FString& OutTutorialPath, FString& OutDocumentationPath, FText& CustomizedLogMessage) const
 {
 	OutDocumentationPath = TEXT("Platforms/HoloLens/GettingStarted");
 	FString LocalErrors;

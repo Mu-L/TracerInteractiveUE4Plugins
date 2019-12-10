@@ -748,7 +748,7 @@ namespace UnrealBuildTool
 			// @todo: Cache this kind of things since every target will re-do this work!
 			foreach (PluginInfo PI in AvailablePlugins)
 			{
-				if (!Plugins.IsPluginEnabledForProject(PI, Project, UnrealTargetPlatform.IOS, UnrealTargetConfiguration.Development, TargetRules.TargetType.Game))
+				if (!Plugins.IsPluginEnabledForTarget(PI, Project, UnrealTargetPlatform.IOS, UnrealTargetConfiguration.Development, TargetRules.TargetType.Game))
 				{
 					continue;
 				}
@@ -777,7 +777,7 @@ namespace UnrealBuildTool
 				}
 			}
 
-			string ShellScript = "set -e\\n\\n" +
+			string ShellScript = "set -e\\n\\nIFS=$'\\\\n'\\n\\n" +
 				"if [ $PLATFORM_NAME = iphoneos ] || [ $PLATFORM_NAME = tvos ]; then \\n" +
 				"\\tFRAMEWORK_DIR=$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH/Frameworks\\n" +
 				FrameworkScript.ToString() + 

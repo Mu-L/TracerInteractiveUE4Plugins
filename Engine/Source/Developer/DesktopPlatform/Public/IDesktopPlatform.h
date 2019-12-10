@@ -58,7 +58,19 @@ public:
 	}
 };
 
+/**
+ * Information about a target supported by a project
+ */
+struct FTargetInfo
+{
+	FString Name;
+	FString Path;
+	EBuildTargetType Type;
+};
 
+/**
+ * Interface for functionality supported by desktop platforms
+ */
 class IDesktopPlatform
 {
 public:
@@ -387,6 +399,19 @@ public:
 	*/
 	virtual bool IsUnrealBuildToolRunning() = 0;
 
+	/**
+	 * Gets information about the build targets supported by a particular project.
+	 *
+	 * @return Array of TargetInfo objects
+	 */
+	virtual const TArray<FTargetInfo>& GetTargetsForProject(const FString& ProjectFile) const = 0;
+
+	/**
+	 * Gets information about the build targets supported by the current project.
+	 *
+	 * @return Array of TargetInfo objects
+	 */
+	virtual const TArray<FTargetInfo>& GetTargetsForCurrentProject() const = 0;
 
 	/**
 	* Gets the path to the solution for the current project
@@ -394,6 +419,7 @@ public:
 	* @param OutSolutionPath	Receives the string 
 	* @return True if a solution file exists and OutSolutionPath has been updated
 	*/
+	UE_DEPRECATED(4.24, "The IDesktopPlatform::GetSolutionPath() method has been deprecated. Use the ISourceCodeAccessor interface for cross-IDE support instead.")
 	virtual bool GetSolutionPath(FString& OutSolutionPath) = 0;
 
 	/**

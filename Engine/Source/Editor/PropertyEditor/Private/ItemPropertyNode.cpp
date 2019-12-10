@@ -20,14 +20,7 @@ FItemPropertyNode::~FItemPropertyNode(void)
 
 }
 
-/**
- * Calculates the memory address for the data associated with this item's property.  This is typically the value of a UProperty or a UObject address.
- *
- * @param	StartAddress	the location to use as the starting point for the calculation; typically the address of the object that contains this property.
- *
- * @return	a pointer to a UProperty value or UObject.  (For dynamic arrays, you'd cast this value to an FArray*)
- */
-uint8* FItemPropertyNode::GetValueBaseAddress( uint8* StartAddress )
+uint8* FItemPropertyNode::GetValueBaseAddress(uint8* StartAddress, bool bIsSparseData)
 {
 	UProperty* MyProperty = GetProperty();
 	if( MyProperty && ParentNodeWeakPtr.IsValid())
@@ -36,7 +29,7 @@ uint8* FItemPropertyNode::GetValueBaseAddress( uint8* StartAddress )
 		USetProperty* OuterSetProp = Cast<USetProperty>(MyProperty->GetOuter());
 		UMapProperty* OuterMapProp = Cast<UMapProperty>(MyProperty->GetOuter());
 
-		uint8* ValueBaseAddress = ParentNode->GetValueBaseAddress(StartAddress);
+		uint8* ValueBaseAddress = ParentNode->GetValueBaseAddress(StartAddress, bIsSparseData);
 
 		if (OuterArrayProp != nullptr)
 		{
@@ -73,7 +66,7 @@ uint8* FItemPropertyNode::GetValueBaseAddress( uint8* StartAddress )
 		}
 		else
 		{
-			uint8* ValueAddress = ParentNode->GetValueAddress(StartAddress);
+			uint8* ValueAddress = ParentNode->GetValueAddress(StartAddress, bIsSparseData);
 			if (ValueAddress != nullptr && ParentNode->GetProperty() != MyProperty)
 			{
 				// if this is not a fixed size array (in which the parent property and this property are the same), we need to offset from the property (otherwise, the parent already did that for us)
@@ -91,17 +84,9 @@ uint8* FItemPropertyNode::GetValueBaseAddress( uint8* StartAddress )
 	return nullptr;
 }
 
-/**
- * Calculates the memory address for the data associated with this item's value.  For most properties, identical to GetValueBaseAddress.  For items corresponding
- * to dynamic array elements, the pointer returned will be the location for that element's data. 
- *
- * @param	StartAddress	the location to use as the starting point for the calculation; typically the address of the object that contains this property.
- *
- * @return	a pointer to a UProperty value or UObject.  (For dynamic arrays, you'd cast this value to whatever type is the Inner for the dynamic array)
- */
-uint8* FItemPropertyNode::GetValueAddress( uint8* StartAddress )
+uint8* FItemPropertyNode::GetValueAddress(uint8* StartAddress, bool bIsSparseData)
 {
-	uint8* Result = GetValueBaseAddress(StartAddress);
+	uint8* Result = GetValueBaseAddress(StartAddress, bIsSparseData);
 
 	UProperty* MyProperty = GetProperty();
 
@@ -313,11 +298,8 @@ void FItemPropertyNode::InitChildNodes()
 		for (TFieldIterator<UProperty> It(StructProperty->Struct); It; ++It)
 		{
 			UProperty* StructMember = *It;
-			static const FName Name_InlineEditConditionToggle("InlineEditConditionToggle");
-			const bool bOnlyShowAsInlineEditCondition = StructMember->HasMetaData(Name_InlineEditConditionToggle);
-			const bool bShowIfEditableProperty = StructMember->HasAnyPropertyFlags(CPF_Edit);
-			const bool bShowIfDisableEditOnInstance = !StructMember->HasAnyPropertyFlags(CPF_DisableEditOnInstance) || bShouldShowDisableEditOnInstance;
-			if (bShouldShowHiddenProperties || (bShowIfEditableProperty && !bOnlyShowAsInlineEditCondition && bShowIfDisableEditOnInstance))
+			
+			if (PropertyEditorHelpers::ShouldBeVisible(*this, StructMember))
 			{
 				StructMembers.Add(StructMember);
 			}
@@ -327,7 +309,7 @@ void FItemPropertyNode::InitChildNodes()
 
 		for (UProperty* StructMember : StructMembers)
 		{
-			TSharedPtr<FItemPropertyNode> NewItemNode( new FItemPropertyNode );//;//CreatePropertyItem(StructMember,INDEX_NONE,this);
+			TSharedPtr<FItemPropertyNode> NewItemNode( new FItemPropertyNode );
 		
 			FPropertyNodeInitParams InitParams;
 			InitParams.ParentNode = SharedThis(this);
@@ -532,6 +514,13 @@ FText FItemPropertyNode::GetDisplayName() const
 			
 			// Sets and maps do not have a display index.
 			UProperty* ParentProperty = ParentNode->GetProperty();
+
+			// Also handle UArray's having the ArraySizeEnum entry...
+			if (ArraySizeEnum == nullptr && Cast<UArrayProperty>(ParentProperty) != nullptr && ParentProperty->HasMetaData(NAME_ArraySizeEnum))
+			{
+				ArraySizeEnum = FindObject<UEnum>(NULL, *ParentProperty->GetMetaData(NAME_ArraySizeEnum));
+			}
+
 			if (Cast<USetProperty>(ParentProperty) == nullptr &&  Cast<UMapProperty>(ParentProperty) == nullptr)
 			{
 				// This item is a member of an array, its display name is its index 

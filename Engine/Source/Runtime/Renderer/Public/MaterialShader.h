@@ -20,18 +20,6 @@
 
 template<typename TBufferStruct> class TUniformBufferRef;
 
-template<typename ParameterType> 
-struct TUniformParameter
-{
-	int32 Index;
-	ParameterType ShaderParameter;
-	friend FArchive& operator<<(FArchive& Ar,TUniformParameter<ParameterType>& P)
-	{
-		return Ar << P.Index << P.ShaderParameter;
-	}
-};
-
-
 /**
  * Debug information related to uniform expression sets.
  */
@@ -43,6 +31,7 @@ public:
 	int32 NumScalarExpressions;
 	int32 Num2DTextureExpressions;
 	int32 NumCubeTextureExpressions;
+	int32 Num2DArrayTextureExpressions;
 	int32 NumVolumeTextureExpressions;
 	int32 NumVirtualTextureExpressions;
 
@@ -51,6 +40,7 @@ public:
 		, NumScalarExpressions(0)
 		, Num2DTextureExpressions(0)
 		, NumCubeTextureExpressions(0)
+		, Num2DArrayTextureExpressions(0)
 		, NumVolumeTextureExpressions(0)
 		, NumVirtualTextureExpressions(0)
 	{
@@ -67,6 +57,7 @@ public:
 		NumVectorExpressions = InUniformExpressionSet.UniformVectorExpressions.Num();
 		NumScalarExpressions = InUniformExpressionSet.UniformScalarExpressions.Num();
 		Num2DTextureExpressions = InUniformExpressionSet.Uniform2DTextureExpressions.Num();
+		Num2DArrayTextureExpressions = InUniformExpressionSet.Uniform2DArrayTextureExpressions.Num();
 		NumCubeTextureExpressions = InUniformExpressionSet.UniformCubeTextureExpressions.Num();
 		NumVolumeTextureExpressions = InUniformExpressionSet.UniformVolumeTextureExpressions.Num();
 		NumVirtualTextureExpressions = InUniformExpressionSet.UniformVirtualTextureExpressions.Num();
@@ -79,6 +70,7 @@ public:
 			&& NumScalarExpressions == InUniformExpressionSet.UniformScalarExpressions.Num()
 			&& Num2DTextureExpressions == InUniformExpressionSet.Uniform2DTextureExpressions.Num()
 			&& NumCubeTextureExpressions == InUniformExpressionSet.UniformCubeTextureExpressions.Num()
+			&& Num2DArrayTextureExpressions == InUniformExpressionSet.Uniform2DArrayTextureExpressions.Num()
 			&& NumVolumeTextureExpressions == InUniformExpressionSet.UniformVolumeTextureExpressions.Num()
 			&& NumVirtualTextureExpressions == InUniformExpressionSet.UniformVirtualTextureExpressions.Num();
 	}
@@ -91,6 +83,7 @@ inline FArchive& operator<<(FArchive& Ar, FDebugUniformExpressionSet& DebugExpre
 	Ar << DebugExpressionSet.NumScalarExpressions;
 	Ar << DebugExpressionSet.Num2DTextureExpressions;
 	Ar << DebugExpressionSet.NumCubeTextureExpressions;
+	Ar << DebugExpressionSet.Num2DArrayTextureExpressions;
 	Ar << DebugExpressionSet.NumVolumeTextureExpressions;
 	Ar << DebugExpressionSet.NumVirtualTextureExpressions;
 	return Ar;
@@ -135,7 +128,7 @@ public:
 		if (View.bShouldBindInstancedViewUB && View.Family->Views.Num() > 0)
 		{
 			// When drawing the left eye in a stereo scene, copy the right eye view values into the instanced view uniform buffer.
-			const EStereoscopicPass StereoPassIndex = (View.StereoPass != eSSP_FULL) ? eSSP_RIGHT_EYE : eSSP_FULL;
+			const EStereoscopicPass StereoPassIndex = IStereoRendering::IsStereoEyeView(View) ? eSSP_RIGHT_EYE : eSSP_FULL;
 
 			const FSceneView& InstancedView = View.Family->GetStereoEyeView(StereoPassIndex);
 			const auto& InstancedViewUniformBufferParameter = GetUniformBufferParameter<FInstancedViewUniformShaderParameters>();
@@ -163,6 +156,17 @@ public:
 		const FMaterialRenderProxy* MaterialRenderProxy, 
 		const FMaterial& Material,
 		const FSceneView& View, 
+		const TUniformBufferRef<FViewUniformShaderParameters>& ViewUniformBuffer,
+		ESceneTextureSetupMode SceneTextureSetupMode);
+
+	/** Like SetParameters above, but takes a FViewInfo rather than FSceneView, which allows additional per-view parameters to be set */
+	template< typename TRHIShader >
+	void SetParameters(
+		FRHICommandList& RHICmdList,
+		TRHIShader* ShaderRHI,
+		const FMaterialRenderProxy* MaterialRenderProxy,
+		const FMaterial& Material,
+		const FViewInfo& View,
 		const TUniformBufferRef<FViewUniformShaderParameters>& ViewUniformBuffer,
 		ESceneTextureSetupMode SceneTextureSetupMode);
 

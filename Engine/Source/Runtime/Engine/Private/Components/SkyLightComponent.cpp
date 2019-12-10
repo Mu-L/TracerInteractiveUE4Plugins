@@ -71,9 +71,11 @@ constexpr EPixelFormat SKYLIGHT_CUBEMAP_FORMAT = PF_FloatRGBA;
 
 void FSkyTextureCubeResource::InitRHI()
 {
-	if (GetFeatureLevel() >= ERHIFeatureLevel::SM4 || GSupportsRenderTargetFormat_PF_FloatRGBA)
+	if (GetFeatureLevel() >= ERHIFeatureLevel::SM5 || GSupportsRenderTargetFormat_PF_FloatRGBA)
 	{
 		FRHIResourceCreateInfo CreateInfo;
+		CreateInfo.DebugName = TEXT("SkyTextureCube");
+		
 		checkf(FMath::IsPowerOfTwo(Size), TEXT("Size of SkyTextureCube must be a power of two; size is %d"), Size);
 		TextureCubeRHI = RHICreateTextureCube(Size, Format, NumMips, 0, CreateInfo);
 		TextureRHI = TextureCubeRHI;
@@ -172,6 +174,8 @@ FSkyLightSceneProxy::FSkyLightSceneProxy(const USkyLightComponent* InLightCompon
 	, bHasStaticLighting(InLightComponent->HasStaticLighting())
 	, bCastVolumetricShadow(InLightComponent->bCastVolumetricShadow)
 	, bCastRayTracedShadow(InLightComponent->bCastRaytracedShadow)
+	, bAffectReflection(InLightComponent->bAffectReflection)
+	, bAffectGlobalIllumination(InLightComponent->bAffectGlobalIllumination)
 	, OcclusionCombineMode(InLightComponent->OcclusionCombineMode)
 	, IndirectLightingIntensity(InLightComponent->IndirectLightingIntensity)
 	, VolumetricScatteringIntensity(FMath::Max(InLightComponent->VolumetricScatteringIntensity, 0.0f))
@@ -185,6 +189,7 @@ FSkyLightSceneProxy::FSkyLightSceneProxy(const USkyLightComponent* InLightCompon
 	, IsDirtyImportanceSamplingData(true)
 #endif
 	, LightColor(FLinearColor(InLightComponent->LightColor) * InLightComponent->Intensity)
+	, bMovable(InLightComponent->IsMovable())
 {
 	const FSHVectorRGB3* InIrradianceEnvironmentMap = &InLightComponent->IrradianceEnvironmentMap;
 	const FSHVectorRGB3* BlendDestinationIrradianceEnvironmentMap = &InLightComponent->BlendDestinationIrradianceEnvironmentMap;
@@ -233,7 +238,9 @@ USkyLightComponent::USkyLightComponent(const FObjectInitializer& ObjectInitializ
 	BlendDestinationAverageBrightness = 1.0f;
 	bCastVolumetricShadow = true;
 	bCastRaytracedShadow = false;
-	SamplesPerPixel = 1;
+	bAffectReflection = true;
+	bAffectGlobalIllumination = true;
+	SamplesPerPixel = 4;
 }
 
 #if RHI_RAYTRACING
@@ -255,7 +262,7 @@ FSkyLightSceneProxy* USkyLightComponent::CreateSceneProxy() const
 
 void USkyLightComponent::SetCaptureIsDirty()
 { 
-	if (bVisible && bAffectsWorld)
+	if (GetVisibleFlag() && bAffectsWorld)
 	{
 		FScopeLock Lock(&SkyCapturesToUpdateLock);
 
@@ -312,7 +319,7 @@ void USkyLightComponent::SanitizeCubemapSize()
 
 void USkyLightComponent::SetBlendDestinationCaptureIsDirty()
 { 
-	if (bVisible && bAffectsWorld && BlendDestinationCubemap)
+	if (GetVisibleFlag() && bAffectsWorld && BlendDestinationCubemap)
 	{
 		SkyCapturesToUpdateBlendDestinations.AddUnique(this); 
 
@@ -341,7 +348,7 @@ void USkyLightComponent::CreateRenderState_Concurrent()
 
 	const bool bIsValid = SourceType != SLS_SpecifiedCubemap || Cubemap != NULL;
 
-	if (bAffectsWorld && bVisible && !bHidden && bIsValid)
+	if (bAffectsWorld && GetVisibleFlag() && !bHidden && bIsValid)
 	{
 		// Create the light's scene proxy.
 		SceneProxy = CreateSceneProxy();
@@ -375,7 +382,7 @@ void USkyLightComponent::PostLoad()
 	SanitizeCubemapSize();
 
 	// All components are queued for update on creation by default, remove if needed
-	if (!bVisible || HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject))
+	if (!GetVisibleFlag() || HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject))
 	{
 		FScopeLock Lock(&SkyCapturesToUpdateLock);
 		SkyCapturesToUpdate.Remove(this);
@@ -474,15 +481,14 @@ void USkyLightComponent::DestroyRenderState_Concurrent()
 void USkyLightComponent::PreEditChange(UProperty* PropertyAboutToChange)
 {
 	Super::PreEditChange(PropertyAboutToChange);
-
 	PreEditCubemapResolution = CubemapResolution;
 }
 
 void USkyLightComponent::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
-	if (PropertyChangedEvent.Property && 
-		PropertyChangedEvent.Property->GetFName() == GET_MEMBER_NAME_CHECKED(USkyLightComponent, CubemapResolution))
+	if (PropertyChangedEvent.Property && PropertyChangedEvent.Property->GetFName() == GET_MEMBER_NAME_CHECKED(USkyLightComponent, CubemapResolution))
 	{
+		// Simply rounds the cube map size to nearest power of two. Occasionally checks for out of video mem.
 		SanitizeCubemapSize();
 	}
 	Super::PostEditChangeProperty(PropertyChangedEvent);
@@ -523,7 +529,7 @@ void USkyLightComponent::CheckForErrors()
 {
 	AActor* Owner = GetOwner();
 
-	if (Owner && bVisible && bAffectsWorld)
+	if (Owner && GetVisibleFlag() && bAffectsWorld)
 	{
 		UWorld* ThisWorld = Owner->GetWorld();
 		bool bMultipleFound = false;
@@ -536,7 +542,7 @@ void USkyLightComponent::CheckForErrors()
 
 				if (Component != this 
 					&& !Component->IsPendingKill()
-					&& Component->bVisible
+					&& Component->GetVisibleFlag()
 					&& Component->bAffectsWorld
 					&& Component->GetOwner() 
 					&& ThisWorld->ContainsActor(Component->GetOwner())
@@ -905,7 +911,7 @@ void USkyLightComponent::OnVisibilityChanged()
 {
 	Super::OnVisibilityChanged();
 
-	if (bVisible && !bHasEverCaptured)
+	if (GetVisibleFlag() && !bHasEverCaptured)
 	{
 		// Capture if we are being enabled for the first time
 		SetCaptureIsDirty();

@@ -21,6 +21,7 @@ IMPLEMENT_MODULE(FLiveCodingModule, LiveCoding)
 #define LOCTEXT_NAMESPACE "LiveCodingModule"
 
 bool GIsCompileActive = false;
+bool GHasLoadedPatch = false;
 FString GLiveCodingConsolePath;
 FString GLiveCodingConsoleArguments;
 
@@ -252,6 +253,21 @@ void FLiveCodingModule::Tick()
 		UpdateModules();
 		bUpdateModulesInTick = false;
 	}
+
+	// Needs to happen after updating modules, since "Quick Restart" functionality may try to install patch immediately
+	extern void LppSyncPoint();
+	LppSyncPoint();
+
+	if (GHasLoadedPatch)
+	{
+		OnPatchCompleteDelegate.Broadcast();
+		GHasLoadedPatch = false;
+	}
+}
+
+ILiveCodingModule::FOnPatchCompleteDelegate& FLiveCodingModule::GetOnPatchCompleteDelegate()
+{
+	return OnPatchCompleteDelegate;
 }
 
 bool FLiveCodingModule::StartLiveCoding()
@@ -293,7 +309,7 @@ bool FLiveCodingModule::StartLiveCoding()
 		// Build the command line
 		FString Arguments;
 		Arguments += FString::Printf(TEXT("%s"), FPlatformMisc::GetUBTPlatform());
-		Arguments += FString::Printf(TEXT(" %s"), EBuildConfigurations::ToString(FApp::GetBuildConfiguration()));
+		Arguments += FString::Printf(TEXT(" %s"), LexToString(FApp::GetBuildConfiguration()));
 		Arguments += FString::Printf(TEXT(" -TargetType=%s"), FPlatformMisc::GetUBTTarget());
 		if(SourceProject.Len() > 0)
 		{
@@ -346,7 +362,7 @@ void FLiveCodingModule::UpdateModules()
 	{
 #if IS_MONOLITHIC
 		wchar_t FullFilePath[WINDOWS_MAX_PATH];
-		verify(GetModuleFileName(hInstance, FullFilePath, ARRAY_COUNT(FullFilePath)));
+		verify(GetModuleFileName(hInstance, FullFilePath, UE_ARRAY_COUNT(FullFilePath)));
 		LppEnableModule(FullFilePath);
 #else
 		TArray<FModuleStatus> ModuleStatuses;

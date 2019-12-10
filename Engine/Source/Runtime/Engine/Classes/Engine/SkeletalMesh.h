@@ -25,6 +25,8 @@
 #include "SkeletalMeshLODSettings.h"
 #include "Animation/NodeMappingProviderInterface.h"
 #include "Animation/SkinWeightProfile.h"
+#include "Engine/StreamableRenderAsset.h"
+#include "RenderAssetUpdate.h"
 
 #include "SkeletalMesh.generated.h"
 
@@ -44,6 +46,7 @@ class FSkeletalMeshLODModel;
 class FSkeletalMeshLODRenderData;
 class FSkinWeightVertexBuffer;
 struct FSkinWeightProfileInfo;
+class FSkeletalMeshUpdate;
 
 #if WITH_APEX_CLOTHING
 
@@ -160,7 +163,10 @@ struct FSkeletalMeshLODInfo
 	UPROPERTY(EditAnywhere, Category=SkeletalMeshLODInfo, meta=(DisplayName="LOD Hysteresis"))
 	float LODHysteresis;
 
-	/** Mapping table from this LOD's materials to the USkeletalMesh materials array. */
+	/** Mapping table from this LOD's materials to the USkeletalMesh materials array.
+	 * section index is the key
+	 * remapped material index is the value, can be INDEX_NONE for no remapping
+	 */
 	UPROPERTY()
 	TArray<int32> LODMaterialMap;
 
@@ -173,6 +179,10 @@ struct FSkeletalMeshLODInfo
 	UPROPERTY()
 	TArray<FName> RemovedBones_DEPRECATED;
 #endif
+
+	/** build settings to apply when building render data. */
+	UPROPERTY(EditAnywhere, Category = BuildSettings)
+	FSkeletalMeshBuildSettings BuildSettings;
 
 	/** Reduction settings to apply when building render data. */
 	UPROPERTY(EditAnywhere, Category = ReductionSettings)
@@ -227,6 +237,13 @@ struct FSkeletalMeshLODInfo
 	 */
 	UPROPERTY()
 	uint8 bImportWithBaseMesh:1;
+
+	//Temporary build GUID data
+	//We use this GUID to store the LOD Key so we can now if the LOD need to be rebuild
+	//This GUID is set when we Cache the render data (build function)
+	FGuid BuildGUID;
+
+	ENGINE_API FGuid ComputeDeriveDataCacheKey(const FSkeletalMeshLODGroupSettings* SkeletalMeshLODGroupSettings);
 #endif
 
 	FSkeletalMeshLODInfo()
@@ -243,6 +260,9 @@ struct FSkeletalMeshLODInfo
 		, bImportWithBaseMesh(false)
 #endif
 	{
+#if WITH_EDITORONLY_DATA
+		BuildGUID.Invalidate();
+#endif
 	}
 
 };
@@ -417,6 +437,7 @@ struct FSkeletalMaterial
 #if WITH_EDITOR
 /** delegate type for pre skeletal mesh build events */
 DECLARE_MULTICAST_DELEGATE_OneParam(FOnPostMeshCache, class USkeletalMesh*);
+
 #endif
 
 #if WITH_EDITORONLY_DATA
@@ -450,7 +471,7 @@ namespace NSSkeletalMeshSourceFileLabels
  * @see https://docs.unrealengine.com/latest/INT/Engine/Content/Types/SkeletalMeshes/
  */
 UCLASS(hidecategories=Object, BlueprintType)
-class ENGINE_API USkeletalMesh : public UObject, public IInterface_CollisionDataProvider, public IInterface_AssetUserData, public INodeMappingProviderInterface
+class ENGINE_API USkeletalMesh : public UStreamableRenderAsset, public IInterface_CollisionDataProvider, public IInterface_AssetUserData, public INodeMappingProviderInterface
 {
 	GENERATED_UCLASS_BODY()
 
@@ -595,6 +616,18 @@ public:
 	FPerPlatformBool DisableBelowMinLodStripping;
 
 #if WITH_EDITORONLY_DATA
+	/** Whether we can stream the LODs of this mesh */
+	UPROPERTY(EditAnywhere, Category=LODSettings, meta=(DisplayName="Stream LODs"))
+	FPerPlatformBool bSupportLODStreaming;
+
+	/** Maximum number of LODs that can be streamed */
+	UPROPERTY(EditAnywhere, Category=LODSettings)
+	FPerPlatformInt MaxNumStreamedLODs;
+
+	/** Maximum number of LODs below min LOD level that can be saved to optional pak (currently, need to be either 0 or > num of LODs below MinLod) */
+	UPROPERTY(EditAnywhere, Category=LODSettings)
+	FPerPlatformInt MaxNumOptionalLODs;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, AssetRegistrySearchable, BlueprintSetter = SetLODSettings, Category = LODSettings)
 	USkeletalMeshLODSettings* LODSettings;
 
@@ -610,12 +643,12 @@ public:
 	TEnumAsByte<EAxis::Type> SkelMirrorFlipAxis;
 
 	/** If true, use 32 bit UVs. If false, use 16 bit UVs to save memory */
-	UPROPERTY(EditAnywhere, Category=Mesh)
-	uint8 bUseFullPrecisionUVs:1;
+	UPROPERTY()
+	uint8 bUseFullPrecisionUVs_DEPRECATED :1;
 
 	/** If true, tangents will be stored at 16 bit vs 8 bit precision */
-	UPROPERTY(EditAnywhere, Category = Mesh)
-	uint8 bUseHighPrecisionTangentBasis : 1;
+	UPROPERTY()
+	uint8 bUseHighPrecisionTangentBasis_DEPRECATED : 1;
 
 	/** true if this mesh has ever been simplified with Simplygon. */
 	UPROPERTY()
@@ -850,6 +883,11 @@ protected:
 	FOnMeshChanged OnMeshChanged;
 #endif
 
+	TRefCountPtr<FSkeletalMeshUpdate> PendingUpdate;
+
+	friend struct FSkeletalMeshUpdateContext;
+	friend class FSkeletalMeshUpdate;
+
 private:
 	/** 
 	 *	Array of named socket locations, set up in editor and used as a shortcut instead of specifying 
@@ -872,6 +910,10 @@ public:
 	*/
 	void ReleaseResources();
 
+	/**
+	* Flush current render state
+	*/
+	void FlushRenderState();
 
 	/** Release CPU access version of buffer */
 	void ReleaseCPUResources();
@@ -902,6 +944,34 @@ public:
 
 	//~ Begin UObject Interface.
 #if WITH_EDITOR
+private:
+	int32 PostEditChangeStackCounter;
+public:
+	//We want to avoid calling post edit change multiple time during import and build process.
+
+	/*
+	 * This function will increment the PostEditChange stack counter.
+	 * It will return the stack counter value. (the value should be >= 1)
+	 */
+	int32 StackPostEditChange();
+	
+	/*
+	 * This function will decrement the stack counter.
+	 * It will return the stack counter value. (the value should be >= 0)
+	 */
+	int32 UnStackPostEditChange();
+
+	int32 GetPostEditChangeStackCounter() { return PostEditChangeStackCounter; }
+	void SetPostEditChangeStackCounter(int32 InPostEditChangeStackCounter)
+	{
+		PostEditChangeStackCounter = InPostEditChangeStackCounter;
+	}
+
+	/**
+	* If derive data cache key do not match, regenerate derived data and re-create any render state based on that.
+	*/
+	void Build();
+
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 
 	virtual void PostEditUndo() override;
@@ -919,9 +989,36 @@ public:
 	virtual FString GetDesc() override;
 	virtual FString GetDetailedInfoInternal() const override;
 	virtual void GetResourceSizeEx(FResourceSizeEx& CumulativeResourceSize) override;
-	static void AddReferencedObjects(UObject* InThis, FReferenceCollector& Collector);
 	virtual void GetPreloadDependencies(TArray<UObject*>& OutDeps) override;
 	//~ End UObject Interface.
+
+	//~ Begin UStreamableRenderAsset Interface.
+	virtual int32 GetLODGroupForStreaming() const final override;
+	virtual int32 GetNumMipsForStreaming() const final override;
+	virtual int32 GetNumNonStreamingMips() const final override;
+	virtual int32 CalcNumOptionalMips() const final override;
+	virtual int32 CalcCumulativeLODSize(int32 NumLODs) const final override;
+	virtual bool GetMipDataFilename(const int32 MipIndex, FString& OutBulkDataFilename) const final override;
+	virtual bool IsReadyForStreaming() const final override;
+	virtual int32 GetNumResidentMips() const final override;
+	virtual int32 GetNumRequestedMips() const final override;
+	virtual bool CancelPendingMipChangeRequest() final override;
+	virtual bool HasPendingUpdate() const final override;
+	virtual bool IsPendingUpdateLocked() const final override;
+	virtual bool StreamOut(int32 NewMipCount) final override;
+	virtual bool StreamIn(int32 NewMipCount, bool bHighPrio) final override;
+	virtual bool UpdateStreamingStatus(bool bWaitForMipFading = false) final override;
+	//~ End UStreamableRenderAsset Interface.
+
+	void LinkStreaming();
+	void UnlinkStreaming();
+
+	/**
+	* Cancels any pending static mesh streaming actions if possible.
+	* Returns when no more async loading requests are in flight.
+	*/
+	static void CancelAllPendingStreamingActions();
+
 
 	/** Setup-only routines - not concerned with the instance. */
 
@@ -1119,6 +1216,14 @@ private:
 public:
 	/** Get multicast delegate broadcast post to mesh data caching */
 	FOnPostMeshCache& OnPostMeshCached() { return PostMeshCached; }
+
+	/**
+	* Force the creation of a new GUID use to build the derive data cache key.
+	* Next time a build happen the whole skeletal mesh will be rebuild.
+	* Use this when you change stuff not in the skeletal mesh ddc key, like the geometry (import, re-import)
+	* Every big data should not be in the ddc key and should use this function, because its slow to create a key with big data.
+	*/
+	void InvalidateDeriveDataCacheGUID();
 #endif 
 
 private:
@@ -1130,16 +1235,6 @@ private:
 
 	/** Utility function to help with building the combined socket list */
 	bool IsSocketOnMesh( const FName& InSocketName ) const;
-
-	/**
-	* Flush current render state
-	*/
-	void FlushRenderState();
-
-	/**
-	* Create a new GUID for the source Model data, regenerate derived data and re-create any render state based on that.
-	*/
-	void InvalidateRenderData();
 
 #if WITH_EDITORONLY_DATA
 	/**
@@ -1243,7 +1338,16 @@ public:
 	/* 
 	 * Returns total number of LOD
 	 */
-	int32 GetLODNum() const { return LODInfo.Num();  }
+	int32 GetLODNum() const 
+	{ 
+#if WITH_EDITOR
+		if (bSupportLODStreaming.Default || bSupportLODStreaming.PerPlatform.FindKey(true))
+		{
+			check(LODInfo.Num() <= MAX_MESH_LOD_COUNT); 
+		}
+#endif
+		return LODInfo.Num();  
+	}
 
 public:
 	const TArray<FSkinWeightProfileInfo>& GetSkinWeightProfiles() const { return SkinWeightProfiles; }
@@ -1257,11 +1361,17 @@ public:
 	/** Releases all allocated Skin Weight Profile resources, assumes none are currently in use */
 	void ReleaseSkinWeightProfileResources();
 
+#if WITH_EDITORONLY_DATA
+	/*Transient data use when we postload an old asset to use legacy ddc key, it is turn off so if the user change the asset it go back to the latest ddc code*/
+	bool UseLegacyMeshDerivedDataKey = false;
+#endif
+
 protected:
 	/** Set of skin weight profiles associated with this mesh */
 	UPROPERTY(EditAnywhere, Category = SkinWeights, EditFixedSize, Meta=(NoResetToDefault))
 	TArray<FSkinWeightProfileInfo> SkinWeightProfiles;
 };
+
 
 /**
  * Refresh Physics Asset Change

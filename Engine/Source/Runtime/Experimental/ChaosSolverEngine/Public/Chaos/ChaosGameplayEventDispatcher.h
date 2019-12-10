@@ -9,6 +9,13 @@
 
 struct FBodyInstance;
 
+namespace Chaos
+{
+	struct FCollisionEventData;
+	struct FBreakingEventData;
+	struct FSleepingEventData;
+}
+
 USTRUCT(BlueprintType)
 struct CHAOSSOLVERENGINE_API FChaosBreakEvent
 {
@@ -71,7 +78,8 @@ class CHAOSSOLVERENGINE_API UChaosGameplayEventDispatcher : public UChaosEventLi
 
 public:
 
-	virtual void TickComponent(float DeltaTime, enum ELevelTick TickType, FActorComponentTickFunction *ThisTickFunction) override;
+	virtual void OnRegister() override;
+	virtual void OnUnregister() override;
 
 private:
 
@@ -107,6 +115,8 @@ private:
 	/** Holds the list of pending legacy notifies that are to be processed */
 	TArray<FCollisionNotifyInfo> PendingCollisionNotifies;
 
+	/** Holds the list of pending legacy sleep/wake notifies */
+	TMap<FBodyInstance*, ESleepEvent> PendingSleepNotifies;
 
 public:
 	/** 
@@ -132,6 +142,17 @@ private:
 	float LastBreakingDataTime = -1.f;
 
 	void DispatchPendingCollisionNotifies();
+	void DispatchPendingWakeNotifies();
+
+	void RegisterChaosEvents();
+	void UnregisterChaosEvents();
+
+	// Chaos Event Handlers
+	void HandleCollisionEvents(const Chaos::FCollisionEventData& CollisionData);
+	void HandleBreakingEvents(const Chaos::FBreakingEventData& BreakingData);
+	void HandleSleepingEvents(const Chaos::FSleepingEventData& SleepingData);
+	void AddPendingSleepingNotify(FBodyInstance* BodyInstance, ESleepEvent SleepEventType);
+
 };
 
 

@@ -8,10 +8,12 @@
 #include "NiagaraShared.h"
 #include "VectorVM.h"
 #include "NiagaraDataInterface.h"
-#include "Chaos/ChaosSolver.h"
+#include "EventsData.h"
 #include "Chaos/ChaosSolverActor.h"
 #include "GeometryCollection/GeometryCollectionActor.h"
 #include "NiagaraDataInterfaceChaosDestruction.generated.h"
+
+struct PhysicsProxyWrapper;
 
 USTRUCT()
 struct FChaosDestructionEvent
@@ -78,7 +80,6 @@ struct FChaosDestructionEvent
 	}
 };
 
-#if INCLUDE_CHAOS
 struct FSolverData
 {
 	FSolverData()
@@ -86,9 +87,8 @@ struct FSolverData
 	{}
 
 	TSharedPtr<FPhysScene_Chaos> PhysScene;
-	Chaos::FPBDRigidsSolver* Solver;
+	Chaos::FPhysicsSolver* Solver;
 };
-#endif
 
 struct FNDIChaosDestruction_InstanceData
 {
@@ -528,13 +528,14 @@ public:
 	EDebugTypeEnum DebugType;
 
 	/* ParticleIndex to process collisionData for */
-	UPROPERTY(EditAnywhere, Category = "Debug Settings", meta = (DisplayName = "ParticleIndex to Process"))
-	int32 ParticleIndexToProcess;
+//	UPROPERTY(EditAnywhere, Category = "Debug Settings", meta = (DisplayName = "ParticleIndex to Process"))
+//	TGeometryParticleHandle<float, 3>* ParticleToProcess;
 
 	//----------------------------------------------------------------------------
 	// UObject Interface
 	virtual void PostInitProperties() override;
 	virtual void PostLoad() override;
+	virtual void BeginDestroy() override;
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
@@ -674,20 +675,13 @@ public:
 		return SolverTime;
 	}
 
-	virtual void ProvidePerInstanceDataForRenderThread(void* DataForRenderThread, void* PerInstanceData, const FGuid& SystemInstance) override;
+	virtual void ProvidePerInstanceDataForRenderThread(void* DataForRenderThread, void* PerInstanceData, const FNiagaraSystemInstanceID& SystemInstance) override;
 protected:
 	virtual bool CopyToInternal(UNiagaraDataInterface* Destination) const override;
 
-#if INCLUDE_CHAOS
 	void ResetInstData(FNDIChaosDestruction_InstanceData* InstData);
 
-	bool GetAllCollisionsAndMaps(FSolverData SolverData,
-								 TArray<Chaos::TCollisionDataExt<float, 3>>& AllCollisionsArray,
-								 TArray<SolverObjectWrapper>& SolverObjectReverseMappingArray,
-								 TArray<int32>& ParticleIndexReverseMappingArray,
-								 TMap<ISolverObjectBase*, TArray<int32>>& AllCollisionsIndicesBySolverObjectMap,
-								 float& TimeData_MapsCreated);
-
+	void HandleCollisionEvents(const Chaos::FCollisionEventData& Event);
 	void FilterAllCollisions(TArray<Chaos::TCollisionDataExt<float, 3>>& AllCollisionsArray);
 
 	void SortCollisions(TArray<Chaos::TCollisionDataExt<float, 3>>& CollisionsArray);
@@ -701,13 +695,7 @@ protected:
 									  float TimeData_MapsCreated,
 									  int32 IdxSolver);
 	
-	bool GetAllBreakingsAndMaps(FSolverData SolverData,
-								TArray<Chaos::TBreakingDataExt<float, 3>>& AllBreakingsArray,
-								TArray<SolverObjectWrapper>& SolverObjectReverseMappingArray,
-								TArray<int32>& ParticleIndexReverseMappingArray,
-								TMap<ISolverObjectBase*, TArray<int32>>& AllBreakingsIndicesBySolverObjectMap,
-								float& TimeData_MapsCreated);
-
+	void HandleBreakingEvents(const Chaos::FBreakingEventData& Event);
 	void FilterAllBreakings(TArray<Chaos::TBreakingDataExt<float, 3>>& AllBreakingsArray);
 
 	void SortBreakings(TArray<Chaos::TBreakingDataExt<float, 3>>& BreakingsArray);
@@ -721,13 +709,7 @@ protected:
 									 float TimeData_MapsCreated,
 									 int32 IdxSolver);
 	   	  
-	bool GetAllTrailingsAndMaps(FSolverData SolverData,
-								TArray<Chaos::TTrailingDataExt<float, 3>>& AllTrailingsArray,
-								TArray<SolverObjectWrapper>& SolverObjectReverseMappingArray,
-								TArray<int32>& ParticleIndexReverseMappingArray,
-								TMap<ISolverObjectBase*, TArray<int32>>& AllTrailingsIndicesBySolverObjectMap,
-								float& TimeData_MapsCreated);
-
+	void HandleTrailingEvents(const Chaos::FTrailingEventData& Event);
 	void FilterAllTrailings(TArray<Chaos::TTrailingDataExt<float, 3>>& AllTrailingsArray);
 
 	void SortTrailings(TArray<Chaos::TTrailingDataExt<float, 3>>& TrailingsArray);
@@ -744,8 +726,6 @@ protected:
 	bool CollisionCallback(FNDIChaosDestruction_InstanceData* InstData);
 	bool BreakingCallback(FNDIChaosDestruction_InstanceData* InstData);
 	bool TrailingCallback(FNDIChaosDestruction_InstanceData* InstData);
-	   
-#endif
 
 	void PushToRenderThread();
 
@@ -766,26 +746,27 @@ protected:
 
 	bool ShouldSpawn;
 
-#if INCLUDE_CHAOS
 	TArray<FSolverData> Solvers;
-#endif
+	TArray<Chaos::TCollisionDataExt<float, 3>> CollisionEvents;
+	TArray<Chaos::TBreakingDataExt<float, 3>> BreakingEvents;
+	TArray<Chaos::TTrailingDataExt<float, 3>> TrailingEvents;
 };
 
 struct FNiagaraDataInterfaceProxyChaosDestruction : public FNiagaraDataInterfaceProxy
 {
-	virtual void ConsumePerInstanceDataFromGameThread(void* PerInstanceData, const FGuid& Instance) override;
+	virtual void ConsumePerInstanceDataFromGameThread(void* PerInstanceData, const FNiagaraSystemInstanceID& Instance) override;
 	virtual int32 PerInstanceDataPassedToRenderThreadSize() const override
 	{
 		return sizeof(FNiagaraDIChaosDestruction_InstanceDataToPassToRT);
 	}
 
-	void CreatePerInstanceData(const FGuid& SystemInstance);
+	void CreatePerInstanceData(const FNiagaraSystemInstanceID& SystemInstance);
 
-	void DestroyInstanceData(NiagaraEmitterInstanceBatcher* Batcher, const FGuid& SystemInstance);
+	void DestroyInstanceData(NiagaraEmitterInstanceBatcher* Batcher, const FNiagaraSystemInstanceID& SystemInstance);
 
 	virtual void DeferredDestroy()
 	{
-		for (const FGuid& SystemInstance : InstancesToDestroy)
+		for (const FNiagaraSystemInstanceID& SystemInstance : InstancesToDestroy)
 		{
 			SystemsToGPUInstanceData.Remove(SystemInstance);
 		}
@@ -796,6 +777,6 @@ struct FNiagaraDataInterfaceProxyChaosDestruction : public FNiagaraDataInterface
 	float SolverTime;
 	int32 LastSpawnedPointID;
 
-	TMap<FGuid, FNiagaraDIChaosDestruction_GPUData> SystemsToGPUInstanceData;
-	TSet<FGuid> InstancesToDestroy;
+	TMap<FNiagaraSystemInstanceID, FNiagaraDIChaosDestruction_GPUData> SystemsToGPUInstanceData;
+	TSet<FNiagaraSystemInstanceID> InstancesToDestroy;
 };

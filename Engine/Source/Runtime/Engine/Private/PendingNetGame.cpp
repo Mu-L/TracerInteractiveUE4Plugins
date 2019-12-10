@@ -371,7 +371,20 @@ void UPendingNetGame::FinalizeEncryptedConnection(const FEncryptionKeyResponse& 
 		{
 			if (Response.Response == EEncryptionResponse::Success)
 			{
-				Connection->EnableEncryptionWithKey(Response.EncryptionKey);
+				// handle deprecated path where only the key is set
+				PRAGMA_DISABLE_DEPRECATION_WARNINGS
+				if ((Response.EncryptionKey.Num() > 0) && (Response.EncryptionData.Key.Num() == 0))
+				{
+					FEncryptionData ResponseData = Response.EncryptionData;
+					ResponseData.Key = Response.EncryptionKey;
+
+					Connection->EnableEncryption(ResponseData);
+				}
+				PRAGMA_ENABLE_DEPRECATION_WARNINGS
+				else
+				{
+					Connection->EnableEncryption(Response.EncryptionData);
+				}
 			}
 			else
 			{
@@ -415,7 +428,7 @@ void UPendingNetGame::SetEncryptionKey(const FEncryptionKeyResponse& Response)
 			{
 				if (Response.Response == EEncryptionResponse::Success)
 				{
-					Connection->SetEncryptionKey(Response.EncryptionKey);
+					Connection->SetEncryptionData(Response.EncryptionData);
 				}
 				else
 				{
@@ -470,13 +483,20 @@ void UPendingNetGame::Tick( float DeltaTime )
 	 *   ****may NULL itself via CancelPending if a disconnect/error occurs****
 	 */
 	NetDriver->TickDispatch(DeltaTime);
+
+	if (NetDriver)
+	{
+		NetDriver->PostTickDispatch();
+	}
+
 	if (NetDriver)
 	{
 		NetDriver->TickFlush(DeltaTime);
-		if (NetDriver)
-		{
-			NetDriver->PostTickFlush();
-		}
+	}
+
+	if (NetDriver)
+	{
+		NetDriver->PostTickFlush();
 	}
 }
 

@@ -246,19 +246,19 @@ FD3D11Texture3D::~FD3D11Texture3D()
 	D3D11TextureDeleted( *this );
 }
 
-uint64 FD3D11DynamicRHI::RHICalcTexture2DPlatformSize(uint32 SizeX, uint32 SizeY, uint8 Format, uint32 NumMips, uint32 NumSamples, uint32 Flags, uint32& OutAlign)
+uint64 FD3D11DynamicRHI::RHICalcTexture2DPlatformSize(uint32 SizeX, uint32 SizeY, uint8 Format, uint32 NumMips, uint32 NumSamples, uint32 Flags, const FRHIResourceCreateInfo& CreateInfo, uint32& OutAlign)
 {
 	OutAlign = 0;
 	return CalcTextureSize(SizeX, SizeY, (EPixelFormat)Format, NumMips);
 }
 
-uint64 FD3D11DynamicRHI::RHICalcTexture3DPlatformSize(uint32 SizeX, uint32 SizeY, uint32 SizeZ, uint8 Format, uint32 NumMips, uint32 Flags, uint32& OutAlign)
+uint64 FD3D11DynamicRHI::RHICalcTexture3DPlatformSize(uint32 SizeX, uint32 SizeY, uint32 SizeZ, uint8 Format, uint32 NumMips, uint32 Flags, const FRHIResourceCreateInfo& CreateInfo, uint32& OutAlign)
 {
 	OutAlign = 0;
 	return CalcTextureSize3D(SizeX, SizeY, SizeZ, (EPixelFormat)Format, NumMips);
 }
 
-uint64 FD3D11DynamicRHI::RHICalcTextureCubePlatformSize(uint32 Size, uint8 Format, uint32 NumMips, uint32 Flags,	uint32& OutAlign)
+uint64 FD3D11DynamicRHI::RHICalcTextureCubePlatformSize(uint32 Size, uint8 Format, uint32 NumMips, uint32 Flags, const FRHIResourceCreateInfo& CreateInfo, uint32& OutAlign)
 {
 	OutAlign = 0;
 	return CalcTextureSize(Size, Size, (EPixelFormat)Format, NumMips) * 6;
@@ -452,7 +452,7 @@ DXGI_FORMAT FD3D11DynamicRHI::GetPlatformTextureResourceFormat(DXGI_FORMAT InFor
 /**
  * Creates a 2D texture optionally guarded by a structured exception handler.
  */
-void SafeCreateTexture2D(ID3D11Device* Direct3DDevice, const D3D11_TEXTURE2D_DESC* TextureDesc, const D3D11_SUBRESOURCE_DATA* SubResourceData, ID3D11Texture2D** OutTexture2D)
+void SafeCreateTexture2D(ID3D11Device* Direct3DDevice, int32 UEFormat, const D3D11_TEXTURE2D_DESC* TextureDesc, const D3D11_SUBRESOURCE_DATA* SubResourceData, ID3D11Texture2D** OutTexture2D)
 {
 #if GUARDED_TEXTURE_CREATES
 	bool bDriverCrash = true;
@@ -461,6 +461,7 @@ void SafeCreateTexture2D(ID3D11Device* Direct3DDevice, const D3D11_TEXTURE2D_DES
 #endif // #if GUARDED_TEXTURE_CREATES
 		VERIFYD3D11CREATETEXTURERESULT(
 			Direct3DDevice->CreateTexture2D(TextureDesc,SubResourceData,OutTexture2D),
+			UEFormat,
 			TextureDesc->Width,
 			TextureDesc->Height,
 			TextureDesc->ArraySize,
@@ -485,13 +486,14 @@ void SafeCreateTexture2D(ID3D11Device* Direct3DDevice, const D3D11_TEXTURE2D_DES
 		if (bDriverCrash)
 		{
 			UE_LOG(LogD3D11RHI,Error,
-				TEXT("Driver crashed while creating texture: %ux%ux%u %s(0x%08x) with %u mips"),
+				TEXT("Driver crashed while creating texture: %ux%ux%u %s(0x%08x) with %u mips, PF_ %d"),
 				TextureDesc->Width,
 				TextureDesc->Height,
 				TextureDesc->ArraySize,
 				GetD3D11TextureFormatString(TextureDesc->Format),
 				(uint32)TextureDesc->Format,
-				TextureDesc->MipLevels
+				TextureDesc->MipLevels,
+				UEFormat
 				);
 		}
 	}
@@ -765,7 +767,7 @@ TD3D11Texture2D<BaseResourceType>* FD3D11DynamicRHI::CreateD3D11Texture2D(uint32
 		else
 #endif
 		{
-			SafeCreateTexture2D(Direct3DDevice, &TextureDesc, CreateInfo.BulkData != NULL ? (const D3D11_SUBRESOURCE_DATA*)SubResourceData.GetData() : NULL, TextureResource.GetInitReference());
+			SafeCreateTexture2D(Direct3DDevice, Format, &TextureDesc, CreateInfo.BulkData != NULL ? (const D3D11_SUBRESOURCE_DATA*)SubResourceData.GetData() : NULL, TextureResource.GetInitReference());
 		}
 
 		if(bCreateRTV)
@@ -1027,6 +1029,7 @@ FD3D11Texture3D* FD3D11DynamicRHI::CreateD3D11Texture3D(uint32 SizeX,uint32 Size
 	const D3D11_SUBRESOURCE_DATA* SubResData = CreateInfo.BulkData != nullptr ? (const D3D11_SUBRESOURCE_DATA*)SubResourceData.GetData() : nullptr;
 	VERIFYD3D11CREATETEXTURERESULT(
 		Direct3DDevice->CreateTexture3D(&TextureDesc, SubResData,TextureResource.GetInitReference()),
+		Format,
 		SizeX,
 		SizeY,
 		SizeZ,
@@ -1195,7 +1198,7 @@ FTexture2DRHIRef FD3D11DynamicRHI::RHIAsyncCreateTexture2D(uint32 SizeX,uint32 S
 		SubResourceData[MipIndex].SysMemSlicePitch = MipSize;
 	}
 
-	SafeCreateTexture2D(Direct3DDevice,&TextureDesc,SubResourceData,TextureResource.GetInitReference());
+	SafeCreateTexture2D(Direct3DDevice, Format, &TextureDesc,SubResourceData,TextureResource.GetInitReference());
 
 	if (TempBufferSize != ZeroBufferSize)
 	{
@@ -1625,6 +1628,7 @@ void* TD3D11Texture2D<RHIResourceType>::Lock(uint32 MipIndex,uint32 ArrayIndex,E
 		TRefCountPtr<ID3D11Texture2D> StagingTexture;
 		VERIFYD3D11CREATETEXTURERESULT(
 			D3DRHI->GetDevice()->CreateTexture2D(&StagingTextureDesc,NULL,StagingTexture.GetInitReference()),
+			RHIResourceType::GetFormat(),
 			this->GetSizeX(),
 			this->GetSizeY(),
 			this->GetSizeZ(),
@@ -2144,7 +2148,7 @@ void FD3D11DynamicRHI::RHICopySubTextureRegion_RenderThread(
 }
 
 void FD3D11DynamicRHI::RHIUpdateTextureReference(FRHITextureReference* TextureRefRHI, FRHITexture* NewTextureRHI)
-{
+{	
 	// Updating texture references is disallowed while the RHI could be caching them in referenced resource tables.
 	check(ResourceTableFrameCounter == INDEX_NONE);
 
@@ -2352,6 +2356,93 @@ TD3D11Texture2D<BaseResourceType>* FD3D11DynamicRHI::CreateTextureFromResource(b
 	return Texture2D;
 }
 
+template <typename BaseResourceType>
+TD3D11Texture2D<BaseResourceType>* FD3D11DynamicRHI::CreateAliasedD3D11Texture2D(TD3D11Texture2D<BaseResourceType>* SourceTexture)
+{
+	D3D11_TEXTURE2D_DESC TextureDesc;
+	SourceTexture->GetResource()->GetDesc(&TextureDesc);
+
+	const bool bSRGB = (SourceTexture->Flags & TexCreate_SRGB) != 0;
+
+	const DXGI_FORMAT PlatformResourceFormat = TextureDesc.Format;
+	const DXGI_FORMAT PlatformShaderResourceFormat = FindShaderResourceDXGIFormat(PlatformResourceFormat, bSRGB);
+	const DXGI_FORMAT PlatformRenderTargetFormat = FindShaderResourceDXGIFormat(PlatformResourceFormat, bSRGB);
+
+	// Determine the MSAA settings to use for the texture.
+	D3D11_DSV_DIMENSION DepthStencilViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+	D3D11_RTV_DIMENSION RenderTargetViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+	D3D11_SRV_DIMENSION ShaderResourceViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+
+	if (TextureDesc.SampleDesc.Count > 1)
+	{
+		DepthStencilViewDimension = D3D11_DSV_DIMENSION_TEXTURE2DMS;
+		RenderTargetViewDimension = D3D11_RTV_DIMENSION_TEXTURE2DMS;
+		ShaderResourceViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DMS;
+	}
+
+	TRefCountPtr<ID3D11ShaderResourceView> ShaderResourceView;
+	TArray<TRefCountPtr<ID3D11RenderTargetView> > RenderTargetViews;
+	TRefCountPtr<ID3D11DepthStencilView> DepthStencilViews[FExclusiveDepthStencil::MaxIndex];
+
+	bool bCreatedRTVPerSlice = false;
+	const bool bCubeTexture = SourceTexture->IsCubemap();
+	const bool bTextureArray = !bCubeTexture && TextureDesc.ArraySize > 1;
+
+	if (TextureDesc.BindFlags & D3D11_BIND_RENDER_TARGET)
+	{
+		// Create a render target view for each mip
+		for (uint32 MipIndex = 0; MipIndex < TextureDesc.MipLevels; MipIndex++)
+		{
+			// Just add null RTV entries (we'll be aliasing from source shortly).
+			if ((SourceTexture->Flags & TexCreate_TargetArraySlicesIndependently) && (bTextureArray || bCubeTexture))
+			{
+				bCreatedRTVPerSlice = true;
+
+				for (uint32 SliceIndex = 0; SliceIndex < TextureDesc.ArraySize; SliceIndex++)
+				{
+					RenderTargetViews.Add(nullptr);
+				}
+			}
+			else
+			{
+				RenderTargetViews.Add(nullptr);
+			}
+		}
+	}
+
+	TD3D11Texture2D<BaseResourceType>* Texture2D = new TD3D11Texture2D<BaseResourceType>(
+		this,
+		nullptr,
+		nullptr,
+		bCreatedRTVPerSlice,
+		TextureDesc.ArraySize,
+		RenderTargetViews,
+		nullptr,
+		TextureDesc.Width,
+		TextureDesc.Height,
+		0,
+		TextureDesc.MipLevels,
+		TextureDesc.SampleDesc.Count,
+		static_cast<BaseResourceType*>(SourceTexture)->GetFormat(),
+		bCubeTexture,
+		SourceTexture->Flags,
+		/*bPooledTexture=*/ false,
+		static_cast<BaseResourceType*>(SourceTexture)->GetClearBinding()
+		);
+
+	if (SourceTexture->Flags & TexCreate_RenderTargetable)
+	{
+		Texture2D->SetCurrentGPUAccess(EResourceTransitionAccess::EWritable);
+	}
+
+	// We'll be the same size, since we're the same thing. Avoid the check in D3D11Resources.h (AliasResources).
+	Texture2D->SetMemorySize(SourceTexture->GetMemorySize());
+	RHIAliasTextureResources(Texture2D, SourceTexture);
+
+	return Texture2D;
+}
+
+
 FTexture2DRHIRef FD3D11DynamicRHI::RHICreateTexture2DFromResource(EPixelFormat Format, uint32 TexCreateFlags, const FClearValueBinding& ClearValueBinding, ID3D11Texture2D* TextureResource)
 {
 	return CreateTextureFromResource<FD3D11BaseTexture2D>(false, false, Format, TexCreateFlags, ClearValueBinding, TextureResource);
@@ -2371,6 +2462,25 @@ void FD3D11DynamicRHI::RHIAliasTextureResources(FRHITexture* DestTextureRHI, FRH
 	{
 		DestTexture->AliasResources(SrcTexture);
 	}
+}
+
+FTextureRHIRef FD3D11DynamicRHI::RHICreateAliasedTexture(FRHITexture* SourceTexture)
+{
+	if (SourceTexture->GetTexture2D() != nullptr)
+	{
+		return CreateAliasedD3D11Texture2D<FD3D11BaseTexture2D>(static_cast<FD3D11Texture2D*>(SourceTexture->GetTexture2D()));
+	}
+	else if (SourceTexture->GetTexture2DArray() != nullptr)
+	{
+		return CreateAliasedD3D11Texture2D<FD3D11BaseTexture2DArray>(static_cast<FD3D11Texture2DArray*>(SourceTexture->GetTexture2DArray()));
+	}
+	else if (SourceTexture->GetTextureCube() != nullptr)
+	{
+		return CreateAliasedD3D11Texture2D<FD3D11BaseTextureCube>(static_cast<FD3D11TextureCube*>(SourceTexture->GetTextureCube()));
+	}
+
+	UE_LOG(LogD3D11RHI, Error, TEXT("Currently FD3D11DynamicRHI::RHICreateAliasedTexture only supports 2D, 2D Array and Cube textures."));
+	return nullptr;
 }
 
 void FD3D11DynamicRHI::RHICopyTexture(FRHITexture* SourceTextureRHI, FRHITexture* DestTextureRHI, const FRHICopyTextureInfo& CopyInfo)

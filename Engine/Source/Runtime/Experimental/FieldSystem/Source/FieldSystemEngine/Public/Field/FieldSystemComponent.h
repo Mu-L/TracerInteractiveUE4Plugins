@@ -12,7 +12,7 @@
 #include "FieldSystemComponent.generated.h"
 
 struct FFieldSystemSampleData;
-class FFieldSystemPhysicsObject;
+class FFieldSystemPhysicsProxy;
 class FChaosSolversModule;
 
 /**
@@ -187,12 +187,9 @@ protected:
 
 	void DispatchCommand(const FFieldSystemCommand& InCommand);
 
-#if INCLUDE_CHAOS
-
-	FFieldSystemPhysicsObject* PhysicsObject;
+	FFieldSystemPhysicsProxy* PhysicsProxy;
 	FChaosSolversModule* ChaosModule;
 
-#endif
 	bool bHasPhysicsState;
 
 };

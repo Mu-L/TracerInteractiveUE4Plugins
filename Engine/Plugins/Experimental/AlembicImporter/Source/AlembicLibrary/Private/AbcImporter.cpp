@@ -25,9 +25,7 @@ PRAGMA_DEFAULT_VISIBILITY_END
 #include "Misc/ScopedSlowTask.h"
 
 #include "PackageTools.h"
-#include "MeshDescription.h"
-#include "MeshAttributes.h"
-#include "MeshAttributeArray.h"
+#include "StaticMeshAttributes.h"
 #include "MeshDescriptionOperations.h"
 #include "ObjectTools.h"
 
@@ -36,7 +34,7 @@ PRAGMA_DEFAULT_VISIBILITY_END
 #include "SkelImport.h"
 #include "Animation/AnimSequence.h"
 #include "Rendering/SkeletalMeshModel.h"
-#include "Toolkits/AssetEditorManager.h"
+
 
 #include "AbcImportUtilities.h"
 #include "Utils.h"
@@ -59,6 +57,8 @@ PRAGMA_DEFAULT_VISIBILITY_END
 #include "AnimationUtils.h"
 #include "ComponentReregisterContext.h"
 #include "GeometryCacheCodecV1.h"
+#include "Subsystems/AssetEditorSubsystem.h"
+#include "Editor.h"
 
 #define LOCTEXT_NAMESPACE "AbcImporter"
 
@@ -195,7 +195,6 @@ UStaticMesh* FAbcImporter::CreateStaticMeshFromSample(UObject* InParent, const F
 		int32 LODIndex = 0;
 		StaticMesh->AddSourceModel();
 		FMeshDescription* MeshDescription = StaticMesh->CreateMeshDescription(LODIndex);
-		StaticMesh->RegisterMeshAttributes(*MeshDescription);
 		// Generate a new lighting GUID (so its unique)
 		StaticMesh->LightingGuid = FGuid::NewGuid();
 
@@ -713,82 +712,89 @@ TArray<UObject*> FAbcImporter::ImportAsSkeletalMesh(UObject* InParent, EObjectFl
 		uint32 WedgeOffset = 0;
 		uint32 VertexOffset = 0;
 
-		for (FCompressedAbcData& CompressedData : CompressedMeshData)
 		{
-			FAbcMeshSample* AverageSample = CompressedData.AverageSample;
-
-			if (CompressedData.BaseSamples.Num() > 0)
+#if WITH_EDITOR
+			// When ScopedPostEditChange goes out of scope, it will call SkeletalMesh->PostEditChange()
+			// while preventing any call to that within the scope
+			FScopedSkeletalMeshPostEditChange ScopedPostEditChange(SkeletalMesh);
+#endif
+			for (FCompressedAbcData& CompressedData : CompressedMeshData)
 			{
-				const int32 NumBases = CompressedData.BaseSamples.Num();
-				int32 NumUsedBases = 0;
+				FAbcMeshSample* AverageSample = CompressedData.AverageSample;
 
-				const int32 NumIndices = CompressedData.AverageSample->Indices.Num();
-
-				for (int32 BaseIndex = 0; BaseIndex < NumBases; ++BaseIndex)
+				if (CompressedData.BaseSamples.Num() > 0)
 				{
-					FAbcMeshSample* BaseSample = CompressedData.BaseSamples[BaseIndex];
+					const int32 NumBases = CompressedData.BaseSamples.Num();
+					int32 NumUsedBases = 0;
 
-					//AbcImporterUtilities::CalculateNormalsWithSmoothingGroups(BaseSample, AverageSample->SmoothingGroupIndices, AverageSample->NumSmoothingGroups);
+					const int32 NumIndices = CompressedData.AverageSample->Indices.Num();
 
-					// Create new morph target with name based on object and base index
-					UMorphTarget* MorphTarget = NewObject<UMorphTarget>(SkeletalMesh, FName(*FString::Printf(TEXT("Base_%i_%i"), BaseIndex, ObjectIndex)));
-
-					// Setup morph target vertices directly
-					TArray<FMorphTargetDelta> MorphDeltas;
-					GenerateMorphTargetVertices(BaseSample, MorphDeltas, AverageSample, WedgeOffset, MorphTargetVertexRemapping, UsedVertexIndicesForMorphs, VertexOffset, WedgeOffset);
-					MorphTarget->PopulateDeltas(MorphDeltas, 0, LODModel.Sections);
-
-					const float PercentageOfVerticesInfluences = ((float)MorphTarget->MorphLODModels[0].Vertices.Num() / (float)NumIndices) * 100.0f;
-					if (PercentageOfVerticesInfluences > ImportSettings->CompressionSettings.MinimumNumberOfVertexInfluencePercentage)
+					for (int32 BaseIndex = 0; BaseIndex < NumBases; ++BaseIndex)
 					{
-						SkeletalMesh->RegisterMorphTarget(MorphTarget);
-						MorphTarget->MarkPackageDirty();
+						FAbcMeshSample* BaseSample = CompressedData.BaseSamples[BaseIndex];
 
-						// Set up curves
-						const TArray<float>& CurveValues = CompressedData.CurveValues[BaseIndex];
-						const TArray<float>& TimeValues = CompressedData.TimeValues[BaseIndex];
-						// Morph target stuffies
-						FString CurveName = FString::Printf(TEXT("Base_%i_%i"), BaseIndex, ObjectIndex);
-						FName ConstCurveName = *CurveName;
+						//AbcImporterUtilities::CalculateNormalsWithSmoothingGroups(BaseSample, AverageSample->SmoothingGroupIndices, AverageSample->NumSmoothingGroups);
 
-						// Sets up the morph target curves with the sample values and time keys
-						SetupMorphTargetCurves(Skeleton, ConstCurveName, Sequence, CurveValues, TimeValues);
-					}
-					else
-					{
-						MorphTarget->MarkPendingKill();
+						// Create new morph target with name based on object and base index
+						UMorphTarget* MorphTarget = NewObject<UMorphTarget>(SkeletalMesh, FName(*FString::Printf(TEXT("Base_%i_%i"), BaseIndex, ObjectIndex)));
+
+						// Setup morph target vertices directly
+						TArray<FMorphTargetDelta> MorphDeltas;
+						GenerateMorphTargetVertices(BaseSample, MorphDeltas, AverageSample, WedgeOffset, MorphTargetVertexRemapping, UsedVertexIndicesForMorphs, VertexOffset, WedgeOffset);
+						MorphTarget->PopulateDeltas(MorphDeltas, 0, LODModel.Sections);
+
+						const float PercentageOfVerticesInfluences = ((float)MorphTarget->MorphLODModels[0].Vertices.Num() / (float)NumIndices) * 100.0f;
+						if (PercentageOfVerticesInfluences > ImportSettings->CompressionSettings.MinimumNumberOfVertexInfluencePercentage)
+						{
+							SkeletalMesh->RegisterMorphTarget(MorphTarget);
+							MorphTarget->MarkPackageDirty();
+
+							// Set up curves
+							const TArray<float>& CurveValues = CompressedData.CurveValues[BaseIndex];
+							const TArray<float>& TimeValues = CompressedData.TimeValues[BaseIndex];
+							// Morph target stuffies
+							FString CurveName = FString::Printf(TEXT("Base_%i_%i"), BaseIndex, ObjectIndex);
+							FName ConstCurveName = *CurveName;
+
+							// Sets up the morph target curves with the sample values and time keys
+							SetupMorphTargetCurves(Skeleton, ConstCurveName, Sequence, CurveValues, TimeValues);
+						}
+						else
+						{
+							MorphTarget->MarkPendingKill();
+						}
 					}
 				}
-			}
 
-			Sequence->RawCurveData.RemoveRedundantKeys();
+				Sequence->RawCurveData.RemoveRedundantKeys();
 
-			WedgeOffset += CompressedData.AverageSample->Indices.Num();
-			VertexOffset += CompressedData.AverageSample->Vertices.Num();
+				WedgeOffset += CompressedData.AverageSample->Indices.Num();
+				VertexOffset += CompressedData.AverageSample->Vertices.Num();
 
-			const uint32 NumMaterials = CompressedData.MaterialNames.Num();
-			for (uint32 MaterialIndex = 0; MaterialIndex < NumMaterials; ++MaterialIndex)
-			{
-				const FString& MaterialName = CompressedData.MaterialNames[MaterialIndex];
-				UMaterialInterface* Material = RetrieveMaterial(MaterialName, InParent, Flags);
-				SkeletalMesh->Materials.Add(FSkeletalMaterial(Material, true));
-				if (Material != UMaterial::GetDefaultMaterial(MD_Surface))
+				const uint32 NumMaterials = CompressedData.MaterialNames.Num();
+				for (uint32 MaterialIndex = 0; MaterialIndex < NumMaterials; ++MaterialIndex)
 				{
-					Material->PostEditChange();
+					const FString& MaterialName = CompressedData.MaterialNames[MaterialIndex];
+					UMaterialInterface* Material = RetrieveMaterial(MaterialName, InParent, Flags);
+					SkeletalMesh->Materials.Add(FSkeletalMaterial(Material, true));
+					if (Material != UMaterial::GetDefaultMaterial(MD_Surface))
+					{
+						Material->PostEditChange();
+					}
 				}
+
+				++ObjectIndex;
 			}
 
-			++ObjectIndex;
+			// Set recompute tangent flag on skeletal mesh sections
+			for (FSkelMeshSection& Section : LODModel.Sections)
+			{
+				Section.bRecomputeTangent = true;
+			}
+
+			SkeletalMesh->CalculateInvRefMatrices();
 		}
 
-		// Set recompute tangent flag on skeletal mesh sections
-		for (FSkelMeshSection& Section : LODModel.Sections)
-		{
-			Section.bRecomputeTangent = true;
-		}
-
-		SkeletalMesh->CalculateInvRefMatrices();
-		SkeletalMesh->PostEditChange();
 		SkeletalMesh->MarkPackageDirty();
 
 		// Retrieve the name mapping container
@@ -806,10 +812,10 @@ TArray<UObject*> FAbcImporter::ImportAsSkeletalMesh(UObject* InParent, EObjectFl
 		GeneratedObjects.Add(Skeleton);
 		GeneratedObjects.Add(Sequence);
 
-		FAssetEditorManager& AssetEditorManager = FAssetEditorManager::Get();
-		AssetEditorManager.CloseAllEditorsForAsset(Skeleton);
-		AssetEditorManager.CloseAllEditorsForAsset(SkeletalMesh);
-		AssetEditorManager.CloseAllEditorsForAsset(Sequence);
+		UAssetEditorSubsystem* AssetEditorSubsystem = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>();
+		AssetEditorSubsystem->CloseAllEditorsForAsset(Skeleton);
+		AssetEditorSubsystem->CloseAllEditorsForAsset(SkeletalMesh);
+		AssetEditorSubsystem->CloseAllEditorsForAsset(Sequence);
 	}
 
 	if (RecreateExistingRenderStateContext)
@@ -1279,22 +1285,29 @@ const uint32 FAbcImporter::GetNumMeshTracks() const
 
 void FAbcImporter::GenerateMeshDescriptionFromSample(const FAbcMeshSample* Sample, FMeshDescription* MeshDescription, UStaticMesh* StaticMesh)
 {
-	TVertexAttributesRef<FVector> VertexPositions = MeshDescription->VertexAttributes().GetAttributesRef<FVector>(MeshAttribute::Vertex::Position);
-	TEdgeAttributesRef<bool> EdgeHardnesses = MeshDescription->EdgeAttributes().GetAttributesRef<bool>(MeshAttribute::Edge::IsHard);
-	TEdgeAttributesRef<float> EdgeCreaseSharpnesses = MeshDescription->EdgeAttributes().GetAttributesRef<float>(MeshAttribute::Edge::CreaseSharpness);
-	TPolygonGroupAttributesRef<FName> PolygonGroupImportedMaterialSlotNames = MeshDescription->PolygonGroupAttributes().GetAttributesRef<FName>(MeshAttribute::PolygonGroup::ImportedMaterialSlotName);
-	TVertexInstanceAttributesRef<FVector> VertexInstanceNormals = MeshDescription->VertexInstanceAttributes().GetAttributesRef<FVector>(MeshAttribute::VertexInstance::Normal);
-	TVertexInstanceAttributesRef<FVector> VertexInstanceTangents = MeshDescription->VertexInstanceAttributes().GetAttributesRef<FVector>(MeshAttribute::VertexInstance::Tangent);
-	TVertexInstanceAttributesRef<float> VertexInstanceBinormalSigns = MeshDescription->VertexInstanceAttributes().GetAttributesRef<float>(MeshAttribute::VertexInstance::BinormalSign);
-	TVertexInstanceAttributesRef<FVector4> VertexInstanceColors = MeshDescription->VertexInstanceAttributes().GetAttributesRef<FVector4>(MeshAttribute::VertexInstance::Color);
-	TVertexInstanceAttributesRef<FVector2D> VertexInstanceUVs = MeshDescription->VertexInstanceAttributes().GetAttributesRef<FVector2D>(MeshAttribute::VertexInstance::TextureCoordinate);
+	if (MeshDescription == nullptr)
+	{
+		return;
+	}
+
+	FStaticMeshAttributes Attributes(*MeshDescription);
+
+	TVertexAttributesRef<FVector> VertexPositions = Attributes.GetVertexPositions();
+	TEdgeAttributesRef<bool> EdgeHardnesses = Attributes.GetEdgeHardnesses();
+	TEdgeAttributesRef<float> EdgeCreaseSharpnesses = Attributes.GetEdgeCreaseSharpnesses();
+	TPolygonGroupAttributesRef<FName> PolygonGroupImportedMaterialSlotNames = Attributes.GetPolygonGroupMaterialSlotNames();
+	TVertexInstanceAttributesRef<FVector> VertexInstanceNormals = Attributes.GetVertexInstanceNormals();
+	TVertexInstanceAttributesRef<FVector> VertexInstanceTangents = Attributes.GetVertexInstanceTangents();
+	TVertexInstanceAttributesRef<float> VertexInstanceBinormalSigns = Attributes.GetVertexInstanceBinormalSigns();
+	TVertexInstanceAttributesRef<FVector4> VertexInstanceColors = Attributes.GetVertexInstanceColors();
+	TVertexInstanceAttributesRef<FVector2D> VertexInstanceUVs = Attributes.GetVertexInstanceUVs();
 
 	//Speedtree use UVs to store is data
 	VertexInstanceUVs.SetNumIndices(Sample->NumUVSets);
 	
 	for (int32 MatIndex = 0; MatIndex < StaticMesh->StaticMaterials.Num(); ++MatIndex)
 	{
-		const FPolygonGroupID& PolygonGroupID = MeshDescription->CreatePolygonGroup();
+		const FPolygonGroupID PolygonGroupID = MeshDescription->CreatePolygonGroup();
 		PolygonGroupImportedMaterialSlotNames[PolygonGroupID] = StaticMesh->StaticMaterials[MatIndex].ImportedMaterialSlotName;
 	}
 
@@ -1318,7 +1331,7 @@ void FAbcImporter::GenerateMeshDescriptionFromSample(const FAbcMeshSample* Sampl
 			uint32 IndiceIndex = (TriangleIndex * 3) + Corner;
 			uint32 VertexIndex = Sample->Indices[IndiceIndex];
 			const FVertexID VertexID(VertexIndex);
-			const FVertexInstanceID& VertexInstanceID = MeshDescription->CreateVertexInstance(VertexID);
+			const FVertexInstanceID VertexInstanceID = MeshDescription->CreateVertexInstance(VertexID);
 
 			// tangents
 			FVector TangentX = Sample->TangentX[IndiceIndex];
@@ -1348,10 +1361,7 @@ void FAbcImporter::GenerateMeshDescriptionFromSample(const FAbcMeshSample* Sampl
 
 		const FPolygonGroupID PolygonGroupID(Sample->MaterialIndices[TriangleIndex]);
 		// Insert a polygon into the mesh
-		const FPolygonID NewPolygonID = MeshDescription->CreatePolygon(PolygonGroupID, CornerVertexInstanceIDs);
-		//Triangulate the polygon
-		FMeshPolygon& Polygon = MeshDescription->GetPolygon(NewPolygonID);
-		MeshDescription->ComputePolygonTriangulation(NewPolygonID, Polygon.Triangles);
+		MeshDescription->CreatePolygon(PolygonGroupID, CornerVertexInstanceIDs);
 	}
 	//Set the edge hardness from the smooth group
 	FMeshDescriptionOperations::ConvertSmoothGroupToHardEdges(Sample->SmoothingGroupIndices, *MeshDescription);

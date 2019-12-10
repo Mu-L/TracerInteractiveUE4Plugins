@@ -30,6 +30,8 @@
 #include "Sound/SoundNodeDialoguePlayer.h"
 #include "SSoundCuePalette.h"
 #include "HAL/PlatformApplicationMisc.h"
+#include "AudioDeviceManager.h"
+#include "Audio/AudioDebug.h"
 
 #define LOCTEXT_NAMESPACE "SoundCueEditor"
 
@@ -39,6 +41,7 @@ const FName FSoundCueEditor::PaletteTabId( TEXT( "SoundCueEditor_Palette" ) );
 
 FSoundCueEditor::FSoundCueEditor()
 	: SoundCue(nullptr)
+	, Debugger(nullptr)
 {
 }
 
@@ -146,6 +149,11 @@ void FSoundCueEditor::InitSoundCueEditor(const EToolkitMode::Type Mode, const TS
 	ExtendToolbar();
 	RegenerateMenusAndToolbars();
 
+	if (GEditor->GetAudioDeviceManager())
+	{
+		Debugger = &GEditor->GetAudioDeviceManager()->GetDebugger();
+	}	
+	
 	// @todo toolkit world centric editing
 	/*if(IsWorldCentricAssetEditor())
 	{
@@ -281,6 +289,14 @@ void FSoundCueEditor::ExtendToolbar()
 {
 		static void FillToolbar(FToolBarBuilder& ToolbarBuilder)
 		{
+			ToolbarBuilder.BeginSection("Debug");
+			{
+				ToolbarBuilder.AddToolBarButton(FSoundCueGraphEditorCommands::Get().ToggleSolo);
+
+				ToolbarBuilder.AddToolBarButton(FSoundCueGraphEditorCommands::Get().ToggleMute);
+			}
+			ToolbarBuilder.EndSection();
+
 			ToolbarBuilder.BeginSection("Toolbar");
 			{
 				ToolbarBuilder.AddToolBarButton(FSoundCueGraphEditorCommands::Get().PlayCue);
@@ -336,6 +352,18 @@ void FSoundCueEditor::BindGraphCommands()
 	ToolkitCommands->MapAction(
 		FGenericCommands::Get().Redo,
 		FExecuteAction::CreateSP( this, &FSoundCueEditor::RedoGraphAction ));
+
+	ToolkitCommands->MapAction(
+		Commands.ToggleSolo,
+		FExecuteAction::CreateSP(this, &FSoundCueEditor::ToggleSolo),
+		FCanExecuteAction::CreateSP(this, &FSoundCueEditor::CanExcuteToggleSolo),
+		FIsActionChecked::CreateSP(this, &FSoundCueEditor::IsSoloToggled));
+		
+	ToolkitCommands->MapAction(
+		Commands.ToggleMute,
+		FExecuteAction::CreateSP(this, &FSoundCueEditor::ToggleMute),
+		FCanExecuteAction::CreateSP(this, &FSoundCueEditor::CanExcuteToggleMute),
+		FIsActionChecked::CreateSP(this, &FSoundCueEditor::IsMuteToggled));
 }
 
 void FSoundCueEditor::PlayCue()
@@ -390,6 +418,44 @@ void FSoundCueEditor::TogglePlayback()
 	{
 		PlayCue();
 	}
+}
+
+void FSoundCueEditor::ToggleSolo()
+{
+	if (Debugger)
+	{
+		Debugger->ToggleSoloSoundCue(SoundCue->GetFName());
+	}
+}
+
+bool FSoundCueEditor::CanExcuteToggleSolo() const
+{
+	// Allow Solo if Mute is not Toggle on
+	return Debugger ? !Debugger->IsMuteSoundCue(SoundCue->GetFName()) : false;
+}
+
+bool FSoundCueEditor::IsSoloToggled() const
+{
+	return Debugger ? Debugger->IsSoloSoundCue(SoundCue->GetFName()) : false;
+}
+
+void FSoundCueEditor::ToggleMute()
+{
+	if (Debugger)
+	{
+		Debugger->ToggleMuteSoundCue(SoundCue->GetFName());
+	}
+}
+
+bool FSoundCueEditor::CanExcuteToggleMute() const
+{
+	// Allow Mute if Solo is not Toggle on
+	return Debugger ? !Debugger->IsSoloSoundCue(SoundCue->GetFName()) : false;
+}
+
+bool FSoundCueEditor::IsMuteToggled() const
+{
+	return Debugger ? Debugger->IsMuteSoundCue(SoundCue->GetFName()) : false;
 }
 
 void FSoundCueEditor::PlaySingleNode(UEdGraphNode* Node)
@@ -572,6 +638,44 @@ TSharedRef<SGraphEditor> FSoundCueEditor::CreateGraphEditorWidget()
 			FExecuteAction::CreateSP( this, &FSoundCueEditor::DuplicateNodes ),
 			FCanExecuteAction::CreateSP( this, &FSoundCueEditor::CanDuplicateNodes )
 			);
+
+		// Alignment Commands
+		GraphEditorCommands->MapAction(FGraphEditorCommands::Get().AlignNodesTop,
+			FExecuteAction::CreateSP(this, &FSoundCueEditor::OnAlignTop)
+		);
+
+		GraphEditorCommands->MapAction(FGraphEditorCommands::Get().AlignNodesMiddle,
+			FExecuteAction::CreateSP(this, &FSoundCueEditor::OnAlignMiddle)
+		);
+
+		GraphEditorCommands->MapAction(FGraphEditorCommands::Get().AlignNodesBottom,
+			FExecuteAction::CreateSP(this, &FSoundCueEditor::OnAlignBottom)
+		);
+
+		GraphEditorCommands->MapAction(FGraphEditorCommands::Get().AlignNodesLeft,
+			FExecuteAction::CreateSP(this, &FSoundCueEditor::OnAlignLeft)
+		);
+
+		GraphEditorCommands->MapAction(FGraphEditorCommands::Get().AlignNodesCenter,
+			FExecuteAction::CreateSP(this, &FSoundCueEditor::OnAlignCenter)
+		);
+
+		GraphEditorCommands->MapAction(FGraphEditorCommands::Get().AlignNodesRight,
+			FExecuteAction::CreateSP(this, &FSoundCueEditor::OnAlignRight)
+		);
+
+		GraphEditorCommands->MapAction(FGraphEditorCommands::Get().StraightenConnections,
+			FExecuteAction::CreateSP(this, &FSoundCueEditor::OnStraightenConnections)
+		);
+
+		// Distribution Commands
+		GraphEditorCommands->MapAction(FGraphEditorCommands::Get().DistributeNodesHorizontally,
+			FExecuteAction::CreateSP(this, &FSoundCueEditor::OnDistributeNodesH)
+		);
+
+		GraphEditorCommands->MapAction(FGraphEditorCommands::Get().DistributeNodesVertically,
+			FExecuteAction::CreateSP(this, &FSoundCueEditor::OnDistributeNodesV)
+		);
 	}
 
 	FGraphAppearanceInfo AppearanceInfo;
@@ -903,6 +1007,78 @@ void FSoundCueEditor::RedoGraphAction()
 	SoundCueGraphEditor->ClearSelectionSet();
 
 	GEditor->RedoTransaction();
+}
+
+void FSoundCueEditor::OnAlignTop()
+{
+	if (SoundCueGraphEditor.IsValid())
+	{
+		SoundCueGraphEditor->OnAlignTop();
+	}
+}
+
+void FSoundCueEditor::OnAlignMiddle()
+{
+	if (SoundCueGraphEditor.IsValid())
+	{
+		SoundCueGraphEditor->OnAlignMiddle();
+	}
+}
+
+void FSoundCueEditor::OnAlignBottom()
+{
+	if (SoundCueGraphEditor.IsValid())
+	{
+		SoundCueGraphEditor->OnAlignBottom();
+	}
+}
+
+void FSoundCueEditor::OnAlignLeft()
+{
+	if (SoundCueGraphEditor.IsValid())
+	{
+		SoundCueGraphEditor->OnAlignLeft();
+	}
+}
+
+void FSoundCueEditor::OnAlignCenter()
+{
+	if (SoundCueGraphEditor.IsValid())
+	{
+		SoundCueGraphEditor->OnAlignCenter();
+	}
+}
+
+void FSoundCueEditor::OnAlignRight()
+{
+	if (SoundCueGraphEditor.IsValid())
+	{
+		SoundCueGraphEditor->OnAlignRight();
+	}
+}
+
+void FSoundCueEditor::OnStraightenConnections()
+{
+	if (SoundCueGraphEditor.IsValid())
+	{
+		SoundCueGraphEditor->OnStraightenConnections();
+	}
+}
+
+void FSoundCueEditor::OnDistributeNodesH()
+{
+	if (SoundCueGraphEditor.IsValid())
+	{
+		SoundCueGraphEditor->OnDistributeNodesH();
+	}
+}
+
+void FSoundCueEditor::OnDistributeNodesV()
+{
+	if (SoundCueGraphEditor.IsValid())
+	{
+		SoundCueGraphEditor->OnDistributeNodesV();
+	}
 }
 
 #undef LOCTEXT_NAMESPACE

@@ -3,7 +3,6 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Chaos/PBDRigidParticles.h"
 
 #include "PhysicsCoreTypes.generated.h"
 
@@ -19,8 +18,8 @@ enum class EChaosSolverTickMode : uint8
 UENUM()
 enum class EChaosThreadingMode : uint8
 {
-	DedicatedThread,
-	TaskGraph UMETA(Hidden),
+	DedicatedThread UMETA(Hidden),
+	TaskGraph,
 	SingleThread,
 	Num UMETA(Hidden),
 	Invalid UMETA(Hidden)
@@ -35,5 +34,9 @@ enum class EChaosBufferMode : uint8
 	Invalid UMETA(Hidden)
 };
 
+namespace Chaos
+{
+	template<class T, int>
+	class TPBDRigidParticles;
+}
 typedef Chaos::TPBDRigidParticles<float, 3> FParticlesType;
-

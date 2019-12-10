@@ -566,6 +566,11 @@ bool FMediaPlayerFacade::SetLooping(bool Looping)
 }
 
 
+void FMediaPlayerFacade::SetMediaOptions(const IMediaOptions* Options)
+{
+}
+
+
 bool FMediaPlayerFacade::SetRate(float Rate)
 {
 	if (!Player.IsValid() || !Player->GetControls().SetRate(Rate))
@@ -1171,6 +1176,12 @@ void FMediaPlayerFacade::ProcessSubtitleSamples(IMediaSamples& Samples, TRange<F
 
 void FMediaPlayerFacade::ProcessVideoSamples(IMediaSamples& Samples, TRange<FTimespan> TimeRange)
 {
+	// Let the player do some processing if needed.
+	if (Player.IsValid())
+	{
+		Player->ProcessVideoSamples();
+	}
+
 	TSharedPtr<IMediaTextureSample, ESPMode::ThreadSafe> Sample;
 
 	while (Samples.FetchVideo(TimeRange, Sample))

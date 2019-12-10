@@ -6,6 +6,7 @@
 #include "UObject/ObjectMacros.h"
 #include "UObject/Object.h"
 #include "FeaturePackContentSource.h"
+#include "Internationalization/PolyglotTextData.h"
 #include "TemplateProjectDefs.generated.h"
 
 // does not require reflection exposure
@@ -23,7 +24,7 @@ struct FTemplateConfigValue
 USTRUCT()
 struct FTemplateReplacement
 {
-	GENERATED_USTRUCT_BODY()
+	GENERATED_BODY()
 
 	UPROPERTY()
 	TArray<FString> Extensions;
@@ -41,7 +42,7 @@ struct FTemplateReplacement
 USTRUCT()
 struct FTemplateFolderRename
 {
-	GENERATED_USTRUCT_BODY()
+	GENERATED_BODY()
 
 	UPROPERTY()
 	FString From;
@@ -53,18 +54,34 @@ struct FTemplateFolderRename
 USTRUCT()
 struct FLocalizedTemplateString
 {
-	GENERATED_USTRUCT_BODY()
+	GENERATED_BODY()
 
 	UPROPERTY()
 	FString Language;
 
 	UPROPERTY()
 	FString Text;
+
+	/** Find a text value for the current locale (or fallback to English) from the given array of localized strings. */
+	static FText GetLocalizedText(const TArray<FLocalizedTemplateString>& LocalizedStrings);
+};
+
+UENUM()
+enum class ETemplateSetting
+{
+	Languages,
+	HardwareTarget,
+	GraphicsPreset,
+	StarterContent,
+	XR,
+	Raytracing,
+	All
 };
 
 UCLASS(abstract,config=TemplateDefs,MinimalAPI)
 class UTemplateProjectDefs : public UObject
 {
+public:
 	GENERATED_UCLASS_BODY()
 
 	UPROPERTY(config)
@@ -92,7 +109,7 @@ class UTemplateProjectDefs : public UObject
 	FString SortKey;
 
 	UPROPERTY(config)
-	FName Category;
+	TArray<FName> Categories;
 
 	UPROPERTY(config)
 	FString ClassTypes;
@@ -100,9 +117,21 @@ class UTemplateProjectDefs : public UObject
 	UPROPERTY(config)
 	FString AssetTypes;
 
-	/* Should we allow creation of a project from this template */
+	/* Should we allow creation of a project from this template. If this is false, the template is treated as a feature pack. */
 	UPROPERTY(config)
 	bool bAllowProjectCreation;
+
+	/** Is this an enterprise template? */
+	UPROPERTY(config)
+	bool bIsEnterprise;
+
+	/** Is this a blank template? Determines whether we can override the default map when creating the project. */
+	UPROPERTY(config)
+	bool bIsBlank;
+
+	/* Optional list of settings to hide. If none are specified, then all settings are shown. */
+	UPROPERTY(config)
+	TArray<ETemplateSetting> HiddenSettings;
 	
 	/* Optional list of feature packs to include */
 	UPROPERTY(config)
@@ -144,3 +173,39 @@ private:
 	void FixString(FString& InOutStringToFix, const FString& TemplateName, const FString& ProjectName);
 };
 
+USTRUCT()
+struct FTemplateCategoryDef
+{
+	GENERATED_BODY()
+	
+	/** Key to use for identifying what category a template is in. */
+	UPROPERTY()
+	FName Key;
+
+	/** Localized name for this template category. */
+	UPROPERTY()
+	TArray<FLocalizedTemplateString> LocalizedDisplayNames;
+
+	/** Localized description for this template category. */
+	UPROPERTY()
+	TArray<FLocalizedTemplateString> LocalizedDescriptions;
+
+	/** Reference to an icon to display for this category. Should be around 128x128. */
+	UPROPERTY()
+	FString Icon;
+
+	/** Is this a major top-level category? Major categories are displayed as full rows, eg. the Game category.*/
+	UPROPERTY()
+	bool IsMajorCategory;
+};
+
+UCLASS(config=TemplateCategories)
+class UTemplateCategories : public UObject
+{
+public:
+	GENERATED_BODY()
+
+	/** Array of all categories specified in this location. */
+	UPROPERTY(config)
+	TArray<FTemplateCategoryDef> Categories;
+};

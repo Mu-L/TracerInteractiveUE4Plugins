@@ -75,6 +75,25 @@ DECLARE_CYCLE_STAT(TEXT("  PC Tick Input"), STAT_PC_TickInput, STATGROUP_PlayerC
 DECLARE_CYCLE_STAT(TEXT("    PC Build Input Stack"), STAT_PC_BuildInputStack, STATGROUP_PlayerController);
 DECLARE_CYCLE_STAT(TEXT("    PC Process Input Stack"), STAT_PC_ProcessInputStack, STATGROUP_PlayerController);
 
+// CVars
+namespace PlayerControllerCVars
+{
+	// Resync timestamps on pawn ack
+	static int32 NetResetServerPredictionDataOnPawnAck = 1;
+	FAutoConsoleVariableRef CVarNetResetServerPredictionDataOnPawnAck(
+		TEXT("PlayerController.NetResetServerPredictionDataOnPawnAck"),
+		NetResetServerPredictionDataOnPawnAck,
+		TEXT("Whether to reset server prediction data for the possessed Pawn when the pawn ack handshake completes.\n")
+		TEXT("0: Disable, 1: Enable"),
+		ECVF_Default);
+
+	static bool LevelVisibilityDontSerializeFileName = false;
+	FAutoConsoleVariableRef CVarLevelVisibilityDontSerializeFileName(
+		TEXT("PlayerController.LevelVisibilityDontSerializeFileName"),
+		LevelVisibilityDontSerializeFileName,
+		TEXT("When true, we'll always skip serializing FileName with FUpdateLevelVisibilityLevelInfo's. This will save bandwidth when games don't need both.")
+	);
+}
 
 const float RetryClientRestartThrottleTime = 0.5f;
 const float RetryServerAcknowledgeThrottleTime = 0.25f;
@@ -82,6 +101,41 @@ const float RetryServerCheckSpectatorThrottleTime = 0.25f;
 
 // Note: This value should be sufficiently small such that it is considered to be in the past before RetryClientRestartThrottleTime and RetryServerAcknowledgeThrottleTime.
 const float ForceRetryClientRestartTime = -100.0f;
+
+FUpdateLevelVisibilityLevelInfo::FUpdateLevelVisibilityLevelInfo(const ULevel* const Level, const bool bInIsVisible)
+	: bIsVisible(bInIsVisible)
+{
+	const UPackage* const LevelPackage = Level->GetOutermost();
+	PackageName = LevelPackage->GetFName();
+
+	// When packages are duplicated for PIE, they may not have a FileName.
+	// For now, just revert to the old behavior.
+	FileName = (LevelPackage->FileName == NAME_None) ? PackageName : LevelPackage->FileName;
+}
+
+bool FUpdateLevelVisibilityLevelInfo::NetSerialize(FArchive& Ar, UPackageMap* PackageMap, bool& bOutSuccess)
+{
+	bool bArePackageAndFileTheSame = !!((PlayerControllerCVars::LevelVisibilityDontSerializeFileName) || (FileName == PackageName) || (FileName == NAME_None));
+	bool bLocalIsVisible = !!bIsVisible;
+
+	Ar.SerializeBits(&bArePackageAndFileTheSame, 1);
+	Ar.SerializeBits(&bLocalIsVisible, 1);
+	Ar << PackageName;
+
+	if (!bArePackageAndFileTheSame)
+	{
+		Ar << FileName;
+	}
+	else if (Ar.IsLoading())
+	{
+		FileName = PackageName;
+	}
+
+	bIsVisible = bLocalIsVisible;
+
+	bOutSuccess = !Ar.IsError();
+	return true;
+}
 
 //////////////////////////////////////////////////////////////////////////
 // APlayerController
@@ -128,7 +182,7 @@ APlayerController::APlayerController(const FObjectInitializer& ObjectInitializer
 	if (RootComponent)
 	{
 		// We want to drive rotation with ControlRotation regardless of attachment state.
-		RootComponent->bAbsoluteRotation = true;
+		RootComponent->SetUsingAbsoluteRotation(true);
 	}
 }
 
@@ -315,25 +369,27 @@ void APlayerController::ClientFlushLevelStreaming_Implementation()
 }
 
 
-void APlayerController::ServerUpdateLevelVisibility_Implementation(FName PackageName, bool bIsVisible)
+void APlayerController::ServerUpdateLevelVisibility_Implementation(const FUpdateLevelVisibilityLevelInfo& LevelVisibility)
 {
 	UNetConnection* Connection = Cast<UNetConnection>(Player);
 	if (Connection != NULL)
 	{
-		PackageName = NetworkRemapPath(PackageName, true);
-		Connection->UpdateLevelVisibility(PackageName, bIsVisible);
+		FUpdateLevelVisibilityLevelInfo LevelVisibilityCopy = LevelVisibility;
+		LevelVisibilityCopy.PackageName = NetworkRemapPath(LevelVisibilityCopy.PackageName, true);
+
+		Connection->UpdateLevelVisibility(LevelVisibilityCopy);
 	}
 }
 
-bool APlayerController::ServerUpdateLevelVisibility_Validate(FName PackageName, bool bIsVisible)
+bool APlayerController::ServerUpdateLevelVisibility_Validate(const FUpdateLevelVisibilityLevelInfo& LevelVisibility)
 {
-	RPC_VALIDATE( PackageName.IsValid() );
+	RPC_VALIDATE(LevelVisibility.PackageName.IsValid());
 
 	FText Reason;
 
-	if ( !FPackageName::IsValidLongPackageName( PackageName.ToString(), true, &Reason ) )
+	if (!FPackageName::IsValidLongPackageName(LevelVisibility.PackageName.ToString(), true, &Reason))
 	{
-		UE_LOG( LogPlayerController, Warning, TEXT( "ServerUpdateLevelVisibility() Invalid package name: %s (%s)" ), *PackageName.ToString(), *Reason.ToString() );
+		UE_LOG(LogPlayerController, Warning, TEXT( "ServerUpdateLevelVisibility() Invalid package name: %s (%s)" ), *LevelVisibility.PackageName.ToString(), *Reason.ToString());
 		return false;
 	}
 
@@ -342,17 +398,17 @@ bool APlayerController::ServerUpdateLevelVisibility_Validate(FName PackageName, 
 
 void APlayerController::ServerUpdateMultipleLevelsVisibility_Implementation( const TArray<FUpdateLevelVisibilityLevelInfo>& LevelVisibilities )
 {
-	for( const FUpdateLevelVisibilityLevelInfo& LevelVisibility : LevelVisibilities )
+	for(const FUpdateLevelVisibilityLevelInfo& LevelVisibility : LevelVisibilities)
 	{
-		ServerUpdateLevelVisibility_Implementation( LevelVisibility.PackageName, LevelVisibility.bIsVisible );
+		ServerUpdateLevelVisibility_Implementation(LevelVisibility);
 	}
 }
 
 bool APlayerController::ServerUpdateMultipleLevelsVisibility_Validate( const TArray<FUpdateLevelVisibilityLevelInfo>& LevelVisibilities )
 {
-	for( const FUpdateLevelVisibilityLevelInfo& LevelVisibility : LevelVisibilities )
+	for(const FUpdateLevelVisibilityLevelInfo& LevelVisibility : LevelVisibilities)
 	{
-		if( !ServerUpdateLevelVisibility_Validate( LevelVisibility.PackageName, LevelVisibility.bIsVisible ) )
+		if(!ServerUpdateLevelVisibility_Validate(LevelVisibility))
 		{
 			return false;
 		}
@@ -653,7 +709,7 @@ void APlayerController::InitInputSystem()
 
 	// add the player to any matinees running so that it gets in on any cinematics already running, etc
 	// (already done on server in PostLogin())
-	if (Role < ROLE_Authority)
+	if (GetLocalRole() < ROLE_Authority)
 	{
 		TArray<AMatineeActor*> AllMatineeActors;
 		World->GetMatineeActors(AllMatineeActors);
@@ -737,7 +793,7 @@ void APlayerController::ClientRestart_Implementation(APawn* NewPawn)
 	GetPawn()->Controller = this;
 	GetPawn()->PawnClientRestart();
 	
-	if (Role < ROLE_Authority)
+	if (GetLocalRole() < ROLE_Authority)
 	{
 		ChangeState( NAME_Playing );
 		if (bAutoManageActiveCameraTarget)
@@ -982,6 +1038,7 @@ bool APlayerController::ServerShortTimeout_Validate()
 
 void APlayerController::ServerShortTimeout_Implementation()
 {
+	QUICK_SCOPE_CYCLE_COUNTER(STAT_PC_ServerShortTimeout);
 	if (!bShortConnectTimeOut)
 	{
 		UWorld* World = GetWorld();
@@ -999,8 +1056,8 @@ void APlayerController::ServerShortTimeout_Implementation()
 			{
 				if (NetworkObjectInfo.IsValid())
 				{
-					AActor* const A = NetworkObjectInfo->Actor;
-					if (A && !A->IsPendingKill())
+					AActor* const A = NetworkObjectInfo->WeakActor.Get();
+					if (A)
 					{
 						if (!A->bOnlyRelevantToOwner)
 						{
@@ -1012,20 +1069,14 @@ void APlayerController::ServerShortTimeout_Implementation()
 		}
 		else 
 		{
-			float NetUpdateTimeOffset = (World->GetAuthGameMode()->GetNumPlayers() < 8) ? 0.2f : 0.5f;
-			for (TSharedPtr<FNetworkObjectInfo> NetworkObjectInfo : World->GetNetDriver()->GetNetworkObjectList().GetAllObjects())
+			if (World->GetNetDriver())
 			{
-				if (NetworkObjectInfo.IsValid())
+				float NetUpdateTimeOffset = (World->GetAuthGameMode()->GetNumPlayers() < 8) ? 0.2f : 0.5f;
+				auto ValidActorTest = [](const AActor* const Actor)
 				{
-					AActor* const A = NetworkObjectInfo->Actor;
-					if (A && !A->IsPendingKill())
-					{
-						if ((A->NetUpdateFrequency < 1) && !A->bOnlyRelevantToOwner)
-						{
-							A->SetNetUpdateTime(World->TimeSeconds + NetUpdateTimeOffset * FMath::FRand());
-						}
-					}
-				}
+					return (Actor->NetUpdateFrequency < 1) && !Actor->bOnlyRelevantToOwner;
+				};
+				World->GetNetDriver()->ForceAllActorsNetUpdateTime(NetUpdateTimeOffset, ValidActorTest);
 			}
 		}
 	}
@@ -1072,7 +1123,7 @@ void APlayerController::SpawnDefaultHUD()
 	UE_LOG(LogPlayerController, Verbose, TEXT("SpawnDefaultHUD"));
 	FActorSpawnParameters SpawnInfo;
 	SpawnInfo.Owner = this;
-	SpawnInfo.Instigator = Instigator;
+	SpawnInfo.Instigator = GetInstigator();
 	SpawnInfo.ObjectFlags |= RF_Transient;	// We never want to save HUDs into a map
 	MyHUD = GetWorld()->SpawnActor<AHUD>( SpawnInfo );
 }
@@ -1204,6 +1255,18 @@ void APlayerController::ServerAcknowledgePossession_Implementation(APawn* P)
 {
 	UE_LOG(LogPlayerController, Verbose, TEXT("ServerAcknowledgePossession_Implementation %s"), *GetNameSafe(P));
 	AcknowledgedPawn = P;
+
+	if (PlayerControllerCVars::NetResetServerPredictionDataOnPawnAck != 0)
+	{
+		if (AcknowledgedPawn && AcknowledgedPawn == GetPawn())
+		{
+			INetworkPredictionInterface* NetworkPredictionInterface = GetPawn() ? Cast<INetworkPredictionInterface>(GetPawn()->GetMovementComponent()) : NULL;
+			if (NetworkPredictionInterface)
+			{
+				NetworkPredictionInterface->ResetPredictionData_Server();
+			}
+		}
+	}
 }
 
 bool APlayerController::ServerAcknowledgePossession_Validate(APawn* P)
@@ -1222,7 +1285,7 @@ void APlayerController::OnUnPossess()
 {
 	if (GetPawn() != NULL)
 	{
-		if (Role == ROLE_Authority)
+		if (GetLocalRole() == ROLE_Authority)
 		{
 			GetPawn()->SetReplicates(true);
 		}
@@ -1249,7 +1312,7 @@ void APlayerController::ClientSetHUD_Implementation(TSubclassOf<AHUD> NewHUDClas
 
 	FActorSpawnParameters SpawnInfo;
 	SpawnInfo.Owner = this;
-	SpawnInfo.Instigator = Instigator;
+	SpawnInfo.Instigator = GetInstigator();
 	SpawnInfo.ObjectFlags |= RF_Transient;	// We never want to save HUDs into a map
 
 	MyHUD = GetWorld()->SpawnActor<AHUD>(NewHUDClass, SpawnInfo );
@@ -1478,7 +1541,7 @@ void APlayerController::Destroyed()
 	if (GetPawn() != NULL)
 	{
 		// Handle players leaving the game
-		if (Player == NULL && Role == ROLE_Authority)
+		if (Player == NULL && GetLocalRole() == ROLE_Authority)
 		{
 			PawnLeavingGame();
 		}
@@ -1709,6 +1772,31 @@ void APlayerController::ServerUpdateCamera_Implementation(FVector_NetQuantize Ca
 }
 
 /// @endcond
+
+bool APlayerController::ServerExecRPC_Validate(const FString& Msg)
+{
+	return true;
+}
+
+void APlayerController::ServerExecRPC_Implementation(const FString& Msg)
+{
+#if !UE_BUILD_SHIPPING
+	ClientMessage(ConsoleCommand(Msg));
+#endif
+}
+	
+void APlayerController::ServerExec(const FString& Msg)
+{
+#if !UE_BUILD_SHIPPING
+
+	if (Msg.Len() > 128)
+	{
+		UE_LOG(LogPlayerController, Warning, TEXT("APlayerController::ServerExec. Msg too big for network RPC. Truncating to 128 character"));
+	}
+
+	ServerExecRPC(Msg.Left(128));
+#endif
+}
 
 void APlayerController::RestartLevel()
 {
@@ -2153,7 +2241,7 @@ void APlayerController::PlayerTick( float DeltaTime )
 		
 		if ( IsInState(NAME_Inactive) )
 		{
-			if (Role < ROLE_Authority)
+			if (GetLocalRole() < ROLE_Authority)
 			{
 				SafeServerCheckClientPossession();
 			}
@@ -2162,7 +2250,7 @@ void APlayerController::PlayerTick( float DeltaTime )
 		}
 		else if ( IsInState(NAME_Spectating) )
 		{
-			if (Role < ROLE_Authority)
+			if (GetLocalRole() < ROLE_Authority)
 			{
 				SafeServerUpdateSpectatorState();
 			}
@@ -2576,7 +2664,7 @@ void APlayerController::SpawnPlayerCameraManager()
 	// If no archetype specified, spawn an Engine.PlayerCameraManager.  NOTE all games should specify an archetype.
 	FActorSpawnParameters SpawnInfo;
 	SpawnInfo.Owner = this;
-	SpawnInfo.Instigator = Instigator;
+	SpawnInfo.Instigator = GetInstigator();
 	SpawnInfo.ObjectFlags |= RF_Transient;	// We never want to save camera managers into a map
 	if (PlayerCameraManagerClass != NULL)
 	{
@@ -2817,8 +2905,6 @@ void APlayerController::ServerViewPrevPlayer_Implementation()
 
 APlayerState* APlayerController::GetNextViewablePlayer(int32 dir)
 {
-	int32 CurrentIndex = -1;
-
 	UWorld* World = GetWorld();
 	AGameModeBase* GameMode = World->GetAuthGameMode();
 	AGameStateBase* GameState = World->GetGameState();
@@ -2829,44 +2915,33 @@ APlayerState* APlayerController::GetNextViewablePlayer(int32 dir)
 		return nullptr;
 	}
 
-	if (PlayerCameraManager && PlayerCameraManager->ViewTarget.PlayerState)
+	APlayerState* NextPlayerState = (PlayerCameraManager ? PlayerCameraManager->ViewTarget.GetPlayerState() : nullptr);
+	
+	// If we don't have a NextPlayerState, use our own.
+	// This will allow us to attempt to find another player to view or, if all else fails, makes sure we have a playerstate set for next time.
+	int32 NextIndex = (NextPlayerState ? GameState->PlayerArray.Find(NextPlayerState) : GameState->PlayerArray.Find(PlayerState));
+
+	// Cycle through the player states until we find a valid one.
+	for (int32 i = 0; i < GameState->PlayerArray.Num(); ++i)
 	{
-		// Find index of current viewtarget's PlayerState
-		for ( int32 i=0; i<GameState->PlayerArray.Num(); i++ )
+		NextIndex = ((NextIndex == 0) && (dir < 0)) ? (GameState->PlayerArray.Num() - 1) : ((NextIndex == (GameState->PlayerArray.Num() - 1)) && (dir > 0)) ? 0 : NextIndex += dir;
+		NextPlayerState = GameState->PlayerArray[NextIndex];
+
+		// Make sure we're not trying to view our own player state.
+		if (NextPlayerState != PlayerState)
 		{
-			if (PlayerCameraManager->ViewTarget.PlayerState == GameState->PlayerArray[i])
+			AController* NextController = Cast<AController>(NextPlayerState->GetOwner());
+
+			// Check they have a pawn & the game mode is ok with us spectating them.
+			if (NextController && NextController->GetPawn() && GameMode->CanSpectate(this, NextPlayerState))
 			{
-				CurrentIndex = i;
 				break;
 			}
 		}
 	}
 
-	// Find next valid viewtarget in appropriate direction
-	int32 NewIndex;
-	for ( NewIndex=CurrentIndex+dir; (NewIndex>=0)&&(NewIndex<GameState->PlayerArray.Num()); NewIndex=NewIndex+dir )
-	{
-		APlayerState* const NextPlayerState = GameState->PlayerArray[NewIndex];
-		AController* NextController = (NextPlayerState ? Cast<AController>(NextPlayerState->GetOwner()) : nullptr);
-		if ( NextController && NextController->GetPawn() != nullptr && GameMode->CanSpectate(this, NextPlayerState) )
-		{
-			return NextPlayerState;
-		}
-	}
-
-	// wrap around
-	CurrentIndex = (NewIndex < 0) ? GameState->PlayerArray.Num() : -1;
-	for ( NewIndex=CurrentIndex+dir; (NewIndex>=0)&&(NewIndex<GameState->PlayerArray.Num()); NewIndex=NewIndex+dir )
-	{
-		APlayerState* const NextPlayerState = GameState->PlayerArray[NewIndex];
-		AController* NextController = (NextPlayerState ? Cast<AController>(NextPlayerState->GetOwner()) : nullptr);
-		if ( NextController && NextController->GetPawn() != nullptr && GameMode->CanSpectate(this, NextPlayerState) )
-		{
-			return NextPlayerState;
-		}
-	}
-
-	return nullptr;
+	// If we've failed to find another player to view, we'll be back to our original view target playerstate.
+	return NextPlayerState;
 }
 
 void APlayerController::ViewAPlayer(int32 dir)
@@ -3893,6 +3968,19 @@ void APlayerController::PlayDynamicForceFeedback(float Intensity, float Duration
 	}
 }
 
+
+void APlayerController::TestServerLevelVisibilityChange(const FName PackageName, const FName FileName)
+{
+#if !(UE_BUILD_TEST||UE_BUILD_SHIPPING)
+	FUpdateLevelVisibilityLevelInfo LevelInfo;
+	LevelInfo.bIsVisible = true;
+	LevelInfo.PackageName = PackageName;
+	LevelInfo.FileName = FileName;
+	ServerUpdateLevelVisibility(LevelInfo);
+#endif
+}
+
+
 FDynamicForceFeedbackHandle APlayerController::PlayDynamicForceFeedback(float Intensity, float Duration, bool bAffectsLeftLarge, bool bAffectsLeftSmall, bool bAffectsRightLarge, bool bAffectsRightSmall, EDynamicForceFeedbackAction::Type Action, FDynamicForceFeedbackHandle ActionHandle)
 {
 	FDynamicForceFeedbackHandle FeedbackHandle = 0;
@@ -4379,7 +4467,7 @@ void APlayerController::SetPlayer( UPlayer* InPlayer )
 	UpdateStateInputComponents();
 
 #if ENABLE_VISUAL_LOG
-	if (Role == ROLE_Authority && FVisualLogger::Get().IsRecordingOnServer())
+	if (GetLocalRole() == ROLE_Authority && FVisualLogger::Get().IsRecordingOnServer())
 	{
 		OnServerStartedVisualLogger(true);
 	}
@@ -4499,7 +4587,7 @@ void APlayerController::TickActor( float DeltaSeconds, ELevelTick TickType, FAct
 		// force physics update for clients that aren't sending movement updates in a timely manner 
 		// this prevents cheats associated with artificially induced ping spikes
 		// skip updates if pawn lost autonomous proxy role (e.g. TurnOff() call)
-		if (GetPawn() && !GetPawn()->IsPendingKill() && GetPawn()->GetRemoteRole() == ROLE_AutonomousProxy && GetPawn()->bReplicateMovement)
+		if (GetPawn() && !GetPawn()->IsPendingKill() && GetPawn()->GetRemoteRole() == ROLE_AutonomousProxy && GetPawn()->IsReplicatingMovement())
 		{
 			UMovementComponent* PawnMovement = GetPawn()->GetMovementComponent();
 			INetworkPredictionInterface* NetworkPredictionInterface = Cast<INetworkPredictionInterface>(PawnMovement);
@@ -4595,7 +4683,7 @@ void APlayerController::TickActor( float DeltaSeconds, ELevelTick TickType, FAct
 			}
 		}
 	}
-	else if (Role > ROLE_SimulatedProxy)
+	else if (GetLocalRole() > ROLE_SimulatedProxy)
 	{
 		// Process PlayerTick with input.
 		if (!PlayerInput && (Player == nullptr || Cast<ULocalPlayer>( Player ) != nullptr))
@@ -4746,7 +4834,7 @@ void APlayerController::EndPlayingState()
 
 void APlayerController::BeginSpectatingState()
 {
-	if (GetPawn() != NULL && Role == ROLE_Authority && ShouldKeepCurrentPawnUponSpectating() == false)
+	if (GetPawn() != NULL && GetLocalRole() == ROLE_Authority && ShouldKeepCurrentPawnUponSpectating() == false)
 	{
 		UnPossess();
 	}

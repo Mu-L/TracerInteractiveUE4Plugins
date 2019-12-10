@@ -7,13 +7,15 @@
 #include "XmppStrophe/StropheStanzaConstants.h"
 #include "XmppLog.h"
 #include "Misc/EmbeddedCommunication.h"
+#include "Containers/BackgroundableTicker.h"
 
 #if WITH_XMPP_STROPHE
 
-const FName FXmppPrivateChatStrophe::TickRequesterId = FName("StrophePrivateChat");
+#define TickRequesterId FName("StrophePrivateChat")
 
 FXmppPrivateChatStrophe::FXmppPrivateChatStrophe(FXmppConnectionStrophe& InConnectionManager)
-	: ConnectionManager(InConnectionManager)
+	: FTickerObjectBase(0.0f, FBackgroundableTicker::GetCoreTicker())
+	, ConnectionManager(InConnectionManager)
 {
 }
 
@@ -144,5 +146,7 @@ void FXmppPrivateChatStrophe::CleanupMessages()
 		FEmbeddedCommunication::AllowSleep(TickRequesterId);
 	}
 }
+
+#undef TickRequesterId
 
 #endif

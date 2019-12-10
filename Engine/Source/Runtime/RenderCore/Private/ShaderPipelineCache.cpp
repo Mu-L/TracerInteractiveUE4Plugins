@@ -69,6 +69,12 @@ static TAutoConsoleVariable<int32> CVarPSOFileCacheBatchSize(
 														   TEXT("Set the number of PipelineStateObjects to compile in a single batch operation when compiling takes priority. Defaults to a maximum of 50 per frame, due to async. file IO it is less in practice."),
 														   ECVF_Default | ECVF_RenderThreadSafe
 														   );
+static TAutoConsoleVariable<int32> CVarPSOFileCachePrecompileBatchSize(
+															 TEXT("r.ShaderPipelineCache.PrecompileBatchSize"),
+															 50,
+															 TEXT("Set the number of PipelineStateObjects to compile in a single batch operation when pre-optimizing the cache. Defaults to a maximum of 50 per frame, due to async. file IO it is less in practice."),
+															 ECVF_Default | ECVF_RenderThreadSafe
+															 );
 static TAutoConsoleVariable<float> CVarPSOFileCacheBackgroundBatchTime(
 														  TEXT("r.ShaderPipelineCache.BackgroundBatchTime"),
 														  0.0f,
@@ -81,6 +87,12 @@ static TAutoConsoleVariable<float> CVarPSOFileCacheBatchTime(
 														   TEXT("The target time (in ms) to spend precompiling each frame when compiling takes priority or 0.0 to disable. When precompiling is faster the batch size will grow and when slower will shrink to attempt to occupy the full amount. Defaults to 16.0 (max. ms per-frame of precompilation)."),
 														   ECVF_Default | ECVF_RenderThreadSafe
 														   );
+static TAutoConsoleVariable<float> CVarPSOFileCachePrecompileBatchTime(
+															 TEXT("r.ShaderPipelineCache.PrecompileBatchTime"),
+															 0.0f,
+															 TEXT("The target time (in ms) to spend precompiling each frame when cpre-optimizing or 0.0 to disable. When precompiling is faster the batch size will grow and when slower will shrink to attempt to occupy the full amount. Defaults to 10.0 (off)."),
+															 ECVF_Default | ECVF_RenderThreadSafe
+															 );
 static TAutoConsoleVariable<int32> CVarPSOFileCacheSaveAfterPSOsLogged(
 														   TEXT("r.ShaderPipelineCache.SaveAfterPSOsLogged"),
 #if !UE_BUILD_SHIPPING
@@ -98,6 +110,13 @@ static TAutoConsoleVariable<int32> CVarPSOFileCacheAutoSaveTime(
 															TEXT("Set the time where any logged PSO's will be saved if the number is < r.ShaderPipelineCache.SaveAfterPSOsLogged. Disabled when r.ShaderPipelineCache.SaveAfterPSOsLogged is 0"),
 															ECVF_Default | ECVF_RenderThreadSafe
 														);
+
+static TAutoConsoleVariable<int32> CVarPSOFileCachePreCompileMask(
+																TEXT("r.ShaderPipelineCache.PreCompileMask"),
+																-1,
+																TEXT("Mask used to precompile the cache. Defaults to all PSOs (-1)"),
+																ECVF_Default | ECVF_RenderThreadSafe
+																);
 
 static TAutoConsoleVariable<int32> CVarPSOFileCacheAutoSaveTimeBoundPSO(
 	TEXT("r.ShaderPipelineCache.AutoSaveTimeBoundPSO"),
@@ -192,6 +211,11 @@ void ConsoleCommandSwitchModePipelineCacheCmd(const TArray< FString >& Args)
             FShaderPipelineCache::SetBatchMode(FShaderPipelineCache::BatchMode::Fast);
             FShaderPipelineCache::ResumeBatching();
         }
+		else if (Mode == TEXT("Precompile"))
+		{
+			FShaderPipelineCache::SetBatchMode(FShaderPipelineCache::BatchMode::Precompile);
+			FShaderPipelineCache::ResumeBatching();
+		}
     }
 }
 
@@ -272,6 +296,7 @@ private:
 
 FShaderPipelineCache* FShaderPipelineCache::ShaderPipelineCache = nullptr;
 
+FShaderPipelineCache::FShaderCachePreOpenDelegate FShaderPipelineCache::OnCachePreOpen;
 FShaderPipelineCache::FShaderCacheOpenedDelegate FShaderPipelineCache::OnCachedOpened;
 FShaderPipelineCache::FShaderCacheClosedDelegate FShaderPipelineCache::OnCachedClosed;
 FShaderPipelineCache::FShaderPrecompilationBeginDelegate FShaderPipelineCache::OnPrecompilationBegin;
@@ -300,7 +325,7 @@ bool FShaderPipelineCache::SetGameUsageMaskWithComparison(uint64 InMask, FPSOMas
 {
 	bool bMaskChanged = false;
 	
-	if (ShaderPipelineCache != nullptr)
+	if (ShaderPipelineCache != nullptr && CVarPSOFileCacheGameFileMaskEnabled.GetValueOnAnyThread())
 	{
 		FScopeLock Lock(&ShaderPipelineCache->Mutex);
 		
@@ -309,7 +334,7 @@ bool FShaderPipelineCache::SetGameUsageMaskWithComparison(uint64 InMask, FPSOMas
 		
 		ShaderPipelineCache->bReady = true;
 		
-		if(bMaskChanged && ShaderPipelineCache->bOpened && CVarPSOFileCacheGameFileMaskEnabled.GetValueOnAnyThread())
+		if(bMaskChanged && ShaderPipelineCache->bOpened)
 		{
 			// Mask has changed and we have an open file refetch PSO's for this Mask - leave the FPipelineFileCache file open - no need to close - just pull out the relevant PSOs.
 			// If this PSO compile run has completed for this Mask in which case don't refetch + compile for that mask
@@ -412,6 +437,12 @@ void FShaderPipelineCache::SetBatchMode(BatchMode Mode)
 	{
 		switch (Mode)
 		{
+			case BatchMode::Precompile:
+			{
+				ShaderPipelineCache->BatchSize = CVarPSOFileCachePrecompileBatchSize.GetValueOnAnyThread();
+				ShaderPipelineCache->BatchTime = CVarPSOFileCachePrecompileBatchTime.GetValueOnAnyThread();
+				break;
+			}
 			case BatchMode::Fast:
 			{
 				ShaderPipelineCache->BatchSize = CVarPSOFileCacheBatchSize.GetValueOnAnyThread();
@@ -528,114 +559,119 @@ bool FShaderPipelineCache::Precompile(FRHICommandListImmediate& RHICmdList, ESha
 	INC_DWORD_STAT(STAT_PreCompileShadersNum);
     
     uint64 StartTime = FPlatformTime::Cycles64();
-		
+
 	bool bOk = false;
 	
-	TArray<uint8> DummyCode;
-	
-	if(FPipelineCacheFileFormatPSO::DescriptorType::Graphics == PSO.Type)
+	if(PSO.Verify())
 	{
-		FGraphicsPipelineStateInitializer GraphicsInitializer;
+		TArray<uint8> DummyCode;
 		
-		FRHIVertexDeclaration* VertexDesc = PipelineStateCache::GetOrCreateVertexDeclaration(PSO.GraphicsDesc.VertexDescriptor);
-		GraphicsInitializer.BoundShaderState.VertexDeclarationRHI = VertexDesc;
-		
-		FVertexShaderRHIRef VertexShader;
-		if (PSO.GraphicsDesc.VertexShader != FSHAHash())
+		if(FPipelineCacheFileFormatPSO::DescriptorType::Graphics == PSO.Type)
 		{
-			VertexShader = FShaderCodeLibrary::CreateVertexShader(Platform, PSO.GraphicsDesc.VertexShader, DummyCode);
-			GraphicsInitializer.BoundShaderState.VertexShaderRHI = VertexShader;
-		}
+			FGraphicsPipelineStateInitializer GraphicsInitializer;
+			
+			FRHIVertexDeclaration* VertexDesc = PipelineStateCache::GetOrCreateVertexDeclaration(PSO.GraphicsDesc.VertexDescriptor);
+			GraphicsInitializer.BoundShaderState.VertexDeclarationRHI = VertexDesc;
+			
+			FVertexShaderRHIRef VertexShader;
+			if (PSO.GraphicsDesc.VertexShader != FSHAHash())
+			{
+				VertexShader = FShaderCodeLibrary::CreateVertexShader(Platform, PSO.GraphicsDesc.VertexShader, DummyCode);
+				GraphicsInitializer.BoundShaderState.VertexShaderRHI = VertexShader;
+			}
 
-#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
-		FHullShaderRHIRef HullShader;
-		if (PSO.GraphicsDesc.HullShader != FSHAHash())
-		{
-			HullShader = FShaderCodeLibrary::CreateHullShader(Platform, PSO.GraphicsDesc.HullShader, DummyCode);
-			GraphicsInitializer.BoundShaderState.HullShaderRHI = HullShader;
-		}
+	#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
+			FHullShaderRHIRef HullShader;
+			if (PSO.GraphicsDesc.HullShader != FSHAHash())
+			{
+				HullShader = FShaderCodeLibrary::CreateHullShader(Platform, PSO.GraphicsDesc.HullShader, DummyCode);
+				GraphicsInitializer.BoundShaderState.HullShaderRHI = HullShader;
+			}
 
-		FDomainShaderRHIRef DomainShader;
-		if (PSO.GraphicsDesc.DomainShader != FSHAHash())
-		{
-			DomainShader = FShaderCodeLibrary::CreateDomainShader(Platform, PSO.GraphicsDesc.DomainShader, DummyCode);
-			GraphicsInitializer.BoundShaderState.DomainShaderRHI = DomainShader;
-		}
-#endif
-		FPixelShaderRHIRef FragmentShader;
-		if (PSO.GraphicsDesc.FragmentShader != FSHAHash())
-		{
-			FragmentShader = FShaderCodeLibrary::CreatePixelShader(Platform, PSO.GraphicsDesc.FragmentShader, DummyCode);
-			GraphicsInitializer.BoundShaderState.PixelShaderRHI = FragmentShader;
-		}
+			FDomainShaderRHIRef DomainShader;
+			if (PSO.GraphicsDesc.DomainShader != FSHAHash())
+			{
+				DomainShader = FShaderCodeLibrary::CreateDomainShader(Platform, PSO.GraphicsDesc.DomainShader, DummyCode);
+				GraphicsInitializer.BoundShaderState.DomainShaderRHI = DomainShader;
+			}
+	#endif
+			FPixelShaderRHIRef FragmentShader;
+			if (PSO.GraphicsDesc.FragmentShader != FSHAHash())
+			{
+				FragmentShader = FShaderCodeLibrary::CreatePixelShader(Platform, PSO.GraphicsDesc.FragmentShader, DummyCode);
+				GraphicsInitializer.BoundShaderState.PixelShaderRHI = FragmentShader;
+			}
 
-#if PLATFORM_SUPPORTS_GEOMETRY_SHADERS
-		FGeometryShaderRHIRef GeometryShader;
-		if (PSO.GraphicsDesc.GeometryShader != FSHAHash())
-		{
-			GeometryShader = FShaderCodeLibrary::CreateGeometryShader(Platform, PSO.GraphicsDesc.GeometryShader, DummyCode);
-			GraphicsInitializer.BoundShaderState.GeometryShaderRHI = GeometryShader;
-		}
-#endif
-		auto BlendState = RHICmdList.CreateBlendState(PSO.GraphicsDesc.BlendState);
-		GraphicsInitializer.BlendState = BlendState;
-		
-		auto RasterState = RHICmdList.CreateRasterizerState(PSO.GraphicsDesc.RasterizerState);
-		GraphicsInitializer.RasterizerState = RasterState;
-		
-		auto DepthState = RHICmdList.CreateDepthStencilState(PSO.GraphicsDesc.DepthStencilState);
-		GraphicsInitializer.DepthStencilState = DepthState;
-		
-		for (uint32 i = 0; i < MaxSimultaneousRenderTargets; ++i)
-		{
-			GraphicsInitializer.RenderTargetFormats[i] = PSO.GraphicsDesc.RenderTargetFormats[i];
-			GraphicsInitializer.RenderTargetFlags[i] = PSO.GraphicsDesc.RenderTargetFlags[i];
-		}
-		
-		GraphicsInitializer.RenderTargetsEnabled = PSO.GraphicsDesc.RenderTargetsActive;
-		GraphicsInitializer.NumSamples = PSO.GraphicsDesc.MSAASamples;
-		
-		if(GraphicsInitializer.RenderTargetsEnabled > MaxSimultaneousRenderTargets || GraphicsInitializer.NumSamples > 16)
-		{
-			return false;
-		}
+	#if PLATFORM_SUPPORTS_GEOMETRY_SHADERS
+			FGeometryShaderRHIRef GeometryShader;
+			if (PSO.GraphicsDesc.GeometryShader != FSHAHash())
+			{
+				GeometryShader = FShaderCodeLibrary::CreateGeometryShader(Platform, PSO.GraphicsDesc.GeometryShader, DummyCode);
+				GraphicsInitializer.BoundShaderState.GeometryShaderRHI = GeometryShader;
+			}
+	#endif
+			auto BlendState = RHICmdList.CreateBlendState(PSO.GraphicsDesc.BlendState);
+			GraphicsInitializer.BlendState = BlendState;
+			
+			auto RasterState = RHICmdList.CreateRasterizerState(PSO.GraphicsDesc.RasterizerState);
+			GraphicsInitializer.RasterizerState = RasterState;
+			
+			auto DepthState = RHICmdList.CreateDepthStencilState(PSO.GraphicsDesc.DepthStencilState);
+			GraphicsInitializer.DepthStencilState = DepthState;
+			
+			for (uint32 i = 0; i < MaxSimultaneousRenderTargets; ++i)
+			{
+				GraphicsInitializer.RenderTargetFormats[i] = PSO.GraphicsDesc.RenderTargetFormats[i];
+				GraphicsInitializer.RenderTargetFlags[i] = PSO.GraphicsDesc.RenderTargetFlags[i];
+			}
+			
+			GraphicsInitializer.RenderTargetsEnabled = PSO.GraphicsDesc.RenderTargetsActive;
+			GraphicsInitializer.NumSamples = PSO.GraphicsDesc.MSAASamples;
 
-		GraphicsInitializer.SubpassHint = (ESubpassHint)PSO.GraphicsDesc.SubpassHint;
-		GraphicsInitializer.SubpassIndex = PSO.GraphicsDesc.SubpassIndex;
-		
-		GraphicsInitializer.DepthStencilTargetFormat = PSO.GraphicsDesc.DepthStencilFormat;
-		GraphicsInitializer.DepthStencilTargetFlag = PSO.GraphicsDesc.DepthStencilFlags;
-		GraphicsInitializer.DepthTargetLoadAction = PSO.GraphicsDesc.DepthLoad;
-		GraphicsInitializer.StencilTargetLoadAction = PSO.GraphicsDesc.StencilLoad;
-		GraphicsInitializer.DepthTargetStoreAction = PSO.GraphicsDesc.DepthStore;
-		GraphicsInitializer.StencilTargetStoreAction = PSO.GraphicsDesc.StencilStore;
-		
-		GraphicsInitializer.PrimitiveType = PSO.GraphicsDesc.PrimitiveType;
-		GraphicsInitializer.bFromPSOFileCache = true;
-		
-		// This indicates we do not want a fatal error if this compilation fails
-		// (ie, if this entry in the file cache is bad)
-		GraphicsInitializer.bFromPSOFileCache = 1;
-		
-		// Use SetGraphicsPipelineState to call down into PipelineStateCache and also handle the fallback case used by OpenGL.
-		SetGraphicsPipelineState(RHICmdList, GraphicsInitializer, EApplyRendertargetOption::DoNothing);
-		bOk = true;
+			GraphicsInitializer.SubpassHint = (ESubpassHint)PSO.GraphicsDesc.SubpassHint;
+			GraphicsInitializer.SubpassIndex = PSO.GraphicsDesc.SubpassIndex;
+			
+			GraphicsInitializer.DepthStencilTargetFormat = PSO.GraphicsDesc.DepthStencilFormat;
+			GraphicsInitializer.DepthStencilTargetFlag = PSO.GraphicsDesc.DepthStencilFlags;
+			GraphicsInitializer.DepthTargetLoadAction = PSO.GraphicsDesc.DepthLoad;
+			GraphicsInitializer.StencilTargetLoadAction = PSO.GraphicsDesc.StencilLoad;
+			GraphicsInitializer.DepthTargetStoreAction = PSO.GraphicsDesc.DepthStore;
+			GraphicsInitializer.StencilTargetStoreAction = PSO.GraphicsDesc.StencilStore;
+			
+			GraphicsInitializer.PrimitiveType = PSO.GraphicsDesc.PrimitiveType;
+			GraphicsInitializer.bFromPSOFileCache = true;
+			
+			// This indicates we do not want a fatal error if this compilation fails
+			// (ie, if this entry in the file cache is bad)
+			GraphicsInitializer.bFromPSOFileCache = 1;
+			
+			// Use SetGraphicsPipelineState to call down into PipelineStateCache and also handle the fallback case used by OpenGL.
+			SetGraphicsPipelineState(RHICmdList, GraphicsInitializer, EApplyRendertargetOption::DoNothing);
+			bOk = true;
+		}
+		else if(FPipelineCacheFileFormatPSO::DescriptorType::Compute == PSO.Type)
+		{
+			FComputeShaderRHIRef ComputeInitializer = FShaderCodeLibrary::CreateComputeShader(GMaxRHIShaderPlatform, PSO.ComputeDesc.ComputeShader, DummyCode);
+			if(ComputeInitializer.IsValid())
+			{
+				FComputePipelineState* ComputeResult = PipelineStateCache::GetAndOrCreateComputePipelineState(RHICmdList, ComputeInitializer);
+				bOk = ComputeResult != nullptr;
+			}
+		}
+		else
+		{
+			check(false);
+		}
 	}
-	else if(FPipelineCacheFileFormatPSO::DescriptorType::Compute == PSO.Type)
-	{
-		FComputeShaderRHIRef ComputeInitializer = FShaderCodeLibrary::CreateComputeShader(GMaxRHIShaderPlatform, PSO.ComputeDesc.ComputeShader, DummyCode);
-		if(ComputeInitializer.IsValid())
-		{
-			FComputePipelineState* ComputeResult = PipelineStateCache::GetAndOrCreateComputePipelineState(RHICmdList, ComputeInitializer);
-			bOk = ComputeResult != nullptr;
-		}
-	}
+#if !UE_BUILD_SHIPPING
 	else
 	{
-		check(false);
+		UE_LOG(LogRHI, Warning, TEXT("FShaderPipelineCache::Precompile() - PSO Verify failure - Did not attempt to precompile"));
 	}
-    
-    if (bOk)
+#endif
+	
+    // All read dependencies have given the green light - always update task counts
+    // Otherwise we end up with outstanding compiles that we can't progress or external tools may think this has not been completed and may run again.
     {
         uint64 TimeDelta = FPlatformTime::Cycles64() - StartTime;
         FPlatformAtomics::InterlockedIncrement(&TotalCompleteTasks);
@@ -1114,35 +1150,25 @@ FShaderPipelineCache::~FShaderPipelineCache()
 	
 	// The render thread tick should be dead now and we are safe to destroy everything that needs to wait or manual destruction
 
-	for(CompileJob& Entry: ReadTasks )
+	// Close() should have called though to Flush() - all work is now in the shutdown lists
+	for(CompileJob& Entry: ShutdownReadCompileTasks)
 	{
-		check(Entry.ReadRequests);
-		Entry.ReadRequests->BlockingWaitComplete();
-	}
-	
-	for(CompileJob& Entry: ShutdownReadCompileTasks )
-	{
-		check(Entry.ReadRequests);
-		Entry.ReadRequests->BlockingWaitComplete();
-	}
-	
-	for (FPipelineCacheFileFormatPSORead* Entry : FetchTasks)
-	{
-		if(Entry->ReadRequest.IsValid())
+		if(Entry.ReadRequests != nullptr)
 		{
-			Entry->ReadRequest->WaitCompletion(0.0);
+			Entry.ReadRequests->BlockingWaitComplete();
+			delete Entry.ReadRequests;
+			Entry.ReadRequests = nullptr;
 		}
-		delete Entry;
 	}
 	
 	for (FPipelineCacheFileFormatPSORead* Entry : ShutdownFetchTasks)
 	{
 		if(Entry->ReadRequest.IsValid())
 		{
-			Entry->ReadRequest->WaitCompletion(0.0);
+			Entry->ReadRequest->WaitCompletion(0.f);
 		}
 		delete Entry;
-	}	
+	}
 }
 
 bool FShaderPipelineCache::IsTickable() const
@@ -1176,6 +1202,8 @@ void FShaderPipelineCache::Tick( float DeltaTime )
         {
             OnPrecompilationComplete.Broadcast((uint32)TotalCompleteTasks, FPlatformTime::ToSeconds64(TotalPrecompileTime), ShaderCachePrecompileContext);
         }
+		FPipelineFileCache::PreCompileComplete();
+		
         FPlatformAtomics::InterlockedExchange(&TotalCompleteTasks, 0);
         FPlatformAtomics::InterlockedExchange(&TotalPrecompileTime, 0);
     }
@@ -1354,6 +1382,16 @@ TStatId FShaderPipelineCache::GetStatId() const
 	RETURN_QUICK_DECLARE_CYCLE_STAT(FShaderPipelineBatchCompiler, STATGROUP_Tickables);
 }
 
+// Not sure where the define is for this but most seem to be low, medium, high, epic, cinema, auto, except material quality but that's less anyway
+static const int32 MaxQualityCount = 6;
+static const int32 MaxPlaylistCount = 3;
+
+static bool PreCompileMaskComparison(uint64 ReferenceGameMask, uint64 PSOMask)
+{
+	uint64 UsageMask = (ReferenceGameMask & PSOMask);
+	return (UsageMask & (7 << (MaxQualityCount*2+MaxPlaylistCount))) && (UsageMask & (63 << MaxQualityCount*2)) && (UsageMask & (63 << MaxQualityCount)) && (UsageMask & 63);
+}
+
 bool FShaderPipelineCache::Open(FString const& Name, EShaderPlatform Platform)
 {
 	FileName = Name;
@@ -1366,8 +1404,16 @@ bool FShaderPipelineCache::Open(FString const& Name, EShaderPlatform Platform)
 		
 		Flush();
 		
+		if (OnCachePreOpen.IsBound())
+		{
+			OnCachePreOpen.Broadcast(Name, Platform, bReady);
+		}
+		
 		if(bReady)
 		{
+			uint64 PreCompileMask = (uint64)CVarPSOFileCachePreCompileMask.GetValueOnAnyThread();
+			FPipelineFileCache::SetGameUsageMaskWithComparison(PreCompileMask, PreCompileMaskComparison);
+
 			int32 Order = (int32)FPipelineFileCache::PSOOrder::Default;
 			
 			if(!GConfig->GetInt(FShaderPipelineCacheConstants::SectionHeading, FShaderPipelineCacheConstants::SortOrderKey, Order, *GGameUserSettingsIni))
@@ -1401,10 +1447,14 @@ bool FShaderPipelineCache::Open(FString const& Name, EShaderPlatform Platform)
 
 			PreFetchedTasks = LocalPreFetchedTasks;
 
-			UE_LOG(LogRHI, Display, TEXT("Opened pipeline cache and enqueued %d of %d tasks for precompile."), Count, PreFetchedTasks.Num());
+			UE_LOG(LogRHI, Display, TEXT("Opened pipeline cache and enqueued %d of %d tasks for precompile with BatchSize %d and BatchTime %f."), Count, PreFetchedTasks.Num(), BatchSize, BatchTime);
 		}
 		else
 		{
+			if (CVarPSOFileCacheGameFileMaskEnabled.GetValueOnAnyThread() == 0)
+			{
+				CVarPSOFileCacheGameFileMaskEnabled->Set(1);
+			}
 			UE_LOG(LogRHI, Display, TEXT("Opened pipeline cache - precompile deferred on UsageMask."));
 		}
 	}

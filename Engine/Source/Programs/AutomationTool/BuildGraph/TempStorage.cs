@@ -927,6 +927,7 @@ namespace AutomationTool
 							// Create one zip per thread using the given basename
 							using (var ZipArchive = new Ionic.Zip.ZipFile(ZipFileName.FullName) { CompressionLevel = Ionic.Zlib.CompressionLevel.BestSpeed })
 							{
+								ZipArchive.UseZip64WhenSaving = Ionic.Zip.Zip64Option.AsNecessary;
 
 								// pull from the queue until we are out of files.
 								do
@@ -1129,6 +1130,10 @@ namespace AutomationTool
 				return true;
 			}
 			if (FileName.Equals("tbbmalloc.dll", StringComparison.OrdinalIgnoreCase) || FileName.Equals("libtbbmalloc.dylib", StringComparison.OrdinalIgnoreCase))
+			{
+				return true;
+			}
+			if (FileName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
 			{
 				return true;
 			}

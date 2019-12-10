@@ -264,6 +264,14 @@ bool ReadPackage(const TArray<uint8>& InSerializedPackageData, FConcertPackageIn
 
 } // namespace PackageDataUtil
 
+enum class FConcertSyncSessionDatabaseVersion
+{
+	Empty = 0,
+	Initial = 1,
+
+	Current = Initial,
+};
+
 class FConcertSyncSessionDatabaseStatements
 {
 public:
@@ -293,6 +301,9 @@ public:
 		PREPARE_STATEMENT(Statement_GetPackageName);
 		PREPARE_STATEMENT(Statement_GetPackageNameId);
 
+		PREPARE_STATEMENT(Statement_GetPersistEventId);
+		PREPARE_STATEMENT(Statement_AddPersistEvent);
+
 		PREPARE_STATEMENT(Statement_SetEndpointData);
 		PREPARE_STATEMENT(Statement_GetEndpointDataForId);
 		PREPARE_STATEMENT(Statement_GetAllEndpointData);
@@ -317,6 +328,8 @@ public:
 		PREPARE_STATEMENT(Statement_GetPackageMaxEventId);
 		PREPARE_STATEMENT(Statement_GetPackageDataForRevision);
 		PREPARE_STATEMENT(Statement_GetPackageHeadEventId);
+		PREPARE_STATEMENT(Statement_GetPackageHeadEventIdAndTransactionIdAtSave);
+		PREPARE_STATEMENT(Statement_GetMaxPackageEventIdAndTransactionEventIdAtSavePerPackageNameId);
 		PREPARE_STATEMENT(Statement_GetPackageHeadRevison);
 		PREPARE_STATEMENT(Statement_GetPackageTransactionEventIdAtLastSave);
 
@@ -332,6 +345,10 @@ public:
 		PREPARE_STATEMENT(Statement_GetActivityIdAndEventTypesInRange);
 		PREPARE_STATEMENT(Statement_GetActivityMaxId);
 		
+		PREPARE_STATEMENT(Statement_IgnoreActivity);
+		PREPARE_STATEMENT(Statement_PerceiveActivity);
+		PREPARE_STATEMENT(Statement_IsActivityIgnored);
+
 		PREPARE_STATEMENT(Statement_MapObjectNameIdToLockEventId);
 		PREPARE_STATEMENT(Statement_UnmapObjectNameIdsForLockEventId);
 		PREPARE_STATEMENT(Statement_GetLockEventIdsForObjectNameId);
@@ -341,6 +358,7 @@ public:
 		PREPARE_STATEMENT(Statement_UnmapPackageNameIdsForTransactionEventId);
 		PREPARE_STATEMENT(Statement_GetTransactionEventIdsForPackageNameId);
 		PREPARE_STATEMENT(Statement_GetTransactionEventIdsInRangeForPackageNameId);
+		PREPARE_STATEMENT(Statement_GetPackageNameIdsMaxTransactionId);
 		PREPARE_STATEMENT(Statement_GetPackageNameIdsWithTransactions);
 		PREPARE_STATEMENT(Statement_GetPackageNameIdsForTransactionEventId);
 
@@ -439,12 +457,37 @@ public:
 		return Statement_GetPackageName.BindAndExecuteSingle(InPackageNameId, OutPackageName);
 	}
 
-	/** Get an package_name_id from package_names for the given package_name */
+	/** Get a package_name_id from package_names for the given package_name */
 	SQLITE_PREPARED_STATEMENT(FGetPackageNameId, "SELECT package_name_id FROM package_names WHERE package_name = ?1;", SQLITE_PREPARED_STATEMENT_COLUMNS(int64), SQLITE_PREPARED_STATEMENT_BINDINGS(FName));
 	FGetPackageNameId Statement_GetPackageNameId;
 	bool GetPackageNameId(const FName InPackageName, int64& OutPackageNameId)
 	{
 		return Statement_GetPackageNameId.BindAndExecuteSingle(InPackageName, OutPackageNameId);
+	}
+
+	/**
+	 * Statements working on persist_events
+	 */
+
+	/** Get a persist_event_id and transaction_event_id_at_persist from persist_events for the given package_event_id */
+	SQLITE_PREPARED_STATEMENT(FGetPersistEventId, "SELECT persist_event_id, transaction_event_id_at_persist FROM persist_events WHERE package_event_id = ?1;", SQLITE_PREPARED_STATEMENT_COLUMNS(int64, int64), SQLITE_PREPARED_STATEMENT_BINDINGS(int64));
+	FGetPersistEventId Statement_GetPersistEventId;
+	bool GetPersistEventId(int64 InPackageEventId, int64& OutPersistEventId, int64& OutTransactionEventIdAtPersist)
+	{
+		return Statement_GetPersistEventId.BindAndExecuteSingle(InPackageEventId, OutPersistEventId, OutTransactionEventIdAtPersist);
+	}
+
+	/** Add a new package_event_id to persist_events and get its persist_event_id. */
+	SQLITE_PREPARED_STATEMENT_BINDINGS_ONLY(FAddPersistEvent, "INSERT INTO persist_events(package_event_id, transaction_event_id_at_persist) VALUES(?1, ?2);", SQLITE_PREPARED_STATEMENT_BINDINGS(int64, int64));
+	FAddPersistEvent Statement_AddPersistEvent;
+	bool AddPersistEvent(int64 InPackageEventId, int64 InTransactionEventIdAtPersist, int64& OutPersistEventId)
+	{
+		if (Statement_AddPersistEvent.BindAndExecute(InPackageEventId, InTransactionEventIdAtPersist))
+		{
+			OutPersistEventId = Database.GetLastInsertRowId();
+			return true;
+		}
+		return false;
 	}
 
 	/**
@@ -690,6 +733,30 @@ public:
 		return Statement_GetPackageHeadEventId.BindAndExecuteSingle(InPackageNameId, OutPackageEventId);
 	}
 
+	/** Get the largest package_event_id and its transaction_event_id_at_save currently in package_events for the given package_name_id */
+	SQLITE_PREPARED_STATEMENT(FGetPackageHeadEventIdAndTransactionIdAtSave, "SELECT MAX(package_event_id), transaction_event_id_at_save FROM package_events WHERE package_name_id = ?1;", SQLITE_PREPARED_STATEMENT_COLUMNS(int64, int64), SQLITE_PREPARED_STATEMENT_BINDINGS(int64));
+	FGetPackageHeadEventIdAndTransactionIdAtSave Statement_GetPackageHeadEventIdAndTransactionIdAtSave;
+	bool GetPackageHeadEventIdAndTransactionIdAtSave(const int64 InPackageNameId, int64& OutPackageEventId, int64& OutTransactionEventIdAtSave)
+	{
+		return Statement_GetPackageHeadEventIdAndTransactionIdAtSave.BindAndExecuteSingle(InPackageNameId, OutPackageEventId, OutTransactionEventIdAtSave);
+	}
+
+	/** Get the largest package_event_id along its transaction_event_id_at_save currently in package_events for each distinct package_name_id */
+	SQLITE_PREPARED_STATEMENT_COLUMNS_ONLY(FGetMaxPackageEventIdAndTransactionEventIdAtSavePerPackageNameId, "SELECT package_name_id, MAX(package_event_id), transaction_event_id_at_save FROM package_events GROUP BY package_name_id;", SQLITE_PREPARED_STATEMENT_COLUMNS(int64, int64, int64));
+	FGetMaxPackageEventIdAndTransactionEventIdAtSavePerPackageNameId Statement_GetMaxPackageEventIdAndTransactionEventIdAtSavePerPackageNameId;
+	bool GetMaxPackageEventIdAndTransactionEventIdAtSavePerPackageNameId(TFunctionRef<ESQLitePreparedStatementExecuteRowResult(int64, int64, int64)> InCallback)
+	{
+		return Statement_GetMaxPackageEventIdAndTransactionEventIdAtSavePerPackageNameId.Execute([&InCallback](const FGetMaxPackageEventIdAndTransactionEventIdAtSavePerPackageNameId& InStatement)
+		{
+			int64 PackageNameId = 0, MaxPackageEventId = 0, TransactionEventIdAtSave = 0;
+			if (InStatement.GetColumnValues(PackageNameId, MaxPackageEventId, TransactionEventIdAtSave))
+			{
+				return InCallback(PackageNameId, MaxPackageEventId, TransactionEventIdAtSave);
+			}
+			return ESQLitePreparedStatementExecuteRowResult::Error;
+		}) != INDEX_NONE;
+	}
+
 	/** Get the largest package_revision currently in package_events for the given package_name_id */
 	SQLITE_PREPARED_STATEMENT(FGetPackageHeadRevison, "SELECT MAX(package_revision) FROM package_events WHERE package_name_id = ?1;", SQLITE_PREPARED_STATEMENT_COLUMNS(int64), SQLITE_PREPARED_STATEMENT_BINDINGS(int64));
 	FGetPackageHeadRevison Statement_GetPackageHeadRevison;
@@ -860,6 +927,35 @@ public:
 	}
 
 	/**
+	 * Statements working on ignored_activities
+	 */
+	
+	/** Add the activity_id to ignored_activities */
+	SQLITE_PREPARED_STATEMENT_BINDINGS_ONLY(FIgnoreActivity, "INSERT OR REPLACE INTO ignored_activities(activity_id) VALUES(?1);", SQLITE_PREPARED_STATEMENT_BINDINGS(int64));
+	FIgnoreActivity Statement_IgnoreActivity;
+	bool IgnoreActivity(const int64 InActivityId)
+	{
+		return Statement_IgnoreActivity.BindAndExecute(InActivityId);
+	}
+
+	/** Remove the activity_id from ignored_activities */
+	SQLITE_PREPARED_STATEMENT_BINDINGS_ONLY(FPerceiveActivity, "DELETE FROM ignored_activities WHERE activity_id = ?1;", SQLITE_PREPARED_STATEMENT_BINDINGS(int64));
+	FPerceiveActivity Statement_PerceiveActivity;
+	bool PerceiveActivity(const int64 InActivityId)
+	{
+		return Statement_PerceiveActivity.BindAndExecute(InActivityId);
+	}
+
+	/** See if the given activity_id is in ignored_activities */
+	SQLITE_PREPARED_STATEMENT(FIsActivityIgnored, "SELECT activity_id FROM ignored_activities WHERE activity_id = ?1;", SQLITE_PREPARED_STATEMENT_COLUMNS(int64), SQLITE_PREPARED_STATEMENT_BINDINGS(int64));
+	FIsActivityIgnored Statement_IsActivityIgnored;
+	bool IsActivityIgnored(const int64 InActivityId)
+	{
+		int64 OutActivityId = 0;
+		return Statement_IsActivityIgnored.BindAndExecuteSingle(InActivityId, OutActivityId);
+	}
+
+	/**
 	 * Statements working on resource_locks
 	 */
 
@@ -958,6 +1054,22 @@ public:
 			if (InStatement.GetColumnValues(TransactionEventId))
 			{
 				return InCallback(TransactionEventId);
+			}
+			return ESQLitePreparedStatementExecuteRowResult::Error;
+		}) != INDEX_NONE;
+	}
+
+	/** Get the max transaction_event_id for each package_name_ids from package_transactions */
+	SQLITE_PREPARED_STATEMENT_COLUMNS_ONLY(FGetPackageNameIdsMaxTransactionId, "SELECT package_name_id, MAX(transaction_event_id) FROM package_transactions GROUP BY package_name_id;", SQLITE_PREPARED_STATEMENT_COLUMNS(int64, int64));
+	FGetPackageNameIdsMaxTransactionId Statement_GetPackageNameIdsMaxTransactionId;
+	bool GetPackageNameIdsMaxTransactionId(TFunctionRef<ESQLitePreparedStatementExecuteRowResult(int64, int64)> InCallback)
+	{
+		return Statement_GetPackageNameIdsMaxTransactionId.Execute([&InCallback](const FGetPackageNameIdsMaxTransactionId& InStatement)
+		{
+			int64 PackageNameId = 0, MaxTransactionEventId = 0;
+			if (InStatement.GetColumnValues(PackageNameId, MaxTransactionEventId))
+			{
+				return InCallback(PackageNameId, MaxTransactionEventId);
 			}
 			return ESQLitePreparedStatementExecuteRowResult::Error;
 		}) != INDEX_NONE;
@@ -1124,6 +1236,15 @@ bool FConcertSyncSessionDatabase::Open(const FString& InSessionPath, const ESQLi
 	Database->Execute(TEXT("PRAGMA journal_mode=WAL;"));
 	Database->Execute(TEXT("PRAGMA synchronous=NORMAL;"));
 
+	int32 LoadedDatabaseVersion = 0;
+	Database->GetUserVersion(LoadedDatabaseVersion);
+	if (LoadedDatabaseVersion > (int32)FConcertSyncSessionDatabaseVersion::Current)
+	{
+		Close();
+		UE_LOG(LogConcert, Error, TEXT("Failed to open session database for '%s': Database is too new (version %d, expected <= %d)"), *InSessionPath, LoadedDatabaseVersion, (int32)FConcertSyncSessionDatabaseVersion::Current);
+		return false;
+	}
+
 	// Create our required tables
 #define CREATE_TABLE(NAME, STATEMENT)																										\
 	if (!Database->Execute(TEXT("CREATE TABLE IF NOT EXISTS ") TEXT(NAME) TEXT("(") TEXT(STATEMENT) TEXT(");")))							\
@@ -1138,7 +1259,9 @@ bool FConcertSyncSessionDatabase::Open(const FString& InSessionPath, const ESQLi
 	CREATE_TABLE("lock_events", "lock_event_id INTEGER PRIMARY KEY, lock_event_type INTEGER NOT NULL");
 	CREATE_TABLE("transaction_events", "transaction_event_id INTEGER PRIMARY KEY, data_filename TEXT NOT NULL");
 	CREATE_TABLE("package_events", "package_event_id INTEGER PRIMARY KEY, package_name_id INTEGER NOT NULL, package_revision INTEGER NOT NULL, package_info_size_bytes INTEGER NOT NULL, package_info_data BLOB, transaction_event_id_at_save INTEGER NOT NULL, data_filename TEXT NOT NULL, FOREIGN KEY(package_name_id) REFERENCES package_names(package_name_id)");
+	CREATE_TABLE("persist_events", "persist_event_id INTEGER PRIMARY KEY, package_event_id INTEGER NOT NULL, transaction_event_id_at_persist INTEGER NOT NULL, FOREIGN KEY(package_event_id) REFERENCES package_events(package_event_id)");
 	CREATE_TABLE("activities", "activity_id INTEGER PRIMARY KEY, endpoint_id BLOB NOT NULL, event_time INTEGER NOT NULL, event_type INTEGER NOT NULL, event_id INTEGER NOT NULL, event_summary_type TEXT NOT NULL, event_summary_size_bytes INTEGER NOT NULL, event_summary_data BLOB, FOREIGN KEY(endpoint_id) REFERENCES endpoints(endpoint_id)");
+	CREATE_TABLE("ignored_activities", "activity_id INTEGER NOT NULL, FOREIGN KEY(activity_id) REFERENCES activities(activity_id)");
 	CREATE_TABLE("resource_locks", "object_name_id INTEGER NOT NULL, lock_event_id INTEGER NOT NULL, FOREIGN KEY(object_name_id) REFERENCES object_names(object_name_id), FOREIGN KEY(lock_event_id) REFERENCES lock_events(lock_event_id)");
 	CREATE_TABLE("package_transactions", "package_name_id INTEGER NOT NULL, transaction_event_id INTEGER NOT NULL, FOREIGN KEY(package_name_id) REFERENCES package_names(package_name_id), FOREIGN KEY(transaction_event_id) REFERENCES transaction_events(transaction_event_id)");
 	CREATE_TABLE("object_transactions", "object_name_id INTEGER NOT NULL, transaction_event_id INTEGER NOT NULL, FOREIGN KEY(object_name_id) REFERENCES object_names(object_name_id), FOREIGN KEY(transaction_event_id) REFERENCES transaction_events(transaction_event_id)");
@@ -1160,7 +1283,9 @@ bool FConcertSyncSessionDatabase::Open(const FString& InSessionPath, const ESQLi
 	CREATE_UNIQUE_INDEX("idx_object_path_names_in_object_names", "object_names", "object_path_name");
 	CREATE_UNIQUE_INDEX("idx_package_names_in_package_names", "package_names", "package_name");
 	CREATE_INDEX("idx_package_name_ids_in_package_events", "package_events", "package_name_id");
+	CREATE_INDEX("idx_package_event_ids_in_persist_events", "persist_events", "package_event_id");
 	CREATE_INDEX("idx_event_ids_in_activities", "activities", "event_id");
+	CREATE_UNIQUE_INDEX("idx_activity_ids_in_ignored_activities", "ignored_activities", "activity_id");
 	CREATE_INDEX("idx_object_name_ids_in_resource_locks", "resource_locks", "object_name_id");
 	CREATE_INDEX("idx_lock_event_ids_in_resource_locks", "resource_locks", "lock_event_id");
 	CREATE_INDEX("idx_package_name_ids_in_package_transactions", "package_transactions", "package_name_id");
@@ -1169,6 +1294,13 @@ bool FConcertSyncSessionDatabase::Open(const FString& InSessionPath, const ESQLi
 	CREATE_INDEX("idx_transaction_event_ids_in_object_transactions", "object_transactions", "transaction_event_id");
 #undef CREATE_INDEX
 #undef CREATE_UNIQUE_INDEX
+
+	// The database will have the latest schema at this point, so update the user-version
+	if (!Database->SetUserVersion((int32)FConcertSyncSessionDatabaseVersion::Current))
+	{
+		Close();
+		return false;
+	}
 
 	// Create our required prepared statements
 	Statements = MakeUnique<FConcertSyncSessionDatabaseStatements>(*Database);
@@ -1227,7 +1359,8 @@ bool FConcertSyncSessionDatabase::AddConnectionActivity(const FConcertSyncConnec
 	FConcertSyncSessionDatabaseScopedTransaction ScopedTransaction(*Statements);
 	return ScopedTransaction.CommitOrRollback(
 		AddConnectionEvent(InConnectionActivity.EventData, OutConnectionEventId) &&
-		Statements->AddActivityData(InConnectionActivity.EndpointId, EConcertSyncActivityEventType::Connection, OutConnectionEventId, InConnectionActivity.EventSummary, OutActivityId)
+		Statements->AddActivityData(InConnectionActivity.EndpointId, EConcertSyncActivityEventType::Connection, OutConnectionEventId, InConnectionActivity.EventSummary, OutActivityId) &&
+		SetActivityIgnoredState(OutActivityId, InConnectionActivity.bIgnored)
 		);
 }
 
@@ -1236,7 +1369,8 @@ bool FConcertSyncSessionDatabase::AddLockActivity(const FConcertSyncLockActivity
 	FConcertSyncSessionDatabaseScopedTransaction ScopedTransaction(*Statements);
 	return ScopedTransaction.CommitOrRollback(
 		AddLockEvent(InLockActivity.EventData, OutLockEventId) &&
-		Statements->AddActivityData(InLockActivity.EndpointId, EConcertSyncActivityEventType::Lock, OutLockEventId, InLockActivity.EventSummary, OutActivityId)
+		Statements->AddActivityData(InLockActivity.EndpointId, EConcertSyncActivityEventType::Lock, OutLockEventId, InLockActivity.EventSummary, OutActivityId) &&
+		SetActivityIgnoredState(OutActivityId, InLockActivity.bIgnored)
 		);
 }
 
@@ -1245,7 +1379,8 @@ bool FConcertSyncSessionDatabase::AddTransactionActivity(const FConcertSyncTrans
 	FConcertSyncSessionDatabaseScopedTransaction ScopedTransaction(*Statements);
 	return ScopedTransaction.CommitOrRollback(
 		AddTransactionEvent(InTransactionActivity.EventData, OutTransactionEventId) &&
-		Statements->AddActivityData(InTransactionActivity.EndpointId, EConcertSyncActivityEventType::Transaction, OutTransactionEventId, InTransactionActivity.EventSummary, OutActivityId)
+		Statements->AddActivityData(InTransactionActivity.EndpointId, EConcertSyncActivityEventType::Transaction, OutTransactionEventId, InTransactionActivity.EventSummary, OutActivityId) &&
+		SetActivityIgnoredState(OutActivityId, InTransactionActivity.bIgnored)
 		);
 }
 
@@ -1254,7 +1389,8 @@ bool FConcertSyncSessionDatabase::AddPackageActivity(const FConcertSyncPackageAc
 	FConcertSyncSessionDatabaseScopedTransaction ScopedTransaction(*Statements);
 	return ScopedTransaction.CommitOrRollback(
 		AddPackageEvent(InPackageActivity.EventData, OutPackageEventId) &&
-		Statements->AddActivityData(InPackageActivity.EndpointId, EConcertSyncActivityEventType::Package, OutPackageEventId, InPackageActivity.EventSummary, OutActivityId)
+		Statements->AddActivityData(InPackageActivity.EndpointId, EConcertSyncActivityEventType::Package, OutPackageEventId, InPackageActivity.EventSummary, OutActivityId) &&
+		SetActivityIgnoredState(OutActivityId, InPackageActivity.bIgnored)
 		);
 }
 
@@ -1263,7 +1399,8 @@ bool FConcertSyncSessionDatabase::SetConnectionActivity(const FConcertSyncConnec
 	FConcertSyncSessionDatabaseScopedTransaction ScopedTransaction(*Statements);
 	return ScopedTransaction.CommitOrRollback(
 		SetConnectionEvent(InConnectionActivity.EventId, InConnectionActivity.EventData) &&
-		Statements->SetActivityData(InConnectionActivity.ActivityId, InConnectionActivity.EndpointId, InConnectionActivity.EventTime, InConnectionActivity.EventType, InConnectionActivity.EventId, InConnectionActivity.EventSummary)
+		Statements->SetActivityData(InConnectionActivity.ActivityId, InConnectionActivity.EndpointId, InConnectionActivity.EventTime, InConnectionActivity.EventType, InConnectionActivity.EventId, InConnectionActivity.EventSummary) &&
+		SetActivityIgnoredState(InConnectionActivity.ActivityId, InConnectionActivity.bIgnored)
 		);
 }
 
@@ -1272,31 +1409,35 @@ bool FConcertSyncSessionDatabase::SetLockActivity(const FConcertSyncLockActivity
 	FConcertSyncSessionDatabaseScopedTransaction ScopedTransaction(*Statements);
 	return ScopedTransaction.CommitOrRollback(
 		SetLockEvent(InLockActivity.EventId, InLockActivity.EventData) &&
-		Statements->SetActivityData(InLockActivity.ActivityId, InLockActivity.EndpointId, InLockActivity.EventTime, InLockActivity.EventType, InLockActivity.EventId, InLockActivity.EventSummary)
+		Statements->SetActivityData(InLockActivity.ActivityId, InLockActivity.EndpointId, InLockActivity.EventTime, InLockActivity.EventType, InLockActivity.EventId, InLockActivity.EventSummary) &&
+		SetActivityIgnoredState(InLockActivity.ActivityId, InLockActivity.bIgnored)
 		);
 }
 
-bool FConcertSyncSessionDatabase::SetTransactionActivity(const FConcertSyncTransactionActivity& InTransactionActivity)
+bool FConcertSyncSessionDatabase::SetTransactionActivity(const FConcertSyncTransactionActivity& InTransactionActivity, const bool bMetaDataOnly)
 {
 	FConcertSyncSessionDatabaseScopedTransaction ScopedTransaction(*Statements);
 	return ScopedTransaction.CommitOrRollback(
-		SetTransactionEvent(InTransactionActivity.EventId, InTransactionActivity.EventData) &&
-		Statements->SetActivityData(InTransactionActivity.ActivityId, InTransactionActivity.EndpointId, InTransactionActivity.EventTime, InTransactionActivity.EventType, InTransactionActivity.EventId, InTransactionActivity.EventSummary)
+		SetTransactionEvent(InTransactionActivity.EventId, InTransactionActivity.EventData, bMetaDataOnly) &&
+		Statements->SetActivityData(InTransactionActivity.ActivityId, InTransactionActivity.EndpointId, InTransactionActivity.EventTime, InTransactionActivity.EventType, InTransactionActivity.EventId, InTransactionActivity.EventSummary) &&
+		SetActivityIgnoredState(InTransactionActivity.ActivityId, InTransactionActivity.bIgnored)
 		);
 }
 
-bool FConcertSyncSessionDatabase::SetPackageActivity(const FConcertSyncPackageActivity& InPackageActivity)
+bool FConcertSyncSessionDatabase::SetPackageActivity(const FConcertSyncPackageActivity& InPackageActivity, const bool bMetaDataOnly)
 {
 	FConcertSyncSessionDatabaseScopedTransaction ScopedTransaction(*Statements);
 	return ScopedTransaction.CommitOrRollback(
-		SetPackageEvent(InPackageActivity.EventId, InPackageActivity.EventData) &&
-		Statements->SetActivityData(InPackageActivity.ActivityId, InPackageActivity.EndpointId, InPackageActivity.EventTime, InPackageActivity.EventType, InPackageActivity.EventId, InPackageActivity.EventSummary)
+		SetPackageEvent(InPackageActivity.EventId, InPackageActivity.EventData, bMetaDataOnly) &&
+		Statements->SetActivityData(InPackageActivity.ActivityId, InPackageActivity.EndpointId, InPackageActivity.EventTime, InPackageActivity.EventType, InPackageActivity.EventId, InPackageActivity.EventSummary) &&
+		SetActivityIgnoredState(InPackageActivity.ActivityId, InPackageActivity.bIgnored)
 		);
 }
 
 bool FConcertSyncSessionDatabase::GetActivity(const int64 InActivityId, FConcertSyncActivity& OutActivity) const
 {
 	OutActivity.ActivityId = InActivityId;
+	OutActivity.bIgnored = Statements->IsActivityIgnored(InActivityId);
 	return Statements->GetActivityDataForId(InActivityId, OutActivity.EndpointId, OutActivity.EventTime, OutActivity.EventType, OutActivity.EventId, OutActivity.EventSummary);
 }
 
@@ -1333,7 +1474,12 @@ bool FConcertSyncSessionDatabase::GetActivityForEvent(const int64 InEventId, con
 {
 	OutActivity.EventId = InEventId;
 	OutActivity.EventType = InEventType;
-	return Statements->GetActivityDataForEvent(InEventId, InEventType, OutActivity.ActivityId, OutActivity.EndpointId, OutActivity.EventTime, OutActivity.EventSummary);
+	if (Statements->GetActivityDataForEvent(InEventId, InEventType, OutActivity.ActivityId, OutActivity.EndpointId, OutActivity.EventTime, OutActivity.EventSummary))
+	{
+		OutActivity.bIgnored = Statements->IsActivityIgnored(OutActivity.ActivityId);
+		return true;
+	}
+	return false;
 }
 
 bool FConcertSyncSessionDatabase::GetConnectionActivityForEvent(const int64 InConnectionEventId, FConcertSyncConnectionActivity& OutConnectionActivity) const
@@ -1362,10 +1508,11 @@ bool FConcertSyncSessionDatabase::GetPackageActivityForEvent(const int64 InPacka
 
 bool FConcertSyncSessionDatabase::EnumerateActivities(TFunctionRef<bool(FConcertSyncActivity&&)> InCallback) const
 {
-	return Statements->GetAllActivityData([&InCallback](const int64 InActivityId, const FGuid& InEndpointId, const FDateTime InEventTime, const EConcertSyncActivityEventType InEventType, const int64 InEventId, FConcertSessionSerializedCborPayload&& InEventSummary)
+	return Statements->GetAllActivityData([this, &InCallback](const int64 InActivityId, const FGuid& InEndpointId, const FDateTime InEventTime, const EConcertSyncActivityEventType InEventType, const int64 InEventId, FConcertSessionSerializedCborPayload&& InEventSummary)
 	{
 		FConcertSyncActivity Activity;
 		Activity.ActivityId = InActivityId;
+		Activity.bIgnored = Statements->IsActivityIgnored(InActivityId);
 		Activity.EndpointId = InEndpointId;
 		Activity.EventTime = InEventTime;
 		Activity.EventType = InEventType;
@@ -1383,6 +1530,7 @@ bool FConcertSyncSessionDatabase::EnumerateConnectionActivities(TFunctionRef<boo
 	{
 		FConcertSyncConnectionActivity ConnectionActivity;
 		ConnectionActivity.ActivityId = InActivityId;
+		ConnectionActivity.bIgnored = Statements->IsActivityIgnored(InActivityId);
 		ConnectionActivity.EndpointId = InEndpointId;
 		ConnectionActivity.EventTime = InEventTime;
 		ConnectionActivity.EventType = EConcertSyncActivityEventType::Connection;
@@ -1404,6 +1552,7 @@ bool FConcertSyncSessionDatabase::EnumerateLockActivities(TFunctionRef<bool(FCon
 	{
 		FConcertSyncLockActivity LockActivity;
 		LockActivity.ActivityId = InActivityId;
+		LockActivity.bIgnored = Statements->IsActivityIgnored(InActivityId);
 		LockActivity.EndpointId = InEndpointId;
 		LockActivity.EventTime = InEventTime;
 		LockActivity.EventType = EConcertSyncActivityEventType::Lock;
@@ -1425,6 +1574,7 @@ bool FConcertSyncSessionDatabase::EnumerateTransactionActivities(TFunctionRef<bo
 	{
 		FConcertSyncTransactionActivity TransactionActivity;
 		TransactionActivity.ActivityId = InActivityId;
+		TransactionActivity.bIgnored = Statements->IsActivityIgnored(InActivityId);
 		TransactionActivity.EndpointId = InEndpointId;
 		TransactionActivity.EventTime = InEventTime;
 		TransactionActivity.EventType = EConcertSyncActivityEventType::Transaction;
@@ -1446,6 +1596,7 @@ bool FConcertSyncSessionDatabase::EnumeratePackageActivities(TFunctionRef<bool(F
 	{
 		FConcertSyncPackageActivity PackageActivity;
 		PackageActivity.ActivityId = InActivityId;
+		PackageActivity.bIgnored = Statements->IsActivityIgnored(InActivityId);
 		PackageActivity.EndpointId = InEndpointId;
 		PackageActivity.EventTime = InEventTime;
 		PackageActivity.EventType = EConcertSyncActivityEventType::Package;
@@ -1463,10 +1614,11 @@ bool FConcertSyncSessionDatabase::EnumeratePackageActivities(TFunctionRef<bool(F
 
 bool FConcertSyncSessionDatabase::EnumerateActivitiesForEventType(const EConcertSyncActivityEventType InEventType, TFunctionRef<bool(FConcertSyncActivity&&)> InCallback) const
 {
-	return Statements->GetAllActivityDataForEventType(InEventType, [InEventType, &InCallback](const int64 InActivityId, const FGuid& InEndpointId, const FDateTime InEventTime, const int64 InEventId, FConcertSessionSerializedCborPayload&& InEventSummary)
+	return Statements->GetAllActivityDataForEventType(InEventType, [this, InEventType, &InCallback](const int64 InActivityId, const FGuid& InEndpointId, const FDateTime InEventTime, const int64 InEventId, FConcertSessionSerializedCborPayload&& InEventSummary)
 	{
 		FConcertSyncActivity Activity;
 		Activity.ActivityId = InActivityId;
+		Activity.bIgnored = Statements->IsActivityIgnored(InActivityId);
 		Activity.EndpointId = InEndpointId;
 		Activity.EventTime = InEventTime;
 		Activity.EventType = InEventType;
@@ -1480,10 +1632,11 @@ bool FConcertSyncSessionDatabase::EnumerateActivitiesForEventType(const EConcert
 
 bool FConcertSyncSessionDatabase::EnumerateActivitiesInRange(const int64 InFirstActivityId, const int64 InMaxNumActivities, TFunctionRef<bool(FConcertSyncActivity&&)> InCallback) const
 {
-	return Statements->GetActivityDataInRange(InFirstActivityId, InMaxNumActivities, [&InCallback](const int64 InActivityId, const FGuid& InEndpointId, const FDateTime InEventTime, const EConcertSyncActivityEventType InEventType, const int64 InEventId, FConcertSessionSerializedCborPayload&& InEventSummary)
+	return Statements->GetActivityDataInRange(InFirstActivityId, InMaxNumActivities, [this, &InCallback](const int64 InActivityId, const FGuid& InEndpointId, const FDateTime InEventTime, const EConcertSyncActivityEventType InEventType, const int64 InEventId, FConcertSessionSerializedCborPayload&& InEventSummary)
 	{
 		FConcertSyncActivity Activity;
 		Activity.ActivityId = InActivityId;
+		Activity.bIgnored = Statements->IsActivityIgnored(InActivityId);
 		Activity.EndpointId = InEndpointId;
 		Activity.EventTime = InEventTime;
 		Activity.EventType = InEventType;
@@ -1553,6 +1706,13 @@ bool FConcertSyncSessionDatabase::EnumerateEndpointIds(TFunctionRef<bool(FGuid)>
 	});
 }
 
+bool FConcertSyncSessionDatabase::SetActivityIgnoredState(const int64 InActivityId, const bool InIsIgnored)
+{
+	return InIsIgnored
+		? Statements->IgnoreActivity(InActivityId)
+		: Statements->PerceiveActivity(InActivityId);
+}
+
 bool FConcertSyncSessionDatabase::AddConnectionEvent(const FConcertSyncConnectionEvent& InConnectionEvent, int64& OutConnectionEventId)
 {
 	return Statements->AddConnectionEvent(InConnectionEvent.ConnectionEventType, OutConnectionEventId);
@@ -1613,15 +1773,33 @@ bool FConcertSyncSessionDatabase::AddTransactionEvent(const FConcertSyncTransact
 	return SetTransactionEvent(OutTransactionEventId, InTransactionEvent);
 }
 
-bool FConcertSyncSessionDatabase::SetTransactionEvent(const int64 InTransactionEventId, const FConcertSyncTransactionEvent& InTransactionEvent)
+bool FConcertSyncSessionDatabase::UpdateTransactionEvent(const int64 InTransactionEventId, const FConcertSyncTransactionEvent& InTransactionEvent)
+{
+	int64 MaxTransactionEventId;
+	if (GetTransactionMaxEventId(MaxTransactionEventId) && InTransactionEventId <= MaxTransactionEventId) // Ensure the transaction ID is in bound.
+	{
+		FConcertSyncSessionDatabaseScopedTransaction ScopedTransaction(*Statements);
+		return ScopedTransaction.CommitOrRollback(
+			SetTransactionEvent(InTransactionEventId, InTransactionEvent)
+		);
+	}
+
+	return false;
+}
+
+bool FConcertSyncSessionDatabase::SetTransactionEvent(const int64 InTransactionEventId, const FConcertSyncTransactionEvent& InTransactionEvent, const bool bMetaDataOnly)
 {
 	// Write the data blob file
 	const FString TransactionDataFilename = TransactionDataUtil::GetDataFilename(InTransactionEventId);
 	const FString TransactionDataPathname = TransactionDataUtil::GetDataPath(SessionPath) / TransactionDataFilename;
+
 	FStructOnScope Transaction(FConcertTransactionFinalizedEvent::StaticStruct(), (uint8*)&InTransactionEvent.Transaction);
-	if (!SaveTransaction(TransactionDataPathname, Transaction))
+	if (!bMetaDataOnly)
 	{
-		return false;
+		if (!SaveTransaction(TransactionDataPathname, Transaction))
+		{
+			return false;
+		}
 	}
 
 	// Add the database entry
@@ -1719,6 +1897,16 @@ bool FConcertSyncSessionDatabase::GetLiveTransactionEventIdsForPackage(const FNa
 	});
 }
 
+bool FConcertSyncSessionDatabase::PackageHasLiveTransactions(const FName InPackageName, bool& OutHasLiveTransaction) const
+{
+	OutHasLiveTransaction = false;
+	return EnumerateLiveTransactionEventIdsForPackage(InPackageName, [&OutHasLiveTransaction](const int64)
+	{
+		OutHasLiveTransaction = true;
+		return false;
+	});
+}
+
 bool FConcertSyncSessionDatabase::EnumerateLiveTransactionEventIdsForPackage(const FName InPackageName, TFunctionRef<bool(int64)> InCallback) const
 {
 	int64 PackageNameId = 0;
@@ -1742,16 +1930,24 @@ bool FConcertSyncSessionDatabase::GetPackageNamesWithLiveTransactions(TArray<FNa
 
 bool FConcertSyncSessionDatabase::EnumeratePackageNamesWithLiveTransactions(TFunctionRef<bool(FName)> InCallback) const
 {
-	return Statements->GetPackageNameIdsWithTransactions([this, &InCallback](const int64 InPackageNameId)
+	return Statements->GetPackageNameIdsMaxTransactionId([this, &InCallback](const int64 InPackageNameId, const int64 InMaxTransactionEventId)
 	{
-		FName PackageName;
-		if (GetPackageName(InPackageNameId, PackageName))
+		// Get the transaction id at last save, if the max transaction id for a package name id is greater than its transaction id at last save, it has live transactions
+		int64 HeadTransactionEventIdAtLastSave = 0;
+		Statements->GetPackageTransactionEventIdAtLastSave(InPackageNameId, HeadTransactionEventIdAtLastSave);
+		
+		if (InMaxTransactionEventId > HeadTransactionEventIdAtLastSave)
 		{
-			return InCallback(PackageName)
-				? ESQLitePreparedStatementExecuteRowResult::Continue
-				: ESQLitePreparedStatementExecuteRowResult::Stop;
+			FName PackageName;
+			if (GetPackageName(InPackageNameId, PackageName))
+			{
+				return InCallback(PackageName)
+					? ESQLitePreparedStatementExecuteRowResult::Continue
+					: ESQLitePreparedStatementExecuteRowResult::Stop;
+			}
+			return ESQLitePreparedStatementExecuteRowResult::Error;
 		}
-		return ESQLitePreparedStatementExecuteRowResult::Error;
+		return ESQLitePreparedStatementExecuteRowResult::Continue;
 	});
 }
 
@@ -1832,12 +2028,26 @@ bool FConcertSyncSessionDatabase::AddPackageEvent(const FConcertSyncPackageEvent
 	return SetPackageEvent(OutPackageEventId, PackageRevision, InPackageEvent.Package);
 }
 
-bool FConcertSyncSessionDatabase::SetPackageEvent(const int64 InPackageEventId, const FConcertSyncPackageEvent& InPackageEvent)
+bool FConcertSyncSessionDatabase::UpdatePackageEvent(const int64 InPackageEventId, const FConcertSyncPackageEvent& InPackageEvent)
 {
-	return SetPackageEvent(InPackageEventId, InPackageEvent.PackageRevision, InPackageEvent.Package);
+	int64 MaxPackageEventId;
+	if (GetPackageMaxEventId(MaxPackageEventId) && InPackageEventId <= MaxPackageEventId) // Ensure the package ID is in bound.
+	{
+		FConcertSyncSessionDatabaseScopedTransaction ScopedTransaction(*Statements);
+		return ScopedTransaction.CommitOrRollback(
+			SetPackageEvent(InPackageEventId, InPackageEvent)
+		);
+	}
+
+	return false;
 }
 
-bool FConcertSyncSessionDatabase::SetPackageEvent(const int64 InPackageEventId, const int64 InPackageRevision, const FConcertPackage& InPackage)
+bool FConcertSyncSessionDatabase::SetPackageEvent(const int64 InPackageEventId, const FConcertSyncPackageEvent& InPackageEvent, const bool bMetaDataOnly)
+{
+	return SetPackageEvent(InPackageEventId, InPackageEvent.PackageRevision, InPackageEvent.Package, bMetaDataOnly);
+}
+
+bool FConcertSyncSessionDatabase::SetPackageEvent(const int64 InPackageEventId, const int64 InPackageRevision, const FConcertPackage& InPackage, const bool bMetaDataOnly)
 {
 	if (!ensureAlwaysMsgf(InPackageRevision > 0, TEXT("Invalid package revision! Must be greater than zero.")))
 	{
@@ -1857,10 +2067,14 @@ bool FConcertSyncSessionDatabase::SetPackageEvent(const int64 InPackageEventId, 
 
 	// Write the data blob file
 	const FString PackageDataFilename = PackageDataUtil::GetDataFilename(InPackage.Info.PackageName, InPackageRevision);
-	const FString PackageDataPathname = PackageDataUtil::GetDataPath(SessionPath) / PackageDataFilename;
-	if (!SavePackage(PackageDataPathname, InPackage.Info, InPackage.PackageData))
+
+	if (!bMetaDataOnly)
 	{
-		return false;
+		const FString PackageDataPathname = PackageDataUtil::GetDataPath(SessionPath) / PackageDataFilename;
+		if (!SavePackage(PackageDataPathname, InPackage.Info, InPackage.PackageData))
+		{
+			return false;
+		}
 	}
 
 	// Add the database entry
@@ -1886,6 +2100,56 @@ bool FConcertSyncSessionDatabase::GetPackageEvent(const int64 InPackageEventId, 
 	}
 
 	return false;
+}
+
+bool FConcertSyncSessionDatabase::GetPackageNamesWithHeadRevision(TArray<FName>& OutPackageNames, bool IgnorePersisted) const
+{
+	OutPackageNames.Reset();
+	return EnumeratePackageNamesWithHeadRevision([&OutPackageNames](const FName InPackageName)
+	{
+		OutPackageNames.Add(InPackageName);
+		return true;
+	}, IgnorePersisted);
+}
+
+bool FConcertSyncSessionDatabase::EnumeratePackageNamesWithHeadRevision(TFunctionRef<bool(FName)> InCallback, bool IgnorePersisted) const
+{
+	// if we ignore packages with persist event we need to compare head revision against entry in the persist table.
+	if (IgnorePersisted)
+	{
+		return Statements->GetMaxPackageEventIdAndTransactionEventIdAtSavePerPackageNameId([this, &InCallback](int64 InPackageNameId, int64 InMaxPackageEventId, int64 TransactionEventIdAtSave)
+		{
+			// We enumerate the packages if there isn't an entry in persist events with this MaxPackageEventId or 
+			// if the TransactionEventIdAtPersist and TransactionEventIdAtSave doesn't match (in case a dummy event got squashed)
+			int64 PersistEventId = 0, TransactionEventIdAtPersist = 0;
+			if (!Statements->GetPersistEventId(InMaxPackageEventId, PersistEventId, TransactionEventIdAtPersist)
+				|| TransactionEventIdAtPersist != TransactionEventIdAtSave)
+			{
+				FName PackageName;
+				if (GetPackageName(InPackageNameId, PackageName))
+				{
+					return InCallback(PackageName)
+						? ESQLitePreparedStatementExecuteRowResult::Continue
+						: ESQLitePreparedStatementExecuteRowResult::Stop;
+				}
+				return ESQLitePreparedStatementExecuteRowResult::Error;
+			}
+			return ESQLitePreparedStatementExecuteRowResult::Continue;
+		});
+	}
+	
+	// otherwise we can just gather distinct packages in the package events table
+	return Statements->GetUniquePackageNameIdsForPackageEvents([this, &InCallback](int64 InPackageNameId)
+	{
+		FName PackageName;
+		if (GetPackageName(InPackageNameId, PackageName))
+		{
+			return InCallback(PackageName)
+				? ESQLitePreparedStatementExecuteRowResult::Continue
+				: ESQLitePreparedStatementExecuteRowResult::Stop;
+		}
+		return ESQLitePreparedStatementExecuteRowResult::Error;
+	});
 }
 
 bool FConcertSyncSessionDatabase::EnumerateHeadRevisionPackageData(TFunctionRef<bool(FConcertPackage&&)> InCallback, const bool InMetaDataOnly) const
@@ -1915,6 +2179,18 @@ bool FConcertSyncSessionDatabase::EnumerateHeadRevisionPackageData(TFunctionRef<
 bool FConcertSyncSessionDatabase::GetPackageMaxEventId(int64& OutPackageEventId) const
 {
 	return Statements->GetPackageMaxEventId(OutPackageEventId);
+}
+
+bool FConcertSyncSessionDatabase::AddPersistEventForHeadRevision(FName InPackageName, int64& OutPersistEventId)
+{
+	int64 PackageNameId = 0, HeadPackageEventId = 0, TransactionEventIdAtSave = 0;
+	if (GetPackageNameId(InPackageName, PackageNameId) 
+		&& Statements->GetPackageHeadEventIdAndTransactionIdAtSave(PackageNameId, HeadPackageEventId, TransactionEventIdAtSave)
+		&& HeadPackageEventId > 0)
+	{
+		Statements->AddPersistEvent(HeadPackageEventId, TransactionEventIdAtSave, OutPersistEventId);
+	}
+	return false;
 }
 
 bool FConcertSyncSessionDatabase::GetPackageDataForRevision(const FName InPackageName, FConcertPackage& OutPackage, const int64* InPackageRevision) const

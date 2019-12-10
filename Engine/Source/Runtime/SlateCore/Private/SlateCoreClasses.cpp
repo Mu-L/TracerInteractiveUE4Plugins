@@ -17,17 +17,7 @@ float GSlateContrast = 1;
 FAutoConsoleVariableRef CVarSlateContrast(
 	TEXT("Slate.Contrast"),
 	GSlateContrast,
-	TEXT("The amount of contrast to apply to the UI.")
-);
-
-
-
-int32 GSlateLayoutCaching = 0;
-
-FAutoConsoleVariableRef CVarSlateLayoutCaching(
-	TEXT("Slate.EnableLayoutCaching"),
-	GSlateLayoutCaching,
-	TEXT("Whether or not dynamic prepass and layout caching is enabled")
+	TEXT("The amount of contrast to apply to the UI (default 1).")
 );
 
 
@@ -42,6 +32,34 @@ FAutoConsoleVariableRef CVarSlateFastWidgetPath(
 );
 
 
+int32 GSlateEnableGlobalInvalidation = 0;
+static FAutoConsoleVariableRef CVarSlateNewUpdateMethod(
+	TEXT("Slate.EnableGlobalInvalidation"), 
+	GSlateEnableGlobalInvalidation, 
+	TEXT("")
+);
+
+bool GSlateIsOnFastUpdatePath = false;
+bool GSlateIsInInvalidationSlowPath = false;
+
+#if WITH_SLATE_DEBUGGING
+
+bool GSlateInvalidationDebugging = false;
+/** True if we should allow widgets to be cached in the UI at all. */
+FAutoConsoleVariableRef CVarInvalidationDebugging(
+	TEXT("Slate.InvalidationDebugging"),
+	GSlateInvalidationDebugging,
+	TEXT("Whether to show invalidation debugging visualization"));
+
+
+bool GSlateHitTestGridDebugging = false;
+/** True if we should allow widgets to be cached in the UI at all. */
+FAutoConsoleVariableRef CVarHitTestGridDebugging(
+	TEXT("Slate.HitTestGridDebugging"),
+	GSlateHitTestGridDebugging,
+	TEXT("Whether to show a visualization of everything in the hit teest grid"));
+
+#endif
 
 FSlateWidgetStyle::FSlateWidgetStyle()
 { }

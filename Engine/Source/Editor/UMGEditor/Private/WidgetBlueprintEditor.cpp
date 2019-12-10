@@ -6,6 +6,7 @@
 #include "MovieScene.h"
 #include "Animation/WidgetAnimation.h"
 #include "Widgets/Text/STextBlock.h"
+#include "Widgets/Docking/SDockTab.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "Engine/SimpleConstructionScript.h"
 #include "Blueprint/WidgetBlueprintGeneratedClass.h"
@@ -869,6 +870,13 @@ void FWidgetBlueprintEditor::ChangeViewedAnimation( UWidgetAnimation& InAnimatio
 		TSharedPtr<STextBlock> NoAnimationTextBlockPin = NoAnimationTextBlock.Pin();
 		if( &InAnimationToView == UWidgetAnimation::GetNullAnimation())
 		{
+			const FName CurveEditorTabName = FName(TEXT("SequencerGraphEditor"));
+			TSharedPtr<SDockTab> ExistingTab = GetToolkitHost()->GetTabManager()->FindExistingLiveTab(CurveEditorTabName);
+			if (ExistingTab)
+			{
+				ExistingTab->RequestCloseTab();
+			}
+
 			// Disable sequencer from interaction
 			Sequencer->GetSequencerWidget()->SetEnabled(false);
 			Sequencer->SetAutoChangeMode(EAutoChangeMode::None);
@@ -1009,6 +1017,16 @@ void FWidgetBlueprintEditor::UpdatePreview(UBlueprint* InBlueprint, bool bInForc
 			// The preview widget should not be transactional.
 			PreviewUserWidget->ClearFlags(RF_Transactional);
 
+			// Establish the widget as being in design time before initializing and before duplication 
+            // (so that IsDesignTime is reliable within both calls to Initialize)
+            // The preview widget is also the outer widget that will update all child flags
+			PreviewUserWidget->SetDesignerFlags(GetCurrentDesignerFlags());
+
+			if ( ULocalPlayer* Player = PreviewScene.GetWorld()->GetFirstLocalPlayerFromController() )
+			{
+				PreviewUserWidget->SetPlayerContext(FLocalPlayerContext(Player));
+			}
+
 			UWidgetTree* LatestWidgetTree = PreviewBlueprint->WidgetTree;
 
 			// If there is no RootWidget, we look for a WidgetTree in the parents classes until we find one.
@@ -1019,21 +1037,15 @@ void FWidgetBlueprintEditor::UpdatePreview(UBlueprint* InBlueprint, bool bInForc
 				{
 					LatestWidgetTree = BGClass->WidgetTree;
 				}
-			 }
+			}
 
 			// Update the widget tree directly to match the blueprint tree.  That way the preview can update
 			// without needing to do a full recompile.
 			PreviewUserWidget->DuplicateAndInitializeFromWidgetTree(LatestWidgetTree);
 
-			if ( ULocalPlayer* Player = PreviewScene.GetWorld()->GetFirstLocalPlayerFromController() )
-			{
-				PreviewUserWidget->SetPlayerContext(FLocalPlayerContext(Player));
-			}
-
 			// Establish the widget as being in design time before initializing (so that IsDesignTime is reliable within Initialize)
+            // We have to call it to make sure that all the WidgetTree had the DesignerFlags set correctly
 			PreviewUserWidget->SetDesignerFlags(GetCurrentDesignerFlags());
-
-			PreviewUserWidget->Initialize();
 		}
 
 		// Store a reference to the preview actor.
@@ -1103,20 +1115,20 @@ TArray< TFunction<void()> >& FWidgetBlueprintEditor::GetQueuedDesignerActions()
 	return QueuedDesignerActions;
 }
 
-EWidgetDesignFlags::Type FWidgetBlueprintEditor::GetCurrentDesignerFlags() const
+EWidgetDesignFlags FWidgetBlueprintEditor::GetCurrentDesignerFlags() const
 {
-	EWidgetDesignFlags::Type Flags = EWidgetDesignFlags::Designing;
+	EWidgetDesignFlags Flags = EWidgetDesignFlags::Designing;
 	
 	if ( bShowDashedOutlines )
 	{
-		Flags = ( EWidgetDesignFlags::Type )( Flags | EWidgetDesignFlags::ShowOutline );
+		Flags |= EWidgetDesignFlags::ShowOutline;
 	}
 
 	if ( const UWidgetDesignerSettings* Designer = GetDefault<UWidgetDesignerSettings>() )
 	{
 		if ( Designer->bExecutePreConstructEvent )
 		{
-			Flags = ( EWidgetDesignFlags::Type )( Flags | EWidgetDesignFlags::ExecutePreConstruct );
+			Flags |= EWidgetDesignFlags::ExecutePreConstruct;
 		}
 	}
 
@@ -1746,6 +1758,11 @@ void FWidgetBlueprintEditor::SyncSequencerSelectionToSelectedWidgets()
 	}
 
 	TGuardValue<bool> Guard(bUpdatingSequencerSelection, true);
+
+	if (GetSequencer()->GetSequencerSettings()->GetShowSelectedNodesOnly())
+	{
+		GetSequencer()->RefreshTree();
+	}
 
 	GetSequencer()->ExternalSelectionHasChanged();
 }

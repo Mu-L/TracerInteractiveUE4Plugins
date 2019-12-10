@@ -6,6 +6,7 @@
 #include "SocialTypes.h"
 #include "User/ISocialUserList.h"
 #include "OnlineSubsystem.h"
+#include "Interfaces/OnlinePresenceInterface.h"
 
 #include "SocialToolkit.generated.h"
 
@@ -19,7 +20,13 @@ class FOnlinePartyId;
 
 enum class EMemberExitedReason : uint8;
 
-namespace EOnlinePresenceState { enum Type : uint8; }
+namespace FriendInviteFailureReason 
+{
+	const FString InviteFailReason_NotFound = TEXT("NotFound");
+	const FString InviteFailReason_AddingSelfFail = TEXT("AddingSelfFail");
+	const FString InviteFailReason_AddingBlockedFail = TEXT("AddingBlockedFail");
+	const FString InviteFailReason_AlreadyFriends = TEXT("AlreadyFriends");
+}
 
 DECLARE_DELEGATE_OneParam(FUserDependentAction, USocialUser&);
 
@@ -55,6 +62,7 @@ public:
 
 	const FOnlineUserPresence* GetPresenceInfo(ESocialSubsystem SubsystemType) const;
 	void SetLocalUserOnlineState(EOnlinePresenceState::Type OnlineState);
+	void AddLocalUserOnlineProperties(FPresenceProperties OnlineProperties);
 
 	USocialManager& GetSocialManager() const;
 	ULocalPlayer& GetOwningLocalPlayer() const;
@@ -120,7 +128,7 @@ protected:
 	virtual void OnOwnerLoggedIn();
 	virtual void OnOwnerLoggedOut();
 	
-	virtual void NotifyFriendInviteFailed(const FUniqueNetId& InvitedUserId, const FString& InvitedUserName, ESendFriendInviteFailureReason FailureReason, bool bCanShow = true) {}
+	virtual void OnFriendInviteComplete(const FUniqueNetId& InvitedUserId, const FString& InvitedUserName, bool bInviteSuceeded, const FString& InviteError) {}
 
 	void QueryFriendsLists();
 	void QueryBlockedPlayers();

@@ -155,13 +155,21 @@ public:
 	UPROPERTY(config, EditAnywhere, AdvancedDisplay, Category="Endpoint Settings", meta=(ShowOnlyInnerProperties))
 	FConcertEndpointSettings EndpointSettings;
 
-	/** The directory where the server keeps the live session files. Can be specified on the server command line with `-CONCERTWORKINGDIR=`*/
+	/** The default directory where the server keeps the live session files. Can be specified on the server command line with `-CONCERTWORKINGDIR=`*/
 	UPROPERTY(config)
 	FString WorkingDir;
 
-	/** The directory where the server keeps the archived session files. Can be specified on the server command line with `-CONCERTSAVEDDIR=`*/
+	/** The default directory where the server keeps the archived session files. Can be specified on the server command line with `-CONCERTSAVEDDIR=`*/
 	UPROPERTY(config)
 	FString ArchiveDir;
+
+	/** The root directory where the server creates new session repositories (unless the client request specifies its own root). If empty or invalid, the server will use a default. */
+	UPROPERTY(config)
+	FString SessionRepositoryRootDir;
+
+	/** If neither of WorkingDir and ArchiveDir are set, determine whether the server should mount a standard default session repository where new session will be created. */
+	UPROPERTY(config)
+	bool bMountDefaultSessionRepository = true;
 };
 
 USTRUCT()
@@ -246,11 +254,18 @@ public:
 	bool bInstallEditorToolbarButton;
 
 	/** 
-	 * Automatically connect or create default session on default server. 
+	 * Automatically connect or create default session on default server.
 	 * Can be specified on the editor cmd with `-CONCERTAUTOCONNECT` or `-CONCERTAUTOCONNECT=<true/false>`.
 	 */
 	UPROPERTY(config, EditAnywhere, Category="Client Settings")
 	bool bAutoConnect;
+
+	/** 
+	 * If auto-connect is on, retry connecting to the default server/session until it succeeds or the user cancels.
+	 * Can be specified on the editor cmd with `-CONCERTRETRYAUTOCONNECTONERROR` or `-CONCERTRETRYAUTOCONNECTONERROR=<true/false>`.
+	 */
+	UPROPERTY(config, EditAnywhere, Category="Client Settings")
+	bool bRetryAutoConnectOnError = false;
 
 	/** 
 	 * Default server url (just a name for now) to look for on auto or default connect. 

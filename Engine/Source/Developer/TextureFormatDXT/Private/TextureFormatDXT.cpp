@@ -420,7 +420,7 @@ class FTextureFormatDXT : public ITextureFormat
 
 	virtual void GetSupportedFormats(TArray<FName>& OutFormats) const override
 	{
-		for (int32 i = 0; i < ARRAY_COUNT(GSupportedTextureFormatNames); ++i)
+		for (int32 i = 0; i < UE_ARRAY_COUNT(GSupportedTextureFormatNames); ++i)
 		{
 			OutFormats.Add(GSupportedTextureFormatNames[i]);
 		}
@@ -496,7 +496,7 @@ class FTextureFormatDXT : public ITextureFormat
 		{
 			OutCompressedImage.SizeX = FMath::Max(Image.SizeX, 4);
 			OutCompressedImage.SizeY = FMath::Max(Image.SizeY, 4);
-			OutCompressedImage.SizeZ = BuildSettings.bVolume ? Image.NumSlices : 1;
+			OutCompressedImage.SizeZ = (BuildSettings.bVolume || BuildSettings.bTextureArray) ? Image.NumSlices : 1;
 			OutCompressedImage.PixelFormat = CompressedPixelFormat;
 		}
 		return bCompressionSucceeded;

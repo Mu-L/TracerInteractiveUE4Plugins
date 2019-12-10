@@ -118,7 +118,7 @@ FSpriteEditorViewportClient::FSpriteEditorViewportClient(TWeakPtr<FSpriteEditor>
 
 		// Nudge the source texture view back a bit so it doesn't occlude sprites
 		const FTransform Transform(-1.0f * PaperAxisZ);
-		SourceTextureViewComponent->bVisible = false;
+		SourceTextureViewComponent->SetVisibleFlag(false);
 		PreviewScene->AddComponent(SourceTextureViewComponent, Transform);
 	}
 }
@@ -150,7 +150,7 @@ void FSpriteEditorViewportClient::UpdateSourceTextureSpriteFromSprite(UPaperSpri
 
 			FSpriteAssetInitParameters SpriteReinitParams;
 
-			SpriteReinitParams.SetTextureAndFill(SourceSprite->SourceTexture);
+			SpriteReinitParams.SetTextureAndFill(SourceSprite->GetSourceTexture());
 			SpriteReinitParams.DefaultMaterialOverride = SourceSprite->DefaultMaterial;
 			SpriteReinitParams.AlternateMaterialOverride = SourceSprite->AlternateMaterial;
 			SpriteReinitParams.SetPixelsPerUnrealUnit(SourceSprite->PixelsPerUnrealUnit);
@@ -809,7 +809,7 @@ UPaperSprite* FSpriteEditorViewportClient::CreateNewSprite(const FIntPoint& TopL
 
 	// Create the factory used to generate the sprite
 	UPaperSpriteFactory* SpriteFactory = NewObject<UPaperSpriteFactory>();
-	SpriteFactory->InitialTexture = CurrentSprite->SourceTexture;
+	SpriteFactory->InitialTexture = CurrentSprite->GetSourceTexture();
 	SpriteFactory->bUseSourceRegion = true;
 	SpriteFactory->InitialSourceUV = TopLeft;
 	SpriteFactory->InitialSourceDimension = Dimensions;

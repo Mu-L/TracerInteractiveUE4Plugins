@@ -5,10 +5,33 @@
 #include "Chaos/Box.h"
 #include "Chaos/Defines.h"
 #include "Chaos/GeometryParticles.h"
-#include "Chaos/ImplicitObject.h"
 #include "Chaos/Transform.h"
 #include "ChaosLog.h"
 #include "Chaos/ISpatialAcceleration.h"
+#include "Templates/Models.h"
+
+template <typename T, bool>
+struct TBVHLeafTraits
+{
+};
+
+template <typename T>
+struct TBVHLeafTraits<T, true>
+{
+	using TPayloadType = typename T::TPayloadType;
+};
+
+template <typename T>
+struct TBVHLeafTraits<T, false>
+{
+	using TPayloadType = typename T::ElementType;
+};
+
+struct CComplexBVHLeaf
+{
+	template <typename T>
+	auto Requires(typename T::TPayloadType) ->void;
+};
 
 #define MIN_NUM_OBJECTS 5
 
@@ -33,13 +56,14 @@ FArchive& operator<<(FArchive& Ar, TBVHNode<T,d>& LeafNode)
 }
 
 template<class OBJECT_ARRAY, class LEAF_TYPE, class T, int d>
-class CHAOS_API TBoundingVolumeHierarchy final : public ISpatialAcceleration<T,d>
+class CHAOS_API TBoundingVolumeHierarchy final : public ISpatialAcceleration<int32, T,d>
 {
   public:
 	static constexpr int32 DefaultMaxLevels = 12;
 	static constexpr bool DefaultAllowMultipleSplitting = false;
 	static constexpr bool DefaultUseVelocity = false;
 	static constexpr T DefaultDt = 0;
+	using TPayloadType = typename TBVHLeafTraits<LEAF_TYPE, TModels<CComplexBVHLeaf, LEAF_TYPE>::Value>::TPayloadType;
 
 	TBoundingVolumeHierarchy(const OBJECT_ARRAY& Objects, const int32 MaxLevels = DefaultMaxLevels, const bool bUseVelocity = DefaultUseVelocity, const T Dt = DefaultDt);
 	TBoundingVolumeHierarchy(const OBJECT_ARRAY& Objects, const TArray<uint32>& ActiveIndices, const int32 MaxLevels = DefaultMaxLevels, const bool bUseVelocity = DefaultUseVelocity, const T Dt = DefaultDt);
@@ -90,10 +114,10 @@ class CHAOS_API TBoundingVolumeHierarchy final : public ISpatialAcceleration<T,d
 	}
 
 	// Begin ISpatialAcceleration interface
-	virtual TArray<int32> FindAllIntersections(const TBox<T, d>& Box) const override { return FindAllIntersectionsImp(Box); }
-	virtual TArray<int32> FindAllIntersections(const TSpatialRay<T,d>& Ray) const override { return FindAllIntersectionsImp(Ray); }
-	virtual TArray<int32> FindAllIntersections(const TVector<T, d>& Point) const override { return FindAllIntersectionsImp(Point); }
-	virtual TArray<int32> FindAllIntersections(const TGeometryParticles<T, d>& InParticles, const int32 i) const override;
+	TArray<int32> FindAllIntersections(const TBox<T, d>& Box) const { return FindAllIntersectionsImp(Box); }
+	TArray<int32> FindAllIntersections(const TSpatialRay<T,d>& Ray) const { return FindAllIntersectionsImp(Ray); }
+	TArray<int32> FindAllIntersections(const TVector<T, d>& Point) const { return FindAllIntersectionsImp(Point); }
+	TArray<int32> FindAllIntersections(const TGeometryParticles<T, d>& InParticles, const int32 i) const;
 	// End ISpatialAcceleration interface
 
 	const TArray<int32>& GlobalObjects() const
@@ -109,6 +133,11 @@ class CHAOS_API TBoundingVolumeHierarchy final : public ISpatialAcceleration<T,d
 #endif
 
 	void Serialize(FArchive& Ar);
+
+	virtual void Serialize(FChaosArchive& Ar) override
+	{
+		check(false);
+	}
 
   private:
 	void PrintTree(FString Prefix, const TBVHNode<T,d>* MyNode) const
@@ -141,7 +170,7 @@ class CHAOS_API TBoundingVolumeHierarchy final : public ISpatialAcceleration<T,d
 	FCriticalSection CriticalSection;
 };
 
-#if PLATFORM_MAC
+#if PLATFORM_MAC || PLATFORM_LINUX
 extern template class CHAOS_API Chaos::TBoundingVolumeHierarchy<Chaos::TParticles<float, 3>, TArray<int32>, float, 3>;
 extern template class CHAOS_API Chaos::TBoundingVolumeHierarchy<Chaos::TGeometryParticles<float, 3>, TArray<int32>, float, 3>;
 #endif
@@ -152,4 +181,5 @@ FArchive& operator<<(FArchive& Ar, TBoundingVolumeHierarchy<OBJECT_ARRAY, LEAF_T
 	BVH.Serialize(Ar);
 	return Ar;
 }
+
 }

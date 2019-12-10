@@ -11,6 +11,7 @@
 #include "IOSAudioDevice.h"
 #include "AudioEffect.h"
 #include "ADPCMAudioInfo.h"
+#include "AudioPluginUtilities.h"
 
 DEFINE_LOG_CATEGORY(LogIOSAudio);
 
@@ -109,11 +110,12 @@ bool FIOSAudioDevice::Exec(UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar)
 
 FAudioPlatformSettings FIOSAudioDevice::GetPlatformSettings() const
 {
-	return FAudioPlatformSettings::GetPlatformSettings(TEXT("/Script/IOSRuntimeSettings.IOSRuntimeSettings"));
+	return FAudioPlatformSettings::GetPlatformSettings(FPlatformProperties::GetRuntimeSettingsClassName());
 }
 
 bool FIOSAudioDevice::InitializeHardware()
 {
+    UE_LOG(LogIOSAudio, Warning, TEXT("Initializing legacy audio backend for iOS"));
 	SIZE_T SampleSize = sizeof(AudioSampleType);
 	double GraphSampleRate = 44100.0;
 
@@ -198,7 +200,7 @@ bool FIOSAudioDevice::InitializeHardware()
 		return false;
 	}
 
-	uint32 BusCount = MaxChannels * CHANNELS_PER_BUS;
+	uint32 BusCount = GetMaxSources() * CHANNELS_PER_BUS;
 	Status = AudioUnitSetProperty(MixerUnit,
 	                              kAudioUnitProperty_ElementCount,
 	                              kAudioUnitScope_Input,

@@ -926,15 +926,13 @@ public:
 #define GL_UNPACK_IMAGE_HEIGHT 0x806E
 #define GL_NUM_EXTENSIONS 0x821D
 
-#if PLATFORM_HTML5
+#ifdef __EMSCRIPTEN__
 // Browser supports either GLES2.0 or GLES3.0 at runtime, so needs to read these
 #define GL_MAX_3D_TEXTURE_SIZE 0x8073
 #define GL_MAX_COLOR_ATTACHMENTS 0x8CDF
 #define GL_MAX_SAMPLES 0x8D57
 #else
 // In native OpenGL ES 2.0, define to zero things that are not available.
-// In HTML5 however, always query from the browser what the supported
-// values are.
 #define GL_MAX_3D_TEXTURE_SIZE 0	//0x8073
 #define GL_MAX_COLOR_ATTACHMENTS 0	//0x8CDF
 #define GL_MAX_SAMPLES 0	//0x8D57

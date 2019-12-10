@@ -43,11 +43,20 @@ FGauntletModule* UGauntletTestController::GetGauntlet()
 	return ParentModule;
 }
 
+void UGauntletTestController::MarkHeartbeatActive(const FString& OptionalStatusMessage /*= FString()*/)
+{
+	FString StatusMessage = OptionalStatusMessage;
+	if (!StatusMessage.IsEmpty())
+	{
+		StatusMessage = FString::Printf(TEXT("[%s] %s"), *GetName(), *StatusMessage);
+	}
+
+	GetGauntlet()->MarkHeartbeatActive(StatusMessage);
+}
+
 UWorld* UGauntletTestController::GetWorld() const
 {
-	UGameInstance* GameInstance = GEngine->GameViewport->GetGameInstance();
-
-	return GameInstance ? GameInstance->GetWorld() : nullptr;
+	return GWorld;
 }
 
 APlayerController* UGauntletTestController::GetFirstPlayerController() const

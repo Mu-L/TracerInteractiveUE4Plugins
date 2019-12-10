@@ -2,9 +2,9 @@
 
 #include "GeometryCollection/GeometryCollectionParticlesData.h"
 
-#if INCLUDE_CHAOS && !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
 
-#include "PBDRigidsSolver.h"
+#include "PhysicsSolver.h"
 #include "Chaos/Sphere.h"
 #include "Chaos/Box.h"
 #include "Chaos/ImplicitObjectTransformed.h"
@@ -26,7 +26,8 @@ TGeometryCollectionParticlesData<T, d>::TGeometryCollectionParticlesData()
 }
 
 template<class T, int d>
-void TGeometryCollectionParticlesData<T, d>::Sync(const Chaos::FPBDRigidsSolver* Solver, const TManagedArray<int32>& RigidBodyIds)
+//void TGeometryCollectionParticlesData<T, d>::Sync(const Chaos::FPhysicsSolver* Solver, const TManagedArray<int32>& RigidBodyIds)
+void TGeometryCollectionParticlesData<T, d>::Sync(const Chaos::FPhysicsSolver* Solver, const TManagedArray<FGuid>& RigidBodyIds)
 {
 	// No point in calling twice the sync function within the same frame
 	if (!ensureMsgf(SyncFrame != GFrameCounter, TEXT("Sync should not happen twice during the same tick.")))
@@ -53,7 +54,7 @@ void TGeometryCollectionParticlesData<T, d>::Sync(const Chaos::FPBDRigidsSolver*
 			Chaos::IDispatcher* const PhysicsDispatcher = ChaosModule->GetDispatcher();
 			check(PhysicsDispatcher);
 
-			PhysicsDispatcher->EnqueueCommand([this, Solver, &RigidBodyIds]()
+			PhysicsDispatcher->EnqueueCommandImmediate([this, Solver, &RigidBodyIds]()
 			{
 				// Iterate through all data
 				FData& Data = BufferedData.GetPhysicsDataForWrite();
@@ -135,9 +136,13 @@ void TGeometryCollectionParticlesData<T, d>::FData::Reset(EGeometryCollectionPar
 }
 
 template<class T, int d>
-void TGeometryCollectionParticlesData<T, d>::FData::Copy(EGeometryCollectionParticlesData Data, const Chaos::FPBDRigidsSolver* Solver, const TManagedArray<int32>& RigidBodyIds)
+void TGeometryCollectionParticlesData<T, d>::FData::Copy(EGeometryCollectionParticlesData Data, const Chaos::FPhysicsSolver* Solver, const TManagedArray<FGuid>& RigidBodyIds)
 {
 	check(Solver);
+#if TODO_REIMPLEMENT_GET_RIGID_PARTICLES
+	// 10.31.2019 Ryan - This code uses the RigidBodyIds as indices, and that's not going to work anymore.
+	// We need to figure that out...
+
 	const Chaos::TPBDRigidParticles<T, d>& Particles = Solver->GetRigidParticles();
 	const Chaos::TPBDRigidClustering<FPBDRigidsEvolution, FPBDCollisionConstraints, T, d>& Clustering = Solver->GetRigidClustering();
 
@@ -162,8 +167,8 @@ void TGeometryCollectionParticlesData<T, d>::FData::Copy(EGeometryCollectionPart
 	auto HasBoundingBox = [](Chaos::TSerializablePtr<Chaos::TImplicitObject<T, d>> ImplicitObject) { return ImplicitObject ? ImplicitObject->HasBoundingBox(): false; };
 	auto BoxMin         = [](Chaos::TSerializablePtr<Chaos::TImplicitObject<T, d>> ImplicitObject) { const Chaos::TBox     <T, d>* Box     ; return ImplicitObject && (Box      = ImplicitObject->template GetObject<Chaos::TBox     <T, d>>()) != nullptr ? Box     ->Min    (): Chaos::TVector<T, d>(T(0)); };
 	auto BoxMax         = [](Chaos::TSerializablePtr<Chaos::TImplicitObject<T, d>> ImplicitObject) { const Chaos::TBox     <T, d>* Box     ; return ImplicitObject && (Box      = ImplicitObject->template GetObject<Chaos::TBox     <T, d>>()) != nullptr ? Box     ->Max    (): Chaos::TVector<T, d>(T(0)); };
-	auto SphereCenter   = [](Chaos::TSerializablePtr<Chaos::TImplicitObject<T, d>> ImplicitObject) { const Chaos::TSphere  <T, d>* Sphere  ; return ImplicitObject && (Sphere   = ImplicitObject->template GetObject<Chaos::TSphere  <T, d>>()) != nullptr ? Sphere  ->Center (): Chaos::TVector<T, d>(T(0)); };
-	auto SphereRadius   = [](Chaos::TSerializablePtr<Chaos::TImplicitObject<T, d>> ImplicitObject) { const Chaos::TSphere  <T, d>* Sphere  ; return ImplicitObject && (Sphere   = ImplicitObject->template GetObject<Chaos::TSphere  <T, d>>()) != nullptr ? Sphere  ->Radius (): T(0); };
+	auto SphereCenter   = [](Chaos::TSerializablePtr<Chaos::TImplicitObject<T, d>> ImplicitObject) { const Chaos::TSphere  <T, d>* Sphere  ; return ImplicitObject && (Sphere   = ImplicitObject->template GetObject<Chaos::TSphere  <T, d>>()) != nullptr ? Sphere  ->GetCenter (): Chaos::TVector<T, d>(T(0)); };
+	auto SphereRadius   = [](Chaos::TSerializablePtr<Chaos::TImplicitObject<T, d>> ImplicitObject) { const Chaos::TSphere  <T, d>* Sphere  ; return ImplicitObject && (Sphere   = ImplicitObject->template GetObject<Chaos::TSphere  <T, d>>()) != nullptr ? Sphere  ->GetRadius (): T(0); };
 	auto LevelSetGrid   = [](Chaos::TSerializablePtr<Chaos::TImplicitObject<T, d>> ImplicitObject) { const Chaos::TLevelSet<T, d>* LevelSet; return ImplicitObject && (LevelSet = ImplicitObject->template GetObject<Chaos::TLevelSet<T, d>>()) != nullptr ? LevelSet->GetGrid(): Chaos::TUniformGrid<T, d>(); };
 
 	// Data type copy for all particles
@@ -201,6 +206,7 @@ void TGeometryCollectionParticlesData<T, d>::FData::Copy(EGeometryCollectionPart
 	case EGeometryCollectionParticlesData::ConnectivityEdges     : ConnectivityEdges     .Resize(Count); for (int32 i = 0; i < Count; ++i) { if (RigidBodyIds[i] != INDEX_NONE) { ConnectivityEdges     [i] = Clustering.GetConnectivityEdges()[RigidBodyIds[i]] ; } } break;
 	case EGeometryCollectionParticlesData::ChildToParentMap      : ChildToParentMap      .Resize(Count); for (int32 i = 0; i < Count; ++i) { if (RigidBodyIds[i] != INDEX_NONE) { ChildToParentMap      [i] = Clustering.GetChildToParentMap ()[RigidBodyIds[i]] ; } } break;
 	}
+#endif
 }
 
 template<class T, int d>
@@ -261,5 +267,5 @@ FString TGeometryCollectionParticlesData<T, d>::FData::ToString(int32 Index, con
 // Current chaos particles type
 template class TGeometryCollectionParticlesData<float, 3>;
 
-#endif  // #if INCLUDE_CHAOS && !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+#endif  // #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
 

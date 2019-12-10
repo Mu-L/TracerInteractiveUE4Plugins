@@ -1,7 +1,7 @@
 // Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
 
 #include "SoundCueGraph/SoundCueGraphNode.h"
-#include "Framework/MultiBox/MultiBoxBuilder.h"
+#include "ToolMenus.h"
 #include "Editor/EditorEngine.h"
 #include "SoundCueGraph/SoundCueGraph.h"
 #include "Sound/SoundNodeWavePlayer.h"
@@ -211,46 +211,68 @@ void USoundCueGraphNode::CreateInputPins()
 	}
 }
 
-void USoundCueGraphNode::GetContextMenuActions(const FGraphNodeContextMenuBuilder& Context) const
+void USoundCueGraphNode::GetNodeContextMenuActions(UToolMenu* Menu, UGraphNodeContextMenuContext* Context) const
 {
-	if (Context.Pin)
+	if (Context->Pin)
 	{
 		// If on an input that can be deleted, show option
-		if(Context.Pin->Direction == EGPD_Input && SoundNode->ChildNodes.Num() > SoundNode->GetMinChildNodes())
+		if(Context->Pin->Direction == EGPD_Input && SoundNode->ChildNodes.Num() > SoundNode->GetMinChildNodes())
 		{
-			Context.MenuBuilder->AddMenuEntry(FSoundCueGraphEditorCommands::Get().DeleteInput);
+			FToolMenuSection& Section = Menu->AddSection("SoundCueGraphDeleteInput");
+			Section.AddMenuEntry(FSoundCueGraphEditorCommands::Get().DeleteInput);
 		}
 	}
-	else if (Context.Node)
+	else if (Context->Node)
 	{
-		Context.MenuBuilder->BeginSection("SoundCueGraphNodeEdit");
 		{
-			Context.MenuBuilder->AddMenuEntry( FGenericCommands::Get().Delete );
-			Context.MenuBuilder->AddMenuEntry( FGenericCommands::Get().Cut );
-			Context.MenuBuilder->AddMenuEntry( FGenericCommands::Get().Copy );
-			Context.MenuBuilder->AddMenuEntry( FGenericCommands::Get().Duplicate );
-		}
-		Context.MenuBuilder->EndSection();
+			FToolMenuSection& Section = Menu->AddSection("SoundCueGraphNodeAlignment");
+			Section.AddSubMenu("Alignment", LOCTEXT("AlignmentHeader", "Alignment"), FText(), FNewToolMenuDelegate::CreateLambda([](UToolMenu* SubMenu)
+			{
+				{
+					FToolMenuSection& SubMenuSection = SubMenu->AddSection("EdGraphSchemaAlignment", LOCTEXT("AlignHeader", "Align"));
+					SubMenuSection.AddMenuEntry(FGraphEditorCommands::Get().AlignNodesTop);
+					SubMenuSection.AddMenuEntry(FGraphEditorCommands::Get().AlignNodesMiddle);
+					SubMenuSection.AddMenuEntry(FGraphEditorCommands::Get().AlignNodesBottom);
+					SubMenuSection.AddMenuEntry(FGraphEditorCommands::Get().AlignNodesLeft);
+					SubMenuSection.AddMenuEntry(FGraphEditorCommands::Get().AlignNodesCenter);
+					SubMenuSection.AddMenuEntry(FGraphEditorCommands::Get().AlignNodesRight);
+					SubMenuSection.AddMenuEntry(FGraphEditorCommands::Get().StraightenConnections);
+				}
 
-		Context.MenuBuilder->BeginSection("SoundCueGraphNodeAddPlaySync");
+				{
+					FToolMenuSection& SubMenuSection = SubMenu->AddSection("EdGraphSchemaDistribution", LOCTEXT("DistributionHeader", "Distribution"));
+					SubMenuSection.AddMenuEntry(FGraphEditorCommands::Get().DistributeNodesHorizontally);
+					SubMenuSection.AddMenuEntry(FGraphEditorCommands::Get().DistributeNodesVertically);
+				}
+			}));
+		}
+
 		{
+			FToolMenuSection& Section = Menu->AddSection("SoundCueGraphNodeEdit");
+			Section.AddMenuEntry( FGenericCommands::Get().Delete );
+			Section.AddMenuEntry( FGenericCommands::Get().Cut );
+			Section.AddMenuEntry( FGenericCommands::Get().Copy );
+			Section.AddMenuEntry( FGenericCommands::Get().Duplicate );
+		}
+
+		{
+			FToolMenuSection& Section = Menu->AddSection("SoundCueGraphNodeAddPlaySync");
 			if (CanAddInputPin())
 			{
-				Context.MenuBuilder->AddMenuEntry(FSoundCueGraphEditorCommands::Get().AddInput);
+				Section.AddMenuEntry(FSoundCueGraphEditorCommands::Get().AddInput);
 			}
 
-			Context.MenuBuilder->AddMenuEntry(FSoundCueGraphEditorCommands::Get().PlayNode);
+			Section.AddMenuEntry(FSoundCueGraphEditorCommands::Get().PlayNode);
 
 			if ( Cast<USoundNodeWavePlayer>(SoundNode) )
 			{
-				Context.MenuBuilder->AddMenuEntry(FSoundCueGraphEditorCommands::Get().BrowserSync);
+				Section.AddMenuEntry(FSoundCueGraphEditorCommands::Get().BrowserSync);
 			}
 			else if (Cast<USoundNodeDialoguePlayer>(SoundNode))
 			{
-				Context.MenuBuilder->AddMenuEntry(FSoundCueGraphEditorCommands::Get().BrowserSync);
+				Section.AddMenuEntry(FSoundCueGraphEditorCommands::Get().BrowserSync);
 			}
 		}
-		Context.MenuBuilder->EndSection();
 	}
 }
 

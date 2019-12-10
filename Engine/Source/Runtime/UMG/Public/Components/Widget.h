@@ -19,6 +19,7 @@
 #include "Slate/WidgetTransform.h"
 #include "UObject/UObjectThreadContext.h"
 #include "GameFramework/PlayerController.h"
+#include "Blueprint/WidgetNavigation.h"
 
 #if WITH_EDITOR
 // This violates IWYU, but the alternative is .cpp includes that are invariably not within #if WITH_EDITOR and cause non-editor build failures
@@ -173,16 +174,15 @@ namespace UMWidget
  * Flags used by the widget designer.
  */
 UENUM()
-namespace EWidgetDesignFlags
+enum class EWidgetDesignFlags : uint8
 {
-	enum Type
-	{
-		None				= 0,
-		Designing			= 1,
-		ShowOutline			= 2,
-		ExecutePreConstruct	= 4
-	};
-}
+	None				= 0,
+	Designing			= 1 << 0,
+	ShowOutline			= 1 << 1,
+	ExecutePreConstruct	= 1 << 2
+};
+
+ENUM_CLASS_FLAGS(EWidgetDesignFlags);
 
 
 #if WITH_EDITOR
@@ -366,7 +366,7 @@ public:
 
 private:
 	/** A custom set of accessibility rules for this widget. If null, default rules for the widget are used. */
-	UPROPERTY()
+	UPROPERTY(Instanced)
 	USlateAccessibleWidgetData* AccessibleWidgetData;
 
 protected:
@@ -595,13 +595,17 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Widget")
 	bool HasUserFocusedDescendants(APlayerController* PlayerController) const;
 	
+	/** Sets the focus to this widget for the owning user */
+	UFUNCTION(BlueprintCallable, Category = "Widget")
+	void SetFocus();
+
 	/** Sets the focus to this widget for a specific user */
 	UFUNCTION(BlueprintCallable, Category="Widget")
 	void SetUserFocus(APlayerController* PlayerController);
 
 	/**
 	 * Forces a pre-pass.  A pre-pass caches the desired size of the widget hierarchy owned by this widget.  
-	 * One pre-pass is already happens for every widget before Tick occurs.  You only need to perform another 
+	 * One pre-pass already happens for every widget before Tick occurs.  You only need to perform another 
 	 * pre-pass if you are adding child widgets this frame and want them to immediately be visible this frame.
 	 */
 	UFUNCTION(BlueprintCallable, Category="Widget")
@@ -638,8 +642,41 @@ public:
 	 *	@param Rule The rule to use when navigation is taking place
 	 *	@param WidgetToFocus When using the Explicit rule, focus on this widget
 	 */
+	UE_DEPRECATED(4.23, "SetNavigationRule is deprecated. Please use either SetNavigationRuleBase or SetNavigationRuleExplicit or SetNavigationRuleCustom or SetNavigationRuleCustomBoundary.")
 	UFUNCTION(BlueprintCallable, Category = "Widget")
 	void SetNavigationRule(EUINavigation Direction, EUINavigationRule Rule, FName WidgetToFocus);
+
+	/**
+	 *	Sets the widget navigation rules for a specific direction. This can only be called on widgets that are in a widget tree. This works only for non Explicit, non Custom and non CustomBoundary Rules.
+	 *	@param Direction
+	 *	@param Rule The rule to use when navigation is taking place
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Widget")
+	void SetNavigationRuleBase(EUINavigation Direction, EUINavigationRule Rule);
+
+	/**
+	 *	Sets the widget navigation rules for a specific direction. This can only be called on widgets that are in a widget tree. This works only for Explicit Rule.
+	 *	@param Direction
+	 *	@param InWidget Focus on this widget instance
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Widget")
+	void SetNavigationRuleExplicit(EUINavigation Direction, UWidget* InWidget);
+
+	/**
+	 *	Sets the widget navigation rules for a specific direction. This can only be called on widgets that are in a widget tree. This works only for Custom Rule.
+	 *	@param Direction
+	 *	@param InCustomDelegate Custom Delegate that will be called
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Widget")
+	void SetNavigationRuleCustom(EUINavigation Direction, FCustomWidgetNavigationDelegate InCustomDelegate);
+
+	/**
+	 *	Sets the widget navigation rules for a specific direction. This can only be called on widgets that are in a widget tree. This works only for CustomBoundary Rule.
+	 *	@param Direction
+	 *	@param InCustomDelegate Custom Delegate that will be called
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Widget")
+	void SetNavigationRuleCustomBoundary(EUINavigation Direction, FCustomWidgetNavigationDelegate InCustomDelegate);
 
 	/** Gets the parent widget */
 	UFUNCTION(BlueprintCallable, Category="Widget")
@@ -664,6 +701,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Widget")
 	const FGeometry& GetCachedGeometry() const;
 
+	UFUNCTION(BlueprintCallable, Category="Widget")
+	const FGeometry& GetTickSpaceGeometry() const;
+
+	UFUNCTION(BlueprintCallable, Category="Widget")
+	const FGeometry& GetPaintSpaceGeometry() const;
 	/**
 	 * Gets the underlying slate widget or constructs it if it doesn't exist.  If you're looking to replace
 	 * what slate widget gets constructed look for RebuildWidget.  For extremely special cases where you actually
@@ -783,18 +825,18 @@ public:
 	}
 
 	/** Sets the designer flags on the widget. */
-	virtual void SetDesignerFlags(EWidgetDesignFlags::Type NewFlags);
+	virtual void SetDesignerFlags(EWidgetDesignFlags NewFlags);
 
 	/** Gets the designer flags currently set on the widget. */
-	FORCEINLINE EWidgetDesignFlags::Type GetDesignerFlags() const
+	FORCEINLINE EWidgetDesignFlags GetDesignerFlags() const
 	{
-		return DesignerFlags;
+		return static_cast<EWidgetDesignFlags>(DesignerFlags);
 	}
 
 	/** Tests if any of the flags exist on this widget. */
-	FORCEINLINE bool HasAnyDesignerFlags(EWidgetDesignFlags::Type FlagToCheck) const
+	FORCEINLINE bool HasAnyDesignerFlags(EWidgetDesignFlags FlagsToCheck) const
 	{
-		return ( DesignerFlags&FlagToCheck ) != 0;
+		return EnumHasAnyFlags(GetDesignerFlags(), FlagsToCheck);
 	}
 
 	/** Returns the friendly name of the widget to display in the editor */
@@ -818,13 +860,13 @@ public:
 	 * To trigger compilation failure, add an error to the log. Warnings and notes will be visible, but will not cause compiles to fail.
 	 */
 	virtual void ValidateCompiledDefaults(class IWidgetCompilerLog& CompileLog) const {}
+
+	/** Mark this object as modified, also mark the slot as modified. */
+	virtual bool Modify(bool bAlwaysMarkDirty = true) override;
 #else
 	FORCEINLINE bool IsDesignTime() const { return false; }
 #endif
 	
-	/** Mark this object as modified, also mark the slot as modified. */
-	virtual bool Modify(bool bAlwaysMarkDirty = true) override;
-
 	/**
 	 * Recurses up the list of parents and returns true if this widget is a descendant of the PossibleParent
 	 * @return true if this widget is a child of the PossibleParent
@@ -984,7 +1026,7 @@ protected:
 		return FSlateColor(InLinearColor.Get());
 	}
 
-	void SetNavigationRuleInternal(EUINavigation Direction, EUINavigationRule Rule, FName WidgetToFocus);
+	void SetNavigationRuleInternal(EUINavigation Direction, EUINavigationRule Rule, FName WidgetToFocus = NAME_None, UWidget* InWidget = nullptr, FCustomWidgetNavigationDelegate InCustomDelegate = FCustomWidgetNavigationDelegate());
 
 #if WITH_ACCESSIBILITY
 	/** Gets the widget that accessibility properties should synchronize to. */
@@ -1009,7 +1051,7 @@ private:
 #if WITH_EDITORONLY_DATA
 	/** Any flags used by the designer at edit time. */
 	UPROPERTY(Transient)
-	TEnumAsByte<EWidgetDesignFlags::Type> DesignerFlags;
+	uint8 DesignerFlags;
 
 	/** The friendly name for this widget displayed in the designer and BP graph. */
 	UPROPERTY()

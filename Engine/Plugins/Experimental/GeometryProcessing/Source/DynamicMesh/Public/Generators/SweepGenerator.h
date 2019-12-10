@@ -12,6 +12,7 @@
 #include "FrameTypes.h"
 #include "MatrixTypes.h"
 #include "Polygon2.h"
+#include "Curve/CurveUtil.h"
 
 /**
  * ECapType indicates the type of cap to use on a sweep
@@ -124,10 +125,11 @@ protected:
 					SetTrianglePolygon(TriIdx, PolyIdx);
 					TriIdx++;
 				}
+				float SideScale = 2 * CapIdx - 1;
 				for (int32 Idx = 0; Idx < XVerts; Idx++)
 				{
 					FVector2d CenteredVert = CrossSection.GetVertices()[Idx] * UVScale + UVOffset;
-					SetUV(CapUVStart[CapIdx] + Idx, FVector2f(CenteredVert.X, CenteredVert.Y), VertOffset + Idx);
+					SetUV(CapUVStart[CapIdx] + Idx, FVector2f(CenteredVert.X * SideScale, CenteredVert.Y), VertOffset + Idx);
 					SetNormal(CapNormalStart[CapIdx] + Idx, FVector3f::Zero(), VertOffset + Idx);
 				}
 			}
@@ -146,7 +148,7 @@ protected:
 				for (int32 XIdx = 0; XIdx < NumCrossSections; XIdx++)
 				{
 					float UVY = XIdx / float(NumCrossSections - 1);
-					SetUV(XIdx * XUVs + UVSubIdx, FVector2f(UVX, UVY), XIdx * XVerts + VertSubIdx);
+					SetUV(XIdx * XUVs + UVSubIdx, FVector2f(1-UVX, 1-UVY), XIdx * XVerts + VertSubIdx);
 				}
 
 				if (VertSubIdx == NextDupVertIdx)
@@ -178,7 +180,7 @@ protected:
 				for (int32 XIdx = 0; XIdx < NumCrossSections; XIdx++)
 				{
 					float UVY = XIdx / float(NumCrossSections - 1);
-					SetUV(XIdx * XUVs + UVSubIdx, FVector2f(UVX, UVY), XIdx * XVerts + VertSubIdx);
+					SetUV(XIdx * XUVs + UVSubIdx, FVector2f(1-UVX, 1-UVY), XIdx * XVerts + VertSubIdx);
 				}
 			}
 			NumSections = NormalSections.Num();
@@ -244,7 +246,9 @@ public:
 	float Radius[2] = {1.0f, 1.0f};
 	float Height = 1.0f;
 	int AngleSamples = 16;
+	int LengthSamples = 0;
 	bool bCapped = false;
+	bool bUVScaleMatchSidesAndCaps = true;
 
 public:
 	/** Generate the mesh */
@@ -254,24 +258,143 @@ public:
 		const TArray<FVector2d>& XVerts = X.GetVertices();
 		ECapType Caps[2] = {ECapType::None, ECapType::None};
 
+		FVector2d NormalSide = (FVector2d(Radius[1], Height) - FVector2d(Radius[0], 0)).Perp().Normalized();
+
 		if (bCapped)
 		{
 			Caps[0] = ECapType::FlatTriangulation;
 			Caps[1] = ECapType::FlatTriangulation;
 		}
-		ConstructMeshTopology(X, {}, {}, 2, Caps, FVector2d(1, 1), FVector2d(0, 0));
 
+		int NumX = LengthSamples + 2;
+		ConstructMeshTopology(X, {}, {}, NumX, Caps, FVector2d(.5, .5), FVector2d(.5, .5));
+
+		// set vertex positions and normals for all cross sections along length
+		double LengthFactor = 1.0 / double(NumX-1);
 		for (int SubIdx = 0; SubIdx < X.VertexCount(); SubIdx++)
 		{
-			for (int XIdx = 0; XIdx < 2; ++XIdx)
+			for (int XIdx = 0; XIdx < NumX; ++XIdx)
 			{
+				double Along = XIdx * LengthFactor;
+				double AlongRadius = FMath::Lerp(Radius[0], Radius[1], Along);
 				Vertices[SubIdx + XIdx * AngleSamples] =
-					FVector3d(XVerts[SubIdx].X * Radius[XIdx], XVerts[SubIdx].Y * Radius[XIdx], XIdx * Height);
-				Normals[SubIdx + XIdx * AngleSamples] = FVector3f(XVerts[SubIdx].X, XVerts[SubIdx].Y, 0);
-
-				if (bCapped)
+					FVector3d(XVerts[SubIdx].X * AlongRadius, XVerts[SubIdx].Y * AlongRadius, Height * Along);
+				Normals[SubIdx + XIdx * AngleSamples] = FVector3f(XVerts[SubIdx].X*NormalSide.X, XVerts[SubIdx].Y*NormalSide.X, NormalSide.Y);
+			}
+		}
+		// if capped, set top/bottom normals
+		if (bCapped)
+		{
+			for (int SubIdx = 0; SubIdx < X.VertexCount(); SubIdx++)
+			{
+				for (int XBotTop = 0; XBotTop < 2; ++XBotTop)
 				{
-					Normals[CapNormalStart[XIdx] + SubIdx] = FVector3f(0, 0, 2 * XIdx - 1);
+					Normals[CapNormalStart[XBotTop] + SubIdx] = FVector3f(0, 0, 2 * XBotTop - 1);
+				}
+			}
+		}
+
+		for (int k = 0; k < Normals.Num(); ++k)
+		{
+			Normals[k].Normalize();
+		}
+
+		if (bUVScaleMatchSidesAndCaps)
+		{
+			float MaxAbsRad = FMathf::Max(FMathf::Abs(Radius[0]), FMathf::Abs(Radius[1]));
+			float AbsHeight = FMathf::Abs(Height);
+			float MaxAbsCircumference = MaxAbsRad * FMathf::TwoPi;
+			
+			// scales to put each differently-scaled UV coordinate into the same space
+			float ThetaScale = MaxAbsCircumference;
+			float HeightScale = AbsHeight;
+			float CapScale = MaxAbsRad*2;
+
+			float MaxScale = FMathf::Max3(ThetaScale, HeightScale, CapScale);
+			ThetaScale /= MaxScale;
+			HeightScale /= MaxScale;
+			CapScale /= MaxScale;
+			for (int UVIdx = 0; UVIdx < CapUVStart[0]; UVIdx++)
+			{
+				UVs[UVIdx].X *= ThetaScale;
+				UVs[UVIdx].Y *= HeightScale;
+			}
+			for (int UVIdx = CapUVStart[0]; UVIdx < UVs.Num(); UVIdx++)
+			{
+				UVs[UVIdx] *= CapScale;
+			}
+		}
+
+		return *this;
+	}
+};
+
+
+/**
+ * Sweep a 2D Profile Polygon along a 3D Path.
+ * 
+ * TODO: 
+ *  - Loop path support
+ *  - Mitering cross sections support?
+ */
+class /*DYNAMICMESH_API*/ FGeneralizedCylinderGenerator : public FSweepGeneratorBase
+{
+public:
+	FPolygon2d CrossSection;
+	TArray<FVector3d> Path;
+
+	FFrame3d InitialFrame;
+
+	bool bCapped = false;
+
+public:
+	/** Generate the mesh */
+	virtual FMeshShapeGenerator& Generate() override
+	{
+		const bool bLoop = false; // TODO: support loops -- note this requires updating FSweepGeneratorBase to set up the mesh topology correctly!
+		
+		const TArray<FVector2d>& XVerts = CrossSection.GetVertices();
+		ECapType Caps[2] = {ECapType::None, ECapType::None};
+
+		if (bCapped)
+		{
+			Caps[0] = ECapType::FlatTriangulation;
+			Caps[1] = ECapType::FlatTriangulation;
+		}
+		int PathNum = Path.Num();
+		ConstructMeshTopology(CrossSection, {}, {}, PathNum, Caps, FVector2d(.5, .5), FVector2d(.5, .5));
+
+		int XNum = CrossSection.VertexCount();
+		TArray<FVector2d> XNormals; XNormals.SetNum(XNum);
+		for (int Idx = 0; Idx < XNum; Idx++)
+		{
+			XNormals[Idx] = CrossSection.GetNormal_FaceAvg(Idx);
+		}
+
+		FFrame3d CrossSectionFrame = InitialFrame;
+		for (int PathIdx = 0; PathIdx < PathNum; ++PathIdx)
+		{
+			FVector3d Tangent = TCurveUtil<double>::Tangent(Path, PathIdx, bLoop);
+			CrossSectionFrame.AlignAxis(2, Tangent);
+			FVector3d C = Path[PathIdx];
+			FVector3d X = CrossSectionFrame.X();
+			FVector3d Y = CrossSectionFrame.Y();
+			for (int SubIdx = 0; SubIdx < XNum; SubIdx++)
+			{
+				FVector2d XP = CrossSection[SubIdx];
+				FVector2d XN = XNormals[SubIdx];
+				Vertices[SubIdx + PathIdx * XNum] = C + X * XP.X + Y * XP.Y;
+				Normals[SubIdx + PathIdx * XNum] = FVector3f(X * XN.X + Y * XN.Y);
+			}
+		}
+		if (bCapped && !bLoop)
+		{
+			for (int CapIdx = 0; CapIdx < 2; CapIdx++)
+			{
+				FVector3f Normal(TCurveUtil<double>::Tangent(Path, CapIdx * (PathNum-1), bLoop) * (CapIdx * 2 - 1));
+				for (int SubIdx = 0; SubIdx < XNum; SubIdx++)
+				{
+					Normals[CapNormalStart[CapIdx] + SubIdx] = Normal;
 				}
 			}
 		}

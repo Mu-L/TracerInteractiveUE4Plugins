@@ -11,7 +11,7 @@
 #include "Config/IDisplayClusterConfigManager.h"
 #include "Game/IDisplayClusterGameManager.h"
 
-#include "DisplayClusterPawn.h"
+#include "DisplayClusterRootComponent.h"
 #include "DisplayClusterScreenComponent.h"
 
 
@@ -159,37 +159,18 @@ bool FDisplayClusterProjectionSimplePolicy::GetProjectionMatrix(const uint32 Vie
 	const FVector vc = pc - pe; // camera -> lt
 
 	const float d = -FVector::DotProduct(va, vn); // distance from eye to screen
-	const float ndifd = n / d;
+
+	static const float minScreenDistance = 10; //Minimal distance from eye to screen
+	const float SafeDistance = (fabs(d) < minScreenDistance) ? minScreenDistance : d;
+
+	const float ndifd = n / SafeDistance;
+
 	const float l = FVector::DotProduct(vr, va) * ndifd; // distance to left screen edge
 	const float r = FVector::DotProduct(vr, vb) * ndifd; // distance to right screen edge
 	const float b = FVector::DotProduct(vu, va) * ndifd; // distance to bottom screen edge
 	const float t = FVector::DotProduct(vu, vc) * ndifd; // distance to top screen edge
 
-	const float mx = 2.f * n / (r - l);
-	const float my = 2.f * n / (t - b);
-	const float ma = -(r + l) / (r - l);
-	const float mb = -(t + b) / (t - b);
-	const float mc = f / (f - n);
-	const float md = -(f * n) / (f - n);
-	const float me = 1.f;
-
-	// Normal LHS
-	const FMatrix pm = FMatrix(
-		FPlane(mx, 0, 0, 0),
-		FPlane(0, my, 0, 0),
-		FPlane(ma, mb, mc, me),
-		FPlane(0, 0, md, 0));
-
-	// Invert Z-axis (UE4 uses Z-inverted LHS)
-	const FMatrix flipZ = FMatrix(
-		FPlane(1, 0, 0, 0),
-		FPlane(0, 1, 0, 0),
-		FPlane(0, 0, -1, 0),
-		FPlane(0, 0, 1, 1));
-
-	const FMatrix result(pm * flipZ);
-
-	OutPrjMatrix = result;
+	OutPrjMatrix = DisplayClusterHelpers::math::GetProjectionMatrixFromOffsets(l, r, t, b, n, f);
 
 	return true;
 }
@@ -210,9 +191,9 @@ void FDisplayClusterProjectionSimplePolicy::InitializeMeshData()
 		return;
 	}
 
-	// Get our pawn
-	APawn* Pawn = GameMgr->GetRoot();
-	if (!Pawn)
+	// Get our VR root
+	UDisplayClusterRootComponent* Root = GameMgr->GetRootComponent();
+	if (!Root)
 	{
 		UE_LOG(LogDisplayClusterProjectionSimple, Error, TEXT("Couldn't get a VR root object"));
 		return;
@@ -222,7 +203,7 @@ void FDisplayClusterProjectionSimplePolicy::InitializeMeshData()
 	USceneComponent* ParentComp = nullptr;
 	if (CfgScreen.ParentId.IsEmpty())
 	{
-		ParentComp = Pawn->GetRootComponent();
+		ParentComp = Root;
 	}
 	else
 	{
@@ -236,7 +217,7 @@ void FDisplayClusterProjectionSimplePolicy::InitializeMeshData()
 	}
 
 	// Finally, create the component
-	ScreenComp = NewObject<UDisplayClusterScreenComponent>(Pawn, FName(*CfgScreen.Id), RF_Transient);
+	ScreenComp = NewObject<UDisplayClusterScreenComponent>(Root->GetOwner(), FName(*CfgScreen.Id), RF_Transient);
 	check(ScreenComp);
 
 	// Initialize it

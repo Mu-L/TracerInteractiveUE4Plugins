@@ -463,8 +463,9 @@ struct FSequencerSectionPainterImpl : FSequencerSectionPainter
 		}
 
 		const FSlateBrush* MyBrush = FEditorStyle::Get().GetBrush("Sequencer.Timeline.EaseInOut");
-		FSlateShaderResourceProxy *ResourceProxy = FSlateDataPayload::ResourceManager->GetShaderResource(*MyBrush);
+
 		FSlateResourceHandle ResourceHandle = FSlateApplication::Get().GetRenderer()->GetResourceHandle(*MyBrush);
+		const FSlateShaderResourceProxy* ResourceProxy = ResourceHandle.GetResourceProxy();
 
 		FVector2D AtlasOffset = ResourceProxy ? ResourceProxy->StartUV : FVector2D(0.f, 0.f);
 		FVector2D AtlasUVSize = ResourceProxy ? ResourceProxy->SizeUV : FVector2D(1.f, 1.f);
@@ -1038,13 +1039,15 @@ int32 SSequencerSection::OnPaint( const FPaintArgs& Args, const FGeometry& Allot
 		Hotspot = GetSequencer().GetHotspot().Get();
 	}
 
-	const bool bEnabled = bParentEnabled && SectionObject->IsActive();
-	const bool bLocked = SectionObject->IsLocked();
-	UMovieScenePropertyTrack* Track = SectionObject->GetTypedOuter<UMovieScenePropertyTrack>();
+	UMovieSceneTrack* Track = SectionObject->GetTypedOuter<UMovieSceneTrack>();
+	const bool bEnabled = bParentEnabled && SectionObject->IsActive() && !(Track && Track->IsEvalDisabled());
+	const bool bLocked = SectionObject->IsLocked() || SectionObject->IsReadOnly();
+
+	UMovieScenePropertyTrack* PropertyTrack = Cast<UMovieScenePropertyTrack>(Track);
 	bool bSetSectionToKey = false;
-	if (Track)
+	if (PropertyTrack)
 	{
-		if (Track->GetSectionToKey() == SectionObject)
+		if (PropertyTrack->GetSectionToKey() == SectionObject)
 		{
 			bSetSectionToKey = true;
 		}

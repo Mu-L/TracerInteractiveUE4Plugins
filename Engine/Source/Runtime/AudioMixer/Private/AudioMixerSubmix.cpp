@@ -3,16 +3,25 @@
 #include "AudioMixerSubmix.h"
 #include "AudioMixerDevice.h"
 #include "AudioMixerSourceVoice.h"
-#include "Sound/SoundSubmix.h"
 #include "Sound/SoundEffectSubmix.h"
+#include "Sound/SoundSubmix.h"
+#include "Sound/SoundSubmixSend.h"
 #include "ProfilingDebugging/CsvProfiler.h"
 
 // Link to "Audio" profiling category
-CSV_DECLARE_CATEGORY_MODULE_EXTERN(AUDIOMIXER_API, Audio);
+CSV_DECLARE_CATEGORY_MODULE_EXTERN(AUDIOMIXERCORE_API, Audio);
+
+static int32 RecoverRecordingOnShutdownCVar = 0;
+FAutoConsoleVariableRef CVarRecoverRecordingOnShutdown(
+	TEXT("au.RecoverRecordingOnShutdown"),
+	RecoverRecordingOnShutdownCVar,
+	TEXT("When set to 1, we will attempt to bounce the recording to a wav file if the game is shutdown while a recording is in flight.\n")
+	TEXT("0: Disabled, 1: Enabled"),
+	ECVF_Default);
 
 namespace Audio
 {
-	// Unique IDs for mixer submixe's
+	// Unique IDs for mixer submixes
 	static uint32 GSubmixMixerIDs = 0;
 
 	FMixerSubmix::FMixerSubmix(FMixerDevice* InMixerDevice)
@@ -49,7 +58,7 @@ namespace Audio
 			TearDownAmbisonicsDecoder();
 		}
 
-		if (OwningSubmixObject && bIsRecording)
+		if (RecoverRecordingOnShutdownCVar && OwningSubmixObject && bIsRecording)
 		{
 			FString InterruptedFileName = TEXT("InterruptedRecording.wav");
 			UE_LOG(LogAudioMixer, Warning, TEXT("Recording of Submix %s was interrupted. Saving interrupted recording as %s."), *(OwningSubmixObject->GetName()), *InterruptedFileName);
@@ -773,10 +782,11 @@ namespace Audio
 			const int32 OutBufferSamples = OutAudioBuffer.Num();
 			const float* OutAudioBufferPtr = OutAudioBuffer.GetData();
 
-			float TempEnvelopeValues[AUDIO_MIXER_MAX_OUTPUT_CHANNELS];
-			FMemory::Memset(TempEnvelopeValues, sizeof(float)*AUDIO_MIXER_MAX_OUTPUT_CHANNELS);
 
 			// Perform envelope following per channel
+			FScopeLock EnvelopeScopeLock(&EnvelopeCriticalSection);
+			FMemory::Memset(EnvelopeValues, sizeof(float)*AUDIO_MIXER_MAX_OUTPUT_CHANNELS);
+
 			for (int32 ChannelIndex = 0; ChannelIndex < NumChannels; ++ChannelIndex)
 			{
 				// Get the envelope follower for the channel
@@ -789,14 +799,10 @@ namespace Audio
 					EnvFollower.ProcessAudio(SampleValue);
 				}
 
-				// Store the last value
-				TempEnvelopeValues[ChannelIndex] = EnvFollower.GetCurrentValue();
+				EnvelopeValues[ChannelIndex] = EnvFollower.GetCurrentValue();
 			}
 
-			FScopeLock EnvelopeScopeLock(&EnvelopeCriticalSection);
-
 			EnvelopeNumChannels = NumChannels;
-			FMemory::Memcpy(EnvelopeValues, TempEnvelopeValues, sizeof(float)*AUDIO_MIXER_MAX_OUTPUT_CHANNELS);
 		}
 
 		// Don't necessarily need to do this if the user isn't using this feature

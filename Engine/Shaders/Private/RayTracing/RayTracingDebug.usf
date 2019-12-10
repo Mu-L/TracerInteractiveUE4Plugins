@@ -13,8 +13,7 @@ RaytracingAccelerationStructure TLAS;
 uint VisualizationMode;
 uint ShouldUsePreExposure;
 
-[shader("raygeneration")]
-void RayTracingDebugMainRGS()
+RAY_TRACING_ENTRY_RAYGEN(RayTracingDebugMainRGS)
 {
 	uint2 PixelCoord = DispatchRaysIndex().xy + View.ViewRectMin;
 
@@ -24,18 +23,17 @@ void RayTracingDebugMainRGS()
     FRayCone RayCone = (FRayCone)0;
 	RayCone.SpreadAngle = View.EyeToPixelSpreadAngle;
 
-	uint RayFlags = RAY_FLAG_CULL_BACK_FACING_TRIANGLES;
+	const uint RayFlags = RAY_FLAG_CULL_BACK_FACING_TRIANGLES;
+	const uint InstanceInclusionMask = RAY_TRACING_MASK_ALL;
+	const bool bEnableSkyLightContribution = true;
 
-	FMaterialClosestHitPayload Payload = TraceRayInternal(
-		TLAS,   // AccelerationStructure
+	FMaterialClosestHitPayload Payload = TraceMaterialRay(
+		TLAS,
 		RayFlags,
-		RAY_TRACING_MASK_ALL,
-		RAY_TRACING_SHADER_SLOT_MATERIAL, // RayContributionToHitGroupIndex
-		RAY_TRACING_NUM_SHADER_SLOTS,     // MultiplierForGeometryContributionToShaderIndex
-		0,      // MissShaderIndex
-		Ray,    // RayDesc
-		RayCone
-	);
+		InstanceInclusionMask,
+		Ray,
+		RayCone,
+		bEnableSkyLightContribution);
 
 	float4 Result = float4(0, 0, 0, 1);
 
@@ -108,22 +106,4 @@ void RayTracingDebugMainRGS()
 	}
 
 	Output[PixelCoord] = Result;
-}
-
-[shader("closesthit")]
-void RayTracingDebugMainCHS(inout FPackedMaterialClosestHitPayload PackedPayload, in FDefaultAttributes Attributes)
-{
-	FMaterialClosestHitPayload Payload = (FMaterialClosestHitPayload)0;
-
-	Payload.HitT = RayTCurrent();
-	Payload.BaseColor = float3(0.2, 0.3, 0.4);
-
-	FTriangleBaseAttributes Triangle = LoadTriangleBaseAttributes(PrimitiveIndex());
-	float3 Edge0 = Triangle.LocalPositions[2] - Triangle.LocalPositions[0];
-	float3 Edge1 = Triangle.LocalPositions[1] - Triangle.LocalPositions[0];
-	float3x3 WorldToLocal = (float3x3)WorldToObject();
-	float3x3 LocalToWorldNormal = transpose(WorldToLocal);
-	Payload.WorldNormal = normalize(mul(LocalToWorldNormal, cross(Edge0, Edge1)));
-
-    PackedPayload = PackRayTracingPayload(Payload, PackedPayload.RayCone);
 }

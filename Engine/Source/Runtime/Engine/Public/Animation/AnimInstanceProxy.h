@@ -25,7 +25,7 @@ struct FAnimNode_AssetPlayerBase;
 struct FAnimNode_Base;
 struct FAnimNode_SaveCachedPose;
 struct FAnimNode_StateMachine;
-struct FAnimNode_SubInput;
+struct FAnimNode_LinkedInputPose;
 struct FNodeDebugData;
 struct FPoseContext;
 
@@ -116,14 +116,16 @@ public:
 		, CurrentDeltaSeconds(0.0f)
 		, CurrentTimeDilation(1.0f)
 		, RootNode(nullptr)
-		, DefaultSubInstanceInputNode(nullptr)
+		, DefaultLinkedInstanceInputNode(nullptr)
 		, SyncGroupWriteIndex(0)
 		, RootMotionMode(ERootMotionMode::NoRootMotionExtraction)
 		, FrameCounterForUpdate(0)
+		, FrameCounterForNodeUpdate(0)
 		, CacheBonesRecursionCounter(0)
 		, bUpdatingRoot(false)
 		, bBoneCachesInvalidated(false)
 		, bShouldExtractRootMotion(false)
+		, bDeferRootNodeInitialization(false)
 #if WITH_EDITORONLY_DATA
 		, bIsBeingDebugged(false)
 #endif
@@ -138,14 +140,16 @@ public:
 		, CurrentDeltaSeconds(0.0f)
 		, CurrentTimeDilation(1.0f)
 		, RootNode(nullptr)
-		, DefaultSubInstanceInputNode(nullptr)
+		, DefaultLinkedInstanceInputNode(nullptr)
 		, SyncGroupWriteIndex(0)
 		, RootMotionMode(ERootMotionMode::NoRootMotionExtraction)
 		, FrameCounterForUpdate(0)
+		, FrameCounterForNodeUpdate(0)
 		, CacheBonesRecursionCounter(0)
 		, bUpdatingRoot(false)
 		, bBoneCachesInvalidated(false)
 		, bShouldExtractRootMotion(false)
+		, bDeferRootNodeInitialization(false)
 #if WITH_EDITORONLY_DATA
 		, bIsBeingDebugged(false)
 #endif
@@ -438,6 +442,9 @@ public:
 	/** Reset any dynamics running simulation-style updates (e.g. on teleport, time skip etc.) */
 	void ResetDynamics(ETeleportType InTeleportType);
 
+	/** Returns all Animation Nodes of FAnimNode_AssetPlayerBase class within the specified (named) Animation Graph */
+	TArray<FAnimNode_AssetPlayerBase*> GetInstanceAssetPlayers(const FName& GraphName);
+
 	UE_DEPRECATED(4.20, "Please use ResetDynamics with a ETeleportType argument")
 	void ResetDynamics();
 
@@ -454,7 +461,7 @@ public:
 	friend class UAnimInstance;
 	friend class UAnimSingleNodeInstance;
 	friend class USkeletalMeshComponent;
-	friend struct FAnimNode_SubInstance;
+	friend struct FAnimNode_LinkedAnimGraph;
 	friend struct FAnimationBaseContext;
 
 protected:
@@ -473,11 +480,25 @@ protected:
 	/** Update override point */
 	virtual void Update(float DeltaSeconds) {}
 
+	UE_DEPRECATED(4.24, "Please use the overload that takes an FAnimationUpdateContext")
+	virtual void UpdateAnimationNode(float DeltaSeconds)
+	{
+		FAnimationUpdateContext Context(this, DeltaSeconds);
+		UpdateAnimationNode(Context);
+	}
+
 	/** Updates the anim graph */
-	virtual void UpdateAnimationNode(float DeltaSeconds);
+	virtual void UpdateAnimationNode(const FAnimationUpdateContext& InContext);
+
+	UE_DEPRECATED(4.24, "Please use the overload that takes an FAnimationUpdateContext")
+	virtual void UpdateAnimationNode_WithRoot(float DeltaSeconds, FAnimNode_Base* InRootNode, FName InLayerName) 
+	{
+		FAnimationUpdateContext Context(this, DeltaSeconds);
+		UpdateAnimationNode_WithRoot(Context, InRootNode, InLayerName);
+	}
 
 	/** Updates the anim graph using a specified root node */
-	virtual void UpdateAnimationNode_WithRoot(float DeltaSeconds, FAnimNode_Base* InRootNode, FName InLayerName);
+	virtual void UpdateAnimationNode_WithRoot(const FAnimationUpdateContext& InContext, FAnimNode_Base* InRootNode, FName InLayerName);
 
 	/** Called on the game thread pre-evaluate. */
 	virtual void PreEvaluateAnimation(UAnimInstance* InAnimInstance);
@@ -540,8 +561,15 @@ protected:
 	/** Calls Update(), updates the anim graph, ticks asset players */
 	void UpdateAnimation();
 
+	UE_DEPRECATED(4.24, "Please use the overload that takes an FAnimationUpdateContext")
+	void UpdateAnimation_WithRoot(FAnimNode_Base* InRootNode, FName InLayerName)
+	{
+		FAnimationUpdateContext Context(this, CurrentDeltaSeconds);
+		UpdateAnimation_WithRoot(Context, InRootNode, InLayerName);
+	}
+
 	/** Calls Update(), updates the anim graph from the specified root, ticks asset players */
-	void UpdateAnimation_WithRoot(FAnimNode_Base* InRootNode, FName InLayerName);
+	void UpdateAnimation_WithRoot(const FAnimationUpdateContext& InContext, FAnimNode_Base* InRootNode, FName InLayerName);
 
 	/** Evaluates the anim graph if Evaluate() returns false */
 	void EvaluateAnimation(FPoseContext& Output);
@@ -728,7 +756,7 @@ protected:
 	void GetStateMachineIndexAndDescription(FName InMachineName, int32& OutMachineIndex, const FBakedAnimationStateMachine** OutMachineDescription);
 
 	/** Initialize the root node - split into a separate function for backwards compatibility (initialization order) reasons */
-	void InitializeRootNode();
+	void InitializeRootNode(bool bInDeferRootNodeInitialization = false);
 
 	/** Initialize the specified root node */
 	void InitializeRootNode_WithRoot(FAnimNode_Base* InRootNode);
@@ -737,7 +765,7 @@ protected:
 	void AddReferencedObjects(UAnimInstance* InAnimInstance, FReferenceCollector& Collector);
 
 	/** Allow nodes to register log messages to be processed on the game thread */
-	void LogMessage(FName InLogType, EMessageSeverity::Type InSeverity, const FText& InMessage);
+	void LogMessage(FName InLogType, EMessageSeverity::Type InSeverity, const FText& InMessage) const;
 
 	/** Get the current value of all animation curves **/
 	TMap<FName, float>& GetAnimationCurves(EAnimCurveType InCurveType) { return AnimationCurves[(uint8)InCurveType]; }
@@ -759,6 +787,9 @@ protected:
 	void AddCurveValue(const FSmartNameMapping& Mapping, const FName& CurveName, float Value);
 
 private:
+	/** Get the debug data for this instance's anim bp */
+	FAnimBlueprintDebugData* GetAnimBlueprintDebugData() const;
+
 	/** The component to world transform of the component we are running on */
 	FTransform ComponentTransform;
 
@@ -805,8 +836,8 @@ private:
 	/** Anim graph */
 	FAnimNode_Base* RootNode;
 
-	/** Default sub-instance input node if available */
-	FAnimNode_SubInput* DefaultSubInstanceInputNode;
+	/** Default linked instance input node if available */
+	FAnimNode_LinkedInputPose* DefaultLinkedInstanceInputNode;
 
 	/** Map of layer name to saved pose nodes to process after the graph has been updated */
 	TMap<FName, TArray<FAnimNode_SaveCachedPose*>> SavedPoseQueueMap;
@@ -855,6 +886,7 @@ protected:
 
 	// Sync counter
 	uint64 FrameCounterForUpdate;
+	uint64 FrameCounterForNodeUpdate;
 
 private:
 	// Root motion extracted from animation since the last time ConsumeExtractedRootMotion was called
@@ -909,10 +941,10 @@ private:
 	 *  on a worked thread
 	 */
 	typedef TPair<EMessageSeverity::Type, FText> FLogMessageEntry;
-	TMap<FName, TArray<FLogMessageEntry>> LoggedMessagesMap;
+	mutable TMap<FName, TArray<FLogMessageEntry>> LoggedMessagesMap;
 
 	/** Cache of guids generated from previously sent messages so we can stop spam*/
-	TArray<FGuid> PreviouslyLoggedMessages;
+	mutable TArray<FGuid> PreviouslyLoggedMessages;
 #endif
 
 	/** Scope guard to prevent duplicate work on re-entracy */
@@ -927,6 +959,9 @@ private:
 
 	// Diplicate of bool result of ShouldExtractRootMotion()
 	uint8 bShouldExtractRootMotion : 1;
+
+	/** We can defer initialization until first update */
+	uint8 bDeferRootNodeInitialization : 1;
 
 #if WITH_EDITORONLY_DATA
 	/** Whether this UAnimInstance is currently being debugged in the editor */

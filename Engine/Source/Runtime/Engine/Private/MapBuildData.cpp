@@ -37,6 +37,12 @@ FArchive& operator<<(FArchive& Ar, FMeshMapBuildData& MeshMapBuildData)
 	return Ar;
 }
 
+FArchive& operator<<(FArchive& Ar, FSkyAtmosphereMapBuildData& Data)
+{
+	//Ar << Data.Dummy; // No serialisation needed
+	return Ar;
+}
+
 ULevel* UWorld::GetActiveLightingScenario() const
 {
 	for (int32 LevelIndex = 0; LevelIndex < Levels.Num(); LevelIndex++)
@@ -54,6 +60,17 @@ ULevel* UWorld::GetActiveLightingScenario() const
 
 void UWorld::PropagateLightingScenarioChange()
 {
+	for (ULevel* Level : GetLevels())
+	{
+		Level->ReleaseRenderingResources();
+		Level->InitializeRenderingResources();
+
+		for (UModelComponent* ModelComponent : Level->ModelComponents)
+		{
+			ModelComponent->PropagateLightingScenarioChange();
+		}
+	}
+
 	for (FActorIterator It(this); It; ++It)
 	{
 		TInlineComponentArray<USceneComponent*> Components;
@@ -63,17 +80,6 @@ void UWorld::PropagateLightingScenarioChange()
 		{
 			USceneComponent* CurrentComponent = Components[ComponentIndex];
 			CurrentComponent->PropagateLightingScenarioChange();
-		}
-	}
-
-	for (ULevel* Level : GetLevels())
-	{
-		Level->ReleaseRenderingResources();
-		Level->InitializeRenderingResources();
-
-		for (UModelComponent* ModelComponent : Level->ModelComponents)
-		{
-			ModelComponent->PropagateLightingScenarioChange();
 		}
 	}
 
@@ -380,6 +386,11 @@ void UMapBuildDataRegistry::Serialize(FArchive& Ar)
 		{
 			Ar << ReflectionCaptureBuildData;
 		}
+
+		if (Ar.CustomVer(FRenderingObjectVersion::GUID) >= FRenderingObjectVersion::SkyAtmosphereStaticLightingVersioning)
+		{
+			Ar << SkyAtmosphereBuildData;
+		}
 	}
 }
 
@@ -393,9 +404,9 @@ void UMapBuildDataRegistry::PostLoad()
 	{
 		// We already stripped unneeded formats during cooking, but some cooking targets require multiple formats to be stored
 		// Strip unneeded formats for the current max feature level
-		bool bRetainAllFeatureLevelData = GIsEditor && GMaxRHIFeatureLevel >= ERHIFeatureLevel::SM4;
+		bool bRetainAllFeatureLevelData = GIsEditor && GMaxRHIFeatureLevel >= ERHIFeatureLevel::SM5;
 		bool bEncodedDataRequired = bRetainAllFeatureLevelData || (GMaxRHIFeatureLevel == ERHIFeatureLevel::ES2 || GMaxRHIFeatureLevel == ERHIFeatureLevel::ES3_1);
-		bool bFullDataRequired = GMaxRHIFeatureLevel >= ERHIFeatureLevel::SM4;
+		bool bFullDataRequired = GMaxRHIFeatureLevel >= ERHIFeatureLevel::SM5;
 
 		for (TMap<FGuid, FReflectionCaptureMapBuildData>::TIterator It(ReflectionCaptureBuildData); It; ++It)
 		{
@@ -613,6 +624,23 @@ const FReflectionCaptureMapBuildData* UMapBuildDataRegistry::GetReflectionCaptur
 FReflectionCaptureMapBuildData* UMapBuildDataRegistry::GetReflectionCaptureBuildData(FGuid CaptureId)
 {
 	return ReflectionCaptureBuildData.Find(CaptureId);
+}
+
+FSkyAtmosphereMapBuildData& UMapBuildDataRegistry::FindOrAllocateSkyAtmosphereBuildData(const FGuid& Guid)
+{
+	check(Guid.IsValid());
+	return SkyAtmosphereBuildData.FindOrAdd(Guid);
+}
+
+const FSkyAtmosphereMapBuildData* UMapBuildDataRegistry::GetSkyAtmosphereBuildData(const FGuid& Guid) const
+{
+	check(Guid.IsValid());
+	return SkyAtmosphereBuildData.Find(Guid);
+}
+
+void UMapBuildDataRegistry::ClearSkyAtmosphereBuildData()
+{
+	SkyAtmosphereBuildData.Empty();
 }
 
 void UMapBuildDataRegistry::InvalidateStaticLighting(UWorld* World, bool bRecreateRenderState, const TSet<FGuid>* ResourcesToKeep)

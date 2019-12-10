@@ -7,7 +7,6 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Templates/ScopedPointer.h"
 #include "Shader.h"
 #include "Templates/UniquePtr.h"
 #include "RHIResources.h"
@@ -80,10 +79,9 @@ public:
 		ModifyCompilationEnvironmentType InModifyCompilationEnvironmentRef,
 		ShouldCompilePermutationType InShouldCompilePermutationRef,
 		ValidateCompiledResultType InValidateCompiledResultRef,
-		GetStreamOutElementsType InGetStreamOutElementsRef,
 		const FShaderParametersMetadata* InRootParametersMetadata = nullptr
 		):
-		FShaderType(EShaderTypeForDynamicCast::Global, InName, InSourceFilename, InFunctionName, InFrequency, InTotalPermutationCount, InConstructSerializedRef, InGetStreamOutElementsRef, InRootParametersMetadata),
+		FShaderType(EShaderTypeForDynamicCast::Global, InName, InSourceFilename, InFunctionName, InFrequency, InTotalPermutationCount, InConstructSerializedRef, InRootParametersMetadata),
 		ConstructCompiledRef(InConstructCompiledRef),
 		ShouldCompilePermutationRef(InShouldCompilePermutationRef),
 		ValidateCompiledResultRef(InValidateCompiledResultRef),
@@ -239,6 +237,17 @@ inline TShaderMap<FGlobalShaderType>* GetGlobalShaderMap(ERHIFeatureLevel::Type 
  * // Instantiates global shader's global variable that will take care of compilation process of the shader. This needs imperatively to be
  * done in a .cpp file regardless of whether FMyGlobalShaderPS is in a header or not.
  * IMPLEMENT_GLOBAL_SHADER(FMyGlobalShaderPS, "/Engine/Private/MyShaderFile.usf", "MainPS", SF_Pixel);
+ *
+ * When the shader class is a public header, let say in RenderCore module public header, the shader class then should have the RENDERCORE_API
+ * like this:
+ *
+ * class RENDERCORE_API FMyGlobalShaderPS : public FGlobalShader
+ * {
+ *		// Setup the shader's boiler plate.
+ *		DECLARE_GLOBAL_SHADER(FMyGlobalShaderPS);
+ *
+ *		// ...
+ * };
  */
 #define DECLARE_GLOBAL_SHADER(ShaderClass) \
 	public: \
@@ -274,6 +283,5 @@ inline TShaderMap<FGlobalShaderType>* GetGlobalShaderMap(ERHIFeatureLevel::Type 
 		ShaderClass::ModifyCompilationEnvironmentImpl, \
 		ShaderClass::ShouldCompilePermutation, \
 		ShaderClass::ValidateCompiledResult, \
-		ShaderClass::GetStreamOutElements, \
 		ShaderClass::GetRootParametersMetadata() \
 		)

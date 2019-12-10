@@ -40,7 +40,9 @@ namespace UnrealBuildTool.Rules
 					"usd",
 					"usdShade",
 					"usdGeom",
-					"usdLux"
+					"usdLux",
+					"usdSkel",
+					"usdUtils",
 				};
 
 				PublicIncludePaths.AddRange(
@@ -56,8 +58,8 @@ namespace UnrealBuildTool.Rules
 						PublicAdditionalLibraries.Add(Path.Combine(USDLibsDir, UsdLib + ".lib"));
 					}
 
-					PublicLibraryPaths.Add(Path.Combine(EngineDir, "Source/ThirdParty/Python/Win64/libs"));
-					PublicLibraryPaths.Add(USDLibsDir);
+					PublicSystemLibraryPaths.Add(Path.Combine(EngineDir, "Source/ThirdParty/Python/Win64/libs"));
+					PublicSystemLibraryPaths.Add(USDLibsDir);
 				}
 				else
 				{

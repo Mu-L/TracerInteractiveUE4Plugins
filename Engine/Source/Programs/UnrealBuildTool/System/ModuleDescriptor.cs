@@ -34,15 +34,25 @@ namespace UnrealBuildTool
         /// </summary>
         RuntimeAndProgram,
 
-        /// <summary>
+		/// <summary>
 		/// Loaded only in cooked builds
 		/// </summary>
 		CookedOnly,
 
-        /// <summary>
-        /// Loaded only when the engine has support for developer tools enabled
-        /// </summary>
-        Developer,
+		/// <summary>
+		/// Loaded only in uncooked builds
+		/// </summary>
+		UncookedOnly,
+
+		/// <summary>
+		/// Loaded only when the engine has support for developer tools enabled
+		/// </summary>
+		Developer,
+
+		/// <summary>
+		/// Loads on any targets where bBuildDeveloperTools is enabled
+		/// </summary>
+		DeveloperTool,
 
 		/// <summary>
 		/// Loaded only by the editor
@@ -55,6 +65,11 @@ namespace UnrealBuildTool
 		EditorNoCommandlet,
 
 		/// <summary>
+		/// Loaded by the editor or program targets
+		/// </summary>
+		EditorAndProgram,
+
+		/// <summary>
 		/// Loaded only by programs
 		/// </summary>
 		Program,
@@ -65,9 +80,14 @@ namespace UnrealBuildTool
         ServerOnly,
 
 		/// <summary>
-		/// Loaded only by clients
+		/// Loaded only by clients, and commandlets, and editor....
 		/// </summary>
         ClientOnly,
+
+		/// <summary>
+		/// Loaded only by clients and editor (editor can run PIE which is kinda a commandlet)
+		/// </summary>
+		ClientOnlyNoCommandlet,
 	}
 
 	/// <summary>
@@ -99,6 +119,11 @@ namespace UnrealBuildTool
 		/// Loaded before the engine is fully initialized, immediately after the config system has been initialized.  Necessary only for very low-level hooks
 		/// </summary>
 		PostConfigInit,
+
+		/// <summary>
+		/// The first screen to be rendered after system splash screen
+		/// </summary>
+		PostSplashScreen,
 
 		/// <summary>
 		/// After PostConfigInit and before coreUobject initialized. used for early boot loading screens before the uobjects are initialized
@@ -382,16 +407,28 @@ namespace UnrealBuildTool
 		}
 
 		/// <summary>
+		/// Produces any warnings and errors for the module settings
+		/// </summary>
+		/// <param name="File">File containing the module declaration</param>
+		public void Validate(FileReference File)
+		{
+			if(Type == ModuleHostType.Developer)
+			{
+				Log.TraceWarningOnce("The 'Developer' module type has been deprecated in 4.24. Use 'DeveloperTool' for modules that can be loaded by game/client/server targets in non-shipping configurations, or 'UncookedOnly' for modules that should only be loaded by uncooked editor and program targets (eg. modules containing blueprint nodes)");
+				Log.TraceWarningOnce(File, "The 'Developer' module type has been deprecated in 4.24.");
+			}
+		}
+
+		/// <summary>
 		/// Determines whether the given plugin module is part of the current build.
 		/// </summary>
 		/// <param name="Platform">The platform being compiled for</param>
-		/// <param name="TargetConfiguration">The target configuration being compiled for</param>
+		/// <param name="Configuration">The target configuration being compiled for</param>
 		/// <param name="TargetName">Name of the target being built</param>
 		/// <param name="TargetType">The type of the target being compiled</param>
 		/// <param name="bBuildDeveloperTools">Whether the configuration includes developer tools (typically UEBuildConfiguration.bBuildDeveloperTools for UBT callers)</param>
-		/// <param name="bBuildEditor">Whether the configuration includes the editor (typically UEBuildConfiguration.bBuildEditor for UBT callers)</param>
 		/// <param name="bBuildRequiresCookedData">Whether the configuration requires cooked content (typically UEBuildConfiguration.bBuildRequiresCookedData for UBT callers)</param>
-		public bool IsCompiledInConfiguration(UnrealTargetPlatform Platform, UnrealTargetConfiguration TargetConfiguration, string TargetName, TargetType TargetType, bool bBuildDeveloperTools, bool bBuildEditor, bool bBuildRequiresCookedData)
+		public bool IsCompiledInConfiguration(UnrealTargetPlatform Platform, UnrealTargetConfiguration Configuration, string TargetName, TargetType TargetType, bool bBuildDeveloperTools, bool bBuildRequiresCookedData)
 		{
 			// Check the platform is whitelisted
 			if (WhitelistPlatforms != null && WhitelistPlatforms.Length > 0 && !WhitelistPlatforms.Contains(Platform))
@@ -418,13 +455,13 @@ namespace UnrealBuildTool
 			}
 
 			// Check the target configuration is whitelisted
-			if (WhitelistTargetConfigurations != null && WhitelistTargetConfigurations.Length > 0 && !WhitelistTargetConfigurations.Contains(TargetConfiguration))
+			if (WhitelistTargetConfigurations != null && WhitelistTargetConfigurations.Length > 0 && !WhitelistTargetConfigurations.Contains(Configuration))
 			{
 				return false;
 			}
 
 			// Check the target configuration is not blacklisted
-			if (BlacklistTargetConfigurations != null && BlacklistTargetConfigurations.Contains(TargetConfiguration))
+			if (BlacklistTargetConfigurations != null && BlacklistTargetConfigurations.Contains(Configuration))
 			{
 				return false;
 			}
@@ -451,15 +488,21 @@ namespace UnrealBuildTool
 				case ModuleHostType.Runtime:
 				case ModuleHostType.RuntimeNoCommandlet:
                     return TargetType != TargetType.Program;
-                case ModuleHostType.CookedOnly:
-                    return bBuildRequiresCookedData;
-                case ModuleHostType.RuntimeAndProgram:
+				case ModuleHostType.RuntimeAndProgram:
 					return true;
-                case ModuleHostType.Developer:
+				case ModuleHostType.CookedOnly:
+                    return bBuildRequiresCookedData;
+				case ModuleHostType.UncookedOnly:
+					return !bBuildRequiresCookedData;
+				case ModuleHostType.Developer:
+					return TargetType == TargetType.Editor || TargetType == TargetType.Program;
+				case ModuleHostType.DeveloperTool:
 					return bBuildDeveloperTools;
 				case ModuleHostType.Editor:
 				case ModuleHostType.EditorNoCommandlet:
-					return TargetType == TargetType.Editor || bBuildEditor;
+					return TargetType == TargetType.Editor;
+				case ModuleHostType.EditorAndProgram:
+					return TargetType == TargetType.Editor || TargetType == TargetType.Program;
 				case ModuleHostType.Program:
 					return TargetType == TargetType.Program;
                 case ModuleHostType.ServerOnly:

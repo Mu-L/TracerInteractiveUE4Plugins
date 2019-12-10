@@ -13,6 +13,7 @@ class SWidget;
 class UAnimationAsset;
 class USkeletalMesh;
 class USkeleton;
+struct FAnimBlueprintDebugData;
 
 USTRUCT()
 struct FAnimGroupInfo
@@ -54,6 +55,17 @@ struct FAnimParentNodeAssetOverride
 	{
 		return ParentNodeGuid == Other.ParentNodeGuid;
 	}
+};
+
+/** The method by which a preview animation blueprint is applied */
+UENUM()
+enum class EPreviewAnimationBlueprintApplicationMethod : uint8
+{
+	/** Apply the preview animation blueprint using LinkAnimClassLayers */
+	LinkedLayers,
+
+	/** Apply the preview animation blueprint using SetLinkedAnimGraphByTag */
+	LinkedAnimGraph,
 };
 
 /**
@@ -130,7 +142,7 @@ class ENGINE_API UAnimBlueprint : public UBlueprint, public IInterface_PreviewMe
 	int32 FindOrAddGroup(FName GroupName);
 
 	/** Returns the most base anim blueprint for a given blueprint (if it is inherited from another anim blueprint, returning null if only native / non-anim BP classes are it's parent) */
-	static UAnimBlueprint* FindRootAnimBlueprint(UAnimBlueprint* DerivedBlueprint);
+	static UAnimBlueprint* FindRootAnimBlueprint(const UAnimBlueprint* DerivedBlueprint);
 
 	DECLARE_MULTICAST_DELEGATE_TwoParams(FOnOverrideChangedMulticaster, FGuid, UAnimationAsset*);
 
@@ -165,6 +177,23 @@ public:
 	virtual USkeletalMesh* GetPreviewMesh(bool bFindIfNotSet = false) override;
 	virtual USkeletalMesh* GetPreviewMesh() const override;
 
+	/** Preview anim blueprint support */
+	void SetPreviewAnimationBlueprint(UAnimBlueprint* InPreviewAnimationBlueprint);
+	UAnimBlueprint* GetPreviewAnimationBlueprint() const;
+
+	void SetPreviewAnimationBlueprintApplicationMethod(EPreviewAnimationBlueprintApplicationMethod InMethod);
+	EPreviewAnimationBlueprintApplicationMethod GetPreviewAnimationBlueprintApplicationMethod() const;
+
+	void SetPreviewAnimationBlueprintTag(FName InTag);
+	FName GetPreviewAnimationBlueprintTag() const;
+
+public:
+	/** Check if the anim instance is the active debug object for this anim BP */
+	bool IsObjectBeingDebugged(const UObject* AnimInstance) const;
+
+	/** Get the debug data for this anim BP */
+	FAnimBlueprintDebugData* GetDebugData() const;
+
 #if WITH_EDITORONLY_DATA
 public:
 	// Array of overrides to asset containing nodes in the parent that have been overridden
@@ -180,5 +209,20 @@ private:
 	/** The default skeletal mesh to use when previewing this asset - this only applies when you open Persona using this asset*/
 	UPROPERTY(duplicatetransient, AssetRegistrySearchable)
 	TSoftObjectPtr<class USkeletalMesh> PreviewSkeletalMesh;
-#endif
+
+	/** 
+	 * An animation Blueprint to overlay with this Blueprint. When working on layers, this allows this Blueprint to be previewed in the context of another 'outer' anim blueprint. 
+	 * Setting this is the equivalent of running the preview animation blueprint on the preview mesh, then calling SetLayerOverlay with this anim blueprint.
+	 */
+	UPROPERTY(duplicatetransient, AssetRegistrySearchable)
+	TSoftObjectPtr<class UAnimBlueprint> PreviewAnimationBlueprint;
+
+	/** The method by which a preview animation blueprint is applied, either as an overlay layer, or as a linked instance */
+	UPROPERTY()
+	EPreviewAnimationBlueprintApplicationMethod PreviewAnimationBlueprintApplicationMethod;
+
+	/** The tag to use when applying a preview animation blueprint via LinkAnimGraphByTag */
+	UPROPERTY()
+	FName PreviewAnimationBlueprintTag;
+#endif // WITH_EDITORONLY_DATA
 };

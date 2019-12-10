@@ -52,6 +52,7 @@
 #include "UObject/TextProperty.h"
 #include "UObject/MetaData.h"
 #include "HAL/LowLevelMemTracker.h"
+#include "HAL/LowLevelMemStats.h"
 #include "Misc/CoreDelegates.h"
 #include "ProfilingDebugging/CsvProfiler.h"
 
@@ -62,7 +63,15 @@ DEFINE_LOG_CATEGORY(LogUObjectGlobals);
 #endif
 
 bool GIsSavingPackage = false;
-bool GAllowUnversionedContentInEditor = false;
+
+int32 GAllowUnversionedContentInEditor = 0;
+
+static FAutoConsoleVariableRef CVarAllowUnversionedContentInEditor(
+	TEXT("s.AllowUnversionedContentInEditor"),
+	GAllowUnversionedContentInEditor,
+	TEXT("If true, allows unversioned content to be loaded by the editor."),
+	ECVF_Default
+);
 
 /** Object annotation used by the engine to keep track of which objects are selected */
 FUObjectAnnotationSparseBool GSelectedObjectAnnotation;
@@ -251,7 +260,7 @@ struct FPerClassNumberSuffixAnnotation
 		return false;
 	}
 
-	TMap<UClass*, int32> Suffixes;
+	TMap<const UClass*, int32> Suffixes;
 };
 
 /**
@@ -259,7 +268,7 @@ struct FPerClassNumberSuffixAnnotation
  *
  * Updating is done via a callback because a lock needs to be maintained while this happens.
  */
-int32 UpdateSuffixForNextNewObject(UObject* Parent, UClass* Class, TFunctionRef<void(int32&)> IndexMutator)
+int32 UpdateSuffixForNextNewObject(UObject* Parent, const UClass* Class, TFunctionRef<void(int32&)> IndexMutator)
 {
 	static FCriticalSection PerClassNumberSuffixAnnotationMutex;
 	static FUObjectAnnotationDense<FPerClassNumberSuffixAnnotation, true> PerClassNumberSuffixAnnotation;
@@ -772,7 +781,7 @@ bool ResolveName(UObject*& InPackage, FString& InOutName, bool Create, bool Thro
 bool ParseObject( const TCHAR* Stream, const TCHAR* Match, UClass* Class, UObject*& DestRes, UObject* InParent, bool* bInvalidObject )
 {
 	TCHAR TempStr[1024];
-	if( !FParse::Value( Stream, Match, TempStr, ARRAY_COUNT(TempStr) ) )
+	if( !FParse::Value( Stream, Match, TempStr, UE_ARRAY_COUNT(TempStr) ) )
 	{
 		// Match not found
 		return 0;
@@ -1032,7 +1041,7 @@ public:
 
 		
 
-		while ( Tick(0.0, false, false) == FLinkerLoad::LINKER_TimedOut ) 
+		while ( Tick(0.0, false, false, nullptr) == FLinkerLoad::LINKER_TimedOut ) 
 		{ 
 		}
 
@@ -1747,7 +1756,7 @@ void EndLoad(FUObjectSerializeContext* LoadContext)
 	Object name functions.
 -----------------------------------------------------------------------------*/
 
-FName MakeUniqueObjectName( UObject* Parent, UClass* Class, FName InBaseName/*=NAME_None*/ )
+FName MakeUniqueObjectName( UObject* Parent, const UClass* Class, FName InBaseName/*=NAME_None*/ )
 {
 	CSV_SCOPED_TIMING_STAT(UObject, MakeUniqueObjectName);
 	check(Class);
@@ -2159,6 +2168,11 @@ bool SaveToTransactionBuffer(UObject* Object, bool bMarkDirty)
 
 void SnapshotTransactionBuffer(UObject* Object)
 {
+	SnapshotTransactionBuffer(Object, TArrayView<const UProperty*>());
+}
+
+void SnapshotTransactionBuffer(UObject* Object, TArrayView<const UProperty*> Properties)
+{
 	// Script packages should not end up in the transaction buffer.
 	// PIE objects should go through however. Additionally, in order
 	// to save a copy of the object, we must have a transactor and the object must be transactional.
@@ -2167,11 +2181,11 @@ void SnapshotTransactionBuffer(UObject* Object)
 
 	if (GUndo && bIsTransactional && bIsNotScriptPackage)
 	{
-		GUndo->SnapshotObject(Object);
+		GUndo->SnapshotObject(Object, Properties);
 	}
 }
 
-bool StaticAllocateObjectErrorTests( UClass* InClass, UObject* InOuter, FName InName, EObjectFlags InFlags)
+bool StaticAllocateObjectErrorTests( const UClass* InClass, UObject* InOuter, FName InName, EObjectFlags InFlags)
 {
 	// Validation checks.
 	if( !InClass )
@@ -2239,7 +2253,7 @@ COREUOBJECT_API bool GOutputCookingWarnings = false;
 
 UObject* StaticAllocateObject
 (
-	UClass*			InClass,
+	const UClass*	InClass,
 	UObject*		InOuter,
 	FName			InName,
 	EObjectFlags	InFlags,
@@ -2435,7 +2449,7 @@ UObject* StaticAllocateObject
 	if (!bSubObject)
 	{
 		FMemory::Memzero((void *)Obj, TotalSize);
-		new ((void *)Obj) UObjectBase(InClass, InFlags|RF_NeedInitialization, InternalSetFlags, InOuter, InName);
+		new ((void *)Obj) UObjectBase(const_cast<UClass*>(InClass), InFlags|RF_NeedInitialization, InternalSetFlags, InOuter, InName);
 	}
 	else
 	{
@@ -2500,7 +2514,7 @@ UObject::UObject()
 	EnsureNotRetrievingVTablePtr();
 
 	FObjectInitializer* ObjectInitializerPtr = FUObjectThreadContext::Get().TopInitializer();
-	UE_CLOG(!ObjectInitializerPtr, LogUObjectGlobals, Fatal, TEXT("%s is not being constructed with either NewObject, NewNamedObject or ConstructObject."), *GetName());
+	UE_CLOG(!ObjectInitializerPtr, LogUObjectGlobals, Fatal, TEXT("%s is not being constructed with NewObject."), *GetName());
 	FObjectInitializer& ObjectInitializer = *ObjectInitializerPtr;
 	UE_CLOG(ObjectInitializer.Obj != nullptr && ObjectInitializer.Obj != this, LogUObjectGlobals, Fatal, TEXT("UObject() constructor called but it's not the object that's currently being constructed with NewObject. Maybe you are trying to construct it on the stack, which is not supported."));
 	const_cast<FObjectInitializer&>(ObjectInitializer).Obj = this;
@@ -2557,6 +2571,11 @@ FObjectInitializer::FObjectInitializer(UObject* InObj, UObject* InObjectArchetyp
 	LastConstructedObject = ThreadContext.ConstructedObject;
 	ThreadContext.ConstructedObject = Obj;
 	ThreadContext.PushInitializer(this);
+
+	if (Obj)
+	{
+		Obj->GetClass()->SetupObjectInitializer(*this);
+	}
 }
 
 /**
@@ -3019,25 +3038,69 @@ void FObjectInitializer::InitProperties(UObject* Obj, UClass* DefaultsClass, UOb
 	}
 }
 
-bool FObjectInitializer::IslegalOverride(FName InComponentName, class UClass *DerivedComponentClass, class UClass *BaseComponentClass) const
+/**  Add an override, make sure it is legal **/
+void FObjectInitializer::FOverrides::Add(FName InComponentName, UClass* InComponentClass, FObjectInitializer const& ObjectInitializer)
 {
-	if (DerivedComponentClass && BaseComponentClass && !DerivedComponentClass->IsChildOf(BaseComponentClass) )
+	const int32 Index = Find(InComponentName);
+	if (Index == INDEX_NONE)
 	{
-		UE_LOG(LogUObjectGlobals, Fatal, TEXT("%s is not a legal override for component %s because it does not derive from %s."), 
-			*DerivedComponentClass->GetFullName(), *InComponentName.ToString(), *BaseComponentClass->GetFullName());
+		Overrides.Emplace(FOverride(InComponentName, InComponentClass));
+	}
+	else if (InComponentClass && Overrides[Index].ComponentClass)
+	{
+		// if a base class is asking for an override, the existing override (which we are going to use) had better be derived
+		if (!IsLegalOverride(Overrides[Index].ComponentClass, InComponentClass))
+		{
+			UE_LOG(LogUObjectGlobals, Error, TEXT("%s is not a legal override for component %s because it does not derive from %s. Will use %s when constructing component."),
+				*Overrides[Index].ComponentClass->GetFullName(), *InComponentName.ToString(), *InComponentClass->GetFullName(), *InComponentClass->GetFullName());
+
+			Overrides[Index].ComponentClass = InComponentClass;
+		}
+	}
+}
+
+/**  Retrieve an override, or TClassToConstructByDefault::StaticClass or nullptr if this was removed by a derived class **/
+UClass* FObjectInitializer::FOverrides::Get(FName InComponentName, UClass* ReturnType, UClass* ClassToConstructByDefault, FObjectInitializer const& ObjectInitializer) const
+{
+	const int32 Index = Find(InComponentName);
+	UClass* BaseComponentClass = ClassToConstructByDefault;
+	if (Index == INDEX_NONE)
+	{
+		return BaseComponentClass; // no override so just do what the base class wanted
+	}
+	else if (Overrides[Index].ComponentClass)
+	{
+		if (IsLegalOverride(Overrides[Index].ComponentClass, ReturnType)) // if THE base class is asking for a T, the existing override (which we are going to use) had better be derived
+		{
+			return Overrides[Index].ComponentClass; // the override is of an acceptable class, so use it
+		}
+		else
+		{
+			UE_LOG(LogUObjectGlobals, Error, TEXT("%s is not a legal override for component %s because it does not derive from %s. Using %s to construct component."),
+				*Overrides[Index].ComponentClass->GetFullName(), *InComponentName.ToString(), *ReturnType->GetFullName(), *ClassToConstructByDefault->GetFullName());
+
+			return ClassToConstructByDefault;
+		}
+	}
+	return nullptr;  // the override is of nullptr, which means "don't create this component"
+}
+bool FObjectInitializer::FOverrides::IsLegalOverride(const UClass* DerivedComponentClass, const UClass* BaseComponentClass)
+{
+	if (DerivedComponentClass && BaseComponentClass && !DerivedComponentClass->IsChildOf(BaseComponentClass))
+	{
 		return false;
 	}
 	return true;
 }
 
-void FObjectInitializer::AssertIfSubobjectSetupIsNotAllowed(const TCHAR* SubobjectName) const
+void FObjectInitializer::AssertIfSubobjectSetupIsNotAllowed(const FName SubobjectName) const
 {
 	UE_CLOG(!bSubobjectClassInitializationAllowed, LogUObjectGlobals, Fatal,
-		TEXT("%s.%s: Subobject class setup is only allowed in base class constructor call (in the initialization list)"), Obj ? *Obj->GetFullName() : TEXT("NULL"), SubobjectName);
+		TEXT("%s.%s: Subobject class setup is only allowed in base class constructor call (in the initialization list)"), Obj ? *Obj->GetFullName() : TEXT("NULL"), *SubobjectName.GetPlainNameString());
 }
 
 #if DO_CHECK
-void CheckIsClassChildOf_Internal(UClass* Parent, UClass* Child)
+void CheckIsClassChildOf_Internal(const UClass* Parent, const UClass* Child)
 {
 	// This is a function to avoid platform compilation issues
 	checkf(Child, TEXT("NewObject called with a nullptr class object"));
@@ -3047,7 +3110,7 @@ void CheckIsClassChildOf_Internal(UClass* Parent, UClass* Child)
 
 UObject* StaticConstructObject_Internal
 (
-	UClass*			InClass,
+	const UClass*	InClass,
 	UObject*		InOuter								/*=GetTransientPackage()*/,
 	FName			InName								/*=NAME_None*/,
 	EObjectFlags	InFlags								/*=0*/,
@@ -4525,6 +4588,8 @@ namespace UE4CodeGen_Private
 #endif
 
 		NewClass->StaticLink();
+
+		NewClass->SetSparseClassDataStruct(NewClass->GetSparseClassDataArchetypeStruct());
 	}
 }
 

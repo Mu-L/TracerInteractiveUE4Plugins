@@ -189,7 +189,10 @@ void FGenericErrorReport::SetPrimaryCrashProperties( FPrimaryCrashProperties& ou
 			CallStack.RemoveAt(0, FMath::Min(CallStack.Num(), (int32)NumMinidumpFramesToIgnore));
 		}
 
-		out_PrimaryCrashProperties.CallStack = CallStack;
+		if (CallStack.Num() > 0)
+		{
+			out_PrimaryCrashProperties.CallStack = CallStack;
+		}
 		out_PrimaryCrashProperties.Modules = Helper->CrashInfo.ModuleNames;
 		out_PrimaryCrashProperties.SourceContext = Helper->CrashInfo.SourceContext;
 
@@ -299,7 +302,7 @@ bool FGenericErrorReport::TryReadDiagnosticsFile()
 			else if (Line.StartsWith(ExceptionLineStart))
 			{
 				// Not subtracting 1 from the array count so it gobbles the initial quote
-				Exception = Line.RightChop(ARRAY_COUNT(ExceptionLineStart)).LeftChop(1);
+				Exception = Line.RightChop(UE_ARRAY_COUNT(ExceptionLineStart)).LeftChop(1);
 			}
 			break;
 		}

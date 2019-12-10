@@ -710,36 +710,51 @@ void SKismetInspector::UpdateFromObjects(const TArray<UObject*>& PropertyObjects
 
 				if(Object != EditableComponentTemplate)
 				{
-					UObjectProperty* ObjectProperty = FindField<UObjectProperty>(Object->GetClass(), EditableComponentTemplate->GetFName());
-					if(ObjectProperty != nullptr)
+					if (UObjectProperty* ObjectProperty = FindField<UObjectProperty>(Object->GetClass(), EditableComponentTemplate->GetFName()))
 					{
 						SelectedObjectProperties.Add(ObjectProperty);
 					}
-					else if(UActorComponent* Archetype = Cast<UActorComponent>(EditableComponentTemplate->GetArchetype()))
+					else 
 					{
-						if(AActor* Owner = Archetype->GetOwner())
+						auto FindPropertyReferencingComponent = [Object](const UActorComponent* Component) -> UProperty*
 						{
-							if(UClass* OwnerClass = Owner->GetClass())
+							if (AActor* Owner = Component->GetOwner())
 							{
-								AActor* OwnerCDO = CastChecked<AActor>(OwnerClass->GetDefaultObject());
-								for(TFieldIterator<UObjectProperty> ObjPropIt(OwnerClass, EFieldIteratorFlags::IncludeSuper); ObjPropIt; ++ObjPropIt)
+								if (UClass* OwnerClass = Owner->GetClass())
 								{
-									ObjectProperty = *ObjPropIt;
-									check(ObjectProperty != nullptr);
-
-									// If the property value matches the current archetype, add it as a selected property for filtering
-									if(Archetype->GetClass()->IsChildOf(ObjectProperty->PropertyClass)
-										&& Archetype == ObjectProperty->GetObjectPropertyValue_InContainer(OwnerCDO))
+									AActor* OwnerCDO = CastChecked<AActor>(OwnerClass->GetDefaultObject());
+									for (TFieldIterator<UObjectProperty> ObjPropIt(OwnerClass, EFieldIteratorFlags::IncludeSuper); ObjPropIt; ++ObjPropIt)
 									{
-										ObjectProperty = FindField<UObjectProperty>(Object->GetClass(), ObjectProperty->GetFName());
-										if(ObjectProperty != nullptr)
+										UObjectProperty* ObjectProperty = *ObjPropIt;
+										check(ObjectProperty != nullptr);
+
+										// If the property value matches the current archetype, add it as a selected property for filtering
+										if (Component->GetClass()->IsChildOf(ObjectProperty->PropertyClass)
+											&& Component == ObjectProperty->GetObjectPropertyValue_InContainer(OwnerCDO))
 										{
-											SelectedObjectProperties.Add(ObjectProperty);
-											break;
+											ObjectProperty = FindField<UObjectProperty>(Object->GetClass(), ObjectProperty->GetFName());
+											if (ObjectProperty != nullptr)
+											{
+												return ObjectProperty;
+											}
 										}
 									}
 								}
 							}
+							return nullptr;
+						};
+
+						UProperty* ReferencingProperty = FindPropertyReferencingComponent(EditableComponentTemplate);
+						if (ReferencingProperty == nullptr)
+						{
+							if (UActorComponent* Archetype = Cast<UActorComponent>(EditableComponentTemplate->GetArchetype()))
+							{
+								ReferencingProperty = FindPropertyReferencingComponent(Archetype);
+							}
+						}
+						if (ReferencingProperty)
+						{
+							SelectedObjectProperties.Add(ReferencingProperty);
 						}
 					}
 				}
@@ -764,6 +779,21 @@ bool SKismetInspector::IsStructViewPropertyReadOnly(const struct FPropertyAndPar
 
 	return false;
 }
+
+bool SKismetInspector::IsAnyParentContainerSelected(const FPropertyAndParent& PropertyAndParent) const
+{
+	for (const UProperty* CurrentProperty : PropertyAndParent.ParentProperties)
+	{
+		const UProperty* CurrentOuter = Cast<UProperty>(CurrentProperty->GetOuter());
+
+		if (CurrentOuter != nullptr && SelectedObjectProperties.Find(MakeWeakObjectPtr(const_cast<UProperty*>(CurrentOuter))))
+		{
+			return true;
+		}
+	}
+
+	return false;
+} 
 
 bool SKismetInspector::IsPropertyVisible( const FPropertyAndParent& PropertyAndParent ) const
 {
@@ -832,30 +862,23 @@ bool SKismetInspector::IsPropertyVisible( const FPropertyAndParent& PropertyAndP
 		// If the current property is selected, it is visible.
 		return true;
 	}
-	else if ( PropertyAndParent.ParentProperty )
+	else if ( PropertyAndParent.ParentProperties.Num() > 0 && SelectedObjectProperties.Num() > 0 )
 	{
-		const UProperty* ParentProperty = PropertyAndParent.ParentProperty;
-		const UProperty* ParentPropertyOuter = nullptr;
-		
-		if (ParentProperty)
-		{
-			ParentPropertyOuter = Cast<UProperty>(ParentProperty->GetOuter());
-		}
+		const UProperty* ParentProperty = PropertyAndParent.ParentProperties[0];
 
 		if ( SelectedObjectProperties.Find( MakeWeakObjectPtr( const_cast<UProperty*>( ParentProperty ) ) ) )
 		{
 			// If its parent is selected, it should be visible
 			return true;
 		}
-		else if ( ParentPropertyOuter && SelectedObjectProperties.Find( MakeWeakObjectPtr( const_cast<UProperty*>( ParentPropertyOuter ) ) ) )
+		else if ( IsAnyParentContainerSelected(PropertyAndParent) )
 		{
-			// If its parent is part of a container and the container property is selected, it should be visible
 			return true;
 		}
 	}
 
 
-	return !SelectedObjectProperties.Num();
+	return SelectedObjectProperties.Num() == 0;
 }
 
 void SKismetInspector::SetPropertyWindowContents(TArray<UObject*> Objects)

@@ -12,7 +12,7 @@ using System.Reflection;
 
 namespace AutomationTool
 {
-	public struct SingleTargetProperties
+	public class SingleTargetProperties
 	{
 		public string TargetName;
 		public TargetRules Rules;
@@ -124,143 +124,305 @@ namespace AutomationTool
 			return ProjectClientBinariesPath;
 		}
 
-		private static bool RequiresTempTarget(FileReference RawProjectPath, List<UnrealTargetPlatform> ClientTargetPlatforms, List<UnrealTargetConfiguration> ClientTargetConfigurations, bool AssetNativizationRequested)
-		{
-			string Reason;
-			if(RequiresTempTarget(RawProjectPath, ClientTargetPlatforms, ClientTargetConfigurations, AssetNativizationRequested, out Reason))
-			{
-				Log.TraceInformation("{0} requires a temporary target.cs to be generated ({1})", RawProjectPath.GetFileName(), Reason);
-				return true;
-			}
-			return false;
-		}
-
-		private static bool RequiresTempTarget(FileReference RawProjectPath, List<UnrealTargetPlatform> ClientTargetPlatforms, List<UnrealTargetConfiguration> ClientTargetConfigurations, bool AssetNativizationRequested, out string Reason)
+		private static bool ProjectHasCode(FileReference RawProjectPath)
 		{
 			// check to see if we already have a Target.cs file
-			if (File.Exists (Path.Combine (Path.GetDirectoryName (RawProjectPath.FullName), "Source", RawProjectPath.GetFileNameWithoutExtension() + ".Target.cs")))
+			if (File.Exists(Path.Combine(Path.GetDirectoryName(RawProjectPath.FullName), "Source", RawProjectPath.GetFileNameWithoutExtension() + ".Target.cs")))
 			{
-				Reason = null;
-				return false;
+				return true;
 			}
 			else if (Directory.Exists(Path.Combine(Path.GetDirectoryName(RawProjectPath.FullName), "Source")))
 			{
 				// wasn't one in the main Source directory, let's check all sub-directories
 				//@todo: may want to read each target.cs to see if it has a target corresponding to the project name as a final check
-				FileInfo[] Files = (new DirectoryInfo( Path.Combine (Path.GetDirectoryName (RawProjectPath.FullName), "Source")).GetFiles ("*.Target.cs", SearchOption.AllDirectories));
+				FileInfo[] Files = (new DirectoryInfo(Path.Combine(Path.GetDirectoryName(RawProjectPath.FullName), "Source")).GetFiles("*.Target.cs", SearchOption.AllDirectories));
 				if (Files.Length > 0)
 				{
-					Reason = null;
-					return false;
+					return true;
 				}
 			}
+			return false;
+		}
 
-            //
-            // once we reach this point, we can surmise that this is an asset-
-            // only (code free) project
-
-            if (AssetNativizationRequested)
-            {
-                // we're going to be converting some of the project's assets 
-                // into native code, so we require a distinct target (executable) 
-                // be generated for this project
-				Reason = "asset nativization is enabled";
-                return true;
-            }
-
-			if (ClientTargetPlatforms != null)
+		private static bool RequiresTempTarget(FileReference RawProjectPath, List<UnrealTargetPlatform> Platforms, List<UnrealTargetConfiguration> Configurations, bool AssetNativizationRequested)
+		{
+			bool bHasCode = ProjectHasCode(RawProjectPath);
+			foreach (UnrealTargetPlatform Platform in Platforms)
 			{
-				foreach (UnrealTargetPlatform ClientPlatform in ClientTargetPlatforms)
+				foreach(UnrealTargetConfiguration Configuration in Configurations)
 				{
-					EncryptionAndSigning.CryptoSettings Settings = EncryptionAndSigning.ParseCryptoSettings(RawProjectPath.Directory, ClientPlatform);
-					if (Settings.IsAnyEncryptionEnabled() || Settings.IsPakSigningEnabled())
+					string Reason;
+					if(RequiresTempTarget(RawProjectPath, bHasCode, Platform, Configuration, TargetType.Game, AssetNativizationRequested, true, out Reason))
 					{
-						Reason = "encryption/signing is enabled";
+						Log.TraceInformation("{0} requires a temporary target.cs to be generated ({1})", RawProjectPath.GetFileName(), Reason);
 						return true;
 					}
 				}
 			}
+			return false;
+		}
 
-			// no Target file, now check to see if build settings have changed
-			List<UnrealTargetPlatform> TargetPlatforms = ClientTargetPlatforms;
-			if (ClientTargetPlatforms == null || ClientTargetPlatforms.Count < 1)
+		/// <summary>
+		/// NOTE: This function must mirror the functionality of TargetPlatformBase::RequiresTempTarget
+		/// </summary>
+		private static bool RequiresTempTarget(FileReference RawProjectPath, bool bProjectHasCode, UnrealTargetPlatform Platform, UnrealTargetConfiguration Configuration, TargetType TargetType, bool bRequiresAssetNativization, bool bRequiresCookedData, out string OutReason)
+		{
+			// check to see if we already have a Target.cs file
+			if (bProjectHasCode)
 			{
-				// No client target platforms, add all in
-				TargetPlatforms = new List<UnrealTargetPlatform>();
-				foreach (UnrealTargetPlatform TargetPlatformType in UnrealTargetPlatform.GetValidPlatforms())
-				{
-					TargetPlatforms.Add(TargetPlatformType);
-				}
+				OutReason = null;
+				return false;
 			}
 
-			List<UnrealTargetConfiguration> TargetConfigurations = ClientTargetConfigurations;
-			if (TargetConfigurations == null || TargetConfigurations.Count < 1)
+			// check if asset nativization is enabled
+			if (bRequiresAssetNativization)
+            {
+				OutReason = "asset nativization is enabled";
+                return true;
+            }
+
+			// Check if encryption or signing is enabled
+			EncryptionAndSigning.CryptoSettings Settings = EncryptionAndSigning.ParseCryptoSettings(RawProjectPath.Directory, Platform);
+			if (Settings.IsAnyEncryptionEnabled() || Settings.IsPakSigningEnabled())
 			{
-				// No client target configurations, add all in
-				TargetConfigurations = new List<UnrealTargetConfiguration>();
-				foreach (UnrealTargetConfiguration TargetConfigurationType in Enum.GetValues(typeof(UnrealTargetConfiguration)))
-				{
-					if (TargetConfigurationType != UnrealTargetConfiguration.Unknown)
-					{
-						TargetConfigurations.Add(TargetConfigurationType);
-					}
-				}
+				OutReason = "encryption/signing is enabled";
+				return true;
+			}
+
+			// check the target platforms for any differences in build settings or additional plugins
+			if(!CommandUtils.IsEngineInstalled() && !PlatformExports.HasDefaultBuildConfig(RawProjectPath, Platform))
+			{
+				OutReason = "project has non-default build configuration";
+				return true;
+			}
+			if(PlatformExports.RequiresBuild(RawProjectPath, Platform))
+			{
+				OutReason = "overriden by target platform";
+				return true;
 			}
 
 			// Read the project descriptor, and find all the plugins available to this project
 			ProjectDescriptor Project = ProjectDescriptor.FromFile(RawProjectPath);
-			List<PluginInfo> AvailablePlugins = Plugins.ReadAvailablePlugins(CommandUtils.EngineDirectory, RawProjectPath, Project.AdditionalPluginDirectories);
 
-			// check the target platforms for any differences in build settings or additional plugins
-			foreach (UnrealTargetPlatform TargetPlatformType in TargetPlatforms)
+			// Enumerate all the available plugins
+			Dictionary<string, PluginInfo> AllPlugins = Plugins.ReadAvailablePlugins(CommandUtils.EngineDirectory, RawProjectPath, new string[0]).ToDictionary(x => x.Name, x => x, StringComparer.OrdinalIgnoreCase);
+
+			// find if there are any plugins enabled or disabled which differ from the default
+			string Reason;
+			if (RequiresTempTargetForCodePlugin(Project, Platform, Configuration, TargetType, AllPlugins, out Reason))
 			{
-				if(!CommandUtils.IsEngineInstalled() && !PlatformExports.HasDefaultBuildConfig(RawProjectPath, TargetPlatformType))
+				OutReason = Reason;
+				return true;
+			}
+
+			OutReason = null;
+			return false;
+		}
+
+		/// <summary>
+		/// NOTE: This function must mirror FPluginManager::RequiresTempTargetForCodePlugin
+		/// </summary>
+		static bool RequiresTempTargetForCodePlugin(ProjectDescriptor ProjectDescriptor, UnrealTargetPlatform Platform, UnrealTargetConfiguration Configuration, TargetType TargetType, Dictionary<string, PluginInfo> AllPlugins, out string OutReason)
+		{
+			PluginReferenceDescriptor MissingPlugin;
+
+			HashSet<string> ProjectCodePlugins = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			if (!GetCodePluginsForTarget(ProjectDescriptor, Platform, Configuration, TargetType, ProjectCodePlugins, AllPlugins, out MissingPlugin))
+			{
+				OutReason = String.Format("{0} plugin is referenced by target but not found", MissingPlugin.Name);
+				return true;
+			}
+
+			HashSet<string> DefaultCodePlugins = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			if (!GetCodePluginsForTarget(null, Platform, Configuration, TargetType, DefaultCodePlugins, AllPlugins, out MissingPlugin))
+			{
+				OutReason = String.Format("{0} plugin is referenced by the default target but not found", MissingPlugin.Name);
+				return true;
+			}
+
+			foreach (string ProjectCodePlugin in ProjectCodePlugins)
+			{
+				if (!DefaultCodePlugins.Contains(ProjectCodePlugin))
 				{
-					Reason = "project has non-default build configuration";
+					OutReason = String.Format("{0} plugin is enabled", ProjectCodePlugin);
 					return true;
 				}
-				if(PlatformExports.RequiresBuild(RawProjectPath, TargetPlatformType))
+			}
+
+			foreach (string DefaultCodePlugin in DefaultCodePlugins)
+			{
+				if (!ProjectCodePlugins.Contains(DefaultCodePlugin))
 				{
-					Reason = "overriden by target platform";
+					OutReason = String.Format("{0} plugin is disabled", DefaultCodePlugin);
 					return true;
 				}
+			}
 
-				// find if there are any plugins enabled or disabled which differ from the default
-				foreach(PluginInfo Plugin in AvailablePlugins)
+			OutReason = null;
+			return false;
+		}
+
+		/// <summary>
+		/// NOTE: This function must mirror FPluginManager::GetCodePluginsForTarget
+		/// </summary>
+		static bool GetCodePluginsForTarget(ProjectDescriptor ProjectDescriptor, UnrealTargetPlatform Platform, UnrealTargetConfiguration Configuration, TargetType TargetType, HashSet<string> CodePluginNames, Dictionary<string, PluginInfo> AllPlugins, out PluginReferenceDescriptor OutMissingPlugin)
+		{
+			bool bLoadPluginsForTargetPlatforms = (TargetType == TargetType.Editor);
+
+			// Map of all enabled plugins
+			Dictionary<string, PluginInfo> EnabledPlugins = new Dictionary<string, PluginInfo>(StringComparer.OrdinalIgnoreCase);
+					   			 
+			// Keep a set of all the plugin names that have been configured. We read configuration data from different places, but only configure a plugin from the first place that it's referenced.
+			HashSet<string> ConfiguredPluginNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+			// Find all the plugin references in the project file
+			if (ProjectDescriptor != null && ProjectDescriptor.Plugins != null)
+			{
+				// Copy the plugin references, since we may modify the project if any plugins are missing
+				foreach (PluginReferenceDescriptor PluginReference in ProjectDescriptor.Plugins)
 				{
-					bool bPluginEnabledForTarget = false;
-					foreach (UnrealTargetConfiguration TargetConfigType in TargetConfigurations)
+					if(!ConfiguredPluginNames.Contains(PluginReference.Name))
 					{
-						bPluginEnabledForTarget |= Plugins.IsPluginEnabledForProject(Plugin, Project, TargetPlatformType, TargetConfigType, TargetRules.TargetType.Game);
-					}
-
-					bool bPluginEnabledForBaseTarget = false;
-					if(!Plugin.Descriptor.bInstalled)
-					{
-						foreach (UnrealTargetConfiguration TargetConfigType in TargetConfigurations)
+						PluginReferenceDescriptor MissingPlugin;
+						if (!ConfigureEnabledPluginForTarget(PluginReference, ProjectDescriptor, null, Platform, Configuration, TargetType, bLoadPluginsForTargetPlatforms, AllPlugins, EnabledPlugins, out MissingPlugin))
 						{
-							bPluginEnabledForBaseTarget |= Plugins.IsPluginEnabledForProject(Plugin, null, TargetPlatformType, TargetConfigType, TargetRules.TargetType.Game);
+							OutMissingPlugin = MissingPlugin;
+							return false;
 						}
+						ConfiguredPluginNames.Add(PluginReference.Name);
 					}
+				}
+			}
 
-					if (bPluginEnabledForTarget != bPluginEnabledForBaseTarget)
+			// Add the plugins which are enabled by default
+			foreach (KeyValuePair<string, PluginInfo> PluginPair in AllPlugins)
+			{
+				if(PluginPair.Value.EnabledByDefault && !ConfiguredPluginNames.Contains(PluginPair.Key))
+				{
+					PluginReferenceDescriptor MissingPlugin;
+					if (!ConfigureEnabledPluginForTarget(new PluginReferenceDescriptor(PluginPair.Key, null, true), ProjectDescriptor, null, Platform, Configuration, TargetType, bLoadPluginsForTargetPlatforms, AllPlugins, EnabledPlugins, out MissingPlugin))
 					{
-						if(bPluginEnabledForTarget)
+						OutMissingPlugin = MissingPlugin;
+						return false;
+					}
+					ConfiguredPluginNames.Add(PluginPair.Key);
+				}
+			}
+
+			// Figure out which plugins have code 
+			bool bBuildDeveloperTools = (TargetType == TargetType.Editor || TargetType == TargetType.Program || (Configuration != UnrealTargetConfiguration.Test && Configuration != UnrealTargetConfiguration.Shipping));
+			bool bRequiresCookedData = (TargetType != TargetType.Editor);
+			foreach (KeyValuePair<string, PluginInfo> Pair in EnabledPlugins)
+			{
+				ModuleDescriptor[] Modules = Pair.Value.Descriptor.Modules;
+				if (Modules != null)
+				{
+					foreach (ModuleDescriptor Module in Pair.Value.Descriptor.Modules)
+					{
+						if (Module.IsCompiledInConfiguration(Platform, Configuration, null, TargetType, bBuildDeveloperTools, bRequiresCookedData))
 						{
-							Reason = String.Format("{0} plugin is enabled", Plugin.Name);
-							return true;
-						}
-						else
-						{
-							Reason = String.Format("{0} plugin is disabled", Plugin.Name);
-							return true;
+							CodePluginNames.Add(Pair.Key);
+							break;
 						}
 					}
 				}
 			}
 
-			Reason = null;
-			return false;
+			OutMissingPlugin = null;
+			return true;
+		}
+
+		/// <summary>
+		/// NOTE: This function should mirror FPluginManager::ConfigureEnabledPluginForTarget
+		/// </summary>
+		static bool ConfigureEnabledPluginForTarget(PluginReferenceDescriptor FirstReference, ProjectDescriptor ProjectDescriptor, string TargetName, UnrealTargetPlatform Platform, UnrealTargetConfiguration Configuration, TargetType TargetType, bool bLoadPluginsForTargetPlatforms, Dictionary<string, PluginInfo> AllPlugins, Dictionary<string, PluginInfo> EnabledPlugins, out PluginReferenceDescriptor OutMissingPlugin)
+		{
+			if (!EnabledPlugins.ContainsKey(FirstReference.Name))
+			{
+				// Set of plugin names we've added to the queue for processing
+				HashSet<string> NewPluginNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+				NewPluginNames.Add(FirstReference.Name);
+
+				// Queue of plugin references to consider
+				List<PluginReferenceDescriptor> NewPluginReferences = new List<PluginReferenceDescriptor>();
+				NewPluginReferences.Add(FirstReference);
+
+				// Loop through the queue of plugin references that need to be enabled, queuing more items as we go
+				for (int Idx = 0; Idx < NewPluginReferences.Count; Idx++)
+				{
+					PluginReferenceDescriptor Reference = NewPluginReferences[Idx];
+
+					// Check if the plugin is required for this platform
+					if(!Reference.IsEnabledForPlatform(Platform) || !Reference.IsEnabledForTargetConfiguration(Configuration) || !Reference.IsEnabledForTarget(TargetType))
+					{
+						Log.TraceLog("Ignoring plugin '{0}' for platform/configuration", Reference.Name);
+						continue;
+					}
+
+					// Check if the plugin is required for this platform
+					if(!bLoadPluginsForTargetPlatforms && !Reference.IsSupportedTargetPlatform(Platform))
+					{
+						Log.TraceLog("Ignoring plugin '{0}' due to unsupported platform", Reference.Name);
+						continue;
+					}
+
+					// Find the plugin being enabled
+					PluginInfo Plugin;
+					if (!AllPlugins.TryGetValue(Reference.Name, out Plugin))
+					{
+						// Ignore any optional plugins
+						if (Reference.bOptional)
+						{
+							Log.TraceLog("Ignored optional reference to '%s' plugin; plugin was not found.", Reference.Name);
+							continue;
+						}
+
+						// Add it to the missing list
+						OutMissingPlugin = Reference;
+						return false;
+					}
+
+					// Check the plugin supports this platform
+					if(!bLoadPluginsForTargetPlatforms && !Plugin.Descriptor.SupportsTargetPlatform(Platform))
+					{
+						Log.TraceLog("Ignoring plugin '{0}' due to unsupported platform in plugin descriptor", Reference.Name);
+						continue;
+					}
+
+					// Check that this plugin supports the current program
+					if (TargetType == TargetType.Program && !Plugin.Descriptor.SupportedPrograms.Contains(TargetName))
+					{
+						Log.TraceLog("Ignoring plugin '{0}' due to absence from the supported programs list", Reference.Name);
+						continue;
+					}
+
+					// Skip loading Enterprise plugins when project is not an Enterprise project
+					if (Plugin.Type == PluginType.Enterprise && ProjectDescriptor != null && !ProjectDescriptor.IsEnterpriseProject)
+					{
+						Log.TraceLog("Ignoring plugin '{0}' due to not being an enterprise project", Reference.Name);
+						continue;
+					}
+
+					// Add references to all its dependencies
+					if (Plugin.Descriptor.Plugins != null)
+					{
+						foreach (PluginReferenceDescriptor NextReference in Plugin.Descriptor.Plugins)
+						{
+							if (!EnabledPlugins.ContainsKey(NextReference.Name) && !NewPluginNames.Contains(NextReference.Name))
+							{
+								NewPluginNames.Add(NextReference.Name);
+								NewPluginReferences.Add(NextReference);
+							}
+						}
+					}
+
+					// Add the plugin
+					EnabledPlugins.Add(Plugin.Name, Plugin);
+				}
+			}
+
+			OutMissingPlugin = null;
+			return true;
 		}
 
 		private static void GenerateTempTarget(FileReference RawProjectPath)
@@ -336,8 +498,34 @@ namespace AutomationTool
 			List<string> ExtraSearchPaths = null;
 			if (RawProjectPath != null)
 			{
-                string TempTargetDir = CommandUtils.CombinePaths(Path.GetDirectoryName(RawProjectPath.FullName), "Intermediate", "Source");
-                if (RequiresTempTarget(RawProjectPath, ClientTargetPlatforms, ClientTargetConfigurations, AssetNativizationRequested))
+				// no Target file, now check to see if build settings have changed
+				List<UnrealTargetPlatform> TargetPlatforms = ClientTargetPlatforms;
+				if (ClientTargetPlatforms == null || ClientTargetPlatforms.Count < 1)
+				{
+					// No client target platforms, add all in
+					TargetPlatforms = new List<UnrealTargetPlatform>();
+					foreach (UnrealTargetPlatform TargetPlatformType in UnrealTargetPlatform.GetValidPlatforms())
+					{
+						TargetPlatforms.Add(TargetPlatformType);
+					}
+				}
+
+				List<UnrealTargetConfiguration> TargetConfigurations = ClientTargetConfigurations;
+				if (TargetConfigurations == null || TargetConfigurations.Count < 1)
+				{
+					// No client target configurations, add all in
+					TargetConfigurations = new List<UnrealTargetConfiguration>();
+					foreach (UnrealTargetConfiguration TargetConfigurationType in Enum.GetValues(typeof(UnrealTargetConfiguration)))
+					{
+						if (TargetConfigurationType != UnrealTargetConfiguration.Unknown)
+						{
+							TargetConfigurations.Add(TargetConfigurationType);
+						}
+					}
+				}
+
+				string TempTargetDir = CommandUtils.CombinePaths(Path.GetDirectoryName(RawProjectPath.FullName), "Intermediate", "Source");
+                if (RequiresTempTarget(RawProjectPath, TargetPlatforms, TargetConfigurations, AssetNativizationRequested))
 				{
 					GenerateTempTarget(RawProjectPath);
 					Properties.bWasGenerated = true;
@@ -566,14 +754,14 @@ namespace AutomationTool
 				{
 					string TargetName = GetTargetName(TargetType);
 
-					TargetInfo DummyTargetInfo = new TargetInfo(TargetName, BuildHostPlatform.Current.Platform, UnrealTargetConfiguration.Development, "", Properties.RawProjectPath);
+					TargetInfo DummyTargetInfo = new TargetInfo(TargetName, BuildHostPlatform.Current.Platform, UnrealTargetConfiguration.Development, "", Properties.RawProjectPath, null);
 
 					// Create an instance of this type
 					CommandUtils.LogVerbose("Creating target rules object: {0}", TargetType.Name);
 					TargetRules Rules = Activator.CreateInstance(TargetType, DummyTargetInfo) as TargetRules;
 					CommandUtils.LogVerbose("Adding target: {0} ({1})", TargetType.Name, Rules.Type);
 
-					SingleTargetProperties TargetData;
+					SingleTargetProperties TargetData = new SingleTargetProperties();
 					TargetData.TargetName = GetTargetName(TargetType);
 					TargetData.Rules = Rules;
 					if (Rules.Type == global::UnrealBuildTool.TargetType.Program)
@@ -895,7 +1083,7 @@ namespace AutomationTool
 				}
 			}
 
-            SingleTargetProperties Result;
+            SingleTargetProperties Result = new SingleTargetProperties();
             Result.TargetName = ProgramName;
             Result.Rules = null;
             return Result;

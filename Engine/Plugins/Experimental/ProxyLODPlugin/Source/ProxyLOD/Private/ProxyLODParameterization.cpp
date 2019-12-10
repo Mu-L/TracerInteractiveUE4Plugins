@@ -5,6 +5,7 @@
 #include "ProxyLODMeshConvertUtils.h"
 #include "ProxyLODMeshUtilities.h"
 #include "ProxyLODMeshParameterization.h"
+#include "StaticMeshAttributes.h"
 
 
 
@@ -65,7 +66,7 @@ public:
 			}
 			// Reset the result mesh description
 			MeshDescription.Empty();
-			UStaticMesh::RegisterMeshAttributes(MeshDescription);
+			FStaticMeshAttributes(MeshDescription).Register();
 
 			// convert to fill the mesh description
 			ProxyLOD::ConvertMesh(VertexDataMesh, MeshDescription);
@@ -74,6 +75,24 @@ public:
 
 		return bUVGenerationSucess;
 	};
+
+
+	virtual bool GenerateUVs(int32                    Width,
+		                     int32                    Height,
+		                     float                    GutterSpace,
+			                 const TArray<FVector>&   VertexBuffer,
+			                 const TArray<int32>&     IndexBuffer,
+			                 const TArray<int32>&     AdjacencyBuffer,
+			                 TFunction<bool(float)>&  Callback,
+			                 TArray<FVector2D>&       UVVertexBuffer,
+			                 TArray<int32>&           UVIndexBuffer,
+			                 TArray<int32>&           VertexRemapArray,
+			                 float&                   MaxStretch,
+			                 int32&                   NumCharts) const 
+	{
+		ProxyLOD::FTextureAtlasDesc TextureAtlasDesc(FIntPoint(Height, Width), GutterSpace);
+		return ProxyLOD::GenerateUVs(TextureAtlasDesc, VertexBuffer, IndexBuffer, AdjacencyBuffer, Callback, UVVertexBuffer, UVIndexBuffer, VertexRemapArray, MaxStretch, NumCharts);
+	}
 };
 
 

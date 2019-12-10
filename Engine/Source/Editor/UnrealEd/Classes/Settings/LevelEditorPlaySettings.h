@@ -7,6 +7,8 @@
 #include "UObject/Object.h"
 #include "Layout/Margin.h"
 #include "Layout/Visibility.h"
+#include "Misc/App.h"
+#include "Settings/LevelEditorPlayNetworkEmulationSettings.h"
 #include "LevelEditorPlaySettings.generated.h"
 
 class SWindow;
@@ -350,6 +352,20 @@ private:
 
 public:
 
+	/** Should network emulation settings be applied or not */
+	bool IsNetworkEmulationEnabled() const
+	{
+		return NetworkEmulationSettings.bIsNetworkEmulationEnabled;
+	}
+
+	/**
+	 * Customizable settings allowing to emulate latency and packetloss for game network transmissions
+	 */
+	UPROPERTY(config, EditAnywhere, Category = MultiplayerOptions )
+	FLevelEditorPlayNetworkEmulationSettings NetworkEmulationSettings;
+
+public:
+
 	// Accessors for fetching the values of multiplayer options, and returning whether the option is valid at this time
 	void SetPlayNetMode( const EPlayNetMode InPlayNetMode ) { PlayNetMode = InPlayNetMode; }
 	bool IsPlayNetModeActive() const { return true; }
@@ -380,6 +396,8 @@ public:
 	bool GetRouteGamepadToSecondWindow( bool &OutRouteGamepadToSecondWindow ) const { OutRouteGamepadToSecondWindow = RouteGamepadToSecondWindow; return IsRouteGamepadToSecondWindowActive(); }
 	EVisibility GetRouteGamepadToSecondWindowVisibility() const { return (RunUnderOneProcess ? EVisibility::Visible : EVisibility::Hidden); }
 
+	EVisibility GetNetworkEmulationVisibility() const { return (PlayNumberOfClients > 1 || PlayNetDedicated) ? EVisibility::Visible : EVisibility::Hidden; }
+
 	bool IsServerMapNameOverrideActive() const { return (PlayNetMode == PIE_StandaloneWithServer); }
 	bool GetServerMapNameOverride( FString& OutStandaloneServerMapName ) const { OutStandaloneServerMapName = ServerMapNameOverride; return IsServerMapNameOverrideActive(); }
 	EVisibility GetServerMapNameOverrideVisibility() const { return (PlayNetMode == PIE_StandaloneWithServer ? EVisibility::Visible : EVisibility::Hidden); }
@@ -396,6 +414,23 @@ public:
 	bool GetClientWindowSize( FIntPoint &OutClientWindowSize ) const { OutClientWindowSize = FIntPoint(ClientWindowWidth, ClientWindowHeight); return IsClientWindowSizeActive(); }
 	EVisibility GetClientWindowSizeVisibility() const { return (RunUnderOneProcess ? EVisibility::Hidden : EVisibility::Visible); }
 	bool IsCreateAudioDeviceForEveryPlayer() const { return CreateAudioDeviceForEveryPlayer; }
+
+	EBuildConfiguration GetLaunchBuildConfiguration() const
+	{
+		switch (LaunchConfiguration)
+		{
+		case LaunchConfig_Debug:
+			return EBuildConfiguration::Debug;
+		case LaunchConfig_Development:
+			return EBuildConfiguration::Development;
+		case LaunchConfig_Test:
+			return EBuildConfiguration::Test;
+		case LaunchConfig_Shipping:
+			return EBuildConfiguration::Shipping;
+		default:
+			return FApp::GetBuildConfiguration();
+		}
+	}
 
 public:
 

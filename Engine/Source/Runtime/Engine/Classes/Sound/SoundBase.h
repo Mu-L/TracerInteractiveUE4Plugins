@@ -7,18 +7,19 @@
 
 #include "Audio.h"
 #include "CoreMinimal.h"
-#include "UObject/Object.h"
-#include "UObject/ObjectMacros.h"
+#include "IAudioExtensionPlugin.h"
 #include "SoundConcurrency.h"
 #include "SoundSourceBusSend.h"
-#include "SoundSubmix.h"
-#include "IAudioExtensionPlugin.h"
+#include "SoundSubmixSend.h"
+#include "UObject/Object.h"
+#include "UObject/ObjectMacros.h"
 
 #include "SoundBase.generated.h"
 
 
 class USoundEffectSourcePreset;
 class USoundSourceBus;
+class USoundSubmix;
 class USoundEffectSourcePresetChain;
 
 struct FActiveSound;
@@ -98,8 +99,8 @@ public:
 	TEnumAsByte<EMaxConcurrentResolutionRule::Type> MaxConcurrentResolutionRule_DEPRECATED;
 #endif // WITH_EDITORONLY_DATA
 
-	/** Number of times this cue is currently being played. */
-	int32 CurrentPlayCount;
+	/** Map of device handle to number of times this sound is currently being played using that device(counted if sound is virtualized). */
+	TMap<Audio::FDeviceId, int32> CurrentPlayCount;
 
 #if WITH_EDITORONLY_DATA
 	/** If Override Concurrency is false, the sound concurrency settings to use for this sound. */
@@ -175,7 +176,9 @@ public:
 
 	//~ Begin UObject Interface.
 	virtual void PostInitProperties() override;
+#if WITH_EDITORONLY_DATA
 	virtual void PostLoad() override;
+#endif
 	virtual bool CanBeClusterRoot() const override;
 	virtual bool CanBeInCluster() const override;
 	virtual void Serialize(FArchive& Ar) override;

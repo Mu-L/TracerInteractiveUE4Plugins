@@ -60,8 +60,8 @@ static TAutoConsoleVariable<int32> CVarRayTracingRenderInstances(
 
 static TAutoConsoleVariable<int32> CVarRayTracingRenderInstancesCulling(
 	TEXT("r.RayTracing.InstancedStaticMeshes.Culling"),
-	0,
-	TEXT("Enable culling for instances in ray tracing (default = 0 (Culling disabled))"));
+	1,
+	TEXT("Enable culling for instances in ray tracing (default = 1 (Culling enabled))"));
 
 static TAutoConsoleVariable<float> CVarRayTracingInstancesCullClusterMaxRadiusMultiplier(
 	TEXT("r.RayTracing.InstancedStaticMeshes.CullClusterMaxRadiusMultiplier"),
@@ -193,7 +193,7 @@ void FInstanceUpdateCmdBuffer::SetShadowMapData(int32 RenderIndex, const FVector
 
 void FInstanceUpdateCmdBuffer::ResetInlineCommands()
 {
-	Cmds.Reset();
+	Cmds.Empty();
 	NumAdds = 0;
 }
 
@@ -204,7 +204,7 @@ void FInstanceUpdateCmdBuffer::Edit()
 
 void FInstanceUpdateCmdBuffer::Reset()
 {
-	Cmds.Reset();
+	Cmds.Empty();
 	NumAdds = 0;
 	NumEdits = 0;
 }
@@ -364,12 +364,16 @@ void FStaticMeshInstanceBuffer::CreateVertexBuffer(FResourceArrayInterface* InRe
 	// TODO: possibility over allocated the vertex buffer when we support partial update for when working in the editor
 	FRHIResourceCreateInfo CreateInfo(InResourceArray);
 	OutVertexBufferRHI = RHICreateVertexBuffer(InResourceArray->GetResourceDataSize(), InUsage, CreateInfo);
-	OutInstanceSRV = RHICreateShaderResourceView(OutVertexBufferRHI, InStride, InFormat);
+	
+	if (RHISupportsManualVertexFetch(GMaxRHIShaderPlatform))
+	{
+		OutInstanceSRV = RHICreateShaderResourceView(OutVertexBufferRHI, InStride, InFormat);
+	}
 }
 
 void FStaticMeshInstanceBuffer::BindInstanceVertexBuffer(const class FVertexFactory* VertexFactory, FInstancedStaticMeshDataType& InstancedStaticMeshData) const
 {
-	if (InstanceData->GetNumInstances())
+	if (InstanceData->GetNumInstances() && RHISupportsManualVertexFetch(GMaxRHIShaderPlatform))
 	{
 		check(InstanceOriginSRV);
 		check(InstanceTransformSRV);
@@ -431,7 +435,6 @@ void FStaticMeshInstanceBuffer::BindInstanceVertexBuffer(const class FVertexFact
 
 void FStaticMeshInstanceData::Serialize(FArchive& Ar)
 {
-	// HTML5 doesn't support half float so we need to convert at cook time.
 	const bool bCookConvertTransformsToFullFloat = Ar.IsCooking() && bUseHalfFloat && !Ar.CookingTarget()->SupportsFeature(ETargetPlatformFeatures::HalfFloatVertexFormat);
 
 	if (bCookConvertTransformsToFullFloat)
@@ -718,10 +721,8 @@ void FPerInstanceRenderData::UpdateFromPreallocatedData(FStaticMeshInstanceData&
 
 	InOther.SetAllowCPUAccess(InstanceBuffer.RequireCPUAccess);
 
-	FStaticMeshInstanceData* NewInstanceData = new FStaticMeshInstanceData();
-	FMemory::Memswap(&InOther, NewInstanceData, sizeof(FStaticMeshInstanceData));
-
-	InstanceBuffer_GameThread = MakeShared<FStaticMeshInstanceData, ESPMode::ThreadSafe>(*NewInstanceData);
+	InstanceBuffer_GameThread = MakeShared<FStaticMeshInstanceData, ESPMode::ThreadSafe>();
+	FMemory::Memswap(&InOther, InstanceBuffer_GameThread.Get(), sizeof(FStaticMeshInstanceData));
 
 	typedef TSharedPtr<FStaticMeshInstanceData, ESPMode::ThreadSafe> FStaticMeshInstanceDataPtr;
 
@@ -1519,6 +1520,11 @@ void UInstancedStaticMeshComponent::CreateAllInstanceBodies()
 	if (UBodySetup* BodySetup = GetBodySetup())
 	{
 		FPhysScene* PhysScene = GetWorld()->GetPhysicsScene();
+
+		if (!BodyInstance.GetOverrideWalkableSlopeOnInstance())
+		{
+			BodyInstance.SetWalkableSlopeOverride(BodySetup->WalkableSlopeOverride, false);
+		}
 
 		InstanceBodies.SetNumUninitialized(NumBodies);
 
@@ -2704,6 +2710,7 @@ void UInstancedStaticMeshComponent::GetNavigationData(FNavigationRelevantData& D
 		UNavCollisionBase* NavCollision = GetStaticMesh()->NavCollision;
 		if (NavCollision->IsDynamicObstacle())
 		{
+			Data.Modifiers.MarkAsPerInstanceModifier();
 			NavCollision->GetNavigationModifier(Data.Modifiers, FTransform::Identity);
 
 			// Hook per instance transform delegate

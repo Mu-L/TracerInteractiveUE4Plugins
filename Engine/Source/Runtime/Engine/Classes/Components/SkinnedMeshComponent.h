@@ -129,6 +129,18 @@ struct FActiveMorphTarget
 	}
 };
 
+struct FSkeletalMeshObjectCallbackData
+{
+	enum class EEventType { Register, Unregister, Update };
+	typedef void (*TCallbackMeshObjectCallback)(
+		EEventType Event, 
+		class FSkeletalMeshObject* MeshObject,
+		uint64 UserData);
+
+	uint64 UserData = 0;
+	TCallbackMeshObjectCallback Run = nullptr;
+};
+
 /** Vertex skin weight info supplied for a component override. */
 USTRUCT(BlueprintType, meta = (HasNativeMake = "Engine.KismetRenderingLibrary.MakeSkinWeightInfo", HasNativeBreak = "Engine.KismetRenderingLibrary.BreakSkinWeightInfo"))
 struct FSkelMeshSkinWeightInfo
@@ -375,6 +387,7 @@ public:
 	//
 	
 	/** If 0, auto-select LOD level. if >0, force to (ForcedLodModel-1). */
+	UE_DEPRECATED(4.24, "Direct access to ForcedLodModel is deprecated. Please use its getter and setter instead.")
 	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category=LOD)
 	int32 ForcedLodModel;
 
@@ -523,6 +536,7 @@ public:
 	uint8 bCastCapsuleIndirectShadow:1;
 
 	/** Whether or not to CPU skin this component, requires render data refresh after changing */
+	UE_DEPRECATED(4.24, "Direct access to bCPUSkinning is deprecated. Please use its getter and setter instead.")
 	UPROPERTY(transient)
 	uint8 bCPUSkinning : 1;
 
@@ -619,6 +633,7 @@ public:
 
 	/** Object responsible for sending bone transforms, morph target state etc. to render thread. */
 	class FSkeletalMeshObject*	MeshObject;
+	FSkeletalMeshObjectCallbackData MeshObjectCallbackData;
 
 	/** Gets the skeletal mesh resource used for rendering the component. */
 	FSkeletalMeshRenderData* GetSkeletalMeshRenderData() const;
@@ -645,12 +660,16 @@ public:
 	void SetMinLOD(int32 InNewMinLOD);
 
 	/**
-	 * Set MinLodModel of the mesh component
+	 * Set ForcedLodModel of the mesh component
 	 *
 	 * @param	InNewForcedLOD	Set new ForcedLODModel that forces to set the incoming LOD. Range from [1, Max Number of LOD]. This will affect in the next tick update. 
 	 */
 	UFUNCTION(BlueprintCallable, Category="Components|SkinnedMesh")
 	void SetForcedLOD(int32 InNewForcedLOD);
+
+	/** Get ForcedLodModel of the mesh component. Note that the actual forced LOD level is the return value minus one and zero means no forced LOD */
+	UFUNCTION(BlueprintCallable, Category="Components|SkinnedMesh")
+	int32 GetForcedLOD() const;
 
 #if WITH_EDITOR
 	/**
@@ -841,6 +860,21 @@ public:
 	 * @return true if should CPU skin. false otherwise
 	 */
 	virtual bool ShouldCPUSkin();
+
+	/**
+	 * Getter for bCPUSkinning member variable
+	 * May return a different value from ShouldCPUSkin()
+	 */
+	bool GetCPUSkinningEnabled() const;
+
+	/**
+	 * Set whether this component uses CPU skinning
+	 * Notes:
+	 * - If enabled, skeletal mesh referenced by this component will be removed from streaming manager
+	 * - Streaming cannot be (re)enabled as long as any component uses CPU skinning
+	 * - This function is expensive
+	 */
+	void SetCPUSkinningEnabled(bool bEnable, bool bRecreateRenderStateImmediately = false);
 
 	/** 
 	 * Function to operate on mesh object after its created, 
@@ -1074,7 +1108,11 @@ public:
 
 	void SetComponentSpaceTransformsDoubleBuffering(bool bInDoubleBufferedComponentSpaceTransforms);
 
-	const FBoxSphereBounds& GetCachedLocalBounds() { return CachedLocalBounds; } 
+	FBoxSphereBounds GetCachedLocalBounds()  const
+	{ 
+		ensure(bCachedLocalBoundsUpToDate);
+		return CachedWorldSpaceBounds.TransformBy(CachedWorldToLocalTransform);
+	} 
 
 	/**
 	* Should update transform in Tick
@@ -1104,9 +1142,11 @@ protected:
 	virtual bool AllocateTransformData();
 	virtual void DeallocateTransformData();
 
-	/** LocalBounds cached, so they're computed just once. */
+	/** Bounds cached, so they're computed just once. */
 	UPROPERTY(Transient)
-	mutable FBoxSphereBounds CachedLocalBounds;
+	mutable FBoxSphereBounds CachedWorldSpaceBounds;
+	UPROPERTY(Transient)
+	mutable FMatrix CachedWorldToLocalTransform;
 
 public:
 
@@ -1388,7 +1428,7 @@ public:
 	 * @param LODIndex - Index of the LOD to modify material visibility within
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Components|SkinnedMesh")
-	void ShowMaterialSection(int32 MaterialID, bool bShow, int32 LODIndex);
+	void ShowMaterialSection(int32 MaterialID, int32 SectionIndex, bool bShow, int32 LODIndex);
 
 	/** Clear any material visibility modifications made by ShowMaterialSection */
 	UFUNCTION(BlueprintCallable, Category = "Components|SkinnedMesh")
@@ -1451,6 +1491,7 @@ public:
 #endif
 
 	friend class FRenderStateRecreator;
+	friend class FSkeletalMeshStreamOut;
 };
 
 class FRenderStateRecreator
@@ -1481,10 +1522,12 @@ public:
 	{
 		const bool bIsRegistered = Component->IsRegistered();
 
+		const FCoreTexts& CoreTexts = FCoreTexts::Get();
+
 		ensureMsgf(bWasInitiallyRegistered == bIsRegistered,
 			TEXT("Component Registered state changed from %s to %s within FRenderStateRecreator scope."),
-			*((bWasInitiallyRegistered ? GTrue : GFalse).ToString()),
-			*((bIsRegistered ? GTrue : GFalse).ToString()));
+			*((bWasInitiallyRegistered ? CoreTexts.True : CoreTexts.False).ToString()),
+			*((bIsRegistered ? CoreTexts.True : CoreTexts.False).ToString()));
 
 		if (bWasRenderStateCreated && bIsRegistered)
 		{

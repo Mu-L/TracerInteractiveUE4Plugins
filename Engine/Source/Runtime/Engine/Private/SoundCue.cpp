@@ -10,24 +10,27 @@
 #include "UObject/UObjectIterator.h"
 #include "EngineUtils.h"
 #include "Sound/SoundNode.h"
-#include "Sound/SoundNodeMixer.h"
 #include "Sound/SoundNodeAssetReferencer.h"
+#include "Sound/SoundNodeMixer.h"
 #include "Sound/SoundWave.h"
-#include "Sound/SoundNodeWavePlayer.h"
 #include "Sound/SoundNodeAttenuation.h"
+#include "Sound/SoundNodeModulator.h"
 #include "Sound/SoundNodeQualityLevel.h"
-#include "Sound/SoundNodeSoundClass.h"
 #include "Sound/SoundNodeRandom.h"
+#include "Sound/SoundNodeSoundClass.h"
+#include "Sound/SoundNodeWavePlayer.h"
 #include "GameFramework/GameUserSettings.h"
 #include "AudioCompressionSettingsUtils.h"
 #include "AudioThread.h"
+#include "DSP/Dsp.h"
 #if WITH_EDITOR
 #include "Kismet2/BlueprintEditorUtils.h"
+#include "Sound/AudioSettings.h"
 #include "SoundCueGraph/SoundCueGraphNode.h"
 #include "SoundCueGraph/SoundCueGraph.h"
 #include "SoundCueGraph/SoundCueGraphNode_Root.h"
 #include "SoundCueGraph/SoundCueGraphSchema.h"
-#endif
+#endif // WITH_EDITOR
 
 /*-----------------------------------------------------------------------------
 	USoundCue implementation.
@@ -37,7 +40,7 @@ int32 USoundCue::CachedQualityLevel = -1;
 
 #if WITH_EDITOR
 TSharedPtr<ISoundCueAudioEditor> USoundCue::SoundCueAudioEditor = nullptr;
-#endif
+#endif // WITH_EDITOR
 
 USoundCue::USoundCue(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -58,7 +61,6 @@ void USoundCue::PostInitProperties()
 
 	CacheAggregateValues();
 }
-
 
 void USoundCue::AddReferencedObjects(UObject* InThis, FReferenceCollector& Collector)
 {
@@ -85,6 +87,14 @@ void USoundCue::CacheAggregateValues()
 	}
 }
 
+void USoundCue::PrimeSoundCue()
+{
+	if (FirstNode != nullptr)
+	{
+		FirstNode->PrimeChildWavePlayers(true);
+	}
+}
+
 void USoundCue::Serialize(FStructuredArchive::FRecord Record)
 {
 	FArchive& UnderlyingArchive = Record.GetUnderlyingArchive();
@@ -100,20 +110,20 @@ void USoundCue::Serialize(FStructuredArchive::FRecord Record)
 
 	if (UnderlyingArchive.UE4Ver() >= VER_UE4_COOKED_ASSETS_IN_EDITOR_SUPPORT)
 	{
-		FStripDataFlags StripFlags(Record.EnterField(FIELD_NAME_TEXT("SoundCueStripFlags")));
+		FStripDataFlags StripFlags(Record.EnterField(SA_FIELD_NAME(TEXT("SoundCueStripFlags"))));
 #if WITH_EDITORONLY_DATA
 		if (!StripFlags.IsEditorDataStripped())
 		{
-			Record << NAMED_FIELD(SoundCueGraph);
+			Record << SA_VALUE(TEXT("SoundCueGraph"), SoundCueGraph);
 		}
-#endif
+#endif // WITH_EDITORONLY_DATA
 	}
 #if WITH_EDITOR
 	else
 	{
-		Record << NAMED_FIELD(SoundCueGraph);
+		Record << SA_VALUE(TEXT("SoundCueGraph"), SoundCueGraph);
 	}
-#endif
+#endif // WITH_EDITOR
 }
 
 void USoundCue::PostLoad()
@@ -140,7 +150,7 @@ void USoundCue::PostLoad()
 		}
 	}
 	else
-#endif
+#endif // WITH_EDITOR
 	if (GEngine && *GEngine->GameUserSettingsClass)
 	{
 		EvaluateNodes(false);
@@ -151,6 +161,11 @@ void USoundCue::PostLoad()
 	}
 
 	CacheAggregateValues();
+	
+	if (bPrimeOnLoad && FirstNode != nullptr)
+	{
+		FirstNode->PrimeChildWavePlayers(true);
+	}
 }
 
 bool USoundCue::CanBeClusterRoot() const
@@ -183,31 +198,33 @@ void USoundCue::EvaluateNodes(bool bAddToRoot)
 		}
 	}
 
-	TArray<USoundNode*> NodesToEvaluate;
-	NodesToEvaluate.Push(FirstNode);
-
-	while (NodesToEvaluate.Num() > 0)
+	TFunction<void(USoundNode*)> EvaluateNodes_Internal = [&](USoundNode* SoundNode)
 	{
-		if (USoundNode* SoundNode = NodesToEvaluate.Pop(false))
+		if (USoundNodeAssetReferencer* AssetReferencerNode = Cast<USoundNodeAssetReferencer>(SoundNode))
 		{
-			if (USoundNodeAssetReferencer* AssetReferencerNode = Cast<USoundNodeAssetReferencer>(SoundNode))
+			AssetReferencerNode->ConditionalPostLoad();
+			AssetReferencerNode->LoadAsset(bAddToRoot);
+		}
+		else if (USoundNodeQualityLevel* QualityLevelNode = Cast<USoundNodeQualityLevel>(SoundNode))
+		{
+			if (CachedQualityLevel < QualityLevelNode->ChildNodes.Num())
 			{
-				AssetReferencerNode->ConditionalPostLoad();
-				AssetReferencerNode->LoadAsset(bAddToRoot);
-			}
-			else if (USoundNodeQualityLevel* QualityLevelNode = Cast<USoundNodeQualityLevel>(SoundNode))
-			{
-				if (CachedQualityLevel < QualityLevelNode->ChildNodes.Num())
-				{
-					NodesToEvaluate.Add(QualityLevelNode->ChildNodes[CachedQualityLevel]);
-				}
-			}
-			else
-			{
-				NodesToEvaluate.Append(SoundNode->ChildNodes);
+				EvaluateNodes_Internal(QualityLevelNode->ChildNodes[CachedQualityLevel]);
 			}
 		}
-	}
+		else if (SoundNode)
+		{
+			for (USoundNode* ChildNode : SoundNode->ChildNodes)
+			{
+				if (ChildNode)
+				{
+					EvaluateNodes_Internal(ChildNode);
+				}
+			}
+		}
+	};
+
+	EvaluateNodes_Internal(FirstNode);
 }
 
 float USoundCue::FindMaxDistanceInternal() const
@@ -265,7 +282,7 @@ void USoundCue::PostEditChangeProperty(struct FPropertyChangedEvent& PropertyCha
 	{
 		for (TObjectIterator<UAudioComponent> It; It; ++It)
 		{
-			if (It->Sound == this && It->bIsActive)
+			if (It->Sound == this && It->IsActive())
 			{
 				It->Stop();
 				It->Play();
@@ -278,7 +295,7 @@ void USoundCue::PostEditChangeProperty(struct FPropertyChangedEvent& PropertyCha
 
 	CacheAggregateValues();
 }
-#endif
+#endif // WITH_EDITOR
 
 void USoundCue::RecursiveFindAttenuation( USoundNode* Node, TArray<class USoundNodeAttenuation*> &OutNodes )
 {
@@ -630,11 +647,20 @@ void USoundCue::SetSoundCueAudioEditor(TSharedPtr<ISoundCueAudioEditor> InSoundC
 	SoundCueAudioEditor = InSoundCueAudioEditor;
 }
 
-/** Gets the sound cue graph editor implementation. */
-TSharedPtr<ISoundCueAudioEditor> USoundCue::GetSoundCueAudioEditor()
+void USoundCue::ResetGraph()
+{
+	for (const USoundNode* Node : AllNodes)
 	{
-	return SoundCueAudioEditor;
+		SoundCueGraph->RemoveNode(Node->GraphNode);
+	}
+
+	AllNodes.Reset();
+	FirstNode = nullptr;
 }
 
-
-#endif
+/** Gets the sound cue graph editor implementation. */
+TSharedPtr<ISoundCueAudioEditor> USoundCue::GetSoundCueAudioEditor()
+{
+	return SoundCueAudioEditor;
+}
+#endif // WITH_EDITOR

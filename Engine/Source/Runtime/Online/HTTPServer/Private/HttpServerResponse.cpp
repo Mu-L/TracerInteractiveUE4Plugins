@@ -13,7 +13,7 @@ TUniquePtr<FHttpServerResponse> FHttpServerResponse::Create(const FString& Text,
 	const uint8* ConvertToUtf8Bytes = (reinterpret_cast<const uint8*>(ConvertToUtf8.Get()));
 	Response->Body.Append(ConvertToUtf8Bytes, ConvertToUtf8.Length());
 
-	FString Utf8CharsetContentType = FString::Printf(TEXT("%s ;charset=utf-8"), *ContentType);
+	FString Utf8CharsetContentType = FString::Printf(TEXT("%s;charset=utf-8"), *ContentType);
 	TArray<FString> ContentTypeValue = { MoveTemp(Utf8CharsetContentType) };
 	Response->Headers.Add(FHttpServerHeaderKeys::CONTENT_TYPE, MoveTemp(ContentTypeValue));
 
@@ -48,9 +48,12 @@ TUniquePtr<FHttpServerResponse> FHttpServerResponse::Ok()
 	return Response;
 }
 
-TUniquePtr<FHttpServerResponse> FHttpServerResponse::Error(EHttpServerResponseCodes ResponseCode, const FString& ErrorCode)
+TUniquePtr<FHttpServerResponse> FHttpServerResponse::Error(EHttpServerResponseCodes ResponseCode, 
+	const FString& ErrorCode /*=TEXT("")*/, const FString& ErrorMessage /*=TEXT("")*/)
 {
-	const FString& ResponseBody = FString::Printf(TEXT("{\"errorCode\": \"%s\"}"), *ErrorCode);
+	const FString ErrorCodeEscaped = ErrorCode.ReplaceCharWithEscapedChar();
+	const FString ErrorMessageEscaped = ErrorMessage.ReplaceCharWithEscapedChar();
+	const FString ResponseBody = FString::Printf(TEXT("{\"errorCode\": \"%s\", \"errorMessage\": \"%s\"}"), *ErrorCodeEscaped, *ErrorMessageEscaped);
 	auto Response = Create(ResponseBody, TEXT("application/json"));
 	Response->Code = ResponseCode;
 	return Response;

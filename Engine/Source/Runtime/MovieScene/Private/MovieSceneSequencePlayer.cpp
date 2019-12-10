@@ -677,17 +677,17 @@ void UMovieSceneSequencePlayer::Initialize(UMovieSceneSequence* InSequence, cons
 
 void UMovieSceneSequencePlayer::Update(const float DeltaSeconds)
 {
+	UWorld* World = GetPlaybackWorld();
+	float CurrentWorldTime = 0.f;
+	if (World)
+	{
+		CurrentWorldTime = World->GetTimeSeconds();
+	}
+
 	if (IsPlaying())
 	{
 		// Delta seconds has already been multiplied by MatineeTimeDilation at this point, so don't pass that through to Tick
 		float PlayRate = bReversePlayback ? -PlaybackSettings.PlayRate : PlaybackSettings.PlayRate;
-
-		UWorld* World = GetPlaybackWorld();
-		float CurrentWorldTime = 0.f;
-		if (World)
-		{
-			CurrentWorldTime = World->GetTimeSeconds();
-		}
 
 		float DeltaTimeForFunction = DeltaSeconds;
 
@@ -695,7 +695,6 @@ void UMovieSceneSequencePlayer::Update(const float DeltaSeconds)
 		{
 			DeltaTimeForFunction = CurrentWorldTime - LastTickGameTimeSeconds;
 		}
-		LastTickGameTimeSeconds = CurrentWorldTime;
 
 		TimeController->Tick(DeltaTimeForFunction, PlayRate);
 
@@ -707,6 +706,8 @@ void UMovieSceneSequencePlayer::Update(const float DeltaSeconds)
 		FFrameTime NewTime = TimeController->RequestCurrentTime(GetCurrentTime(), PlayRate);
 		UpdateTimeCursorPosition(NewTime, EUpdatePositionMethod::Play);
 	}
+
+	LastTickGameTimeSeconds = CurrentWorldTime;
 }
 
 void UMovieSceneSequencePlayer::UpdateTimeCursorPosition(FFrameTime NewPosition, EUpdatePositionMethod Method)
@@ -959,23 +960,13 @@ TArray<FMovieSceneObjectBindingID> UMovieSceneSequencePlayer::GetObjectBindings(
 	return ObjectBindings;
 }
 
-void UMovieSceneSequencePlayer::BeginDestroy()
-{
-	Stop();
-
-	if (GEngine && OldMaxTickRate.IsSet())
-	{
-		GEngine->SetMaxFPS(OldMaxTickRate.GetValue());
-	}
-
-	Super::BeginDestroy();
-}
-
 UWorld* UMovieSceneSequencePlayer::GetPlaybackWorld() const
 {
 	UObject* PlaybackContext = GetPlaybackContext();
 	return PlaybackContext ? PlaybackContext->GetWorld() : nullptr;
-}bool UMovieSceneSequencePlayer::HasAuthority() const
+}
+
+bool UMovieSceneSequencePlayer::HasAuthority() const
 {
 	AActor* Actor = GetTypedOuter<AActor>();
 	return Actor && Actor->HasAuthority() && !IsPendingKillOrUnreachable();

@@ -102,6 +102,12 @@ public:
 		return MakeError(LOCTEXT("UnrecognizedResult", "Unrecognized result returned from expression"));
 	}
 
+	static FFrameRateParser& Get()
+	{
+		static FFrameRateParser StaticFrameRateParser;
+		return StaticFrameRateParser;
+	}
+
 private:
 
 	static FExpressionResult MakeFrameRate(double A, double B)
@@ -151,7 +157,7 @@ private:
 	FExpressionGrammar Grammar;
 	FOperatorJumpTable JumpTable;
 
-} StaticFrameRateParser;
+};
 
 double FFrameRate::MaxSeconds() const
 {
@@ -175,7 +181,7 @@ FText FFrameRate::ToPrettyText() const
 	}
 }
 
-bool FFrameRate::ComputeGridSpacing(float PixelsPerSecond, double& OutMajorInterval, int32& OutMinorDivisions, float MinTickPx, float DesiredMajorTickPx)
+bool FFrameRate::ComputeGridSpacing(float PixelsPerSecond, double& OutMajorInterval, int32& OutMinorDivisions, float MinTickPx, float DesiredMajorTickPx) const
 {
 	if (PixelsPerSecond <= 0.f)
 	{
@@ -194,7 +200,7 @@ bool FFrameRate::ComputeGridSpacing(float PixelsPerSecond, double& OutMajorInter
 
 		// Showing hours, minutes or seconds
 		static const int32 DesirableBases[]  = { 1, 2, 5, 10, 30, 60 };
-		static const int32 NumDesirableBases = ARRAY_COUNT(DesirableBases);
+		static const int32 NumDesirableBases = UE_ARRAY_COUNT(DesirableBases);
 
 		const int32 Scale     = FMath::CeilToInt(DesiredMajorTickPx / PixelsPerSecond / TimeOrder);
 		const int32 BaseIndex = FMath::Min(Algo::LowerBound(DesirableBases, Scale), NumDesirableBases-1);
@@ -279,11 +285,13 @@ bool FFrameRate::ComputeGridSpacing(float PixelsPerSecond, double& OutMajorInter
 
 TValueOrError<FFrameRate, FExpressionError> ParseFrameRate(const TCHAR* FrameRateString)
 {
+	FFrameRateParser& StaticFrameRateParser = FFrameRateParser::Get();
 	return StaticFrameRateParser.Evaluate(FrameRateString);
 }
 
 bool TryParseString(FFrameRate& OutFrameRate, const TCHAR* InString)
 {
+	FFrameRateParser& StaticFrameRateParser = FFrameRateParser::Get();
 	TValueOrError<FFrameRate, FExpressionError> ParseResult = StaticFrameRateParser.Evaluate(InString);
 	if (ParseResult.IsValid())
 	{

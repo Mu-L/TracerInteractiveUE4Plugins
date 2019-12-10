@@ -5,8 +5,7 @@
 #include "AudioMixer.h"
 #include "AudioMixerDevice.h"
 #include "AudioMixerPlatformSDL.h"
-#include "AudioMixerPlatformDefinesSDL.h"
-
+#include COMPILED_PLATFORM_HEADER(AudioMixerSDLDefines.h)
 
 class FAudioMixerModuleSDL : public IAudioDeviceModule
 {
@@ -25,6 +24,11 @@ public:
 	virtual FAudioDevice* CreateAudioDevice() override
 	{
 		return new Audio::FMixerDevice(new Audio::FAudioMixerPlatformSDL());
+	}
+
+	virtual Audio::IAudioMixerPlatformInterface* CreateAudioMixerPlatformInterface() override
+	{
+		return new Audio::FAudioMixerPlatformSDL();
 	}
 };
 

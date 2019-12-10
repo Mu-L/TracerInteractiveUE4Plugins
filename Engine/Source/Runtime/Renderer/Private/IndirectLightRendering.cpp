@@ -9,7 +9,8 @@
 #include "ScreenSpaceRayTracing.h"
 #include "DeferredShadingRenderer.h"
 #include "PostProcessing.h" // for FPostProcessVS
-#include "RendererModule.h"
+#include "RendererModule.h" 
+#include "RayTracing/RaytracingOptions.h"
 
 
 static TAutoConsoleVariable<int32> CVarDiffuseIndirectDenoiser(
@@ -50,7 +51,7 @@ class FDiffuseIndirectCompositePS : public FGlobalShader
 			return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
 		}
 
-		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM4);
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
 	}
 
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
@@ -77,7 +78,7 @@ class FAmbientCubemapCompositePS : public FGlobalShader
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
 	{
-		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM4);
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
 	}
 
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
@@ -121,30 +122,37 @@ void FDeferredShadingSceneRenderer::RenderDiffuseIndirectAndAmbientOcclusion(FRH
 
 	for (FViewInfo& View : Views)
 	{
+		// TODO: enum cvar. 
+		const bool bApplyRTGI = ShouldRenderRayTracingGlobalIllumination(View);
 		const bool bApplySSGI = ShouldRenderScreenSpaceDiffuseIndirect(View);
 		const bool bApplySSAO = SceneContext.bScreenSpaceAOIsValid;
+		const bool bApplyRTAO = ShouldRenderRayTracingAmbientOcclusion(View) && Views.Num() == 1; //#dxr_todo: enable RTAO in multiview mode
 
 		int32 DenoiseMode = CVarDiffuseIndirectDenoiser.GetValueOnRenderThread();
 
-		
 		IScreenSpaceDenoiser::FAmbientOcclusionRayTracingConfig RayTracingConfig;
 
-		// TODO: integrate RTGI.
 		// TODO: hybrid SSGI / RTGI
 		IScreenSpaceDenoiser::FDiffuseIndirectInputs DenoiserInputs;
-		if (bApplySSGI)
+		if (bApplyRTGI)
 		{
-			static bool bWarnExperimental = false;
-			if (!bWarnExperimental)
+			bool bIsValid = RenderRayTracingGlobalIllumination(GraphBuilder, SceneTextures, View, /* out */ &RayTracingConfig, /* out */ &DenoiserInputs);
+			if (!bIsValid)
 			{
-				UE_LOG(LogRenderer, Warning, TEXT("SSGI is experimental."));
-				bWarnExperimental = true;
+				DenoiseMode = 0;
 			}
+		}
+		else if (bApplySSGI)
+		{
+			RenderScreenSpaceDiffuseIndirect(GraphBuilder, SceneTextures, SceneColor, View, /* out */ &RayTracingConfig, /* out */ &DenoiserInputs);
 
-			RenderScreenSpaceDiffuseIndirect(GraphBuilder, SceneTextures, SceneColor, View, /* out */ &DenoiserInputs);
-			
-			// TODO: Denoise.
-			DenoiseMode = 0;
+			const IScreenSpaceDenoiser* DefaultDenoiser = IScreenSpaceDenoiser::GetDefaultDenoiser();
+			const IScreenSpaceDenoiser* DenoiserToUse = DenoiseMode == 1 ? DefaultDenoiser : GScreenSpaceDenoiser;
+
+			if (!DenoiserToUse->SupportsScreenSpaceDiffuseIndirectDenoiser(View.GetShaderPlatform()) && DenoiseMode > 0)
+			{
+				DenoiseMode = 0;
+			}
 		}
 		else
 		{
@@ -153,7 +161,6 @@ void FDeferredShadingSceneRenderer::RenderDiffuseIndirectAndAmbientOcclusion(FRH
 		}
 		
 		IScreenSpaceDenoiser::FDiffuseIndirectOutputs DenoiserOutputs;
-#if 0 // TODO
 		if (DenoiseMode != 0)
 		{
 			const IScreenSpaceDenoiser* DefaultDenoiser = IScreenSpaceDenoiser::GetDefaultDenoiser();
@@ -164,36 +171,63 @@ void FDeferredShadingSceneRenderer::RenderDiffuseIndirectAndAmbientOcclusion(FRH
 				DenoiserToUse->GetDebugName(),
 				View.ViewRect.Width(), View.ViewRect.Height());
 
-			DenoiserOutputs = DenoiserToUse->DenoiseDiffuseIndirect(
-				GraphBuilder,
-				View,
-				&View.PrevViewInfo,
-				SceneTextures,
-				DenoiserInputs,
-				RayTracingConfig);
+			if (bApplyRTGI)
+			{
+				DenoiserOutputs = DenoiserToUse->DenoiseDiffuseIndirect(
+					GraphBuilder,
+					View,
+					&View.PrevViewInfo,
+					SceneTextures,
+					DenoiserInputs,
+					RayTracingConfig);
+			}
+			else
+			{
+				DenoiserOutputs = DenoiserToUse->DenoiseScreenSpaceDiffuseIndirect(
+					GraphBuilder,
+					View,
+					&View.PrevViewInfo,
+					SceneTextures,
+					DenoiserInputs,
+					RayTracingConfig);
+			}
 		}
 		else
-#endif
 		{
 			DenoiserOutputs.Color = DenoiserInputs.Color;
 			DenoiserOutputs.AmbientOcclusionMask = DenoiserInputs.AmbientOcclusionMask;
 		}
 
-		// Extract the dynamic AO for further down lide
+		// Render RTAO that override any technic.
+		if (bApplyRTAO)
+		{
+			FRDGTextureRef AmbientOcclusionMask = nullptr;
+
+			RenderRayTracingAmbientOcclusion(
+				GraphBuilder,
+				View,
+				SceneTextures,
+				&AmbientOcclusionMask);
+
+			DenoiserOutputs.AmbientOcclusionMask = AmbientOcclusionMask;
+		}
+
+		// Extract the dynamic AO for application of AO beyond RenderDiffuseIndirectAndAmbientOcclusion()
 		if (DenoiserOutputs.AmbientOcclusionMask)
 		{
-			ensureMsgf(!bApplySSAO, TEXT("Looks like SSAO has been computed for this view but is being overridden."));
-			ensureMsgf(Views.Num() == 1, TEXT("SSGI can only output AO for 1 view")); // TODO.
+			//ensureMsgf(!bApplySSAO, TEXT("Looks like SSAO has been computed for this view but is being overridden."));
+			ensureMsgf(Views.Num() == 1, TEXT("Need to add support for one AO texture per view in FSceneRenderTargets")); // TODO.
 			GraphBuilder.QueueTextureExtraction(DenoiserOutputs.AmbientOcclusionMask, &SceneContext.ScreenSpaceAO);
 			SceneContext.bScreenSpaceAOIsValid = true;
 		}
 		else if (bApplySSAO)
 		{
+			// Fetch result of SSAO that was done earlier.
 			DenoiserOutputs.AmbientOcclusionMask = GraphBuilder.RegisterExternalTexture(SceneContext.ScreenSpaceAO);
 		}
 
 		// Applies diffuse indirect and ambient occlusion to the scene color.
-		if (DenoiserOutputs.Color || bApplySSAO)
+		if (DenoiserOutputs.Color || DenoiserOutputs.AmbientOcclusionMask)
 		{
 			FDiffuseIndirectCompositePS::FParameters* PassParameters = GraphBuilder.AllocParameters<FDiffuseIndirectCompositePS::FParameters>();
 			
@@ -210,7 +244,7 @@ void FDeferredShadingSceneRenderer::RenderDiffuseIndirectAndAmbientOcclusion(FRH
 			PassParameters->ViewUniformBuffer = View.ViewUniformBuffer;
 
 			PassParameters->RenderTargets[0] = FRenderTargetBinding(
-				SceneColor, ERenderTargetLoadAction::ELoad, ERenderTargetStoreAction::EStore);
+				SceneColor, ERenderTargetLoadAction::ELoad);
 		
 			FDiffuseIndirectCompositePS::FPermutationDomain PermutationVector;
 			PermutationVector.Set<FDiffuseIndirectCompositePS::FApplyDiffuseIndirectDim>(PassParameters->DiffuseIndirectTexture != nullptr);
@@ -271,7 +305,7 @@ void FDeferredShadingSceneRenderer::RenderDiffuseIndirectAndAmbientOcclusion(FRH
 			PassParameters->ViewUniformBuffer = View.ViewUniformBuffer;
 
 			PassParameters->RenderTargets[0] = FRenderTargetBinding(
-				SceneColor, ERenderTargetLoadAction::ELoad, ERenderTargetStoreAction::EStore);
+				SceneColor, ERenderTargetLoadAction::ELoad);
 		
 			TShaderMapRef<FAmbientCubemapCompositePS> PixelShader(View.ShaderMap);
 			GraphBuilder.AddPass(

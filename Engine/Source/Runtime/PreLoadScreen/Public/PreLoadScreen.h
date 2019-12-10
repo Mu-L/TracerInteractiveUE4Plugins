@@ -4,8 +4,11 @@
 
 #include "Widgets/SWindow.h"
 
+#include "IAnalyticsProviderET.h"
+
 enum class EPreLoadScreenTypes : uint8
 {
+	CustomSplashScreen,
     EarlyStartupScreen,
     EngineLoadingScreen
 };
@@ -26,6 +29,9 @@ public:
     //This function is used to determine if an extra platform sleep should be performed every tick (to slow down the tick rate)
     //keeps us from spinning super fast when we aren't doing much beyond loading data / etc on other threads.
     virtual float GetAddedTickDelay() = 0;
+
+	//Whether an EarlyStartupLoadScreen should render
+	virtual bool ShouldRender() const = 0;
 
     //This tick happens as part of the slate render tick during an EarlyStartupLoadScreen
     virtual void RenderTick(float DeltaTime) = 0;

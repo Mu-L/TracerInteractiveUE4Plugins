@@ -100,20 +100,31 @@ bool FControlClient::IsConnected() const
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-void FControlClient::SendConnect(const TCHAR* Path)
+void FControlClient::SendSendTo(const TCHAR* Host)
 {
     if (!IsConnected())
     {
         return;
     }
 
-    FormatAndSend(TEXT("Connect %s"), Path);
+    FormatAndSend(TEXT("SendTo %s"), Host);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-void FControlClient::SendToggleEvent(const TCHAR* EventMask, bool bState)
+void FControlClient::SendWriteTo(const TCHAR* Path)
 {
-    FormatAndSend(TEXT("ToggleEvent %s %d"), EventMask, bState);
+    if (!IsConnected())
+    {
+        return;
+    }
+
+    FormatAndSend(TEXT("WriteTo %s"), Path);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+void FControlClient::SendToggleEvent(const TCHAR* EventSpec, bool bState)
+{
+    FormatAndSend(TEXT("ToggleEvent %s %d"), EventSpec, bState);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -134,7 +145,7 @@ void FControlClient::FormatAndSend(const TCHAR* Format, ...)
     TCHAR Buffer[512];
 	va_list Args;
 	va_start(Args, Format);
-	int Length = FCString::GetVarArgs(Buffer, ARRAY_COUNT(Buffer), Format, Args);
+	int Length = FCString::GetVarArgs(Buffer, UE_ARRAY_COUNT(Buffer), Format, Args);
     if (Length > sizeof(Buffer))
     {
         Length = sizeof(Buffer);

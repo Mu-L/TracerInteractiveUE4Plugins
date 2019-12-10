@@ -20,7 +20,7 @@ namespace UnrealBuildTool.Rules
 
         private void LoadMixedReality(ReadOnlyTargetRules Target)
         {
-            PublicAdditionalLibraries.Add("DXGI.lib");
+            PublicSystemLibraries.Add("DXGI.lib");
         }
 
         public WindowsMixedRealityRHI(ReadOnlyTargetRules Target) : base(Target)
@@ -56,7 +56,6 @@ namespace UnrealBuildTool.Rules
                         "D3D11RHI",
                         "Slate",
                         "SlateCore",
-                        "UtilityShaders",
                         "MRMesh",
                     }
                     );
@@ -88,8 +87,6 @@ namespace UnrealBuildTool.Rules
                 {
                     PrivateIncludePaths.Add("../../../../Source/Runtime/Windows/D3D11RHI/Private/HoloLens");
                 }
-
-                bFasterWithoutUnity = true;
 
                 PCHUsage = PCHUsageMode.NoSharedPCHs;
                 PrivatePCHHeaderFile = "Private/WindowsMixedRealityPrecompiled.h";

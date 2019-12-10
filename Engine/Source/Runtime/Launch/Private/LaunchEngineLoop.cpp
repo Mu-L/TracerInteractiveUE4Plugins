@@ -24,12 +24,13 @@
 #include "Misc/App.h"
 #include "Misc/OutputDeviceConsole.h"
 #include "HAL/PlatformFilemanager.h"
-#include "Templates/ScopedPointer.h"
 #include "HAL/FileManagerGeneric.h"
 #include "HAL/ExceptionHandling.h"
 #include "Stats/StatsMallocProfilerProxy.h"
 #include "Trace/Trace.h"
 #include "ProfilingDebugging/MiscTrace.h"
+#include "ProfilingDebugging/PlatformFileTrace.h"
+#include "ProfilingDebugging/CountersTrace.h"
 #if WITH_ENGINE
 #include "HAL/PlatformSplash.h"
 #endif
@@ -152,6 +153,7 @@
 
 	#include "MoviePlayer.h"
     #include "PreLoadScreenManager.h"
+	#include "InstallBundleManagerInterface.h"
 
 	#include "ShaderCodeLibrary.h"
 	#include "ShaderPipelineCache.h"
@@ -182,6 +184,7 @@ class FFeedbackContext;
 
 #if UE_EDITOR
 	#include "DesktopPlatformModule.h"
+	#include "TargetReceipt.h"
 #endif
 
 #define LOCTEXT_NAMESPACE "LaunchEngineLoop"
@@ -223,6 +226,10 @@ class FFeedbackContext;
 
 #ifndef WITH_CONFIG_PATCHING
 #define WITH_CONFIG_PATCHING 0
+#endif
+
+#if PLATFORM_IOS || PLATFORM_TVOS
+#include "IOS/IOSAppDelegate.h"
 #endif
 
 
@@ -391,7 +398,7 @@ public:
 	}
 	virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const class FName& Category) override
 	{
-		if (!GIsRequestingExit)
+		if (!IsEngineExitRequested())
 		{
 			for (auto& Phrase : ExitPhrases)
 			{
@@ -502,6 +509,26 @@ bool ParseGameProjectFromCommandLine(const TCHAR* InCmdLine, FString& OutProject
 	return false;
 }
 
+#if WITH_EDITOR
+bool ReadInstalledProjectPath(FString& OutProjFilePath)
+{
+	if(FApp::IsInstalled())
+	{
+		FString ProjFilePath;
+		if (FFileHelper::LoadFileToString(ProjFilePath, *(FPaths::RootDir() / TEXT("Engine/Build/InstalledProjectBuild.txt"))))
+		{
+			ProjFilePath.TrimStartAndEndInline();
+			if(ProjFilePath.Len() > 0)
+			{
+				OutProjFilePath = FPaths::RootDir() / ProjFilePath;
+				FPaths::NormalizeFilename(OutProjFilePath);
+				return true;
+			}
+		}
+	}
+	return false;
+}
+#endif
 
 bool LaunchSetGameName(const TCHAR *InCmdLine, FString& OutGameProjectFilePathUnnormalized)
 {
@@ -522,6 +549,18 @@ bool LaunchSetGameName(const TCHAR *InCmdLine, FString& OutGameProjectFilePathUn
 			OutGameProjectFilePathUnnormalized = ProjFilePath;
 			FPaths::SetProjectFilePath(ProjFilePath);
 		}
+#if WITH_EDITOR
+		else if(ReadInstalledProjectPath(ProjFilePath))
+		{
+			// Only set the game name if this is NOT a program...
+			if (FPlatformProperties::IsProgram() == false)
+			{
+				FApp::SetProjectName(*FPaths::GetBaseFilename(ProjFilePath));
+			}
+			OutGameProjectFilePathUnnormalized = ProjFilePath;
+			FPaths::SetProjectFilePath(ProjFilePath);
+		}
+#endif
 #if UE_GAME
 		else
 		{
@@ -886,6 +925,12 @@ void LaunchUpdateMostRecentProjectFile()
 	}
 }
 
+#if WITH_ENGINE
+void OnStartupContentMounted(FInstallBundleResultInfo Result, bool bDumpEarlyConfigReads, bool bDumpEarlyPakFileReads, bool bReloadConfig, bool bForceQuitAfterEarlyReads);
+#endif
+void DumpEarlyReads(bool bDumpEarlyConfigReads, bool bDumpEarlyPakFileReads, bool bForceQuitAfterEarlyReads);
+void HandleConfigReload(bool bReloadConfig);
+
 #if !UE_BUILD_SHIPPING
 class FFileInPakFileHistoryHelper
 {
@@ -992,40 +1037,7 @@ FEngineLoop::FEngineLoop()
 
 int32 FEngineLoop::PreInit(int32 ArgC, TCHAR* ArgV[], const TCHAR* AdditionalCommandline)
 {
-	FString CmdLine;
-
-	// loop over the parameters, skipping the first one (which is the executable name)
-	for (int32 Arg = 1; Arg < ArgC; Arg++)
-	{
-		FString ThisArg = ArgV[Arg];
-		if (ThisArg.Contains(TEXT(" ")) && !ThisArg.Contains(TEXT("\"")))
-		{
-			int32 EqualsAt = ThisArg.Find(TEXT("="));
-			if (EqualsAt > 0 && ThisArg.Find(TEXT(" ")) > EqualsAt)
-			{
-				ThisArg = ThisArg.Left(EqualsAt + 1) + FString("\"") + ThisArg.RightChop(EqualsAt + 1) + FString("\"");
-
-			}
-			else
-			{
-				ThisArg = FString("\"") + ThisArg + FString("\"");
-			}
-		}
-
-		CmdLine += ThisArg;
-		// put a space between each argument (not needed after the end)
-		if (Arg + 1 < ArgC)
-		{
-			CmdLine += TEXT(" ");
-		}
-	}
-
-	// append the additional extra command line
-	if (AdditionalCommandline)
-	{
-		CmdLine += TEXT(" ");
-		CmdLine += AdditionalCommandline;
-	}
+	FString CmdLine = FCommandLine::BuildFromArgV(nullptr, ArgC, ArgV, AdditionalCommandline);
 
 	// send the command line without the exe name
 	return GEngineLoop.PreInit(*CmdLine);
@@ -1153,16 +1165,53 @@ namespace AppLifetimeEventCapture
 #endif //WITH_ENGINE
 
 
-DECLARE_CYCLE_STAT( TEXT( "FEngineLoop::PreInit.AfterStats" ), STAT_FEngineLoop_PreInit_AfterStats, STATGROUP_LoadTime );
+DECLARE_CYCLE_STAT(TEXT("FEngineLoop::PreInitPreStartupScreen.AfterStats"), STAT_FEngineLoop_PreInitPreStartupScreen_AfterStats, STATGROUP_LoadTime);
+DECLARE_CYCLE_STAT(TEXT("FEngineLoop::PreInitPostStartupScreen.AfterStats"), STAT_FEngineLoop_PreInitPostStartupScreen_AfterStats, STATGROUP_LoadTime);
 
-int32 FEngineLoop::PreInit(const TCHAR* CmdLine)
+int32 FEngineLoop::PreInitPreStartupScreen(const TCHAR* CmdLine)
 {
 	TRACE_REGISTER_GAME_THREAD(FPlatformTLS::GetCurrentThreadId());
-#if CPUPROFILERTRACE_ENABLED
-	FCpuProfilerTrace::Init(FParse::Param(CmdLine, TEXT("cpuprofilertrace")));
-#endif
+	TRACE_CPUPROFILER_INIT(CmdLine);
+	TRACE_PLATFORMFILE_INIT(CmdLine);
+	TRACE_COUNTERS_INIT(CmdLine);
 
 	SCOPED_BOOT_TIMING("FEngineLoop::PreInit");
+
+	// Trace out information about this session
+	{
+		uint8 Payload[1024];
+		int32 PayloadSize = 0;
+
+		auto AddToPayload = [&] (const TCHAR* String) -> uint8
+		{
+			int32 Length = FCString::Strlen(String);
+			Length = FMath::Min<int32>(Length, sizeof(Payload) - PayloadSize - 1);
+			for (int32 i = 0, n = Length; i < n; ++i)
+			{
+				Payload[PayloadSize] = uint8(String[i] & 0x7f);
+				++PayloadSize;
+			}
+			return uint8(PayloadSize - Length);
+		};
+
+		AddToPayload(FGenericPlatformMisc::GetUBTPlatform());
+		uint8 AppNameOffset = AddToPayload(TEXT(UE_APP_NAME));
+		uint8 CommandLineOffset = AddToPayload(CmdLine);
+
+		UE_TRACE_EVENT_BEGIN(Diagnostics, Session, Important|Always)
+			UE_TRACE_EVENT_FIELD(uint8, AppNameOffset)
+			UE_TRACE_EVENT_FIELD(uint8, CommandLineOffset)
+			UE_TRACE_EVENT_FIELD(uint8, ConfigurationType)
+			UE_TRACE_EVENT_FIELD(uint8, TargetType)
+		UE_TRACE_EVENT_END()
+
+		UE_TRACE_LOG(Diagnostics, Session, PayloadSize)
+			<< Session.AppNameOffset(AppNameOffset)
+			<< Session.CommandLineOffset(CommandLineOffset)
+			<< Session.ConfigurationType(uint8(FApp::GetBuildConfiguration()))
+			<< Session.TargetType(uint8(FApp::GetBuildTargetType()))
+			<< Session.Attachment(Payload, PayloadSize);
+	}
 
 #if PLATFORM_WINDOWS
 	// Register a handler for Ctrl-C so we've effective signal handling from the outset.
@@ -1214,10 +1263,15 @@ int32 FEngineLoop::PreInit(const TCHAR* CmdLine)
 	}
 
 	{
-		FString TraceHost;
-		if (FParse::Value(CmdLine, TEXT("-tracehost="), TraceHost))
+		FString Parameter;
+		if (FParse::Value(CmdLine, TEXT("-tracehost="), Parameter))
 		{
-			Trace::Connect(*TraceHost);
+			Trace::SendTo(*Parameter);
+		}
+
+		else if (FParse::Value(CmdLine, TEXT("-tracefile="), Parameter))
+		{
+			Trace::WriteTo(*Parameter);
 		}
 
 #if PLATFORM_WINDOWS && !UE_BUILD_SHIPPING
@@ -1227,7 +1281,7 @@ int32 FEngineLoop::PreInit(const TCHAR* CmdLine)
 			HANDLE KnownEvent = ::OpenEvent(EVENT_ALL_ACCESS, false, TEXT("Local\\UnrealInsightsRecorder"));
 			if (KnownEvent != nullptr)
 			{
-				Trace::Connect(TEXT("127.0.0.1"));
+				Trace::SendTo(TEXT("127.0.0.1"));
 				::CloseHandle(KnownEvent);
 			}
 		}
@@ -1244,7 +1298,7 @@ int32 FEngineLoop::PreInit(const TCHAR* CmdLine)
 		// Tell Launcher to run us instead
 		ILauncherCheckModule::Get().RunLauncher(ELauncherAction::AppLaunch);
 		// We wish to exit
-		GIsRequestingExit = true;
+		RequestEngineExit(TEXT("Run outside of launcher; restarting via launcher"));
 		return 0;
 	}
 #endif
@@ -1621,13 +1675,7 @@ int32 FEngineLoop::PreInit(const TCHAR* CmdLine)
 	// "-Deterministic" is a shortcut for "-UseFixedTimeStep -FixedSeed"
 	bool bDeterministic = FParse::Param(FCommandLine::Get(), TEXT("Deterministic"));
 
-#if PLATFORM_HTML5
-	bool bUseFixedTimeStep = false;
-	GConfig->GetBool(TEXT("/Script/HTML5PlatformEditor.HTML5TargetSettings"), TEXT("UseFixedTimeStep"), bUseFixedTimeStep, GEngineIni);
-	FApp::SetUseFixedTimeStep(bUseFixedTimeStep);
-#else
 	FApp::SetUseFixedTimeStep(bDeterministic || FParse::Param(FCommandLine::Get(), TEXT("UseFixedTimeStep")));
-#endif
 
 	FApp::bUseFixedSeed = bDeterministic || FApp::IsBenchmarking() || FParse::Param(FCommandLine::Get(), TEXT("FixedSeed"));
 
@@ -1711,7 +1759,7 @@ int32 FEngineLoop::PreInit(const TCHAR* CmdLine)
 	FThreadStats::StartThread();
 #endif
 
-	FScopeCycleCounter CycleCount_AfterStats(GET_STATID(STAT_FEngineLoop_PreInit_AfterStats));
+	FScopeCycleCounter CycleCount_AfterStats(GET_STATID(STAT_FEngineLoop_PreInitPreStartupScreen_AfterStats));
 
 	// Load Core modules required for everything else to work (needs to be loaded before InitializeRenderingCVarsCaching)
 	{
@@ -1725,6 +1773,7 @@ int32 FEngineLoop::PreInit(const TCHAR* CmdLine)
 
 	const bool bDumpEarlyConfigReads = FParse::Param(FCommandLine::Get(), TEXT("DumpEarlyConfigReads"));
 	const bool bDumpEarlyPakFileReads = FParse::Param(FCommandLine::Get(), TEXT("DumpEarlyPakFileReads"));
+	const bool bForceQuitAfterEarlyReads = FParse::Param(FCommandLine::Get(), TEXT("ForceQuitAfterEarlyReads"));
 
 	// Overly verbose to avoid a dumb static analysis warning
 #if WITH_CONFIG_PATCHING
@@ -1733,18 +1782,19 @@ int32 FEngineLoop::PreInit(const TCHAR* CmdLine)
 	constexpr bool bWithConfigPatching = false;
 #endif
 
-	if (bWithConfigPatching)
+	if (bDumpEarlyConfigReads)
+	{
+		RecordConfigReadsFromIni();
+	}
+
+	if (bDumpEarlyPakFileReads)
+	{
+		RecordFileReadsFromPaks();
+	}
+
+	if(bWithConfigPatching)
 	{
 		UE_LOG(LogInit, Verbose, TEXT("Begin recording CVar changes for config patching."));
-
-		if (bDumpEarlyConfigReads)
-		{
-			RecordConfigReadsFromIni();
-		}
-		if (bDumpEarlyPakFileReads)
-		{
-			RecordFileReadsFromPaks();
-		}
 
 		RecordApplyCVarSettingsFromIni();
 	}
@@ -1812,7 +1862,7 @@ int32 FEngineLoop::PreInit(const TCHAR* CmdLine)
 				NumThreadsInThreadPool = 1;
 			}
 
-			verify(GBackgroundPriorityThreadPool->Create(NumThreadsInThreadPool, 128 * 1024, TPri_Lowest));
+			verify(GBackgroundPriorityThreadPool->Create(NumThreadsInThreadPool, StackSize * 1024, TPri_Lowest));
 		}
 
 #if WITH_EDITOR
@@ -1823,7 +1873,7 @@ int32 FEngineLoop::PreInit(const TCHAR* CmdLine)
 			GLargeThreadPool = FQueuedThreadPool::Allocate();
 			int32 NumThreadsInLargeThreadPool = FMath::Max(FPlatformMisc::NumberOfCoresIncludingHyperthreads() - 2, 2);
 
-			verify(GLargeThreadPool->Create(NumThreadsInLargeThreadPool, 128 * 1024));
+			verify(GLargeThreadPool->Create(NumThreadsInLargeThreadPool, StackSize * 1024));
 		}
 #endif
 	}
@@ -2196,7 +2246,8 @@ int32 FEngineLoop::PreInit(const TCHAR* CmdLine)
 
 	FEmbeddedCommunication::ForceTick(3);
 
-	FScopedSlowTask SlowTask(100, NSLOCTEXT("EngineLoop", "EngineLoop_Initializing", "Initializing..."));
+	PreInitContext.SlowTaskPtr = new FScopedSlowTask(100, NSLOCTEXT("EngineLoop", "EngineLoop_Initializing", "Initializing..."));
+	FScopedSlowTask& SlowTask = *PreInitContext.SlowTaskPtr;
 
 	SlowTask.EnterProgressFrame(10);
 
@@ -2228,20 +2279,27 @@ int32 FEngineLoop::PreInit(const TCHAR* CmdLine)
 		RenderUtilsInit();
 	}
 
-	if (FPlatformProperties::RequiresCookedData())
 	{
+		bool bUseCodeLibrary = FPlatformProperties::RequiresCookedData() || GAllowCookedDataInEditorBuilds;
+		if (bUseCodeLibrary)
 		{
-			SCOPED_BOOT_TIMING("FShaderCodeLibrary::InitForRuntime");
-			// Will open material shader code storage if project was packaged with it
-			// This only opens the Global shader library, which is always in the content dir.
-			FShaderCodeLibrary::InitForRuntime(GMaxRHIShaderPlatform);
-		}
+			{
+				SCOPED_BOOT_TIMING("FShaderCodeLibrary::InitForRuntime");
+				// Will open material shader code storage if project was packaged with it
+				// This only opens the Global shader library, which is always in the content dir.
+				FShaderCodeLibrary::InitForRuntime(GMaxRHIShaderPlatform);
+			}
 
-		{
-			SCOPED_BOOT_TIMING("FShaderPipelineCache::Initialize");
-			// Initialize the pipeline cache system. Opening is deferred until the manual call to
-			// OpenPipelineFileCache below, after content pak's ShaderCodeLibraries are loaded.
-			FShaderPipelineCache::Initialize(GMaxRHIShaderPlatform);
+	#if !UE_EDITOR
+			// Cooked data only - but also requires the code library - game only
+			if (FPlatformProperties::RequiresCookedData())
+			{
+				SCOPED_BOOT_TIMING("FShaderPipelineCache::Initialize");
+				// Initialize the pipeline cache system. Opening is deferred until the manual call to
+				// OpenPipelineFileCache below, after content pak's ShaderCodeLibraries are loaded.
+				FShaderPipelineCache::Initialize(GMaxRHIShaderPlatform);
+			}
+	#endif //!UE_EDITOR
 		}
 	}
 
@@ -2281,15 +2339,15 @@ int32 FEngineLoop::PreInit(const TCHAR* CmdLine)
 		// if (!IsRunningCommandlet())
 		// hack: don't load global shaders if we are cooking we will load the shaders for the correct platform later
 		if (bEnableShaderCompile &&
-				!IsRunningDedicatedServer() &&
-				Commandline.Contains(TEXT("cookcommandlet")) == false &&
-				Commandline.Contains(TEXT("run=cook")) == false )
-		// if (FParse::Param(FCommandLine::Get(), TEXT("Multiprocess")) == false)
+			!IsRunningDedicatedServer() &&
+			Commandline.Contains(TEXT("cookcommandlet")) == false &&
+			Commandline.Contains(TEXT("run=cook")) == false)
+			// if (FParse::Param(FCommandLine::Get(), TEXT("Multiprocess")) == false)
 		{
 			LLM_SCOPE(ELLMTag::Shaders);
 			SCOPED_BOOT_TIMING("CompileGlobalShaderMap");
 			CompileGlobalShaderMap(false);
-			if (GIsRequestingExit)
+			if (IsEngineExitRequested())
 			{
 				// This means we can't continue without the global shader map.
 				return 1;
@@ -2305,12 +2363,12 @@ int32 FEngineLoop::PreInit(const TCHAR* CmdLine)
 			CreateMoviePlayer();
 		}
 
-        if (FPreLoadScreenManager::ArePreLoadScreensEnabled())
-        {
+		if (FPreLoadScreenManager::ArePreLoadScreensEnabled())
+		{
 			SCOPED_BOOT_TIMING("FPreLoadScreenManager::Create");
 			FPreLoadScreenManager::Create();
-            ensure(FPreLoadScreenManager::Get());
-        }
+			ensure(FPreLoadScreenManager::Get());
+		}
 
 		// If platforms support early movie playback we have to start the rendering thread much earlier
 #if PLATFORM_SUPPORTS_EARLY_MOVIE_PLAYBACK
@@ -2319,22 +2377,22 @@ int32 FEngineLoop::PreInit(const TCHAR* CmdLine)
 			PostInitRHI();
 		}
 
-		if(GUseThreadedRendering)
+		if (GUseThreadedRendering)
 		{
-			if(GRHISupportsRHIThread)
+			if (GRHISupportsRHIThread)
 			{
 				const bool DefaultUseRHIThread = true;
 				GUseRHIThread_InternalUseOnly = DefaultUseRHIThread;
-				if(FParse::Param(FCommandLine::Get(), TEXT("rhithread")))
+				if (FParse::Param(FCommandLine::Get(), TEXT("rhithread")))
 				{
 					GUseRHIThread_InternalUseOnly = true;
 				}
-				else if(FParse::Param(FCommandLine::Get(), TEXT("norhithread")))
+				else if (FParse::Param(FCommandLine::Get(), TEXT("norhithread")))
 				{
 					GUseRHIThread_InternalUseOnly = false;
 				}
 			}
-
+				
 			SCOPED_BOOT_TIMING("StartRenderingThread");
 			StartRenderingThread();
 		}
@@ -2342,26 +2400,115 @@ int32 FEngineLoop::PreInit(const TCHAR* CmdLine)
 
 		FEmbeddedCommunication::ForceTick(4);
 
-#if !UE_SERVER// && !UE_EDITOR
-		if(!IsRunningDedicatedServer() && !IsRunningCommandlet())
 		{
-			TSharedRef<FSlateRenderer> SlateRenderer = GUsingNullRHI ?
-				FModuleManager::Get().LoadModuleChecked<ISlateNullRendererModule>("SlateNullRenderer").CreateSlateNullRenderer() :
-				FModuleManager::Get().GetModuleChecked<ISlateRHIRendererModule>("SlateRHIRenderer").CreateSlateRHIRenderer();
-
+#if !UE_SERVER// && !UE_EDITOR
+			if (!IsRunningDedicatedServer() && !IsRunningCommandlet())
 			{
-				SCOPED_BOOT_TIMING("CurrentSlateApp.InitializeRenderer");
-				// If Slate is being used, initialize the renderer after RHIInit
-				FSlateApplication& CurrentSlateApp = FSlateApplication::Get();
-				CurrentSlateApp.InitializeRenderer(SlateRenderer);
-			}
+				TSharedPtr<FSlateRenderer> SlateRenderer = GUsingNullRHI ?
+					FModuleManager::Get().LoadModuleChecked<ISlateNullRendererModule>("SlateNullRenderer").CreateSlateNullRenderer() :
+					FModuleManager::Get().GetModuleChecked<ISlateRHIRendererModule>("SlateRHIRenderer").CreateSlateRHIRenderer();
+				TSharedRef<FSlateRenderer> SlateRendererSharedRef = SlateRenderer.ToSharedRef();
 
-			{
-				SCOPED_BOOT_TIMING("FEngineFontServices::Create");
-				// Create the engine font services now that the Slate renderer is ready
-				FEngineFontServices::Create();
-			}
+				{
+					SCOPED_BOOT_TIMING("CurrentSlateApp.InitializeRenderer");
+					// If Slate is being used, initialize the renderer after RHIInit
+					FSlateApplication& CurrentSlateApp = FSlateApplication::Get();
+					CurrentSlateApp.InitializeRenderer(SlateRendererSharedRef);
+				}
 
+				{
+					SCOPED_BOOT_TIMING("FEngineFontServices::Create");
+					// Create the engine font services now that the Slate renderer is ready
+					FEngineFontServices::Create();
+				}
+
+				{
+					SCOPED_BOOT_TIMING("LoadModulesForProject(ELoadingPhase::PostSplashScreen)");
+					// Load up all modules that need to hook into the custom splash screen
+					if (!IProjectManager::Get().LoadModulesForProject(ELoadingPhase::PostSplashScreen) || !IPluginManager::Get().LoadModulesForEnabledPlugins(ELoadingPhase::PostSplashScreen))
+					{
+						return 1;
+					}
+				}
+
+				{
+					SCOPED_BOOT_TIMING("PlayFirstPreLoadScreen");
+
+					if (FPreLoadScreenManager::Get())
+					{
+						SCOPED_BOOT_TIMING("PlayFirstPreLoadScreen - FPreLoadScreenManager::Get()->Initialize");
+						// initialize and present custom splash screen
+						FPreLoadScreenManager::Get()->Initialize(SlateRendererSharedRef.Get());
+
+						if (FPreLoadScreenManager::Get()->HasRegisteredPreLoadScreenType(EPreLoadScreenTypes::CustomSplashScreen))
+						{
+							FPreLoadScreenManager::Get()->PlayFirstPreLoadScreen(EPreLoadScreenTypes::CustomSplashScreen);
+						}
+#if PLATFORM_XBOXONE && ENABLE_XBOXONE_FAST_ACTIVATION
+						else
+						{
+							UE_LOG(LogInit, Warning, TEXT("Enable fast activation without enabling a custom splash screen may cause garbage frame buffer being presented"));
+						}
+#endif
+					}
+				}
+
+				PreInitContext.SlateRenderer = SlateRenderer;
+			}
+#endif // !UE_SERVER
+		}
+	}
+#endif // WITH_ENGINE
+
+	// Save PreInitContext
+	PreInitContext.bDumpEarlyConfigReads = bDumpEarlyConfigReads;
+	PreInitContext.bDumpEarlyPakFileReads = bDumpEarlyPakFileReads;
+	PreInitContext.bForceQuitAfterEarlyReads = bForceQuitAfterEarlyReads;
+	PreInitContext.bWithConfigPatching = bWithConfigPatching;
+	PreInitContext.bHasEditorToken = bHasEditorToken;
+#if WITH_ENGINE
+	PreInitContext.bDisableDisregardForGC = bDisableDisregardForGC;
+	PreInitContext.bIsRegularClient = bIsRegularClient;
+#endif // WITH_ENGINE
+	PreInitContext.bTokenDoesNotHaveDash = bTokenDoesNotHaveDash;
+	PreInitContext.Token = Token;
+#if UE_EDITOR || WITH_ENGINE
+	PreInitContext.CommandletCommandLine = CommandletCommandLine;
+#endif // UE_EDITOR || WITH_ENGINE
+	PreInitContext.CommandLineCopy = CommandLineCopy;
+	
+	return 0;
+}
+
+int32 FEngineLoop::PreInitPostStartupScreen(const TCHAR* CmdLine)
+{
+	FScopeCycleCounter CycleCount_AfterStats(GET_STATID(STAT_FEngineLoop_PreInitPostStartupScreen_AfterStats));
+
+	// Restore PreInitContext
+	bool bDumpEarlyConfigReads = PreInitContext.bDumpEarlyConfigReads;
+	bool bDumpEarlyPakFileReads = PreInitContext.bDumpEarlyPakFileReads;
+	bool bForceQuitAfterEarlyReads = PreInitContext.bForceQuitAfterEarlyReads;
+	bool bWithConfigPatching = PreInitContext.bWithConfigPatching;
+	bool bHasEditorToken = PreInitContext.bHasEditorToken;
+#if WITH_ENGINE
+	bool bDisableDisregardForGC = PreInitContext.bDisableDisregardForGC;
+	bool bIsRegularClient = PreInitContext.bIsRegularClient;
+#endif // WITH_ENGINE
+	bool bTokenDoesNotHaveDash = PreInitContext.bTokenDoesNotHaveDash;
+	FString Token = PreInitContext.Token;
+#if UE_EDITOR || WITH_ENGINE
+	const TCHAR* CommandletCommandLine = PreInitContext.CommandletCommandLine;
+#endif // UE_EDITOR || WITH_ENGINE
+	TCHAR* CommandLineCopy = PreInitContext.CommandLineCopy;
+	FScopedSlowTask& SlowTask = *PreInitContext.SlowTaskPtr;
+
+#if WITH_ENGINE
+	{
+#if !UE_SERVER// && !UE_EDITOR
+		if (!IsRunningDedicatedServer() && !IsRunningCommandlet())
+		{
+			TSharedPtr<FSlateRenderer> SlateRenderer = PreInitContext.SlateRenderer;
+			TSharedRef<FSlateRenderer> SlateRendererSharedRef = SlateRenderer.ToSharedRef();
 			{
 				SCOPED_BOOT_TIMING("GetMoviePlayer()->SetupLoadingScreenFromIni");
 				// allow the movie player to load a sequence from the .inis (a PreLoadingScreen module could have already initialized a sequence, in which case
@@ -2378,29 +2525,27 @@ int32 FEngineLoop::PreInit(const TCHAR* CmdLine)
 				}
 			}
 
-			if (bWithConfigPatching)
+			IInstallBundleManager* BundleManager = IInstallBundleManager::GetPlatformInstallBundleManager();
+			if (BundleManager != nullptr && !BundleManager->IsNullInterface())
 			{
-				IPlatformInstallBundleManager* BundleManager = FPlatformMisc::GetPlatformInstallBundleManager();
-				if (BundleManager != nullptr && !BundleManager->IsNullInterface())
-				{
-					IPlatformInstallBundleManager::InstallBundleCompleteDelegate.AddRaw(this, &FEngineLoop::OnStartupContentMounted, bDumpEarlyConfigReads, bDumpEarlyPakFileReads);
-				}
-				// If not using the bundle manager, config will be reloaded after ESP, see below
+				IInstallBundleManager::InstallBundleCompleteDelegate.AddStatic(
+					&OnStartupContentMounted, bDumpEarlyConfigReads, bDumpEarlyPakFileReads, bWithConfigPatching, bForceQuitAfterEarlyReads);
 			}
+			// If not using the bundle manager, config will be reloaded after ESP, see below
 
 			if (GetMoviePlayer()->HasEarlyStartupMovie())
 			{
 				SCOPED_BOOT_TIMING("EarlyStartupMovie");
-				GetMoviePlayer()->Initialize(SlateRenderer.Get());
+				GetMoviePlayer()->Initialize(SlateRendererSharedRef.Get(), FPreLoadScreenManager::Get() ? FPreLoadScreenManager::Get()->GetRenderWindow() : nullptr);
 
-                // hide splash screen now before playing any movies
+				// hide splash screen now before playing any movies
 				FPlatformMisc::PlatformHandleSplashScreen(false);
 
 				// only allowed to play any movies marked as early startup.  These movies or widgets can have no interaction whatsoever with uobjects or engine features
 				GetMoviePlayer()->PlayEarlyStartupMovies();
 
-                // display the splash screen again now that early startup movies have played
-                FPlatformMisc::PlatformHandleSplashScreen(true);
+				// display the splash screen again now that early startup movies have played
+				FPlatformMisc::PlatformHandleSplashScreen(true);
 
 #if 0 && PAK_TRACKER// dump the files which have been accessed inside the pak file
 				FPakPlatformFile* PakPlatformFile = (FPakPlatformFile*)(FPlatformFileManager::Get().FindPlatformFile(FPakPlatformFile::GetTypeName()));
@@ -2457,45 +2602,50 @@ int32 FEngineLoop::PreInit(const TCHAR* CmdLine)
 				}
 #endif
 			}
-            else
-            {
+			else
+			{
 				SCOPED_BOOT_TIMING("PlayFirstPreLoadScreen");
 
-                if (FPreLoadScreenManager::Get())
-                {
+				if (FPreLoadScreenManager::Get())
+				{
 					SCOPED_BOOT_TIMING("PlayFirstPreLoadScreen - FPreLoadScreenManager::Get()->Initialize");
-                    // initialize and play our first Early PreLoad Screen if one is setup
-                    FPreLoadScreenManager::Get()->Initialize(SlateRenderer.Get());
+					// initialize and play our first Early PreLoad Screen if one is setup
+					FPreLoadScreenManager::Get()->Initialize(SlateRendererSharedRef.Get());
 
 					if (FPreLoadScreenManager::Get()->HasRegisteredPreLoadScreenType(EPreLoadScreenTypes::EarlyStartupScreen))
 					{
 						// disable the splash before playing the early startup screen
-						FPlatformMisc::PlatformHandleSplashScreen(false);
-	                    FPreLoadScreenManager::Get()->PlayFirstPreLoadScreen(EPreLoadScreenTypes::EarlyStartupScreen);
-	                }
+						FPreLoadScreenManager::IsResponsibleForRenderingDelegate.AddLambda(
+							[](bool bIsPreloadScreenManResponsibleForRendering)
+						{
+							FPlatformMisc::PlatformHandleSplashScreen(!bIsPreloadScreenManResponsibleForRendering);
+						}
+						);
+						FPreLoadScreenManager::Get()->PlayFirstPreLoadScreen(EPreLoadScreenTypes::EarlyStartupScreen);
+					}
 					else
 					{
 						// no early startup screen, show the splash screen
 						FPlatformMisc::PlatformHandleSplashScreen(true);
 					}
-                }
+				}
 				else
 				{
 					// no preload manager, show the splash screen
 					FPlatformMisc::PlatformHandleSplashScreen(true);
 				}
-            }
+			}
 		}
-		else if ( IsRunningCommandlet() )
+		else if (IsRunningCommandlet())
 		{
 			// Create the engine font services now that the Slate renderer is ready
 			FEngineFontServices::Create();
 		}
-#endif
+#endif //!UE_SERVER
 
 		//Now that our EarlyStartupScreen is finished, lets take the necessary steps to mount paks, apply .ini cvars, and open the shader libraries if we installed content we expect to handle
 		//If using a bundle manager, assume its handling all this stuff and that we don't have to do it.
-		IPlatformInstallBundleManager* BundleManager = FPlatformMisc::GetPlatformInstallBundleManager();
+		IInstallBundleManager* BundleManager = IInstallBundleManager::GetPlatformInstallBundleManager();
 		if (BundleManager == nullptr || BundleManager->IsNullInterface())
 		{
 			// Mount Paks that were installed during EarlyStartupScreen
@@ -2511,12 +2661,13 @@ int32 FEngineLoop::PreInit(const TCHAR* CmdLine)
 				FCoreDelegates::OnMountAllPakFiles.Execute(PakFolders);
 			}
 
+			DumpEarlyReads(bDumpEarlyConfigReads, bDumpEarlyPakFileReads, bForceQuitAfterEarlyReads);
+
 			//Reapply CVars after our EarlyLoadScreen
 			if(bWithConfigPatching)
 			{
 				SCOPED_BOOT_TIMING("ReapplyCVarsFromIniAfterEarlyStartupScreen");
-
-				HandleConfigReload(bDumpEarlyConfigReads, bDumpEarlyPakFileReads);
+				HandleConfigReload(bWithConfigPatching);
 			}
 
 			//Handle opening shader library after our EarlyLoadScreen
@@ -2531,7 +2682,7 @@ int32 FEngineLoop::PreInit(const TCHAR* CmdLine)
 					FShaderCodeLibrary::OpenLibrary(FApp::GetProjectName(), FPaths::Combine(RootDir, FApp::GetProjectName(), TEXT("Content")));
 				}
 
-				// Now our shader code main library is opened, kick off the precompile.
+				// Now our shader code main library is opened, kick off the precompile, if already initialized
 				FShaderPipelineCache::OpenPipelineFileCache(GMaxRHIShaderPlatform);
 			}
 		}
@@ -2774,7 +2925,7 @@ int32 FEngineLoop::PreInit(const TCHAR* CmdLine)
 					GLogConsole->Show(true);
 				}
 				UE_LOG(LogInit, Error, TEXT("%s looked like a commandlet, but we could not find the class."), *Token);
-				GIsRequestingExit = true;
+				RequestEngineExit(FString::Printf(TEXT("Failed to find commandlet class %s"), *Token));
 				return 1;
 			}
 
@@ -2807,9 +2958,9 @@ int32 FEngineLoop::PreInit(const TCHAR* CmdLine)
 			// Allow commandlets to individually override those settings.
 			UCommandlet* Default = CastChecked<UCommandlet>(CommandletClass->GetDefaultObject());
 
-			if ( GIsRequestingExit )
+			if ( IsEngineExitRequested() )
 			{
-				// commandlet set GIsRequestingExit during construction
+				// commandlet set IsEngineExitRequested() during construction
 				return 1;
 			}
 
@@ -2821,7 +2972,7 @@ int32 FEngineLoop::PreInit(const TCHAR* CmdLine)
 			if (Default->IsEditor)
 			{
 				UE_LOG(LogInit, Error, TEXT("Cannot run editor commandlet %s with game executable."), *CommandletClass->GetFullName());
-				GIsRequestingExit = true;
+				RequestEngineExit(TEXT("Tried to run commandlet in non-editor build"));
 				return 1;
 			}
 #endif
@@ -2908,7 +3059,7 @@ int32 FEngineLoop::PreInit(const TCHAR* CmdLine)
 			int32 ErrorLevel = Commandlet->Main( CommandletCommandLine );
 			FStats::TickCommandletStats();
 
-			GIsRequestingExit = true;
+			RequestEngineExit(FString::Printf(TEXT("Commandlet %s finished execution (result %d)"), *Commandlet->GetName(), ErrorLevel));
 
 			// Log warning/ error summary.
 			if( Commandlet->ShowErrorCount )
@@ -3023,7 +3174,7 @@ int32 FEngineLoop::PreInit(const TCHAR* CmdLine)
 	}
 
 	// exit if wanted.
-	if( GIsRequestingExit )
+	if( IsEngineExitRequested() )
 	{
 		if ( GEngine != nullptr )
 		{
@@ -3067,8 +3218,6 @@ int32 FEngineLoop::PreInit(const TCHAR* CmdLine)
 		GConfig->Detach( GEditorIni );
 	}
 #endif // !UE_BUILD_SHIPPING
-
-	delete [] CommandLineCopy;
 
 	// initialize the pointer, as it is deleted before being assigned in the first frame
 	PendingCleanupObjects = nullptr;
@@ -3114,7 +3263,28 @@ int32 FEngineLoop::PreInit(const TCHAR* CmdLine)
 
 	FEmbeddedCommunication::ForceTick(9);
 
+	PreInitContext.Cleanup();
+
 	// Note we still have 20% remaining on the slow task: this will be used by the Editor/Engine initialization next
+	return 0;
+}
+
+int32 FEngineLoop::PreInit(const TCHAR* CmdLine)
+{
+	const int32 rv1 = PreInitPreStartupScreen(CmdLine);
+	if (rv1 != 0)
+	{
+		PreInitContext.Cleanup();
+		return rv1;
+	}
+
+	const int32 rv2 = PreInitPostStartupScreen(CmdLine);
+	if (rv2 != 0)
+	{
+		PreInitContext.Cleanup();
+		return rv2;
+	}
+
 	return 0;
 }
 
@@ -3226,6 +3396,7 @@ bool FEngineLoop::LoadStartupCoreModules()
 	SlowTask.EnterProgressFrame(10);
 	if ( !IsRunningDedicatedServer() )
 	{
+		FModuleManager::Get().LoadModule("SlateCore");
 		FModuleManager::Get().LoadModule("Slate");
 
 #if !UE_BUILD_SHIPPING
@@ -3252,12 +3423,14 @@ bool FEngineLoop::LoadStartupCoreModules()
 	{
 #if WITH_UNREAL_DEVELOPER_TOOLS
 		FModuleManager::Get().LoadModule("MessageLog");
+#endif	// WITH_UNREAL_DEVELOPER_TOOLS
+#if WITH_EDITOR
 		FModuleManager::Get().LoadModule("CollisionAnalyzer");
-#endif	//WITH_UNREAL_DEVELOPER_TOOLS
+#endif	// WITH_EDITOR
 	}
 
 #if WITH_UNREAL_DEVELOPER_TOOLS
-		FModuleManager::Get().LoadModule("FunctionalTesting");
+	FModuleManager::Get().LoadModule("FunctionalTesting");
 #endif	//WITH_UNREAL_DEVELOPER_TOOLS
 
 	SlowTask.EnterProgressFrame(30);
@@ -3316,7 +3489,7 @@ bool FEngineLoop::LoadStartupCoreModules()
 	FModuleManager::Get().LoadModule(TEXT("MediaAssets"));
 #endif
 
-	FModuleManager::Get().LoadModule(TEXT("ClothingSystemRuntime"));
+	FModuleManager::Get().LoadModule(TEXT("ClothingSystemRuntimeNv"));
 #if WITH_EDITOR
 	FModuleManager::Get().LoadModule(TEXT("ClothingSystemEditor"));
 #endif
@@ -3511,7 +3684,7 @@ int32 FEngineLoop::Init()
 		// Load all the post-engine init modules
 		if (!IProjectManager::Get().LoadModulesForProject(ELoadingPhase::PostEngineInit) || !IPluginManager::Get().LoadModulesForEnabledPlugins(ELoadingPhase::PostEngineInit))
 		{
-			GIsRequestingExit = true;
+			RequestEngineExit(TEXT("One or more modules failed PostEngineInit"));
 			return 1;
 		}
 	}
@@ -3601,6 +3774,14 @@ int32 FEngineLoop::Init()
 	FEmbeddedCommunication::AllowSleep(TEXT("Startup"));
 	FEmbeddedCommunication::KeepAwake(TEXT("FirstTicks"), true);
 #endif
+	
+#if UE_EXTERNAL_PROFILING_ENABLED
+	FExternalProfiler* ActiveProfiler = FActiveExternalProfilerBase::GetActiveProfiler();
+	if (ActiveProfiler)
+	{
+		ActiveProfiler->Register();
+	}
+#endif		// UE_EXTERNAL_PROFILING_ENABLED
 
 	return 0;
 }
@@ -3614,7 +3795,7 @@ void FEngineLoop::Exit()
 	GIsRunning	= 0;
 	GLogConsole	= nullptr;
 
-	IPlatformInstallBundleManager::InstallBundleCompleteDelegate.RemoveAll(this);
+	IInstallBundleManager::InstallBundleCompleteDelegate.RemoveAll(this);
 
 	// shutdown visual logger and flush all data
 #if ENABLE_VISUAL_LOG
@@ -3623,7 +3804,22 @@ void FEngineLoop::Exit()
 
 
 	// Make sure we're not in the middle of loading something.
-	FlushAsyncLoading();
+	{
+		bool bFlushOnExit = true;
+		if (GConfig)
+		{
+			FBoolConfigValueHelper FlushStreamingOnExitHelper(TEXT("/Script/Engine.StreamingSettings"), TEXT("s.FlushStreamingOnExit"), GEngineIni);
+			bFlushOnExit = FlushStreamingOnExitHelper;			
+		}
+		if (bFlushOnExit)
+		{
+			FlushAsyncLoading();
+		}
+		else
+		{
+			CancelAsyncLoading();
+		}
+	}
 
 	// Block till all outstanding resource streaming requests are fulfilled.
 	if (!IStreamingManager::HasShutdown())
@@ -3676,6 +3872,7 @@ void FEngineLoop::Exit()
 	FModuleManager::Get().UnloadModule("AssetTools", true);
 
 #endif // WITH_EDITOR
+	FModuleManager::Get().UnloadModule("WorldBrowser", true);
 	FModuleManager::Get().UnloadModule("AssetRegistry", true);
 
 #if !PLATFORM_ANDROID || PLATFORM_LUMIN 	// AppPreExit doesn't work on Android
@@ -3690,6 +3887,12 @@ void FEngineLoop::Exit()
 
 	// Stop the rendering thread.
 	StopRenderingThread();
+	
+	// Disable the PSO cache
+	FShaderPipelineCache::Shutdown();
+
+	// Close shader code map, if any
+	FShaderCodeLibrary::Shutdown();
 
 #if !PLATFORM_ANDROID || PLATFORM_LUMIN // UnloadModules doesn't work on Android
 #if WITH_ENGINE
@@ -3707,12 +3910,6 @@ void FEngineLoop::Exit()
 	FModuleManager::Get().UnloadModulesAtShutdown();
 #endif // !ANDROID
 
-	// Disable the PSO cache
-	FShaderPipelineCache::Shutdown();
-
-	// Close shader code map, if any
-	FShaderCodeLibrary::Shutdown();
-
 	// Tear down the RHI.
 	RHIExitAndStopRHIThread();
 
@@ -3727,6 +3924,8 @@ void FEngineLoop::Exit()
 	IStreamingManager::Shutdown();
 
 	FPlatformMisc::ShutdownTaggedStorage();
+
+	TRACE_CPUPROFILER_SHUTDOWN();
 }
 
 
@@ -3771,17 +3970,20 @@ void FEngineLoop::ProcessLocalPlayerSlateOperations() const
 	}
 }
 
-void FEngineLoop::OnStartupContentMounted(FInstallBundleResultInfo Result, bool bDumpEarlyConfigReads, bool bDumpEarlyPakFileReads)
+#if WITH_ENGINE
+void OnStartupContentMounted(FInstallBundleResultInfo Result, bool bDumpEarlyConfigReads, bool bDumpEarlyPakFileReads, bool bReloadConfig, bool bForceQuitAfterEarlyReads)
 {
 	if (Result.bIsStartup && Result.Result == EInstallBundleResult::OK)
 	{
-		HandleConfigReload(bDumpEarlyConfigReads, bDumpEarlyPakFileReads);
+		DumpEarlyReads(bDumpEarlyConfigReads, bDumpEarlyPakFileReads, bForceQuitAfterEarlyReads);
+		HandleConfigReload(bReloadConfig);
 
-		IPlatformInstallBundleManager::InstallBundleCompleteDelegate.RemoveAll(this);
+		IInstallBundleManager::InstallBundleCompleteDelegate.RemoveAll(&GEngineLoop);
 	}
 }
+#endif
 
-void FEngineLoop::HandleConfigReload(bool bDumpEarlyConfigReads, bool bDumpEarlyPakFileReads)
+void DumpEarlyReads(bool bDumpEarlyConfigReads, bool bDumpEarlyPakFileReads, bool bForceQuitAfterEarlyReads)
 {
 	if (bDumpEarlyConfigReads)
 	{
@@ -3795,8 +3997,20 @@ void FEngineLoop::HandleConfigReload(bool bDumpEarlyConfigReads, bool bDumpEarly
 		DeleteRecordedFileReadsFromPaks();
 	}
 
-	ReapplyRecordedCVarSettingsFromIni();
-	DeleteRecordedCVarSettingsFromIni();
+	if (bForceQuitAfterEarlyReads)
+	{
+		GLog->Flush();
+		GEngine->DeferredCommands.Emplace(TEXT("Quit force"));
+	}
+}
+
+void HandleConfigReload(bool bReloadConfig)
+{
+	if (bReloadConfig)
+	{
+		ReapplyRecordedCVarSettingsFromIni();
+		DeleteRecordedCVarSettingsFromIni();
+	}
 }
 
 bool FEngineLoop::ShouldUseIdleMode() const
@@ -4068,7 +4282,7 @@ void FEngineLoop::Tick()
 		#if WITH_PROFILEGPU && !UE_BUILD_SHIPPING
 			// Issue the measurement of the execution time of a basic LongGPUTask unit on the very first frame
 			// The results will be retrived on the first call of IssueScalableLongGPUTask
-			if (GFrameCounter == 0 && IsFeatureLevelSupported(GMaxRHIShaderPlatform, ERHIFeatureLevel::SM4) && FApp::CanEverRender())
+			if (GFrameCounter == 0 && IsFeatureLevelSupported(GMaxRHIShaderPlatform, ERHIFeatureLevel::SM5) && FApp::CanEverRender())
 			{
 				FlushRenderingCommands();
 
@@ -4099,6 +4313,20 @@ void FEngineLoop::Tick()
 		{
 			QUICK_SCOPE_CYCLE_COUNTER(STAT_FEngineLoop_UpdateTimeAndHandleMaxTickRate);
 			GEngine->UpdateTimeAndHandleMaxTickRate();
+		}
+
+		for (const FWorldContext& Context : GEngine->GetWorldContexts())
+		{
+			UWorld* CurrentWorld = Context.World();
+			if (CurrentWorld)
+			{
+				FSceneInterface* Scene = CurrentWorld->Scene;
+				ENQUEUE_RENDER_COMMAND(UpdateScenePrimitives)(
+					[Scene](FRHICommandListImmediate& RHICmdList)
+				{
+					Scene->UpdateAllPrimitiveSceneInfos(RHICmdList);
+				});
+			}
 		}
 
 		// beginning of RHI frame
@@ -4446,6 +4674,7 @@ void FEngineLoop::Tick()
 		// tick core ticker, threads & deferred commands
 		{
 			SCOPE_CYCLE_COUNTER(STAT_DeferredTickTime);
+			CSV_SCOPED_TIMING_STAT_EXCLUSIVE(DeferredTickTime);
 			// Delete the objects which were enqueued for deferred cleanup before the previous frame.
 			delete PreviousPendingCleanupObjects;
 
@@ -4628,6 +4857,52 @@ static void CheckForPrintTimesOverride()
 	}
 }
 
+#if UE_EDITOR
+bool LaunchCorrectEditorExecutable(const FString& EditorTargetFileName)
+{
+	// Don't allow relaunching the executable if we're running some unattended scripted process.
+	if(FApp::IsUnattended())
+	{
+		return false;
+	}
+
+	// Figure out the executable that we should be running
+	FString LaunchExecutableName;
+	if(EditorTargetFileName.Len() == 0)
+	{
+		LaunchExecutableName = FPlatformProcess::GenerateApplicationPath(TEXT("UE4Editor"), FApp::GetBuildConfiguration());
+	}
+	else
+	{
+		FTargetReceipt Receipt;
+		if(!FPaths::FileExists(EditorTargetFileName) || !Receipt.Read(EditorTargetFileName))
+		{
+			return false;
+		}
+		LaunchExecutableName = Receipt.Launch;
+	}
+	FPaths::MakeStandardFilename(LaunchExecutableName);
+
+	// Get the current executable name. Don't allow relaunching if we're running the console app.
+	FString CurrentExecutableName = FPlatformProcess::ExecutablePath();
+	if(FPaths::GetBaseFilename(CurrentExecutableName).EndsWith(TEXT("-Cmd")))
+	{
+		return false;
+	}
+	FPaths::MakeStandardFilename(CurrentExecutableName);
+
+	// Nothing to do if they're the same
+	if(LaunchExecutableName == CurrentExecutableName)
+	{
+		return false;
+	}
+
+	// Relaunch the correct executable
+	UE_LOG(LogInit, Display, TEXT("Running incorrect executable for target. Launching %s..."), *LaunchExecutableName);
+	FPlatformProcess::CreateProc(*IFileManager::Get().ConvertToAbsolutePathForExternalAppForRead(*LaunchExecutableName), FCommandLine::GetOriginal(), true, false, false, nullptr, 0, nullptr, nullptr, nullptr);
+	return true;
+}
+#endif
 
 /* FEngineLoop static interface
  *****************************************************************************/
@@ -4786,16 +5061,43 @@ bool FEngineLoop::AppInit( )
 		FPlatformStackWalk::Init();
 	}
 
-#if WITH_EDITOR
-	FBlueprintSupport::InitializeCompilationManager();
-#endif
-
 	CheckForPrintTimesOverride();
 
 	// Check whether the project or any of its plugins are missing or are out of date
 #if UE_EDITOR && !IS_MONOLITHIC
-	if(!GIsBuildMachine && FPaths::IsProjectFilePathSet() && PluginManager.AreRequiredPluginsAvailable())
+	if(!GIsBuildMachine && !FApp::IsUnattended() && FPaths::IsProjectFilePathSet())
 	{
+		// Check all the plugins are present
+		if(!PluginManager.AreRequiredPluginsAvailable())
+		{
+			return false;
+		}
+
+		// Find the editor target
+		FString EditorTargetFileName;
+		for (const FTargetInfo& Target : FDesktopPlatformModule::Get()->GetTargetsForProject(FPaths::GetProjectFilePath()))
+		{
+			if (Target.Type == EBuildTargetType::Editor)
+			{
+				if(FPaths::IsUnderDirectory(Target.Path, FPlatformMisc::ProjectDir()))
+				{
+					EditorTargetFileName = FTargetReceipt::GetDefaultPath(FPlatformMisc::ProjectDir(), *Target.Name, FPlatformProcess::GetBinariesSubdirectory(), FApp::GetBuildConfiguration(), nullptr);
+				}
+				else if(FPaths::IsUnderDirectory(Target.Path, FPaths::EngineDir()))
+				{
+					EditorTargetFileName = FTargetReceipt::GetDefaultPath(*FPaths::EngineDir(), *Target.Name, FPlatformProcess::GetBinariesSubdirectory(), FApp::GetBuildConfiguration(), nullptr);
+				}
+				break;
+			}
+		}
+
+		// If we're not running the correct executable for the current target, and the listed executable exists, run that instead
+		if(LaunchCorrectEditorExecutable(EditorTargetFileName))
+		{
+			return false;
+		}
+
+		// Check if we need to compile
 		bool bNeedCompile = false;
 		GConfig->GetBool(TEXT("/Script/UnrealEd.EditorLoadingSavingSettings"), TEXT("bForceCompilationAtStartup"), bNeedCompile, GEditorPerProjectIni);
 		if(FParse::Param(FCommandLine::Get(), TEXT("SKIPCOMPILE")) || FParse::Param(FCommandLine::Get(), TEXT("MULTIPROCESS")))
@@ -4846,17 +5148,38 @@ bool FEngineLoop::AppInit( )
 
 				bNeedCompile = true;
 			}
+			else if(EditorTargetFileName.Len() > 0 && !FPaths::FileExists(EditorTargetFileName))
+			{
+				// Prompt to compile. The target file isn't essential, but we 
+				if (FPlatformMisc::MessageBoxExt(EAppMsgType::YesNo, *FString::Printf(TEXT("The %s file does not exist. Would you like to build the editor?"), *FPaths::GetCleanFilename(EditorTargetFileName)), TEXT("Missing target file")) == EAppReturnType::Yes)
+				{
+					bNeedCompile = true;
+				}
+			}
 		}
 
 		FEmbeddedCommunication::ForceTick(16);
 		
 		if(bNeedCompile)
 		{
+			// If there was no editor target, use the default UE4Editor target
+			FString CompileProject = FPaths::GetProjectFilePath();
+			if(EditorTargetFileName.Len() == 0)
+			{
+				CompileProject.Empty();
+			}
+
 			// Try to compile it
 			FFeedbackContext *Context = (FFeedbackContext*)FDesktopPlatformModule::Get()->GetNativeFeedbackContext();
 			Context->BeginSlowTask(FText::FromString(TEXT("Starting build...")), true, true);
-			bool bCompileResult = FDesktopPlatformModule::Get()->CompileGameProject(FPaths::RootDir(), FPaths::GetProjectFilePath(), Context);
+			bool bCompileResult = FDesktopPlatformModule::Get()->CompileGameProject(FPaths::RootDir(), CompileProject, Context);
 			Context->EndSlowTask();
+
+			// Check if we're running the wrong executable now
+			if(bCompileResult && LaunchCorrectEditorExecutable(EditorTargetFileName))
+			{
+				return false;
+			}
 
 			// Get a list of modules which are still incompatible
 			TArray<FString> StillIncompatibleFiles;
@@ -4882,6 +5205,12 @@ bool FEngineLoop::AppInit( )
 	// Put the command line and config info into the suppression system (before plugins start loading)
 	FLogSuppressionInterface::Get().ProcessConfigAndCommandLine();
 
+#if PLATFORM_IOS || PLATFORM_TVOS
+	// Now that the config system is ready, init the audio system.
+	[[IOSAppDelegate GetDelegate] InitializeAudioSession];
+#endif
+
+	
 	// NOTE: This is the earliest place to init the online subsystems (via plugins)
 	// Code needs GConfigFile to be valid
 	// Must be after FThreadStats::StartThread();
@@ -5070,8 +5399,6 @@ void FEngineLoop::AppPreExit( )
 		GShaderCompilingManager = nullptr;
 	}
 #endif
-
-	Trace::Flush();
 }
 
 
@@ -5168,6 +5495,20 @@ void FEngineLoop::PreInitHMDDevice()
 		// Note we do not disable or warn here if no HMD modules matched ExplicitHMDName, as not all HMD plugins have been loaded yet.
 	}
 #endif // #if WITH_ENGINE && !UE_SERVER
+}
+
+void FPreInitContext::Cleanup()
+{
+#if WITH_ENGINE && !UE_SERVER
+	SlateRenderer = nullptr;
+#endif // WITH_ENGINE && !UE_SERVER
+	CommandletCommandLine = nullptr;
+
+	delete[] CommandLineCopy;
+	CommandLineCopy = nullptr;
+
+	delete SlowTaskPtr;
+	SlowTaskPtr = nullptr;
 }
 
 #undef LOCTEXT_NAMESPACE

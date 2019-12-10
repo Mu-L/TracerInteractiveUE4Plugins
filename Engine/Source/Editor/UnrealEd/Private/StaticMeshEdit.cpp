@@ -13,6 +13,7 @@
 #include "EditorFramework/ThumbnailInfo.h"
 #include "Engine/MeshMerging.h"
 #include "Engine/StaticMesh.h"
+#include "StaticMeshAttributes.h"
 #include "Engine/StaticMeshSocket.h"
 #include "Engine/Polys.h"
 #include "Editor.h"
@@ -31,8 +32,6 @@
 #include "Interfaces/ITargetPlatformManagerModule.h"
 #include "Interfaces/ITargetPlatform.h"
 #include "Settings/EditorExperimentalSettings.h"
-#include "MeshDescription.h"
-#include "MeshAttributes.h"
 
 #include "Modules/ModuleManager.h"
 #include "IMeshReductionManagerModule.h"
@@ -595,9 +594,8 @@ UStaticMesh* CreateStaticMesh(FMeshDescription& RawMesh,TArray<FStaticMaterial>&
 	auto StaticMesh = NewObject<UStaticMesh>(InOuter, InName, RF_Public | RF_Standalone);
 
 	// Add one LOD for the base mesh
-	FStaticMeshSourceModel& SrcModel = StaticMesh->AddSourceModel();
-	FMeshDescription* MeshDescription = StaticMesh->CreateMeshDescription(0);
-	*MeshDescription = RawMesh;
+	StaticMesh->AddSourceModel();
+	FMeshDescription* MeshDescription = StaticMesh->CreateMeshDescription(0, RawMesh);
 	StaticMesh->CommitMeshDescription(0);
 	StaticMesh->StaticMaterials = Materials;
 
@@ -636,7 +634,7 @@ FMergeStaticMeshParams::FMergeStaticMeshParams()
 	, bUseUVScaleBias(false)
 {
 	// initialize some UV channel arrays
-	for (int32 Channel = 0; Channel < ARRAY_COUNT(UVChannelRemap); Channel++)
+	for (int32 Channel = 0; Channel < UE_ARRAY_COUNT(UVChannelRemap); Channel++)
 	{
 		// we can't just map channel to channel by default, because we need to know when a UV channel is
 		// actually being redirected in to, so that we can update Triangle.NumUVs
@@ -787,13 +785,6 @@ void GetBrushMesh(ABrush* Brush, UModel* Model, FMeshDescription& MeshDescriptio
 				//All edge are hard for BSP
 				EdgeHardnesses[NewEdgeID] = true;
 			}
-			int32 NewTriangleIndex = MeshDescription.GetPolygonTriangles(NewPolygonID).AddDefaulted();
-			FMeshTriangle& NewTriangle = MeshDescription.GetPolygonTriangles(NewPolygonID)[NewTriangleIndex];
-			for (int32 TriangleVertexIndex = 0; TriangleVertexIndex < 3; ++TriangleVertexIndex)
-			{
-				const FVertexInstanceID &VertexInstanceID = VertexInstanceIDs[TriangleVertexIndex];
-				NewTriangle.SetVertexInstanceID(TriangleVertexIndex, VertexInstanceID);
-			}
 		}
 	}
 }
@@ -812,10 +803,9 @@ UStaticMesh* CreateStaticMeshFromBrush(UObject* Outer, FName Name, ABrush* Brush
 	UStaticMesh* StaticMesh = NewObject<UStaticMesh>(Outer, Name, RF_Public | RF_Standalone);
 
 	// Add one LOD for the base mesh
-	FStaticMeshSourceModel& SrcModel = StaticMesh->AddSourceModel();
+	StaticMesh->AddSourceModel();
 	const int32 LodIndex = StaticMesh->GetNumSourceModels() - 1;
 	FMeshDescription* MeshDescription = StaticMesh->CreateMeshDescription(LodIndex);
-	UStaticMesh::RegisterMeshAttributes(*MeshDescription);
 
 	// Fill out the mesh description and materials from the brush geometry
 	TArray<FStaticMaterial> Materials;
@@ -1018,6 +1008,8 @@ struct ExistingStaticMeshData
 	bool						ExistingAllowCpuAccess;
 	FVector						ExistingPositiveBoundsExtension;
 	FVector						ExistingNegativeBoundsExtension;
+
+	UStaticMesh::FOnMeshChanged	ExistingOnMeshChanged;
 };
 
 bool IsUsingMaterialSlotNameWorkflow(UAssetImportData* AssetImportData)
@@ -1199,6 +1191,7 @@ ExistingStaticMeshData* SaveExistingStaticMeshData(UStaticMesh* ExistingMesh, Un
 				}
 			}
 		}
+		ExistingMeshDataPtr->ExistingOnMeshChanged = ExistingMesh->OnMeshChanged;
 	}
 
 	return ExistingMeshDataPtr;
@@ -1344,6 +1337,8 @@ void RestoreExistingMeshSettings(ExistingStaticMeshData* ExistingMesh, UStaticMe
 		}
 		NewMesh->MaterialRemapIndexPerImportVersion.Add(FMaterialRemapIndex(MaterialMapKey, ImportRemapMaterial));
 	}
+	// Copy mesh changed delegate data
+	NewMesh->OnMeshChanged = ExistingMesh->ExistingOnMeshChanged;
 }
 
 void UpdateSomeLodsImportMeshData(UStaticMesh* NewMesh, TArray<int32> *ReimportLodList)
@@ -1492,9 +1487,7 @@ void RestoreExistingMeshData(ExistingStaticMeshData* ExistingMeshDataPtr, UStati
 		FStaticMeshSourceModel& SrcModel = NewMesh->AddSourceModel();
 		if (ExistingMeshDataPtr->ExistingLODData[i].ExistingMeshDescription.IsValid())
 		{
-			FMeshDescription* MeshDescription = NewMesh->CreateMeshDescription(i);
-			*MeshDescription = MoveTemp(*ExistingMeshDataPtr->ExistingLODData[i].ExistingMeshDescription);
-			ExistingMeshDataPtr->ExistingLODData[i].ExistingMeshDescription.Reset();
+			FMeshDescription* MeshDescription = NewMesh->CreateMeshDescription(i, MoveTemp(*ExistingMeshDataPtr->ExistingLODData[i].ExistingMeshDescription));
 			NewMesh->CommitMeshDescription(i);
 		}
 		SrcModel.BuildSettings = ExistingMeshDataPtr->ExistingLODData[i].ExistingBuildSettings;

@@ -1,58 +1,86 @@
 // Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
 
 #include "Units/Math/RigUnit_MathTransform.h"
+#include "Units/Math/RigUnit_MathVector.h"
 #include "Math/ControlRigMathLibrary.h"
 #include "Units/RigUnitContext.h"
 
-void FRigUnit_MathTransformFromEulerTransform::Execute(const FRigUnitContext& Context)
+FRigUnit_MathTransformFromEulerTransform_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result = EulerTransform.ToFTransform();
 }
 
-void FRigUnit_MathTransformToEulerTransform::Execute(const FRigUnitContext& Context)
+FRigUnit_MathTransformToEulerTransform_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result.FromFTransform(Value);
 }
 
-void FRigUnit_MathTransformMul::Execute(const FRigUnitContext& Context)
+FRigUnit_MathTransformMul_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result = A * B;
 }
 
-void FRigUnit_MathTransformMakeRelative::Execute(const FRigUnitContext& Context)
+FRigUnit_MathTransformMakeRelative_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Local = Global.GetRelativeTransform(Parent);
+	Local.NormalizeRotation();
 }
 
-void FRigUnit_MathTransformInverse::Execute(const FRigUnitContext& Context)
+FRigUnit_MathTransformMakeAbsolute_Execute()
 {
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
+	Global = Local * Parent;
+	Global.NormalizeRotation();
+}
+
+FRigUnit_MathTransformInverse_Execute()
+{
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result = Value.Inverse();
 }
 
-void FRigUnit_MathTransformLerp::Execute(const FRigUnitContext& Context)
+FRigUnit_MathTransformLerp_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result = FControlRigMathLibrary::LerpTransform(A, B, T);
 }
 
-void FRigUnit_MathTransformSelectBool::Execute(const FRigUnitContext& Context)
+FRigUnit_MathTransformSelectBool_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result = Condition ? IfTrue : IfFalse;
 }
 
-void FRigUnit_MathTransformRotateVector::Execute(const FRigUnitContext& Context)
+FRigUnit_MathTransformRotateVector_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result = Transform.TransformVector(Direction);
 }
 
-void FRigUnit_MathTransformTransformVector::Execute(const FRigUnitContext& Context)
+FRigUnit_MathTransformTransformVector_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result = Transform.TransformPosition(Location);
 }
 
-void FRigUnit_MathTransformFromSRT::Execute(const FRigUnitContext& Context)
+FRigUnit_MathTransformFromSRT_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Transform.SetLocation(Location);
 	Transform.SetRotation(FControlRigMathLibrary::QuatFromEuler(Rotation, RotationOrder));
 	Transform.SetScale3D(Scale);
 	EulerTransform.FromFTransform(Transform);
+}
+
+FRigUnit_MathTransformClampSpatially_Execute()
+{
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
+	FVector Position;
+	FRigUnit_MathVectorClampSpatially::StaticExecute(Value.GetTranslation(), Axis, Type, Minimum, Maximum, Space, bDrawDebug, DebugColor, DebugThickness, Position, RigUnitName, RigUnitStructName, ExecutionType, Context);
+	Result = Value;
+	Result.SetTranslation(Position);
 }

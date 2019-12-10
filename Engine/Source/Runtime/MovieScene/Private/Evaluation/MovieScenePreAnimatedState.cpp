@@ -1,6 +1,8 @@
 // Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
 
 #include "Evaluation/MovieScenePreAnimatedState.h"
+#include "GameFramework/Actor.h"
+#include "Components/ActorComponent.h"
 
 DECLARE_CYCLE_STAT(TEXT("Save Pre Animated State"), MovieSceneEval_SavePreAnimatedState, STATGROUP_MovieSceneEval);
 
@@ -32,6 +34,21 @@ namespace MovieSceneImpl
 	{
 		if (Object)
 		{
+			if (AActor* Actor = Cast<AActor>(Object))
+			{
+				if (Actor->IsActorBeingDestroyed())
+				{
+					return;
+				}
+			}
+			else if (UActorComponent* Component = Cast<UActorComponent>(Object))
+			{
+				if (Component->IsBeingDestroyed())
+				{
+					return;
+				}
+			}
+
 			if (Token.OptionalEntityToken.IsValid())
 			{
 				Token.OptionalEntityToken->RestoreState(*Object, Player);
@@ -369,6 +386,53 @@ void FMovieScenePreAnimatedState::DiscardEntityTokens()
 	}
 
 	MasterTokens.DiscardEntityTokens();
+}
+
+void FMovieScenePreAnimatedState::DiscardAndRemoveEntityTokensForObject(UObject& Object)
+{
+	FObjectKey ObjectKey(&Object);
+
+	auto* FoundObjectTokens = ObjectTokens.Find(ObjectKey);
+	if (FoundObjectTokens)
+	{
+		FoundObjectTokens->DiscardEntityTokens();
+
+		ObjectTokens.Remove(ObjectKey);
+	}
+
+	for (auto& Pair : EntityToAnimatedObjects)
+	{
+		Pair.Value.Remove(ObjectKey);
+	}
+}
+
+void FMovieScenePreAnimatedState::OnObjectsReplaced(const TMap<UObject*, UObject*>& ReplacementMap)
+{
+	for (auto Iter = ReplacementMap.CreateConstIterator(); Iter; ++Iter)
+	{
+		UObject* OldObject = Iter->Key;
+		UObject* NewObject = Iter->Value;
+
+		FObjectKey OldKey = FObjectKey(OldObject);
+		if (OldObject && NewObject && ObjectTokens.Contains(OldKey))
+		{
+			FObjectKey NewKey = FObjectKey(NewObject);
+
+			ObjectTokens.Add(NewKey, MoveTemp(ObjectTokens[OldKey]));
+			ObjectTokens[NewKey].SetPayload(NewObject);
+
+			ObjectTokens.Remove(OldKey);
+
+			for (auto& Pair : EntityToAnimatedObjects)
+			{
+				if (Pair.Value.Contains(OldKey))
+				{
+					Pair.Value.Add(NewKey);
+					Pair.Value.Remove(OldKey);
+				}
+			}
+		}
+	}
 }
 
 /** Explicit, exported template instantiations */

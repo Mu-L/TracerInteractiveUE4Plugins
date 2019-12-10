@@ -28,6 +28,8 @@
 #include "SBlueprintEditorSelectedDebugObjectWidget.h"
 #include "DesktopPlatformModule.h"
 #include "SBlueprintRevisionMenu.h"
+#include "ISourceCodeAccessor.h"
+#include "ISourceCodeAccessModule.h"
 
 #define LOCTEXT_NAMESPACE "KismetToolbar"
 
@@ -79,8 +81,8 @@ void FKismet2Menu::FillFileMenuBlueprintSection( FMenuBuilder& MenuBuilder, FBlu
 	MenuBuilder.EndSection();
 
 	// Only show the developer menu on machines with the solution (assuming they can build it)
-	FString SolutionPath;
-	if(FDesktopPlatformModule::Get()->GetSolutionPath(SolutionPath))
+	ISourceCodeAccessModule* SourceCodeAccessModule = FModuleManager::GetModulePtr<ISourceCodeAccessModule>("SourceCodeAccess");
+	if(SourceCodeAccessModule != nullptr && SourceCodeAccessModule->GetAccessor().CanAccessSourceCode())
 	{
 		MenuBuilder.BeginSection("FileDeveloper");
 		{
@@ -558,6 +560,22 @@ void FBlueprintEditorToolbar::FillScriptingToolbar(FToolBarBuilder& ToolbarBuild
 	ToolbarBuilder.BeginSection("Script");
 
 	ToolbarBuilder.AddToolBarButton(FBlueprintEditorCommands::Get().FindInBlueprint);
+
+	ToolbarBuilder.AddToolBarButton(
+		FBlueprintEditorCommands::Get().ToggleHideUnrelatedNodes,
+		NAME_None,
+		TAttribute<FText>(),
+		TAttribute<FText>(),
+		FSlateIcon(FEditorStyle::GetStyleSetName(), "GraphEditor.ToggleHideUnrelatedNodes")
+	);
+	ToolbarBuilder.AddComboButton(
+		FUIAction(),
+		FOnGetContent::CreateSP(BlueprintEditorPtr.Get(), &FBlueprintEditor::MakeHideUnrelatedNodesOptionsMenu),
+		LOCTEXT("HideUnrelatedNodesOptions", "Focus Related Nodes Options"),
+		LOCTEXT("HideUnrelatedNodesOptionsMenu", "Focus Related Nodes options menu"),
+		TAttribute<FSlateIcon>(),
+		true
+	);
 
 	ToolbarBuilder.EndSection();
 }

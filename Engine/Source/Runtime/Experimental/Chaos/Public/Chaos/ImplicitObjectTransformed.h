@@ -5,7 +5,6 @@
 #include "Chaos/ImplicitObject.h"
 #include "Chaos/Transform.h"
 #include "ChaosArchive.h"
-#include <type_traits>
 #include "Templates/EnableIf.h"
 
 namespace Chaos
@@ -35,13 +34,23 @@ void TImplicitObjectTransformAccumulateSerializableHelper(TArray<Pair<TSerializa
 	check(false);
 }
 
+/**
+ * Transform the contained shape. If you pass a TUniquePtr to the constructor, ownership is transferred to the TransformedImplicit. If you pass a
+ * SerializablePtr, the lifetime of the object must be handled externally (do not delete it before deleting the TransformedImplicit).
+ * @template bSerializable Whether the shape can be serialized (usually true). Set to false for transient/stack-allocated objects. 
+ */
 template<class T, int d, bool bSerializable = true>
 class TImplicitObjectTransformed final : public TImplicitObject<T, d>
 {
-using ObjectType = typename std::conditional<bSerializable, TSerializablePtr<TImplicitObject<T, d>>, const TImplicitObject<T, d>*>::type;
+	using FStorage = TImplicitObjectPtrStorage<T, d, bSerializable>;
+	using ObjectType = typename FStorage::PtrType;
 
 public:
-	IMPLICIT_OBJECT_SERIALIZER(TImplicitObjectTransformed)
+	using TImplicitObject<T, d>::GetTypeName;
+
+	/**
+	 * Create a transform around an ImplicitObject. Lifetime of the wrapped object is managed externally.
+	 */
 	TImplicitObjectTransformed(ObjectType Object, const TRigidTransform<T, d>& InTransform)
 	    : TImplicitObject<T, d>(EImplicitObject::HasBoundingBox, ImplicitObjectType::Transformed)
 	    , MObject(Object)
@@ -50,20 +59,26 @@ public:
 	{
 		this->bIsConvex = Object->IsConvex();
 	}
-	TImplicitObjectTransformed(ObjectType Object, TUniquePtr<Chaos::TImplicitObject<T,d>> &&ObjectOwner, const TRigidTransform<T, d>& InTransform)
+
+	/**
+	 * Create a transform around an ImplicitObject and take control of its lifetime.
+	 */
+	TImplicitObjectTransformed(TUniquePtr<Chaos::TImplicitObject<T,d>> &&ObjectOwner, const TRigidTransform<T, d>& InTransform)
 	    : TImplicitObject<T, d>(EImplicitObject::HasBoundingBox, ImplicitObjectType::Transformed)
-	    , MObject(Object)
 		, MObjectOwner(MoveTemp(ObjectOwner))
 	    , MTransform(InTransform)
-	    , MLocalBoundingBox(Object->BoundingBox().TransformedBox(InTransform))
 	{
-		this->bIsConvex = Object->IsConvex();
+		static_assert(bSerializable, "Non-serializable TImplicitObjectTransformed created with a UniquePtr");
+		this->MObject = FStorage::Convert(MObjectOwner);
+		this->MLocalBoundingBox = MObject->BoundingBox().TransformedBox(InTransform);
+		this->bIsConvex = MObject->IsConvex();
 	}
 
 	TImplicitObjectTransformed(const TImplicitObjectTransformed<T, d, bSerializable>& Other) = delete;
 	TImplicitObjectTransformed(TImplicitObjectTransformed<T, d, bSerializable>&& Other)
 	    : TImplicitObject<T, d>(EImplicitObject::HasBoundingBox, ImplicitObjectType::Transformed)
 	    , MObject(Other.MObject)
+		, MObjectOwner(MoveTemp(Other.MObjectOwner))
 	    , MTransform(Other.MTransform)
 	    , MLocalBoundingBox(MoveTemp(Other.MLocalBoundingBox))
 	{
@@ -89,14 +104,14 @@ public:
 		return Phi;
 	}
 
-	virtual bool Raycast(const TVector<T, d>& StartPoint, const TVector<T, d>& Dir, const T Length, const T Thickness, T& OutTime, TVector<T, d>& OutPosition, TVector<T, d>& OutNormal) const override
+	virtual bool Raycast(const TVector<T, d>& StartPoint, const TVector<T, d>& Dir, const T Length, const T Thickness, T& OutTime, TVector<T, d>& OutPosition, TVector<T, d>& OutNormal, int32& OutFaceIndex) const override
 	{
 		const TVector<T, d> LocalStart = MTransform.InverseTransformPosition(StartPoint);
 		const TVector<T, d> LocalDir = MTransform.InverseTransformVector(Dir);
 		TVector<T, d> LocalPosition;
 		TVector<T, d> LocalNormal;
 
-		if (MObject->Raycast(LocalStart, LocalDir, Length, Thickness, OutTime, LocalPosition, LocalNormal))
+		if (MObject->Raycast(LocalStart, LocalDir, Length, Thickness, OutTime, LocalPosition, LocalNormal, OutFaceIndex))
 		{
 			OutPosition = MTransform.TransformPosition(LocalPosition);
 			OutNormal = MTransform.TransformVector(LocalNormal);
@@ -104,6 +119,21 @@ public:
 		}
 		
 		return false;
+	}
+
+	virtual int32 FindMostOpposingFace(const TVector<T, 3>& Position, const TVector<T, 3>& UnitDir, int32 HintFaceIndex, T SearchDistance) const override
+	{
+		const TVector<T, d> LocalPosition = MTransform.InverseTransformPositionNoScale(Position);
+		const TVector<T, d> LocalDir = MTransform.InverseTransformVectorNoScale(UnitDir);
+		return MObject->FindMostOpposingFace(LocalPosition, LocalDir, HintFaceIndex, SearchDistance);
+	}
+
+	virtual TVector<T, 3> FindGeometryOpposingNormal(const TVector<T, d>& DenormDir, int32 FaceIndex, const TVector<T, d>& OriginalNormal) const override
+	{
+		const TVector<T, d> LocalDenormDir = MTransform.InverseTransformVectorNoScale(DenormDir);
+		const TVector<T, d> LocalOriginalNormal = MTransform.InverseTransformVectorNoScale(OriginalNormal);
+		const TVector<T, d> LocalNormal = MObject->FindGeometryOpposingNormal(LocalDenormDir, FaceIndex, LocalOriginalNormal);
+		return MTransform.TransformVectorNoScale(LocalNormal);
 	}
 
 	virtual bool Overlap(const TVector<T, d>& Point, const T Thickness) const override
@@ -156,7 +186,7 @@ public:
 		MObject->FindAllIntersectingObjects(Out, SubobjectBounds);
 		if (Out.Num() > NumOut)
 		{
-			Out[NumOut].Second = MTransform * Out[NumOut].Second;
+			Out[NumOut].Second = Out[NumOut].Second * MTransform;
 		}
 	}
 
@@ -167,9 +197,17 @@ public:
 	virtual void Serialize(FChaosArchive& Ar) override
 	{
 		check(bSerializable);
+		FChaosArchiveScopedMemory ScopedMemory(Ar, GetTypeName(), false);
 		TImplicitObject<T, d>::SerializeImp(Ar);
 		TImplicitObjectTransformSerializeHelper(Ar, MObject);
-		Ar << MTransform << MLocalBoundingBox;
+		Ar << MTransform;
+		Ar << MLocalBoundingBox;
+	}
+
+	virtual uint32 GetTypeHash() const override
+	{
+		// Combine the hash from the inner, non transformed object with our transform
+		return HashCombine(MObject->GetTypeHash(), ::GetTypeHash(MTransform));
 	}
 
 private:

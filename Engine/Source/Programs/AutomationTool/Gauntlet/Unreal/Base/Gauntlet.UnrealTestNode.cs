@@ -14,6 +14,7 @@ using System.Security.Cryptography;
 
 namespace Gauntlet
 {
+
 	public abstract class UnrealTestNode<TConfigClass> : BaseTest, IDisposable
 		where TConfigClass : UnrealTestConfiguration, new()
 	{
@@ -121,6 +122,9 @@ namespace Gauntlet
 		protected DateTime TimeOfFirstMissingProcess;
 
 		protected int TimeToWaitForProcesses { get; set; }
+
+		protected DateTime LastHeartbeatTime = DateTime.MinValue;
+		protected DateTime LastActiveHeartbeatTime = DateTime.MinValue;
 
 		// End  UnrealTestNode properties and members 
 
@@ -574,7 +578,7 @@ namespace Gauntlet
 			if (App != null)
 			{
 				UnrealLogParser Parser = new UnrealLogParser(App.StdOut);
-
+				
 				// TODO - hardcoded for Orion
 				List<string> TestLines = Parser.GetLogChannel("Gauntlet").ToList();
 
@@ -583,12 +587,25 @@ namespace Gauntlet
 				for (int i = LastLogCount; i < TestLines.Count; i++)
 				{
 					Log.Info(TestLines[i]);
+
+					if (Regex.IsMatch(TestLines[i], @".*GauntletHeartbeat\: Active.*"))
+					{
+						LastHeartbeatTime = DateTime.Now;
+						LastActiveHeartbeatTime = DateTime.Now;
+					}
+					else if (Regex.IsMatch(TestLines[i], @".*GauntletHeartbeat\: Idle.*"))
+					{
+						LastHeartbeatTime = DateTime.Now;
+					}
 				}
 
 				LastLogCount = TestLines.Count;
+
+				// Detect missed heartbeats and fail the test
+				CheckHeartbeat();
 			}
 
-			
+
 			// Check status and health after updating logs
 			if (GetTestStatus() == TestStatus.InProgress && IsTestRunning() == false)
 			{
@@ -635,13 +652,29 @@ namespace Gauntlet
 				Log.Warning("Failed to release devices. {0}", Ex);
 			}
 
+			string Message = string.Empty;
+
 			try
 			{
 				CreateReport(GetTestResult(), Context, Context.BuildInfo, SessionArtifacts, ArtifactPath);
 			}
 			catch (Exception Ex)
 			{
+				CreateReportFailed = true;
+				Message = Ex.Message;				
 				Log.Warning("Failed to save completion report. {0}", Ex);
+			}
+
+			if (CreateReportFailed)
+			{
+				try
+				{
+					HandleCreateReportFailure(Context, Message);
+				}
+				catch (Exception Ex)
+				{
+					Log.Warning("Failed to handle completion report failure. {0}", Ex);
+				}
 			}
 
 			try
@@ -649,10 +682,35 @@ namespace Gauntlet
 				SubmitToDashboard(GetTestResult(), Context, Context.BuildInfo, SessionArtifacts, ArtifactPath);
 			}
 			catch (Exception Ex)
-			{
+			{				
 				Log.Warning("Failed to submit results to dashboard. {0}", Ex);
 			}
 		}
+
+		/// <summary>
+		/// Called when report creation fails, by default logs warning with failure message
+		/// </summary>
+		protected virtual void HandleCreateReportFailure(UnrealTestContext Context, string Message = "")
+		{
+			if (string.IsNullOrEmpty(Message))
+			{
+				Message = string.Format("See Gauntlet.log for details");
+			}
+
+			if (Globals.IsWorker)
+			{
+				// log for worker to parse context
+				Log.Info("GauntletWorker:CreateReportFailure:{0}", Context.WorkerJobID);
+			}
+
+			Log.Warning("CreateReport Failed: {0}", Message);
+		}
+
+		/// <summary>
+		/// Whether creating the test report failed
+		/// </summary>
+		public bool CreateReportFailed { get; protected set; }
+		 
 
 		/// <summary>
 		/// Optional function that is called on test completion and gives an opportunity to create a report
@@ -660,7 +718,7 @@ namespace Gauntlet
 		/// <param name="Result"></param>
 		/// <param name="Contex"></param>
 		/// <param name="Build"></param>
-		public virtual void CreateReport(TestResult Result, UnrealTestContext Contex, UnrealBuildSource Build, IEnumerable<UnrealRoleArtifacts> Artifacts, string ArtifactPath)
+		public virtual void CreateReport(TestResult Result, UnrealTestContext Context, UnrealBuildSource Build, IEnumerable<UnrealRoleArtifacts> Artifacts, string ArtifactPath)
 		{
 		}
 
@@ -789,6 +847,54 @@ namespace Gauntlet
 			return ExitCode;
 		}
 
+		private void CheckHeartbeat()
+		{
+			if (CachedConfig == null 
+				|| CachedConfig.HeartbeatOptions.bExpectHeartbeats == false
+				|| GetTestStatus() != TestStatus.InProgress)
+			{
+				return;
+			}
+
+			UnrealHeartbeatOptions HeartbeatOptions = CachedConfig.HeartbeatOptions;
+
+			// First active heartbeat has not happened yet and timeout before first active heartbeat is enabled
+			if (LastActiveHeartbeatTime == DateTime.MinValue && HeartbeatOptions.TimeoutBeforeFirstActiveHeartbeat > 0)
+			{
+				double SecondsSinceSessionStart = DateTime.Now.Subtract(SessionStartTime).TotalSeconds;
+				if (SecondsSinceSessionStart > HeartbeatOptions.TimeoutBeforeFirstActiveHeartbeat)
+				{
+					Log.Error("{0} seconds have passed without detecting the first active Gauntlet heartbeat.", HeartbeatOptions.TimeoutBeforeFirstActiveHeartbeat);
+					MarkTestComplete();
+					SetUnrealTestResult(TestResult.TimedOut);
+				}
+			}
+
+			// First active heartbeat has happened and timeout between active heartbeats is enabled
+			if (LastActiveHeartbeatTime != DateTime.MinValue && HeartbeatOptions.TimeoutBetweenActiveHeartbeats > 0)
+			{
+				double SecondsSinceLastActiveHeartbeat = DateTime.Now.Subtract(LastActiveHeartbeatTime).TotalSeconds;
+				if (SecondsSinceLastActiveHeartbeat > HeartbeatOptions.TimeoutBetweenActiveHeartbeats)
+				{
+					Log.Error("{0} seconds have passed without detecting any active Gauntlet heartbeats.", HeartbeatOptions.TimeoutBetweenActiveHeartbeats);
+					MarkTestComplete();
+					SetUnrealTestResult(TestResult.TimedOut);
+				}
+			}
+
+			// First heartbeat has happened and timeout between heartbeats is enabled
+			if (LastHeartbeatTime != DateTime.MinValue && HeartbeatOptions.TimeoutBetweenAnyHeartbeats > 0)
+			{
+				double SecondsSinceLastHeartbeat = DateTime.Now.Subtract(LastHeartbeatTime).TotalSeconds;
+				if (SecondsSinceLastHeartbeat > HeartbeatOptions.TimeoutBetweenAnyHeartbeats)
+				{
+					Log.Error("{0} seconds have passed without detecting any Gauntlet heartbeats.", HeartbeatOptions.TimeoutBetweenAnyHeartbeats);
+					MarkTestComplete();
+					SetUnrealTestResult(TestResult.TimedOut);
+				}
+			}
+		}
+
 		/// <summary>
 		/// Returns a hash that represents the results of a role. Should be 0 if no fatal errors or ensures
 		/// </summary>
@@ -896,10 +1002,8 @@ namespace Gauntlet
 				}
 			}
 
-			MB.Paragraph(string.Format("FatalErrors: {0}, Ensures: {1}, Errors: {2}, Warnings: {3}",
-				FatalErrors, LogSummary.Ensures.Count(), LogSummary.Errors.Count(), LogSummary.Warnings.Count()));
-
-			MB.Paragraph(string.Format("ResultHash: {0}", GetRoleResultHash(InArtifacts)));
+			MB.Paragraph(string.Format("FatalErrors: {0}, Ensures: {1}, Errors: {2}, Warnings: {3}, Hash: {4}",
+				FatalErrors, LogSummary.Ensures.Count(), LogSummary.Errors.Count(), LogSummary.Warnings.Count(), GetRoleResultHash(InArtifacts)));
 
 			if (GetCachedConfiguration().ShowErrorsInSummary && InArtifacts.LogSummary.Errors.Count() > 0)
 			{
@@ -1114,8 +1218,7 @@ namespace Gauntlet
 			}
 			MB.Paragraph(string.Format("Context: {0}", Context.ToString()));
 			MB.Paragraph(string.Format("FatalErrors: {0}, Ensures: {1}, Errors: {2}, Warnings: {3}", FatalErrors, Ensures, Errors, Warnings));
-			MB.Paragraph(string.Format("ResultHash: {0}", GetTestResultHash()));
-			MB.Paragraph(string.Format("Result: {0}", GetTestResult()));
+			MB.Paragraph(string.Format("Result: {0}, ResultHash: {1}", GetTestResult(), GetTestResultHash()));
 			//MB.Paragraph(string.Format("Artifacts: {0}", CachedArtifactPath));
 
 			return MB.ToString();

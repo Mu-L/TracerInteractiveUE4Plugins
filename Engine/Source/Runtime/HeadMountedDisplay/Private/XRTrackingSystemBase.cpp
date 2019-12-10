@@ -6,6 +6,8 @@
 #include "Engine/LocalPlayer.h"
 #include "Camera/CameraComponent.h"
 #include "GameFramework/PlayerController.h"
+#include "DefaultXRLoadingScreen.h"
+
 
 // Tracking system delegates
 FXRTrackingSystemDelegates::FXRTrackingOriginChanged FXRTrackingSystemDelegates::OnXRTrackingOriginChanged;
@@ -14,6 +16,7 @@ FXRTrackingSystemDelegates::FXRTrackingOriginChanged FXRTrackingSystemDelegates:
 
 
 FXRTrackingSystemBase::FXRTrackingSystemBase(IARSystemSupport* InARImplementation)
+	: LoadingScreen(nullptr)
 {
 	ARCompositionComponent = MakeShared<FARSupportInterface , ESPMode::ThreadSafe>(InARImplementation, this);
 }
@@ -23,6 +26,13 @@ FXRTrackingSystemBase::~FXRTrackingSystemBase()
 	if (ARCompositionComponent.IsValid())
 	{
 		ARCompositionComponent.Reset();
+	}
+
+	if (LoadingScreen)
+	{
+		LoadingScreen->HideLoadingScreen();
+		delete LoadingScreen;
+		LoadingScreen = nullptr;
 	}
 }
 
@@ -111,6 +121,25 @@ void FXRTrackingSystemBase::UpdateExternalTrackingPosition(const FTransform& Ext
 }
 
 
+class IXRLoadingScreen* FXRTrackingSystemBase::GetLoadingScreen()
+{
+	if (!LoadingScreen)
+	{
+		LoadingScreen = CreateLoadingScreen();
+	}
+	return LoadingScreen;
+}
+
+class IXRLoadingScreen* FXRTrackingSystemBase::CreateLoadingScreen()
+{
+	if (GetStereoRenderingDevice().IsValid() && GetStereoRenderingDevice()->GetStereoLayers() && GetStereoRenderingDevice()->GetStereoLayers()->SupportsLayerState())
+	{
+		return new FDefaultXRLoadingScreen(this);
+	}
+	return nullptr;
+}
+
+
 TSharedPtr<FARSupportInterface , ESPMode::ThreadSafe> FXRTrackingSystemBase::GetARCompositionComponent()
 {
 	return ARCompositionComponent;
@@ -120,7 +149,6 @@ const TSharedPtr<const FARSupportInterface , ESPMode::ThreadSafe> FXRTrackingSys
 {
 	return ARCompositionComponent;
 }
-
 
 FTransform FXRTrackingSystemBase::RefreshTrackingToWorldTransform(FWorldContext& WorldContext)
 {
@@ -164,7 +192,7 @@ FTransform FXRTrackingSystemBase::ComputeTrackingToWorldTransform(FWorldContext&
 						// emulates AActor::CalcCamera(); the PlayerCameraManager uses ViewTarget->CalcCamera() for 
 						// the HMD view's basis (regardless of whether bLockToHmd is set), CalcCamera() just finds 
 						// the first active cam component and chooses that
-						if (Cam->bIsActive)
+						if (Cam->IsActive())
 						{
 							PlayerCamera = Cam;
 							break;
@@ -178,17 +206,17 @@ FTransform FXRTrackingSystemBase::ComputeTrackingToWorldTransform(FWorldContext&
 						{
 							TrackingToWorld = ViewParent->GetComponentTransform();
 
-							if (PlayerCamera->bAbsoluteLocation)
+							if (PlayerCamera->IsUsingAbsoluteLocation())
 							{
 								TrackingToWorld.SetLocation(FVector::ZeroVector);
 							}
 
-							if (PlayerCamera->bAbsoluteRotation)
+							if (PlayerCamera->IsUsingAbsoluteRotation())
 							{
 								TrackingToWorld.SetRotation(FQuat::Identity);
 							}
 
-							if (PlayerCamera->bAbsoluteScale)
+							if (PlayerCamera->IsUsingAbsoluteScale())
 							{
 								TrackingToWorld.SetScale3D(FVector::OneVector);
 							}

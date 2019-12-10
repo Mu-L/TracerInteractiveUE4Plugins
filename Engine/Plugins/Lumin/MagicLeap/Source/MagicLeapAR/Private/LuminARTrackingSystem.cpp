@@ -31,20 +31,12 @@ FLuminARImplementation::~FLuminARImplementation()
 
 void* FLuminARImplementation::GetARSessionRawPointer()
 {
-#if PLATFORM_LUMIN
 	return static_cast<void*>(FLuminARDevice::GetInstance()->GetARSessionRawPointer());
-#endif
-	ensureAlwaysMsgf(false, TEXT("FLuminARImplementation::GetARSessionRawPointer is unimplemented on current platform."));
-	return nullptr;
 }
 
 void* FLuminARImplementation::GetGameThreadARFrameRawPointer()
 {
-#if PLATFORM_LUMIN
 	return static_cast<void*>(FLuminARDevice::GetInstance()->GetGameThreadARFrameRawPointer());
-#endif
-	ensureAlwaysMsgf(false, TEXT("FLuminARImplementation::GetARSessionRawPointer is unimplemented on current platform."));
-	return nullptr;
 }
 
 void FLuminARImplementation::OnARSystemInitialized()
@@ -74,6 +66,15 @@ bool FLuminARImplementation::OnStartARGameFrame(FWorldContext& WorldContext)
 	return true;
 }
 
+bool FLuminARImplementation::IsARAvailable() const
+{
+	return true;
+}
+
+EARTrackingQualityReason FLuminARImplementation::OnGetTrackingQualityReason() const
+{
+	return EARTrackingQualityReason::None;
+}
 
 EARTrackingQuality FLuminARImplementation::OnGetTrackingQuality() const
 {

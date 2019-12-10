@@ -460,6 +460,11 @@ void FAnimationEditor::SetAnimationAsset(UAnimationAsset* AnimAsset)
 	HandleOpenNewAsset(AnimAsset);
 }
 
+IAnimationSequenceBrowser* FAnimationEditor::GetAssetBrowser() const
+{
+	return SequenceBrowser.Pin().Get();
+}
+
 void FAnimationEditor::HandleOpenNewAsset(UObject* InNewAsset)
 {
 	if (UAnimationAsset* NewAnimationAsset = Cast<UAnimationAsset>(InNewAsset))
@@ -730,7 +735,7 @@ void FAnimationEditor::ConditionalRefreshEditor(UObject* InObject)
 {
 	bool bInterestingAsset = true;
 
-	if (InObject != GetPersonaToolkit()->GetSkeleton() && InObject != GetPersonaToolkit()->GetSkeleton()->GetPreviewMesh() && Cast<UAnimationAsset>(InObject) != AnimationAsset)
+	if (InObject != GetPersonaToolkit()->GetSkeleton() && (GetPersonaToolkit()->GetSkeleton() && InObject != GetPersonaToolkit()->GetSkeleton()->GetPreviewMesh()) && Cast<UAnimationAsset>(InObject) != AnimationAsset)
 	{
 		bInterestingAsset = false;
 	}
@@ -754,6 +759,11 @@ void FAnimationEditor::ConditionalRefreshEditor(UObject* InObject)
 				}
 			}
 		}
+	}
+
+	if (GetPersonaToolkit()->GetSkeleton() == nullptr)
+	{
+		bInterestingAsset = false;
 	}
 
 	if (bInterestingAsset)

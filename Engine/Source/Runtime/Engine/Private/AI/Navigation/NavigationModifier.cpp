@@ -18,8 +18,8 @@ static const float CONVEX_HULL_POINTS_MIN_DISTANCE_SQ = 4.0f * 4.0f;
 // FNavigationLinkBase
 //----------------------------------------------------------------------//
 FNavigationLinkBase::FNavigationLinkBase() 
-	: LeftProjectHeight(0.0f), MaxFallDownLength(1000.0f), Direction(ENavLinkDirection::BothWays), UserId(0),
-	  SnapRadius(30.f), SnapHeight(50.0f), bUseSnapHeight(false), bSnapToCheapestArea(true),
+	: LeftProjectHeight(0.0f), MaxFallDownLength(1000.0f), UserId(0), SnapRadius(30.f), SnapHeight(50.0f),
+	  Direction(ENavLinkDirection::BothWays), bUseSnapHeight(false), bSnapToCheapestArea(true),
 	  bCustomFlag0(false), bCustomFlag1(false), bCustomFlag2(false), bCustomFlag3(false), bCustomFlag4(false),
 	  bCustomFlag5(false), bCustomFlag6(false), bCustomFlag7(false)
 {
@@ -52,6 +52,7 @@ bool FNavigationLinkBase::HasMetaArea() const
 	return AreaClass && AreaClass->GetDefaultObject<UNavAreaBase>()->IsMetaArea();
 }
 
+#if WITH_EDITORONLY_DATA
 void FNavigationLinkBase::PostSerialize(const FArchive& Ar)
 {
 	if (Ar.IsLoading() && Ar.UE4Ver() < VER_UE4_NAVIGATION_AGENT_SELECTOR)
@@ -77,6 +78,7 @@ void FNavigationLinkBase::PostSerialize(const FArchive& Ar)
 
 	// can't initialize at this time, used UClass may not be ready yet
 }
+#endif
 
 #if WITH_EDITOR
 
@@ -326,6 +328,22 @@ FAreaNavModifier::FAreaNavModifier(const TNavStatArray<FVector>& InPoints, const
 	SetConvex(InPoints.GetData(), FirstIndex, LastIndex, CoordType, LocalToWorld);
 }
 
+void FAreaNavModifier::InitializeConvex(const TNavStatArray<FVector>& InPoints, const int32 FirstIndex, const int32 LastIndex, const FTransform& LocalToWorld, const TSubclassOf<UNavAreaBase> InAreaClass)
+{
+	check(InPoints.IsValidIndex(FirstIndex) && InPoints.IsValidIndex(LastIndex-1));
+
+	Init(InAreaClass);
+	SetConvex(InPoints.GetData(), FirstIndex, LastIndex, ENavigationCoordSystem::Unreal, LocalToWorld);
+}
+
+void FAreaNavModifier::InitializePerInstanceConvex(const TNavStatArray<FVector>& InPoints, const int32 FirstIndex, const int32 LastIndex, const TSubclassOf<UNavAreaBase> InAreaClass)
+{
+	check(InPoints.IsValidIndex(FirstIndex) && InPoints.IsValidIndex(LastIndex - 1));
+
+	Init(InAreaClass);
+	SetPerInstanceConvex(InPoints.GetData(), FirstIndex, LastIndex);
+}
+
 FAreaNavModifier::FAreaNavModifier(const UBrushComponent* BrushComponent, const TSubclassOf<UNavAreaBase> InAreaClass)
 {
 	check(BrushComponent != NULL);
@@ -369,6 +387,14 @@ void FAreaNavModifier::GetConvex(FConvexNavAreaData& Data) const
 	FVector LastPoint = Data.Points.Pop();
 	Data.MinZ = LastPoint.X;
 	Data.MaxZ = LastPoint.Y;
+}
+
+void FAreaNavModifier::GetPerInstanceConvex(const FTransform& InLocalToWorld, FConvexNavAreaData& OutConvexData) const
+{
+	ensure(ShapeType == ENavigationShapeType::InstancedConvex);
+
+	FBox TmpBounds;
+	FillConvexNavAreaData(Points.GetData(), Points.Num(), InLocalToWorld, OutConvexData, TmpBounds);
 }
 
 void FAreaNavModifier::Init(const TSubclassOf<UNavAreaBase> InAreaClass)
@@ -458,30 +484,33 @@ void FAreaNavModifier::SetBox(const FBox& Box, const FTransform& LocalToWorld)
 	}
 }
 
-void FAreaNavModifier::SetConvex(const FVector* InPoints, const int32 FirstIndex, const int32 LastIndex, ENavigationCoordSystem::Type CoordType, const FTransform& LocalToWorld)
+void FAreaNavModifier::FillConvexNavAreaData(const FVector* InPoints, const int32 InNumPoints, const FTransform& InTotalTransform, FConvexNavAreaData& OutConvexData, FBox& OutBounds)
 {
-	FConvexNavAreaData ConvexData;
-	ConvexData.MinZ = MAX_FLT;
-	ConvexData.MaxZ = -MAX_FLT;
+	OutBounds = FBox(ForceInit);
+	OutConvexData.Points.Reset();
+	OutConvexData.MinZ = MAX_FLT;
+	OutConvexData.MaxZ = -MAX_FLT;
+
+	if (InNumPoints <= 0)
+	{
+		return;
+	}
 
 	const int MaxConvexPoints = 8;
 	TArray<FVector, TInlineAllocator<MaxConvexPoints>> HullVertices;
 	HullVertices.Empty(MaxConvexPoints);
 
-	// we store verts in unreal coords
-	const FTransform& TotalTransform = LocalToWorld * FNavigationSystem::GetCoordTransform(CoordType, ENavigationCoordSystem::Unreal);
-
-	for (int32 i = FirstIndex; i < LastIndex; i++)
+	for (int32 i = 0; i < InNumPoints; i++)
 	{
-		FVector TransformedPoint = TotalTransform.TransformPosition(InPoints[i]);
-		ConvexData.MinZ = FMath::Min( ConvexData.MinZ, TransformedPoint.Z );
-		ConvexData.MaxZ = FMath::Max( ConvexData.MaxZ, TransformedPoint.Z );
+		FVector TransformedPoint = InTotalTransform.TransformPosition(InPoints[i]);
+		OutConvexData.MinZ = FMath::Min(OutConvexData.MinZ, TransformedPoint.Z);
+		OutConvexData.MaxZ = FMath::Max(OutConvexData.MaxZ, TransformedPoint.Z);
 		TransformedPoint.Z = 0.f;
 
 		// check if there's a similar point already in HullVertices array
 		bool bUnique = true;
 		const FVector* RESTRICT Start = HullVertices.GetData();
-		for (const FVector* RESTRICT Data = Start, * RESTRICT DataEnd = Data + HullVertices.Num(); Data != DataEnd; ++Data)
+		for (const FVector* RESTRICT Data = Start, *RESTRICT DataEnd = Data + HullVertices.Num(); Data != DataEnd; ++Data)
 		{
 			if (FVector::DistSquared(*Data, TransformedPoint) < CONVEX_HULL_POINTS_MIN_DISTANCE_SQ)
 			{
@@ -489,7 +518,7 @@ void FAreaNavModifier::SetConvex(const FVector* InPoints, const int32 FirstIndex
 				break;
 			}
 		}
-		
+
 		if (bUnique)
 		{
 			HullVertices.Add(TransformedPoint);
@@ -499,20 +528,52 @@ void FAreaNavModifier::SetConvex(const FVector* InPoints, const int32 FirstIndex
 	TArray<int32, TInlineAllocator<MaxConvexPoints>> HullIndices;
 	HullIndices.Empty(MaxConvexPoints);
 
-	ConvexHull2D::ComputeConvexHull(HullVertices, HullIndices);
-	if (HullIndices.Num())
+	ConvexHull2D::ComputeConvexHullLegacy(HullVertices, HullIndices);
+	
+	// ConvexHull implementation requires at least 3 vertices  (i.e. GrowConvexHull)
+	const int32 MIN_NUM_POINTS = 3;
+
+	if (HullIndices.Num() >= MIN_NUM_POINTS)
 	{
-		Bounds = FBox(ForceInit);
-		for(int32 i = 0; i < HullIndices.Num(); ++i)
+		for (int32 i = 0; i < HullIndices.Num(); ++i)
 		{
 			const FVector& HullVert = HullVertices[HullIndices[i]];
-			ConvexData.Points.Add(HullVert);
-			Bounds += HullVert;
+			OutConvexData.Points.Add(HullVert);
+			OutBounds += HullVert;
 		}
 
-		Bounds.Min.Z = ConvexData.MinZ;
-		Bounds.Max.Z = ConvexData.MaxZ;
+		OutBounds.Min.Z = OutConvexData.MinZ;
+		OutBounds.Max.Z = OutConvexData.MaxZ;
+	}
+}
 
+void FAreaNavModifier::SetPerInstanceConvex(const FVector* InPoints, const int32 InFirstIndex, const int32 InLastIndex)
+{
+	// Per Instance modifiers requires that we keep all unique points until we receive the instance transform for
+    // ConvexHull to be computed. Local Bounds must be computed right away.
+	Bounds = FBox(ForceInit);
+	for (int32 i = InFirstIndex; i < InLastIndex; i++)
+	{
+		const FVector& CurrentPoint = InPoints[i];
+		FVector* SamePoint = Points.FindByPredicate([&CurrentPoint](FVector& Point) { return FMath::IsNearlyZero(FVector::DistSquared(Point, CurrentPoint)); });
+		if (SamePoint == nullptr)
+		{
+			Points.Add(CurrentPoint);
+			Bounds += CurrentPoint;
+		}
+	}
+	ShapeType = ENavigationShapeType::InstancedConvex;
+}
+
+void FAreaNavModifier::SetConvex(const FVector* InPoints, const int32 FirstIndex, const int32 LastIndex, ENavigationCoordSystem::Type CoordType, const FTransform& LocalToWorld)
+{
+	const FTransform& TotalTransform = LocalToWorld * FNavigationSystem::GetCoordTransform(CoordType, ENavigationCoordSystem::Unreal);
+
+	FConvexNavAreaData ConvexData;
+	FillConvexNavAreaData(InPoints + FirstIndex, LastIndex - FirstIndex, TotalTransform, ConvexData, Bounds);
+
+	if (ConvexData.Points.Num() > 0)
+	{
 		Points.Append(ConvexData.Points);
 		Points.Add(FVector(ConvexData.MinZ, ConvexData.MaxZ, 0));
 		ShapeType = ENavigationShapeType::Convex;
@@ -669,6 +730,7 @@ void FCompositeNavModifier::Reset()
 	CustomLinks.Reset();
 	bHasPotentialLinks = false;
 	bAdjustHeight = false;
+	bIsPerInstanceModifier = false;
 }
 
 void FCompositeNavModifier::Empty()
@@ -844,5 +906,7 @@ uint32 FCompositeNavModifier::GetAllocatedSize() const
 
 bool FCompositeNavModifier::HasPerInstanceTransforms() const
 {
+	PRAGMA_DISABLE_DEPRECATION_WARNINGS
 	return NavDataPerInstanceTransformDelegate.IsBound();
+	PRAGMA_ENABLE_DEPRECATION_WARNINGS
 }

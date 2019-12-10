@@ -381,6 +381,13 @@ void UKismetSystemLibrary::QuitGame(UObject* WorldContextObject, class APlayerCo
 	}
 }
 
+#if WITH_EDITOR
+void UKismetSystemLibrary::QuitEditor()
+{
+	GEngine->Exec(nullptr, TEXT("QUIT_EDITOR"), *GLog);
+}
+#endif	// WITH_EDITOR
+
 bool UKismetSystemLibrary::K2_IsValidTimerHandle(FTimerHandle TimerHandle)
 {
 	return TimerHandle.IsValid();
@@ -2126,8 +2133,8 @@ void UKismetSystemLibrary::MoveComponentTo(USceneComponent* Component, FVector T
 		FLatentActionManager& LatentActionManager = World->GetLatentActionManager();
 		FInterpolateComponentToAction* Action = LatentActionManager.FindExistingAction<FInterpolateComponentToAction>(LatentInfo.CallbackTarget, LatentInfo.UUID);
 
-		const FVector ComponentLocation = (Component != NULL) ? Component->RelativeLocation : FVector::ZeroVector;
-		const FRotator ComponentRotation = (Component != NULL) ? Component->RelativeRotation : FRotator::ZeroRotator;
+		const FVector ComponentLocation = (Component != NULL) ? Component->GetRelativeLocation() : FVector::ZeroVector;
+		const FRotator ComponentRotation = (Component != NULL) ? Component->GetRelativeRotation() : FRotator::ZeroRotator;
 
 		// If not currently running
 		if (Action == NULL)
@@ -2669,6 +2676,16 @@ void UKismetSystemLibrary::TransactObject(UObject* Object)
 	if (Object)
 	{
 		Object->Modify();
+	}
+#endif
+}
+
+void UKismetSystemLibrary::SnapshotObject(UObject* Object)
+{
+#if WITH_EDITOR
+	if (Object)
+	{
+		SnapshotTransactionBuffer(Object);
 	}
 #endif
 }

@@ -143,6 +143,19 @@ void FMeshPaintGeometryAdapterForStaticMeshes::InitializeAdapterGlobals()
 	}
 }
 
+void FMeshPaintGeometryAdapterForStaticMeshes::CleanupGlobals()
+{
+	for (TPair<UStaticMesh*, FStaticMeshReferencers>& Pair : MeshToComponentMap)
+	{
+		if (Pair.Key && Pair.Value.RestoreBodySetup)
+		{
+			Pair.Key->BodySetup = Pair.Value.RestoreBodySetup;
+		}
+	}
+
+	MeshToComponentMap.Empty();
+}
+
 void FMeshPaintGeometryAdapterForStaticMeshes::OnAdded()
 {
 	check(StaticMeshComponent);
@@ -205,11 +218,9 @@ void FMeshPaintGeometryAdapterForStaticMeshes::OnAdded()
 
 void FMeshPaintGeometryAdapterForStaticMeshes::OnRemoved()
 {
-	check(StaticMeshComponent);
-	
 	// If the referenced static mesh has been destroyed (and nulled by GC), don't try to do anything more.
 	// It should be in the process of removing all global geometry adapters if it gets here in this situation.
-	if (!ReferencedStaticMesh)
+	if (!ReferencedStaticMesh || !StaticMeshComponent)
 	{
 		return;
 	}
@@ -233,13 +244,6 @@ void FMeshPaintGeometryAdapterForStaticMeshes::OnRemoved()
 			StaticMeshComponent->RecreatePhysicsState();
 
 			StaticMeshReferencers->Referencers.RemoveAtSwap(Index);
-
-			// If the last reference was removed, restore the body setup for the static mesh
-			if (StaticMeshReferencers->Referencers.Num() == 0)
-			{
-				ReferencedStaticMesh->BodySetup = StaticMeshReferencers->RestoreBodySetup;
-				verify(MeshToComponentMap.Remove(ReferencedStaticMesh) == 1);
-			}
 		}
 		else
 		{
@@ -248,6 +252,13 @@ void FMeshPaintGeometryAdapterForStaticMeshes::OnRemoved()
 			{
 				return Info.StaticMeshComponent == nullptr;
 			});
+		}
+
+		// If the last reference was removed, restore the body setup for the static mesh
+		if (StaticMeshReferencers->Referencers.Num() == 0)
+		{
+			ReferencedStaticMesh->BodySetup = StaticMeshReferencers->RestoreBodySetup;
+			verify(MeshToComponentMap.Remove(ReferencedStaticMesh) == 1);
 		}
 	}
 }
@@ -268,21 +279,23 @@ void FMeshPaintGeometryAdapterForStaticMeshes::ApplyOrRemoveTextureOverride(UTex
 	DefaultApplyOrRemoveTextureOverride(StaticMeshComponent, SourceTexture, OverrideTexture);
 }
 
+void FMeshPaintGeometryAdapterForStaticMeshes::AddReferencedObjectsGlobals(FReferenceCollector& Collector)
+{
+	for (TPair<UStaticMesh*, FStaticMeshReferencers>& Pair : MeshToComponentMap)
+	{
+		Collector.AddReferencedObject(Pair.Key);
+		Collector.AddReferencedObject(Pair.Value.RestoreBodySetup);
+		for (FStaticMeshReferencers::FReferencersInfo& ReferencerInfo : Pair.Value.Referencers)
+		{
+			Collector.AddReferencedObject(ReferencerInfo.StaticMeshComponent);
+		}
+	}
+}
+
 void FMeshPaintGeometryAdapterForStaticMeshes::AddReferencedObjects(FReferenceCollector& Collector)
 {
-	if (!ReferencedStaticMesh)
-	{
-		return;
-	}
-
-	FStaticMeshReferencers* StaticMeshReferencers = MeshToComponentMap.Find(ReferencedStaticMesh);
-	check(StaticMeshReferencers);
-	Collector.AddReferencedObject(StaticMeshReferencers->RestoreBodySetup);
-
-	for (auto& Info : StaticMeshReferencers->Referencers)
-	{
-		Collector.AddReferencedObject(Info.StaticMeshComponent);
-	}
+	Collector.AddReferencedObject(ReferencedStaticMesh);
+	Collector.AddReferencedObject(StaticMeshComponent);
 }
 
 void FMeshPaintGeometryAdapterForStaticMeshes::GetVertexColor(int32 VertexIndex, FColor& OutColor, bool bInstance /*= true*/) const
@@ -375,14 +388,16 @@ void FMeshPaintGeometryAdapterForStaticMeshes::PreEdit()
 		StaticMeshComponent->SetFlags(RF_Transactional);
 		StaticMeshComponent->Modify();
 		StaticMeshComponent->bCustomOverrideVertexColorPerLOD = (MeshLODIndex > 0);
-
+				
+		const int32 NumLODs = StaticMesh->GetNumLODs();
+		const int32 MaxIndex = (MeshLODIndex == 0) ? NumLODs : (MeshLODIndex + 1);
 		// Ensure LODData has enough entries in it, free not required.
-		StaticMeshComponent->SetLODDataCount(MeshLODIndex + 1, StaticMeshComponent->LODData.Num());
+
+		StaticMeshComponent->SetLODDataCount(NumLODs, NumLODs);
 
 		// If LOD is 0, pre-edit all LODs. There's currently no way to tell from here
 		// if VertexPaintSettings.bPaintOnSpecificLOD is set to true or not.
-		const int32 MaxLOD = (MeshLODIndex == 0) ? StaticMeshComponent->LODData.Num() : (MeshLODIndex + 1);
-		for (int32 Index = MeshLODIndex; Index < MaxLOD; ++Index)
+		for (int32 Index = MeshLODIndex; Index < MaxIndex; ++Index)
 		{
 			FStaticMeshComponentLODInfo& InstanceMeshLODInfo = StaticMeshComponent->LODData[Index];
 			FStaticMeshLODResources& LODResource = StaticMesh->RenderData->LODResources[Index];

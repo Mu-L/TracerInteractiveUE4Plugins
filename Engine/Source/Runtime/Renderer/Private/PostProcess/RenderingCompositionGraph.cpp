@@ -319,6 +319,17 @@ ERenderTargetLoadAction FRenderingCompositePassContext::GetLoadActionForRenderTa
 	return LoadAction;
 }
 
+FIntRect FRenderingCompositePassContext::GetSceneColorDestRect(FRenderingCompositePass* InPass) const
+{
+	if (const FRenderingCompositeOutput* Output = InPass->GetOutput(ePId_Output0))
+	{
+		if (const IPooledRenderTarget* Target = Output->PooledRenderTarget)
+		{
+			return GetSceneColorDestRect(Target->GetRenderTargetItem());
+		}
+	}
+	return SceneColorViewRect;
+}
 
 // --------------------------------------------------------------------------
 
@@ -891,15 +902,15 @@ void FPostProcessPassParameters::SetPS(TRHICmdList& RHICmdList, FRHIPixelShader*
 	Set(RHICmdList, ShaderRHI, Context, Filter, FallbackColor, FilterOverrideArray);
 }
 
-template void FPostProcessPassParameters::SetPS(FRHICommandList& RHICmdList, FRHIPixelShader* ShaderRHI, const FRenderingCompositePassContext& Context, FRHISamplerState* Filter, EFallbackColor FallbackColor, FRHISamplerState** FilterOverrideArray);
-template void FPostProcessPassParameters::SetPS(FRHICommandListImmediate& RHICmdList, FRHIPixelShader* ShaderRHI, const FRenderingCompositePassContext& Context, FRHISamplerState* Filter, EFallbackColor FallbackColor, FRHISamplerState** FilterOverrideArray);
+template RENDERER_API void FPostProcessPassParameters::SetPS(FRHICommandList& RHICmdList, FRHIPixelShader* ShaderRHI, const FRenderingCompositePassContext& Context, FRHISamplerState* Filter, EFallbackColor FallbackColor, FRHISamplerState** FilterOverrideArray);
+template RENDERER_API void FPostProcessPassParameters::SetPS(FRHICommandListImmediate& RHICmdList, FRHIPixelShader* ShaderRHI, const FRenderingCompositePassContext& Context, FRHISamplerState* Filter, EFallbackColor FallbackColor, FRHISamplerState** FilterOverrideArray);
 
 template< typename TRHICmdList >
 void FPostProcessPassParameters::SetCS(FRHIComputeShader* ShaderRHI, const FRenderingCompositePassContext& Context, TRHICmdList& RHICmdList, FRHISamplerState* Filter, EFallbackColor FallbackColor, FRHISamplerState** FilterOverrideArray)
 {
 	Set(RHICmdList, ShaderRHI, Context, Filter, FallbackColor, FilterOverrideArray);
 }
-template void FPostProcessPassParameters::SetCS< FRHICommandListImmediate >(
+template RENDERER_API void FPostProcessPassParameters::SetCS< FRHICommandListImmediate >(
 	FRHIComputeShader* ShaderRHI,
 	const FRenderingCompositePassContext& Context,
 	FRHICommandListImmediate& RHICmdList,
@@ -908,7 +919,7 @@ template void FPostProcessPassParameters::SetCS< FRHICommandListImmediate >(
 	FRHISamplerState** FilterOverrideArray
 	);
 
-template void FPostProcessPassParameters::SetCS< FRHIAsyncComputeCommandListImmediate >(
+template RENDERER_API void FPostProcessPassParameters::SetCS< FRHIAsyncComputeCommandListImmediate >(
 	FRHIComputeShader* ShaderRHI,
 	const FRenderingCompositePassContext& Context,
 	FRHIAsyncComputeCommandListImmediate& RHICmdList,
@@ -1063,7 +1074,7 @@ void FPostProcessPassParameters::Set(
 }
 
 #define IMPLEMENT_POST_PROCESS_PARAM_SET( TRHIShader, TRHICmdList ) \
-	template void FPostProcessPassParameters::Set< TRHIShader >( \
+	template RENDERER_API void FPostProcessPassParameters::Set< TRHIShader >( \
 		TRHICmdList& RHICmdList,						\
 		TRHIShader* ShaderRHI,			\
 		const FRenderingCompositePassContext& Context,	\
@@ -1220,10 +1231,12 @@ FRDGTextureRef FRenderingCompositePass::CreateRDGTextureForInputWithFallback(
 
 void FRenderingCompositePass::ExtractRDGTextureForOutput(FRDGBuilder& GraphBuilder, EPassOutputId OutputId, FRDGTextureRef Texture)
 {
+	check(Texture);
+
 	if (FRenderingCompositeOutput* Output = GetOutput(OutputId))
 	{
 		Output->RenderTargetDesc = Texture->Desc;
-		GraphBuilder.QueueTextureExtraction(Texture, &Output->PooledRenderTarget, true);
+		GraphBuilder.QueueTextureExtraction(Texture, &Output->PooledRenderTarget);
 	}
 }
 
@@ -1233,19 +1246,24 @@ FRDGTextureRef FRenderingCompositePass::FindOrCreateRDGTextureForOutput(
 	const FRDGTextureDesc& TextureDesc,
 	const TCHAR* TextureName)
 {
+	if (FRDGTextureRef OutputTexture = FindRDGTextureForOutput(GraphBuilder, OutputId, TextureName))
+	{
+		return OutputTexture;
+	}
+	return GraphBuilder.CreateTexture(TextureDesc, TextureName);
+}
+
+FRDGTextureRef FRenderingCompositePass::FindRDGTextureForOutput(
+	FRDGBuilder& GraphBuilder,
+	EPassOutputId OutputId,
+	const TCHAR* TextureName)
+{
 	if (FRenderingCompositeOutput* Output = GetOutput(OutputId))
 	{
-		const TRefCountPtr<IPooledRenderTarget>& ExistingTarget = Output->PooledRenderTarget;
-
-		if (ExistingTarget)
+		if (const TRefCountPtr<IPooledRenderTarget>& ExistingTarget = Output->PooledRenderTarget)
 		{
 			return GraphBuilder.RegisterExternalTexture(ExistingTarget, TextureName);
 		}
-		else
-		{
-			return GraphBuilder.CreateTexture(TextureDesc, TextureName);
-		}
 	}
-
 	return nullptr;
 }

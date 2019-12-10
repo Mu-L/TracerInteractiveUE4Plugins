@@ -4,6 +4,7 @@
 
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/CoreDelegates.h"
+#include "Misc/EmbeddedCommunication.h"
 #include "IOS/IOSAppDelegate.h"
 
 TUniquePtr<FVivoxVoiceChat> CreateVivoxObject()
@@ -34,7 +35,9 @@ bool FIOSVivoxVoiceChat::Initialize()
 	{
 		GConfig->GetBool(TEXT("VoiceChat.Vivox"), TEXT("bDisconnectInBackground"), bDisconnectInBackground, GEngineIni);
 		GConfig->GetFloat(TEXT("VoiceChat.Vivox"), TEXT("BackgroundDelayedDisconnectTime"), BackgroundDelayedDisconnectTime, GEngineIni);
-		
+		GConfig->GetBool(TEXT("VoiceChat.Vivox"), TEXT("bEnableHardwareAEC"), bEnableHardwareAEC, GEngineIni);
+		GConfig->GetBool(TEXT("VoiceChat.Vivox"), TEXT("bEnableBluetoothMicrophone"), bEnableBluetoothMicrophone, GEngineIni);
+
 		if (!ApplicationWillEnterBackgroundHandle.IsValid())
 		{
 			ApplicationWillEnterBackgroundHandle = FCoreDelegates::ApplicationWillDeactivateDelegate.AddRaw(this, &FIOSVivoxVoiceChat::HandleApplicationWillEnterBackground);
@@ -43,9 +46,13 @@ bool FIOSVivoxVoiceChat::Initialize()
 		{
 			ApplicationDidEnterForegroundHandle = FCoreDelegates::ApplicationHasReactivatedDelegate.AddRaw(this, &FIOSVivoxVoiceChat::HandleApplicationHasEnteredForeground);
 		}
-	}
+		if (!AudioRouteChangedHandle.IsValid())
+		{
+			AudioRouteChangedHandle = FCoreDelegates::AudioRouteChangedDelegate.AddRaw(this, &FIOSVivoxVoiceChat::HandleAudioRouteChanged);
+		}
 
-	vx_set_platform_aec_enabled(1);
+		UpdateVoiceChatSettings();
+	}
 
 	bInBackground = false;
 	bShouldReconnect = false;
@@ -66,38 +73,117 @@ bool FIOSVivoxVoiceChat::Uninitialize()
 		FCoreDelegates::ApplicationHasReactivatedDelegate.Remove(ApplicationDidEnterForegroundHandle);
 		ApplicationDidEnterForegroundHandle.Reset();
 	}
+	if (AudioRouteChangedHandle.IsValid())
+	{
+		FCoreDelegates::AudioRouteChangedDelegate.Remove(AudioRouteChangedHandle);
+		AudioRouteChangedHandle.Reset();
+	}
 
-	return FVivoxVoiceChat::Uninitialize();
+	bool bReturn = FVivoxVoiceChat::Uninitialize();
+
+	while (VoiceChatEnableCount > 0)
+	{
+		EnableVoiceChat(false);
+	}
+
+	return bReturn;
+}
+
+void FIOSVivoxVoiceChat::SetSetting(const FString& Name, const FString& Value)
+{
+	if (Name == TEXT("HardwareAEC"))
+	{
+		OverrideEnableHardwareAEC = FCString::ToBool(*Value);
+		UpdateVoiceChatSettings();
+	}
+	else if (Name == TEXT("BluetoothMicrophone"))
+	{
+		OverrideEnableBluetoothMicrophone = FCString::ToBool(*Value);
+		UpdateVoiceChatSettings();
+	}
+	else
+	{
+		FVivoxVoiceChat::SetSetting(Name, Value);
+	}
+}
+
+FString FIOSVivoxVoiceChat::GetSetting(const FString& Name)
+{
+	if (Name == TEXT("HardwareAEC"))
+	{
+		return LexToString(IsHardwareAECEnabled());
+	}
+	else if (Name == TEXT("BluetoothMicrophone"))
+	{
+		return LexToString(IsBluetoothMicrophoneEnabled());
+	}
+	return FVivoxVoiceChat::GetSetting(Name);
+}
+
+void FIOSVivoxVoiceChat::JoinChannel(const FString& ChannelName, const FString& ChannelCredentials, EVoiceChatChannelType ChannelType, const FOnVoiceChatChannelJoinCompleteDelegate& Delegate, TOptional<FVoiceChatChannel3dProperties> Channel3dProperties)
+{
+	EnableVoiceChat(true);
+
+	FOnVoiceChatChannelJoinCompleteDelegate DelegateWrapper = FOnVoiceChatChannelJoinCompleteDelegate::CreateLambda(
+		[this, Delegate](const FString& ChannelName, const FVoiceChatResult& Result)
+		{
+			if (!Result.bSuccess)
+			{
+				EnableVoiceChat(false);
+			}
+			Delegate.ExecuteIfBound(ChannelName, Result);
+		});
+
+	FVivoxVoiceChat::JoinChannel(ChannelName, ChannelCredentials, ChannelType, DelegateWrapper, Channel3dProperties);
 }
 
 FDelegateHandle FIOSVivoxVoiceChat::StartRecording(const FOnVoiceChatRecordSamplesAvailableDelegate::FDelegate& Delegate)
 {
-	FPlatformMisc::EnableVoiceChat(true);
+	bIsRecording = true;
+	EnableVoiceChat(true);
 	return FVivoxVoiceChat::StartRecording(Delegate);
 }
 
 void FIOSVivoxVoiceChat::StopRecording(FDelegateHandle Handle)
 {
 	FVivoxVoiceChat::StopRecording(Handle);
-	if (ConnectionState < EConnectionState::Connecting)
-	{
-		FPlatformMisc::EnableVoiceChat(false);
-	}
+	EnableVoiceChat(false);
+	bIsRecording = false;
 }
 
-void FIOSVivoxVoiceChat::onConnectCompleted(const VivoxClientApi::Uri& Server)
+void FIOSVivoxVoiceChat::InvokeOnUIThread(void (Func)(void* Arg0), void* Arg0)
 {
-	FPlatformMisc::EnableVoiceChat(true);
-	FVivoxVoiceChat::onConnectCompleted(Server);
+	[FIOSAsyncTask CreateTaskWithBlock:^bool()
+	{
+		if (Func)
+		{
+			(*Func)(Arg0);
+		}
+		return true;
+	}];
+	
+	FEmbeddedCommunication::WakeGameThread();
+}
+
+void FIOSVivoxVoiceChat::onChannelJoined(const VivoxClientApi::AccountName& AccountName, const VivoxClientApi::Uri& ChannelUri)
+{
+	FVivoxVoiceChat::onChannelJoined(AccountName, ChannelUri);
+}
+
+void FIOSVivoxVoiceChat::onChannelExited(const VivoxClientApi::AccountName& AccountName, const VivoxClientApi::Uri& ChannelUri, const VivoxClientApi::VCSStatus& Status)
+{
+	EnableVoiceChat(false);
+	FVivoxVoiceChat::onChannelExited(AccountName, ChannelUri, Status);
 }
 
 void FIOSVivoxVoiceChat::onDisconnected(const VivoxClientApi::Uri& Server, const VivoxClientApi::VCSStatus& Status)
 {
-	FVivoxVoiceChat::onDisconnected(Server, Status);
-	if (!bIsRecording)
+	while (VoiceChatEnableCount > (bIsRecording ? 1 : 0))
 	{
-		FPlatformMisc::EnableVoiceChat(false);
+		// call once for every channel we were in
+		EnableVoiceChat(false);
 	}
+	FVivoxVoiceChat::onDisconnected(Server, Status);
 }
 
 void FIOSVivoxVoiceChat::OnVoiceChatConnectComplete(const FVoiceChatResult& Result)
@@ -210,10 +296,98 @@ void FIOSVivoxVoiceChat::HandleApplicationHasEnteredForeground()
 	{
 		Reconnect();
 	}
+
+	// HandleAudioRouteChanged is not getting called when a route change happens in the background. Update voice chat settings here to handle this case
+	UpdateVoiceChatSettings();
+}
+
+void FIOSVivoxVoiceChat::HandleAudioRouteChanged(bool)
+{
+	UE_LOG(LogVivoxVoiceChat, Verbose, TEXT("Audio route changed"));
+	UpdateVoiceChatSettings();
 }
 
 void FIOSVivoxVoiceChat::Reconnect()
 {
 	Connect(FOnVoiceChatConnectCompleteDelegate::CreateRaw(this, &FIOSVivoxVoiceChat::OnVoiceChatConnectComplete));
 	bShouldReconnect = false;
+}
+
+bool FIOSVivoxVoiceChat::IsHardwareAECEnabled() const
+{
+	return OverrideEnableHardwareAEC.Get(bEnableHardwareAEC);
+}
+
+bool FIOSVivoxVoiceChat::IsBluetoothMicrophoneEnabled() const
+{
+	return OverrideEnableBluetoothMicrophone.Get(bEnableBluetoothMicrophone);
+}
+
+void FIOSVivoxVoiceChat::EnableVoiceChat(bool bEnable)
+{
+	if (bEnable)
+	{
+		++VoiceChatEnableCount;
+		if (VoiceChatEnableCount == 1)
+		{
+			[[IOSAppDelegate GetDelegate] SetFeature:EAudioFeature::Playback Active:true];
+			[[IOSAppDelegate GetDelegate] SetFeature:EAudioFeature::Record Active:true];
+
+			const bool bEnableAEC = IsHardwareAECEnabled() && IsUsingBuiltInSpeaker();
+			vx_set_platform_aec_enabled(bEnableAEC ? 1 : 0);
+		}
+	}
+	else
+	{
+		if (ensureMsgf(VoiceChatEnableCount > 0, TEXT("Attempted to disable voice chat when it was already disabled")))
+		{
+			--VoiceChatEnableCount;
+			if (VoiceChatEnableCount == 0)
+			{
+				vx_set_platform_aec_enabled(0);
+				[[IOSAppDelegate GetDelegate] SetFeature:EAudioFeature::Record Active:false];
+				[[IOSAppDelegate GetDelegate] SetFeature:EAudioFeature::Playback Active:false];
+			}
+		}
+	}
+}
+
+void FIOSVivoxVoiceChat::UpdateVoiceChatSettings()
+{
+	if (bBluetoothMicrophoneFeatureEnabled != IsBluetoothMicrophoneEnabled())
+	{
+		[[IOSAppDelegate GetDelegate] SetFeature:EAudioFeature::BluetoothMicrophone Active:IsBluetoothMicrophoneEnabled()];
+		bBluetoothMicrophoneFeatureEnabled = IsBluetoothMicrophoneEnabled();
+	}
+
+	const bool bEnableAEC = IsHardwareAECEnabled() && IsUsingBuiltInSpeaker();
+
+	if (bVoiceChatModeEnabled != bEnableAEC)
+	{
+		[[IOSAppDelegate GetDelegate] SetFeature:EAudioFeature::VoiceChat Active:bEnableAEC];
+		bVoiceChatModeEnabled = bEnableAEC;
+	}
+
+	if (VoiceChatEnableCount > 0)
+	{
+		UE_LOG(LogVivoxVoiceChat, Verbose, TEXT("%s AEC"), bEnableAEC ? TEXT("Enabling") : TEXT("Disabling"))
+		vx_set_platform_aec_enabled(bEnableAEC ? 1 : 0);
+	}
+}
+
+bool FIOSVivoxVoiceChat::IsUsingBuiltInSpeaker()
+{
+	if (AVAudioSessionRouteDescription* CurrentRoute = [[AVAudioSession sharedInstance] currentRoute])
+	{
+		for (AVAudioSessionPortDescription* Port in [CurrentRoute outputs])
+		{
+			if ([[Port portType] isEqualToString:AVAudioSessionPortBuiltInReceiver]
+				|| [[Port portType] isEqualToString:AVAudioSessionPortBuiltInSpeaker])
+			{
+				return true;
+			}
+		}
+	}
+
+	return false;
 }

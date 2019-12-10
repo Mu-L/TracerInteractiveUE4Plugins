@@ -25,8 +25,7 @@ struct CORE_API FWindowsOSVersionHelper
 		ERROR_GETWINDOWSGT62VERSIONS_FAILED = 8,
 	};
 
-	static int32 GetOSVersions( FString& out_OSVersion, FString& out_OSSubVersion );
-	static FString GetOSVersion();
+	static int32 GetOSVersions( FString& OutOSVersion, FString& OutOSSubVersion );
 };
 
 
@@ -233,6 +232,16 @@ struct CORE_API FWindowsPlatformMisc
 	 */
 	static bool IsRunningOnBattery();
 
+	FORCEINLINE static void ChooseHDRDeviceAndColorGamut(uint32 DeviceId, uint32 DisplayNitLevel, int32& OutputDevice, int32& ColorGamut)
+	{
+		if (DeviceId == 0x1002 /*AMD*/ || DeviceId == 0x10DE /*NVIDIA*/)
+		{
+			// ScRGB, 1000 or 2000 nits, Rec2020
+			OutputDevice = (DisplayNitLevel == 1000) ? 5 : 6;
+			ColorGamut = 2;
+		}
+	}
+
 	/**
 	 * Gets a globally unique ID the represents a particular operating system install.
 	 */
@@ -243,6 +252,8 @@ struct CORE_API FWindowsPlatformMisc
 	static IPlatformChunkInstall* GetPlatformChunkInstall();
 
 	static void PumpMessagesOutsideMainLoop();
+
+	static uint64 GetFileVersion(const FString &FileName);
 
 };
 

@@ -9,6 +9,7 @@
 #include "Styling/SlateColor.h"
 #include "Styling/CoreStyle.h"
 #include "Widgets/SLeafWidget.h"
+#include "Styling/SlateTypes.h"
 
 class FPaintArgs;
 class FSlateWindowElementList;
@@ -79,8 +80,8 @@ protected:
 
 protected:
 
-	/** The slate brush to draw for the image, or a bound delegate to a brush. */
-	TAttribute< const FSlateBrush* > Image;
+	/** The slate brush to draw for the image that we can invalidate. */
+	FInvalidatableBrushAttribute Image;
 
 	/** Color and opacity scale for this image */
 	TAttribute<FSlateColor> ColorAndOpacity;

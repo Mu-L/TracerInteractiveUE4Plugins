@@ -9,6 +9,7 @@
 #include "Misc/TimeGuard.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/App.h"
+#include "Misc/CoreDelegates.h"
 #include "UObject/ScriptInterface.h"
 #include "UObject/UObjectAllocator.h"
 #include "UObject/UObjectBase.h"
@@ -76,8 +77,6 @@ FThreadSafeBool& FGCScopeLock::GetGarbageCollectingFlag()
 	return IsGarbageCollecting;
 }
 
-TUniquePtr<FGCCSyncObject> FGCCSyncObject::Singleton;
-
 FGCCSyncObject::FGCCSyncObject()
 {
 	GCUnlockedEvent = FPlatformProcess::GetSynchEventFromPool(true);
@@ -88,12 +87,25 @@ FGCCSyncObject::~FGCCSyncObject()
 	GCUnlockedEvent = nullptr;
 }
 
+FGCCSyncObject* GGCSingleton;
+
 void FGCCSyncObject::Create()
 {
-	if (!Singleton.IsValid())
+	struct FSingletonOwner
 	{
-		Singleton = MakeUnique<FGCCSyncObject>();
+		FGCCSyncObject Singleton;
+
+		FSingletonOwner()	{ GGCSingleton = &Singleton; }
+		~FSingletonOwner()	{ GGCSingleton = nullptr;	}
+	};
+	static const FSingletonOwner MagicStaticSingleton;
 	}
+
+FGCCSyncObject& FGCCSyncObject::Get()
+{
+	FGCCSyncObject* Singleton = GGCSingleton;
+	check(Singleton);
+	return *Singleton;
 }
 
 #define UE_LOG_FGCScopeGuard_LockAsync_Time 0
@@ -292,7 +304,7 @@ class FAsyncPurge : public FRunnable
 			++ObjCurrentPurgeObjectIndex;
 
 			// Time slicing when running on the game thread
-			if (bUseTimeLimit && (ProcessedObjectsCount == TimeLimitEnforcementGranularityForDeletion))
+			if (bUseTimeLimit && (ProcessedObjectsCount == TimeLimitEnforcementGranularityForDeletion) && (ObjCurrentPurgeObjectIndex < GUnreachableObjects.Num()))
 			{
 				ProcessedObjectsCount = 0;
 				if ((FPlatformTime::Seconds() - StartTime) > TimeLimit)
@@ -317,7 +329,7 @@ class FAsyncPurge : public FRunnable
 			Object->~UObject();
 			GUObjectAllocator.FreeUObject(Object);
 
-			if (bUseTimeLimit && (ProcessedObjectsCount == TimeLimitEnforcementGranularityForDeletion))
+			if (bUseTimeLimit && (ProcessedObjectsCount == TimeLimitEnforcementGranularityForDeletion) && !GameThreadObjects.IsEmpty())
 			{
 				ProcessedObjectsCount = 0;
 				if ((FPlatformTime::Seconds() - StartTime) > TimeLimit)
@@ -1023,7 +1035,7 @@ public:
 		// are part of the array so we don't suffer from cache misses as much as we would if we were to check ObjectFlags.
 		ParallelFor(NumThreads, [&ObjectsToSerializeList, &ClustersToDissolveList, &KeepClusterRefsList, FastKeepFlags, KeepFlags, NumberOfObjectsPerThread, NumThreads, MaxNumberOfObjects](int32 ThreadIndex)
 		{
-			// Temporary clamping for 4.23 as GUObjectArray.GetFirstGCIndex() is -1 in some rare circumstances UE-76532
+			// Temporary clamping GUObjectArray.GetFirstGCIndex() is -1 in some rare circumstances UE-76532, until we find a permanent fix
 			int32 FirstObjectIndex = FMath::Max(ThreadIndex * NumberOfObjectsPerThread + GUObjectArray.GetFirstGCIndex(), 0);
 			int32 NumObjects = (ThreadIndex < (NumThreads - 1)) ? NumberOfObjectsPerThread : (MaxNumberOfObjects - (NumThreads - 1) * NumberOfObjectsPerThread);
 			int32 LastObjectIndex = FMath::Min(GUObjectArray.GetObjectArrayNum() - 1, FirstObjectIndex + NumObjects - 1);
@@ -1111,9 +1123,14 @@ public:
 			ClustersToDissolveList.PopAll(ClustersToDissolve);
 			for (FUObjectItem* ObjectItem : ClustersToDissolve)
 			{
+				// Check if the object is still a cluster root - it's possible one of the previous
+				// DissolveClusterAndMarkObjectsAsUnreachable calls already dissolved its cluster
+				if (ObjectItem->HasAnyFlags(EInternalObjectFlags::ClusterRoot))
+				{
 				GUObjectClusters.DissolveClusterAndMarkObjectsAsUnreachable(ObjectItem);
 				GUObjectClusters.SetClustersNeedDissolving();
 			}
+		}
 		}
 
 		{
@@ -1450,6 +1467,11 @@ bool IncrementalDestroyGarbage(bool bUseTimeLimit, float TimeLimit)
 		// Have we finished the first round of attempting to call FinishDestroy on unreachable objects?
 		if (GObjCurrentPurgeObjectIndex >= GUnreachableObjects.Num())
 		{
+			double MaxTimeForFinishDestroy = 10.00;
+			bool bFinishDestroyTimeExtended = false;
+			FString FirstObjectNotReadyWhenTimeExtended;
+			int32 StartObjectsPendingDestructionCount = GGCObjectsPendingDestructionCount;
+
 			// We've finished iterating over all unreachable objects, but we need still need to handle
 			// objects that were deferred.
 			int32 LastLoopObjectsPendingDestructionCount = GGCObjectsPendingDestructionCount;
@@ -1516,10 +1538,17 @@ bool IncrementalDestroyGarbage(bool bUseTimeLimit, float TimeLimit)
 					if (FPlatformProperties::RequiresCookedData())
 					{
 						const bool bPollTimeLimit = ((FinishDestroyTimePollCounter++) % TimeLimitEnforcementGranularityForDestroy == 0);
-#if PLATFORM_IOS
-                        const double MaxTimeForFinishDestroy = 30.0;
-#else
-						const double MaxTimeForFinishDestroy = 10.0;
+#if PLATFORM_IOS || PLATFORM_ANDROID
+						if(bPollTimeLimit && !bFinishDestroyTimeExtended && (FPlatformTime::Seconds() - GCStartTime) > MaxTimeForFinishDestroy )
+						{
+							MaxTimeForFinishDestroy = 30.0;
+							bFinishDestroyTimeExtended = true;
+#if USE_HITCH_DETECTION
+							GHitchDetected = true;
+#endif
+							FirstObjectNotReadyWhenTimeExtended = GetFullNameSafe(GGCObjectsPendingDestruction[0]);
+						}
+						else
 #endif
 						// Check if we spent too much time on waiting for FinishDestroy without making any progress
 						if (LastLoopObjectsPendingDestructionCount == GGCObjectsPendingDestructionCount && bPollTimeLimit &&
@@ -1574,6 +1603,13 @@ bool IncrementalDestroyGarbage(bool bUseTimeLimit, float TimeLimit)
 			// Have all objects been destroyed now?
 			if( GGCObjectsPendingDestructionCount == 0 )
 			{
+				if (bFinishDestroyTimeExtended)
+				{
+					FString Msg = FString::Printf(TEXT("Additional time was required to finish routing FinishDestroy, spent %.2fs on routing FinishDestroy to %d objects. 1st obj not ready: '%s'."), (FPlatformTime::Seconds() - GCStartTime), StartObjectsPendingDestructionCount, *FirstObjectNotReadyWhenTimeExtended);
+					UE_LOG(LogGarbage, Warning, TEXT("%s"), *Msg );
+					FCoreDelegates::OnGCFinishDestroyTimeExtended.Broadcast(Msg);
+				}
+
 				// Release memory we used for objects pending destruction, leaving some slack space
 				GGCObjectsPendingDestruction.Empty( 256 );
 

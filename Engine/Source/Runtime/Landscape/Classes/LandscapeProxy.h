@@ -356,6 +356,7 @@ public:
 		, SizeY(InSizeY)
 		, Format(InFormat)
 		, NumMips(InNumMips)
+		, Hash(0)
 	{}
 
 	virtual uint32 GetSizeX() const override
@@ -377,11 +378,22 @@ public:
 		TextureRHI = RHICreateTexture2D(SizeX, SizeY, Format, NumMips, 1, TexCreate_CPUReadback, CreateInfo);
 	}
 
+	bool UpdateHashFromTextureSource(const uint8* MipData)
+	{
+		uint32 LocalHash = FCrc::MemCrc32(MipData, SizeX * SizeY * sizeof(FColor));
+		bool bChanged = (LocalHash != Hash);
+		Hash = LocalHash;
+		return bChanged;
+	}
+	   
+	uint32 GetHash() const { return Hash; }
+
 private:
 	uint32 SizeX;
 	uint32 SizeY;
 	EPixelFormat Format;
 	uint32 NumMips;
+	uint32 Hash;
 };
 
 UCLASS(Abstract, MinimalAPI, NotBlueprintable, hidecategories=(Display, Attachment, Physics, Debug, Lighting, LOD), showcategories=(Lighting, Rendering, "Utilities|Transformation"), hidecategories=(Mobility))
@@ -403,6 +415,8 @@ protected:
 	FGuid LandscapeGuid;
 
 public:
+	LANDSCAPE_API TOptional<float> GetHeightAtLocation(FVector Location) const;
+
 	/** Offset in quads from global components grid origin (in quads) **/
 	UPROPERTY()
 	FIntPoint LandscapeSectionOffset;
@@ -422,7 +436,7 @@ public:
 	float ComponentScreenSizeToUseSubSections;
 
 	/** This is the starting screen size used to calculate the distribution, by default it's 1, but you can increase the value if you want less LOD0 component, and you use very large landscape component. */
-	UPROPERTY(EditAnywhere, Category = "LOD Distribution", meta = (DisplayName = "LOD 0 Screen Size", ClampMin = "1.0", ClampMax = "10.0", UIMin = "1.0", UIMax = "10.0"))
+	UPROPERTY(EditAnywhere, Category = "LOD Distribution", meta = (DisplayName = "LOD 0 Screen Size", ClampMin = "0.1", ClampMax = "10.0", UIMin = "1.0", UIMax = "10.0"))
 	float LOD0ScreenSize;
 
 	/** The distribution setting used to change the LOD 0 generation, 1.75 is the normal distribution, numbers influence directly the LOD0 proportion on screen. */
@@ -790,7 +804,6 @@ public:
 	virtual void PostEditMove(bool bFinished) override;
 	virtual bool ShouldImport(FString* ActorPropString, bool IsMovingLevel) override;
 	virtual bool ShouldExport() override;
-	virtual bool Modify(bool bAlwaysMarkDirty = true) override;
 	//~ End AActor Interface
 #endif	//WITH_EDITOR
 
@@ -828,6 +841,9 @@ public:
 	LANDSCAPE_API void InvalidateGeneratedComponentData();
 
 #if WITH_EDITOR
+	/** Update Grass maps */
+	void UpdateGrassData();
+
 	/** Render grass maps for the specified components */
 	void RenderGrassMaps(const TArray<ULandscapeComponent*>& LandscapeComponents, const TArray<ULandscapeGrassType*>& GrassTypes);
 
@@ -855,6 +871,12 @@ public:
 	static void AddReferencedObjects(UObject* InThis, FReferenceCollector& Collector);
 	virtual void PostLoad() override;
 
+	LANDSCAPE_API ULandscapeInfo* CreateLandscapeInfo();
+	LANDSCAPE_API ULandscapeInfo* GetLandscapeInfo() const;
+
+	/** Get the LandcapeActor-to-world transform with respect to landscape section offset*/
+	LANDSCAPE_API FTransform LandscapeActorToWorld() const;
+
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 	virtual void PostEditImport() override;
@@ -866,9 +888,6 @@ public:
 	LANDSCAPE_API TArray<FName> GetLayersFromMaterial() const;
 	LANDSCAPE_API static ULandscapeLayerInfoObject* CreateLayerInfo(const TCHAR* LayerName, ULevel* Level);
 	LANDSCAPE_API ULandscapeLayerInfoObject* CreateLayerInfo(const TCHAR* LayerName);
-
-	LANDSCAPE_API ULandscapeInfo* CreateLandscapeInfo();
-	LANDSCAPE_API ULandscapeInfo* GetLandscapeInfo() const;
 
 	// Get Landscape Material assigned to this Landscape
 	virtual UMaterialInterface* GetLandscapeMaterial(int8 InLODIndex = INDEX_NONE) const;
@@ -890,10 +909,7 @@ public:
 
 	// Assign only mismatching data and mark proxy package dirty
 	LANDSCAPE_API void FixupSharedData(ALandscape* Landscape);
-	
-	/** Get the LandcapeActor-to-world transform with respect to landscape section offset*/
-	LANDSCAPE_API FTransform LandscapeActorToWorld() const;
-	
+
 	/** Set landscape absolute location in section space */
 	LANDSCAPE_API void SetAbsoluteSectionBase(FIntPoint SectionOffset);
 	
@@ -1045,4 +1061,17 @@ protected:
 private:
 	/** Returns Grass Update interval */
 	int32 GetGrassUpdateInterval() const;
+
+#if WITH_EDITOR
+	void UpdateGrassDataStatus(TSet<UTexture2D*>& OutCurrentForcedStreamedTextures, TSet<UTexture2D*>* OutDesiredForcedStreamedTextures, TSet<ULandscapeComponent*>& OutComponentsNeedingGrassMapRender, TSet<ULandscapeComponent*>* OutOutdatedComponents, bool bInEnableForceResidentFlag);
+#endif
+
+#if WITH_EDITORONLY_DATA
+public:
+	static const TArray<ALandscapeProxy*>& GetLandscapeProxies() { return LandscapeProxies; }
+
+private:
+	/** Maintain list of Proxies for faster iteration */
+	static TArray<ALandscapeProxy*> LandscapeProxies;
+#endif
 };

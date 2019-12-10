@@ -31,7 +31,7 @@ struct TStructOpsTypeTraits<FVector> : public TStructOpsTypeTraitsBase2<FVector>
 		WithZeroConstructor = true,
 		WithNetSerializer = true,
 		WithNetSharedSerialization = true,
-		WithSerializer = true,
+		WithStructuredSerializer = true,
 	};
 };
 IMPLEMENT_STRUCT(Vector);
@@ -173,7 +173,7 @@ struct TStructOpsTypeTraits<FLinearColor> : public TStructOpsTypeTraitsBase2<FLi
 	{
 		WithNoInitConstructor = true,
 		WithZeroConstructor = true,
-		WithSerializer = true,
+		WithStructuredSerializer = true,
 	};
 };
 IMPLEMENT_STRUCT(LinearColor);
@@ -298,7 +298,7 @@ struct TStructOpsTypeTraits<FSoftObjectPath> : public TStructOpsTypeTraitsBase2<
 	enum
 	{
 		WithZeroConstructor = true,
-		WithSerializer = true,
+		WithStructuredSerializer = true,
 		WithCopy = true,
 		WithIdenticalViaEquality = true,
 		WithExportTextItem = true,
@@ -792,27 +792,44 @@ bool UProperty::ShouldPort( uint32 PortFlags/*=0*/ ) const
 {
 	// if no size, don't export
 	if (GetSize() <= 0)
+	{
 		return false;
+	}
+
+	if (HasAnyPropertyFlags(CPF_Deprecated) && !(PortFlags & (PPF_ParsingDefaultProperties | PPF_UseDeprecatedProperties)))
+	{
+		return false;
+	}
 
 	// if we're parsing default properties or the user indicated that transient properties should be included
 	if (HasAnyPropertyFlags(CPF_Transient) && !(PortFlags & (PPF_ParsingDefaultProperties | PPF_IncludeTransient)))
+	{
 		return false;
+	}
 
 	// if we're copying, treat DuplicateTransient as transient
 	if ((PortFlags & PPF_Copy) && HasAnyPropertyFlags(CPF_DuplicateTransient | CPF_TextExportTransient) && !(PortFlags & (PPF_ParsingDefaultProperties | PPF_IncludeTransient)))
+	{
 		return false;
+	}
 
 	// if we're not copying for PIE and NonPIETransient is set, don't export
 	if (!(PortFlags & PPF_DuplicateForPIE) && HasAnyPropertyFlags(CPF_NonPIEDuplicateTransient))
+	{
 		return false;
+	}
 
 	// if we're only supposed to export components and this isn't a component property, don't export
 	if ((PortFlags & PPF_SubobjectsOnly) && !ContainsInstancedObjectProperty())
+	{
 		return false;
+	}
 
 	// hide non-Edit properties when we're exporting for the property window
 	if ((PortFlags & PPF_PropertyWindow) && !(PropertyFlags & CPF_Edit))
+	{
 		return false;
+	}
 
 	return true;
 }
@@ -1365,9 +1382,11 @@ FName UProperty::FindRedirectedPropertyName(UStruct* ObjectStruct, FName OldName
 
 	// ObjectStruct may be a nested struct, so extract path
 	UPackage* StructPackage = ObjectStruct->GetOutermost();
-	FString OuterPath = ObjectStruct->GetPathName(StructPackage);
+	FName PackageName = StructPackage->GetFName();
+	// Avoid GetPathName string allocation and FName initialization when there is only one outer
+	FName OuterName = (StructPackage == ObjectStruct->GetOuter()) ? ObjectStruct->GetFName() : FName(*ObjectStruct->GetPathName(StructPackage));
 
-	FCoreRedirectObjectName OldRedirectName(OldName, FName(*OuterPath), StructPackage->GetFName());
+	FCoreRedirectObjectName OldRedirectName(OldName, OuterName, PackageName);
 	FCoreRedirectObjectName NewRedirectName = FCoreRedirects::GetRedirectedName(ECoreRedirectFlags::Type_Property, OldRedirectName);
 
 	if (NewRedirectName != OldRedirectName)

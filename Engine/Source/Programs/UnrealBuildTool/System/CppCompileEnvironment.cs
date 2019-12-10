@@ -144,9 +144,10 @@ namespace UnrealBuildTool
 		public bool bEnableBufferSecurityChecks = true;
 
 		/// <summary>
-		/// If true and unity builds are enabled, this module will build without unity.
+		/// If unity builds are enabled this can be used to override if this specific module will build using Unity.
+		/// This is set using the per module configurations in BuildConfiguration.
 		/// </summary>
-		public bool bFasterWithoutUnity = false;
+		public bool bUseUnity = false;
 
 		/// <summary>
 		/// The number of source files in this module before unity build will be activated for that module.  If set to
@@ -177,12 +178,7 @@ namespace UnrealBuildTool
 		/// <summary>
 		/// Whether to warn about the use of shadow variables
 		/// </summary>
-		public bool bEnableShadowVariableWarnings = true;
-
-		/// <summary>
-		/// Whether to treat shadow variable warnings as errors.
-		/// </summary>
-		public bool bShadowVariableWarningsAsErrors = false;
+		public WarningLevel ShadowVariableWarningLevel = WarningLevel.Warning;
 
 		/// <summary>
 		/// Whether to warn about the use of undefined identifiers in #if expressions
@@ -243,6 +239,11 @@ namespace UnrealBuildTool
 		/// Whether PDB files should be used for Visual C++ builds.
 		/// </summary>
 		public bool bUsePDBFiles = false;
+
+		/// <summary>
+		/// Whether to just preprocess source files
+		/// </summary>
+		public bool bPreprocessOnly = false;
 
 		/// <summary>
 		/// Whether to support edit and continue.  Only works on Microsoft compilers in 32-bit compiles.
@@ -386,14 +387,13 @@ namespace UnrealBuildTool
 			bUseRTTI = Other.bUseRTTI;
 			bUseInlining = Other.bUseInlining;
 			bUseAVX = Other.bUseAVX;
-			bFasterWithoutUnity = Other.bFasterWithoutUnity;
+			bUseUnity = Other.bUseUnity;
 			MinSourceFilesForUnityBuildOverride = Other.MinSourceFilesForUnityBuildOverride;
 			MinFilesUsingPrecompiledHeaderOverride = Other.MinFilesUsingPrecompiledHeaderOverride;
 			bBuildLocallyWithSNDBS = Other.bBuildLocallyWithSNDBS;
 			bEnableExceptions = Other.bEnableExceptions;
 			bEnableObjCExceptions = Other.bEnableObjCExceptions;
-			bShadowVariableWarningsAsErrors = Other.bShadowVariableWarningsAsErrors;
-			bEnableShadowVariableWarnings = Other.bEnableShadowVariableWarnings;
+			ShadowVariableWarningLevel = Other.ShadowVariableWarningLevel;
 			bUndefinedIdentifierWarningsAsErrors = Other.bUndefinedIdentifierWarningsAsErrors;
 			bEnableUndefinedIdentifierWarnings = Other.bEnableUndefinedIdentifierWarnings;
 			bOptimizeCode = Other.bOptimizeCode;
@@ -406,6 +406,7 @@ namespace UnrealBuildTool
 			bOmitFramePointers = Other.bOmitFramePointers;
 			bEnableOSX109Support = Other.bEnableOSX109Support;
 			bUsePDBFiles = Other.bUsePDBFiles;
+			bPreprocessOnly = Other.bPreprocessOnly;
 			bSupportEditAndContinue = Other.bSupportEditAndContinue;
 			bUseIncrementalLinking = Other.bUseIncrementalLinking;
 			bAllowLTCG = Other.bAllowLTCG;

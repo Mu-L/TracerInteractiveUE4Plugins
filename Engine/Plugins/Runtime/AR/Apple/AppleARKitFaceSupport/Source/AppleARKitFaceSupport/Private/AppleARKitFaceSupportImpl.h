@@ -25,15 +25,21 @@ private:
 	// ~IAppleARKitFaceSupport
 	virtual TArray<TSharedPtr<FAppleARKitAnchorData>> MakeAnchorData(NSArray<ARAnchor*>* NewAnchors, const FRotator& AdjustBy, EARFaceTrackingUpdate UpdateSetting) override;
 	virtual ARConfiguration* ToARConfiguration(UARSessionConfig* InSessionConfig, UTimecodeProvider* InProvider) override;
-	virtual void PublishLiveLinkData(TSharedPtr<FAppleARKitAnchorData> Anchor) override;
+
 	virtual bool DoesSupportFaceAR() override;
 #if SUPPORTS_ARKIT_1_5
 	virtual TArray<FARVideoFormat> ToARConfiguration() override;
+#endif
+
+#if SUPPORTS_ARKIT_3_0
+	virtual bool IsARFrameSemanticsSupported(ARFrameSemantics InSemantics) const override;
 #endif
 	// ~IAppleARKitFaceSupport
 
 	/** Publishes the remote publisher and the file writer if present */
 	void ProcessRealTimePublishers(TSharedPtr<FAppleARKitAnchorData> AnchorData);
+
+	virtual void PublishLiveLinkData(TSharedPtr<FAppleARKitAnchorData> Anchor) override;
 #endif
 	/** Inits the real time providers if needed */
 	void InitRealtimeProviders();
@@ -44,6 +50,8 @@ private:
 
 	/** Whether the face data is mirrored or not */
 	bool bFaceMirrored;
+	
+protected:
 	/** If requested, publishes face ar updates to LiveLink for the animation system to use */
 	TSharedPtr<ILiveLinkSourceARKit> LiveLinkSource;
 	/** Copied from the UARSessionConfig project settings object */

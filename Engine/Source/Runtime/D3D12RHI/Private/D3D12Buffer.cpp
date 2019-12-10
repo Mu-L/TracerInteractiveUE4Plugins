@@ -18,20 +18,17 @@ template void FD3D12DynamicRHI::UnlockBuffer<FD3D12StructuredBuffer>(FRHICommand
 template FD3D12VertexBuffer* FD3D12Adapter::CreateRHIBuffer<FD3D12VertexBuffer>(FRHICommandListImmediate* RHICmdList,
 	const D3D12_RESOURCE_DESC& Desc,
 	uint32 Alignment, uint32 Stride, uint32 Size, uint32 InUsage,
-	FRHIResourceCreateInfo& CreateInfo,
-	FRHIGPUMask GPUMask);
+	FRHIResourceCreateInfo& CreateInfo);
 
 template FD3D12IndexBuffer* FD3D12Adapter::CreateRHIBuffer<FD3D12IndexBuffer>(FRHICommandListImmediate* RHICmdList,
 	const D3D12_RESOURCE_DESC& Desc,
 	uint32 Alignment, uint32 Stride, uint32 Size, uint32 InUsage,
-	FRHIResourceCreateInfo& CreateInfo,
-	FRHIGPUMask GPUMask);
+	FRHIResourceCreateInfo& CreateInfo);
 
 template FD3D12StructuredBuffer* FD3D12Adapter::CreateRHIBuffer<FD3D12StructuredBuffer>(FRHICommandListImmediate* RHICmdList,
 	const D3D12_RESOURCE_DESC& Desc,
 	uint32 Alignment, uint32 Stride, uint32 Size, uint32 InUsage,
-	FRHIResourceCreateInfo& CreateInfo,
-	FRHIGPUMask GPUMask);
+	FRHIResourceCreateInfo& CreateInfo);
 
 struct FRHICommandUpdateBuffer final : public FRHICommand<FRHICommandUpdateBuffer>
 {
@@ -118,19 +115,18 @@ BufferType* FD3D12Adapter::CreateRHIBuffer(FRHICommandListImmediate* RHICmdList,
 	uint32 Stride,
 	uint32 Size,
 	uint32 InUsage,
-	FRHIResourceCreateInfo& CreateInfo,
-	FRHIGPUMask GPUMask)
+	FRHIResourceCreateInfo& CreateInfo)
 {
 	SCOPE_CYCLE_COUNTER(STAT_D3D12CreateBufferTime);
 
 	const bool bIsDynamic = (InUsage & BUF_AnyDynamic) ? true : false;
-	const uint32 FirstGPUIndex = GPUMask.GetFirstIndex();
+	const uint32 FirstGPUIndex = CreateInfo.GPUMask.GetFirstIndex();
 
 	BufferType* BufferOut = nullptr;
 	if (bIsDynamic)
 	{
 		BufferType* NewBuffer0 = nullptr;
-		BufferOut = CreateLinkedObject<BufferType>(GPUMask, [&](FD3D12Device* Device)
+		BufferOut = CreateLinkedObject<BufferType>(CreateInfo.GPUMask, [&](FD3D12Device* Device)
 		{
 			BufferType* NewBuffer = new BufferType(Device, Stride, Size, InUsage);
 			NewBuffer->BufferAlignment = Alignment;
@@ -151,7 +147,7 @@ BufferType* FD3D12Adapter::CreateRHIBuffer(FRHICommandListImmediate* RHICmdList,
 	}
 	else
 	{
-		BufferOut = CreateLinkedObject<BufferType>(GPUMask, [&](FD3D12Device* Device)
+		BufferOut = CreateLinkedObject<BufferType>(CreateInfo.GPUMask, [&](FD3D12Device* Device)
 		{
 			BufferType* NewBuffer = new BufferType(Device, Stride, Size, InUsage);
 			NewBuffer->BufferAlignment = Alignment;
@@ -172,7 +168,16 @@ BufferType* FD3D12Adapter::CreateRHIBuffer(FRHICommandListImmediate* RHICmdList,
 
 			// Get an upload heap and initialize data
 			FD3D12ResourceLocation SrcResourceLoc(BufferOut->GetParentDevice());
-			void* pData = SrcResourceLoc.GetParentDevice()->GetDefaultFastAllocator().Allocate<FD3D12ScopeLock>(Size, 4UL, &SrcResourceLoc, bOnAsyncThread);
+			void* pData;
+			if (bOnAsyncThread)
+			{
+				const uint32 GPUIdx = SrcResourceLoc.GetParentDevice()->GetGPUIndex();
+				pData = GetUploadHeapAllocator(GPUIdx).AllocUploadResource(Size, 4u, SrcResourceLoc);
+			}
+			else
+			{
+				pData = SrcResourceLoc.GetParentDevice()->GetDefaultFastAllocator().Allocate(Size, 4UL, &SrcResourceLoc);
+			}
 			check(pData);
 			FMemory::Memcpy(pData, CreateInfo.ResourceArray->GetResourceData(), Size);
 
@@ -382,7 +387,7 @@ void* FD3D12DynamicRHI::LockBuffer(FRHICommandListImmediate* RHICmdList, BufferT
 		else
 		{
 			// If the static buffer is being locked for writing, allocate memory for the contents to be written to.
-			Data = Device->GetDefaultFastAllocator().Allocate<FD3D12ScopeLock>(Size, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT, &LockedData.ResourceLocation);
+			Data = Device->GetDefaultFastAllocator().Allocate(Size, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT, &LockedData.ResourceLocation);
 		}
 	}
 

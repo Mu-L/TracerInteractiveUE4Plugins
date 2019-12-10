@@ -37,6 +37,11 @@ FCurveSequence::~FCurveSequence()
 	{
 		OwnerWidget.Pin()->UnRegisterActiveTimer(ActiveTimerHandle.Pin().ToSharedRef());
 	}
+
+	if (TickerHandle.IsValid())
+	{
+		FTicker::GetCoreTicker().RemoveTicker(TickerHandle);
+	}
 }
 
 FCurveHandle FCurveSequence::AddCurve( const float InStartTimeSeconds, const float InDurationSeconds, const ECurveEaseFunction InEaseFunction )
@@ -58,9 +63,13 @@ FCurveHandle FCurveSequence::AddCurveRelative( const float InOffset, const float
 	return AddCurve(CurveStartTime, InDurationSecond, InEaseFunction);
 }
 
-void FCurveSequence::Play( const TSharedRef<SWidget>& InOwnerWidget, bool bPlayLooped, const float StartAtTime )
+void FCurveSequence::Play(const TSharedRef<SWidget>& InOwnerWidget, bool bPlayLooped, const float StartAtTime, bool bRequiresActiveTimer)
 {
-	RegisterActiveTimerIfNeeded(InOwnerWidget);
+	if (bRequiresActiveTimer)
+	{
+		RegisterActiveTimerIfNeeded(InOwnerWidget);
+	}
+
 	bIsLooping = bPlayLooped;
 	bIsPaused = false;
 	
@@ -69,6 +78,21 @@ void FCurveSequence::Play( const TSharedRef<SWidget>& InOwnerWidget, bool bPlayL
 
 	// We start playing NOW.
 	SetStartTime(FSlateApplicationBase::Get().GetCurrentTime() - StartAtTime);
+}
+
+void FCurveSequence::Play(const FTickerDelegate& InDelegate, bool bPlayLooped, const float StartAtTime)
+{
+	bIsLooping = bPlayLooped;
+	bIsPaused = false;
+
+	// Playing forward
+	bInReverse = false;
+
+	// We start playing NOW.
+	SetStartTime(FSlateApplicationBase::Get().GetCurrentTime() - StartAtTime);
+
+	// Register the core ticker so we can start giving callbacks
+	TickerHandle = FTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateRaw(this, &FCurveSequence::TickPlay, InDelegate));
 }
 
 void FCurveSequence::Reverse( )
@@ -89,9 +113,12 @@ void FCurveSequence::Reverse( )
 	SetStartTime(NewStartTime);
 }
 
-void FCurveSequence::PlayReverse( const TSharedRef<SWidget>& InOwnerWidget, bool bPlayLooped, const float StartAtTime )
+void FCurveSequence::PlayReverse(const TSharedRef<SWidget>& InOwnerWidget, bool bPlayLooped, const float StartAtTime, bool bRequiresActiveTimer)
 {
-	RegisterActiveTimerIfNeeded(InOwnerWidget);
+	if (bRequiresActiveTimer)
+	{
+		RegisterActiveTimerIfNeeded(InOwnerWidget);
+	}
 	bIsLooping = bPlayLooped;
 	bIsPaused = false;
 
@@ -218,6 +245,11 @@ void FCurveSequence::RegisterActiveTimerIfNeeded(TSharedRef<SWidget> InOwnerWidg
 		// Save the reference in case we need to take care of unregistering the tick
 		OwnerWidget = InOwnerWidget;
 	}
+}
+
+bool FCurveSequence::TickPlay(float InDeltaTime, FTickerDelegate InUserDelegate)
+{
+	return (InUserDelegate.IsBound() && InUserDelegate.Execute(InDeltaTime)) && IsPlaying();
 }
 
 EActiveTimerReturnType FCurveSequence::EnsureSlateTickDuringAnimation( double InCurrentTime, float InDeltaTime )

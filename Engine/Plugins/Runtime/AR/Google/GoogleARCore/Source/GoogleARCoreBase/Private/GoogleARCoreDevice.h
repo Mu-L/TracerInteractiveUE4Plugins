@@ -12,6 +12,8 @@
 #include "GoogleARCoreAPI.h"
 #include "GoogleARCorePassthroughCameraRenderer.h"
 #include "GoogleARCoreAugmentedImageDatabase.h"
+#include "GoogleARCoreOpenGLContext.h"
+
 
 class FGoogleARCoreDevice
 {
@@ -153,7 +155,7 @@ private:
 	void OnModuleLoaded();
 	void OnModuleUnloaded();
 
-	void OnWorldTickStart(ELevelTick TickType, float DeltaTime);
+	void OnWorldTickStart(UWorld* World, ELevelTick TickType, float DeltaTime);
 
 	void CheckAndRequrestPermission(const UARSessionConfig& ConfigurationData);
 
@@ -189,9 +191,12 @@ private:
 	FARSessionStatus CurrentSessionStatus;
 
 	FGoogleARCoreCameraConfig SessionCameraConfig;
-	FGoogleARCoreDeviceCameraBlitter CameraBlitter;
+	
+	TSharedPtr<FGoogleARCoreDeviceCameraBlitter, ESPMode::ThreadSafe> CameraBlitter;
 
 	TQueue<TFunction<void()>> RunOnGameThreadQueue;
 
 	TSharedPtr<FARSupportInterface, ESPMode::ThreadSafe> ARSystem;
+	
+	TSharedPtr<FGoogleARCoreOpenGLContext, ESPMode::ThreadSafe> GLContext;
 };

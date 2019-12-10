@@ -46,6 +46,7 @@ static TMap<ULevel*, FLevelReadOnlyData> LevelReadOnlyCache;
 
 #if WITH_EDITOR
 bool FLevelUtils::bMovingLevel = false;
+bool FLevelUtils::bApplyingLevelTransform = false;
 #endif
 
 /**
@@ -323,20 +324,23 @@ void FLevelUtils::SetEditorTransform(ULevelStreaming* StreamingLevel, const FTra
 void FLevelUtils::ApplyEditorTransform(const ULevelStreaming* StreamingLevel, bool bDoPostEditMove )
 {
 	check(StreamingLevel);
-	ULevel* LoadedLevel = StreamingLevel->GetLoadedLevel();
-	if( LoadedLevel != NULL )
+	if (ULevel* LoadedLevel = StreamingLevel->GetLoadedLevel())
 	{	
-		ApplyLevelTransform( LoadedLevel, StreamingLevel->LevelTransform, bDoPostEditMove );
+		FApplyLevelTransformParams TransformParams(LoadedLevel, StreamingLevel->LevelTransform);
+		TransformParams.bDoPostEditMove = bDoPostEditMove;
+		ApplyLevelTransform(TransformParams);
 	}
 }
 
 void FLevelUtils::RemoveEditorTransform(const ULevelStreaming* StreamingLevel, bool bDoPostEditMove )
 {
 	check(StreamingLevel);
-	ULevel* LoadedLevel = StreamingLevel->GetLoadedLevel();
-	if( LoadedLevel != NULL )
+	if (ULevel* LoadedLevel = StreamingLevel->GetLoadedLevel())
 	{
-		ApplyLevelTransform( LoadedLevel, StreamingLevel->LevelTransform.Inverse(), bDoPostEditMove );
+		const FTransform InverseTransform = StreamingLevel->LevelTransform.Inverse();
+		FApplyLevelTransformParams TransformParams(LoadedLevel, InverseTransform);
+		TransformParams.bDoPostEditMove = bDoPostEditMove;
+		ApplyLevelTransform(TransformParams);
 	}
 }
 
@@ -371,48 +375,72 @@ bool FLevelUtils::IsMovingLevel()
 	return bMovingLevel;
 }
 
+bool FLevelUtils::IsApplyingLevelTransform()
+{
+	return bApplyingLevelTransform;
+}
+
 #endif // WITH_EDITOR
 
-
-void FLevelUtils::ApplyLevelTransform( ULevel* Level, const FTransform& LevelTransform, bool bDoPostEditMove )
+void FLevelUtils::ApplyLevelTransform(const FLevelUtils::FApplyLevelTransformParams& TransformParams)
 {
-	bool bTransformActors =  !LevelTransform.Equals(FTransform::Identity);
+	const bool bTransformActors =  !TransformParams.LevelTransform.Equals(FTransform::Identity);
 	if (bTransformActors)
 	{
-		if (!LevelTransform.GetRotation().IsIdentity())
+#if WITH_EDITOR
+		TGuardValue<bool> ApplyingLevelTransformGuard(bApplyingLevelTransform, true);
+#endif
+		if (!TransformParams.LevelTransform.GetRotation().IsIdentity())
 		{
 			// If there is a rotation applied, then the relative precomputed bounds become invalid.
-			Level->bTextureStreamingRotationChanged = true;
+			TransformParams.Level->bTextureStreamingRotationChanged = true;
 		}
 
-		// Iterate over all actors in the level and transform them
-		for( int32 ActorIndex=0; ActorIndex<Level->Actors.Num(); ActorIndex++ )
+		if (TransformParams.bSetRelativeTransformDirectly)
 		{
-			AActor* Actor = Level->Actors[ActorIndex];
-
-			// Don't want to transform children they should stay relative to their parents.
-			if( Actor && Actor->GetAttachParentActor() == nullptr )
+			// Iterate over all actors in the level and transform them
+			for (AActor* Actor : TransformParams.Level->Actors)
 			{
-				// Has to modify root component directly as GetActorPosition is incorrect this early
-				USceneComponent *RootComponent = Actor->GetRootComponent();
-				if (RootComponent)
+				if (Actor)
 				{
-					RootComponent->SetRelativeLocationAndRotation( LevelTransform.TransformPosition(RootComponent->RelativeLocation), LevelTransform.TransformRotation(RootComponent->RelativeRotation.Quaternion()) );
-				}			
+					USceneComponent* RootComponent = Actor->GetRootComponent();
+
+					// Don't want to transform children they should stay relative to their parents.
+					if (RootComponent && RootComponent->GetAttachParent() == nullptr)
+					{
+						RootComponent->SetRelativeLocation_Direct(TransformParams.LevelTransform.TransformPosition(RootComponent->GetRelativeLocation()));
+						RootComponent->SetRelativeRotation_Direct(TransformParams.LevelTransform.TransformRotation(RootComponent->GetRelativeRotation().Quaternion()).Rotator());
+					}
+				}
+			}
+		}
+		else
+		{
+			// Iterate over all actors in the level and transform them
+			for (AActor* Actor : TransformParams.Level->Actors)
+			{
+				if (Actor)
+				{
+					USceneComponent* RootComponent = Actor->GetRootComponent();
+
+					// Don't want to transform children they should stay relative to their parents.
+					if (RootComponent && RootComponent->GetAttachParent() == nullptr)
+					{
+						RootComponent->SetRelativeLocationAndRotation(TransformParams.LevelTransform.TransformPosition(RootComponent->GetRelativeLocation()), TransformParams.LevelTransform.TransformRotation(RootComponent->GetRelativeRotation().Quaternion()));
+					}
+				}
 			}
 		}
 
 #if WITH_EDITOR
-		if( bDoPostEditMove )
+		if (TransformParams.bDoPostEditMove)
 		{
-			ApplyPostEditMove( Level );						
+			ApplyPostEditMove(TransformParams.Level);
 		}
 #endif // WITH_EDITOR
 
-		Level->OnApplyLevelTransform.Broadcast(LevelTransform);
+		TransformParams.Level->OnApplyLevelTransform.Broadcast(TransformParams.LevelTransform);
 	}
 }
-
-
 
 #undef LOCTEXT_NAMESPACE

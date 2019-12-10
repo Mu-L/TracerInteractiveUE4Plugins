@@ -122,6 +122,13 @@ static TAutoConsoleVariable<int32> CVarClearOSPSOFileCache(
 														   ECVF_Default | ECVF_RenderThreadSafe
 														   );
 
+static TAutoConsoleVariable<int32> CVarAlwaysGeneratePOSSOFileCache(
+														   TEXT("r.ShaderPipelineCache.AlwaysGenerateOSCache"),
+														   1,
+														   TEXT("1 generates the cache every run, 0 generates it only when it is missing."),
+														   ECVF_Default | ECVF_RenderThreadSafe
+														   );
+
 
 FRWLock FPipelineFileCache::FileCacheLock;
 FPipelineCacheFile* FPipelineFileCache::FileCache = nullptr;
@@ -603,6 +610,115 @@ void FPipelineCacheFileFormatPSO::CommonFromString(const FString& Src)
 #endif
 }
 
+bool FPipelineCacheFileFormatPSO::Verify() const
+{
+	if(Type == DescriptorType::Compute)
+	{
+		return ComputeDesc.ComputeShader != FSHAHash();
+	}
+	else if(Type == DescriptorType::Graphics)
+	{
+		if(GraphicsDesc.VertexShader == FSHAHash())
+		{
+			// No vertex shader - no graphics - nothing else matters
+			return false;
+		}
+		
+#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
+		if( GraphicsDesc.HullShader == FSHAHash() && GraphicsDesc.DomainShader == FSHAHash() && GraphicsDesc.PrimitiveType >= PT_1_ControlPointPatchList && GraphicsDesc.PrimitiveType <= PT_32_ControlPointPatchList)
+		{
+			// Not using tessellation - we shouldn't try to draw patches
+			return false;
+		}
+		else if( (GraphicsDesc.HullShader != FSHAHash() && GraphicsDesc.DomainShader == FSHAHash()) ||
+				 (GraphicsDesc.HullShader == FSHAHash() && GraphicsDesc.DomainShader != FSHAHash()) )
+		{
+			// Hull without Domain or vice-versa
+			return false;
+		}
+#else
+		if(GraphicsDesc.HullShader != FSHAHash() || GraphicsDesc.DomainShader != FSHAHash())
+		{
+			// Define says we don't support tessellation - why have we got tessellation shaders - not a valid PSO for target platform
+			return false;
+		}
+		
+		if(GraphicsDesc.PrimitiveType >= PT_1_ControlPointPatchList && GraphicsDesc.PrimitiveType <= PT_32_ControlPointPatchList)
+		{
+			// Define says we don't support tessellation - can't draw patches - not a valid PSO for target platform
+			return false;
+		}
+#endif
+
+#if PLATFORM_SUPPORTS_GEOMETRY_SHADERS
+		// Is there anything to actually test here?
+#endif
+		
+		if( GraphicsDesc.RenderTargetsActive > MaxSimultaneousRenderTargets ||
+			GraphicsDesc.MSAASamples > 16 ||
+			(uint32)GraphicsDesc.PrimitiveType >= (uint32)EPrimitiveType::PT_Num ||
+			(uint32)GraphicsDesc.DepthStencilFormat >= (uint32)EPixelFormat::PF_MAX ||
+			(uint8)GraphicsDesc.DepthLoad >= (uint8)ERenderTargetLoadAction::Num ||
+			(uint8)GraphicsDesc.StencilLoad >= (uint8)ERenderTargetLoadAction::Num ||
+			(uint8)GraphicsDesc.DepthStore >= (uint8)ERenderTargetStoreAction::Num ||
+			(uint8)GraphicsDesc.StencilStore >= (uint8)ERenderTargetStoreAction::Num )
+		{
+			return false;
+		}
+		
+		for(uint32 rt = 0;rt < GraphicsDesc.RenderTargetsActive;++rt)
+		{
+			if((uint32)GraphicsDesc.RenderTargetFormats[rt] >= (uint32)EPixelFormat::PF_MAX)
+			{
+				return false;
+			}
+			
+			if( GraphicsDesc.BlendState.RenderTargets[rt].ColorBlendOp >= EBlendOperation::EBlendOperation_Num ||
+				GraphicsDesc.BlendState.RenderTargets[rt].AlphaBlendOp >= EBlendOperation::EBlendOperation_Num ||
+				GraphicsDesc.BlendState.RenderTargets[rt].ColorSrcBlend >= EBlendFactor::EBlendFactor_Num ||
+				GraphicsDesc.BlendState.RenderTargets[rt].ColorDestBlend >= EBlendFactor::EBlendFactor_Num ||
+				GraphicsDesc.BlendState.RenderTargets[rt].AlphaSrcBlend >= EBlendFactor::EBlendFactor_Num ||
+				GraphicsDesc.BlendState.RenderTargets[rt].AlphaDestBlend >= EBlendFactor::EBlendFactor_Num ||
+				GraphicsDesc.BlendState.RenderTargets[rt].ColorWriteMask > 0xf)
+			{
+				return false;
+			}
+		}
+		
+		if( (uint8)GraphicsDesc.RasterizerState.FillMode >= (uint8)ERasterizerFillMode::ERasterizerFillMode_Num ||
+			(uint8)GraphicsDesc.RasterizerState.CullMode >= (uint8)ERasterizerCullMode_Num)
+		{
+			return false;
+		}
+		
+		if( (uint8)GraphicsDesc.DepthStencilState.DepthTest >= (uint8)ECompareFunction::ECompareFunction_Num ||
+			(uint8)GraphicsDesc.DepthStencilState.FrontFaceStencilTest >= (uint8)ECompareFunction::ECompareFunction_Num ||
+			(uint8)GraphicsDesc.DepthStencilState.BackFaceStencilTest >= (uint8)ECompareFunction::ECompareFunction_Num ||
+			(uint8)GraphicsDesc.DepthStencilState.FrontFaceStencilFailStencilOp >= (uint8)EStencilOp::EStencilOp_Num ||
+			(uint8)GraphicsDesc.DepthStencilState.FrontFaceDepthFailStencilOp >= (uint8)EStencilOp::EStencilOp_Num ||
+			(uint8)GraphicsDesc.DepthStencilState.FrontFacePassStencilOp >= (uint8)EStencilOp::EStencilOp_Num ||
+			(uint8)GraphicsDesc.DepthStencilState.BackFaceStencilFailStencilOp >= (uint8)EStencilOp::EStencilOp_Num ||
+			(uint8)GraphicsDesc.DepthStencilState.BackFaceDepthFailStencilOp >= (uint8)EStencilOp::EStencilOp_Num ||
+			(uint8)GraphicsDesc.DepthStencilState.BackFacePassStencilOp >= (uint8)EStencilOp::EStencilOp_Num)
+		{
+			return false;
+		}
+
+		uint32 ElementCount = (uint32)GraphicsDesc.VertexDescriptor.Num();
+		for (uint32 i = 0; i < ElementCount;++i)
+		{
+			if(GraphicsDesc.VertexDescriptor[i].Type >= EVertexElementType::VET_MAX)
+			{
+				return false;
+			}
+		}
+		
+		return true;
+	}
+	
+	return false;
+}
+
 /**
   * FPipelineCacheFileFormatPSO
   **/
@@ -848,7 +964,13 @@ FPipelineCacheFileFormatPSO::FPipelineCacheFileFormatPSO()
 	
 	PSO.ComputeDesc.ComputeShader = Init->GetHash();
 	
-	return true;
+	bool bOK = true;
+	
+#if !UE_BUILD_SHIPPING
+	bOK = PSO.Verify();
+#endif
+	
+	return bOK;
 }
 
 /*static*/ bool FPipelineCacheFileFormatPSO::Init(FPipelineCacheFileFormatPSO& PSO, FGraphicsPipelineStateInitializer const& Init)
@@ -969,6 +1091,10 @@ FPipelineCacheFileFormatPSO::FPipelineCacheFileFormatPSO()
 
 	PSO.GraphicsDesc.SubpassHint = (uint8)Init.SubpassHint;
 	PSO.GraphicsDesc.SubpassIndex = Init.SubpassIndex;
+	
+#if !UE_BUILD_SHIPPING
+	bOK = bOK && PSO.Verify();
+#endif
 	
 	return bOK;
 }
@@ -2311,7 +2437,7 @@ void FPipelineFileCache::Initialize(uint32 InGameVersion)
 	ClearOSPipelineCache();
 	
 	// Make enabled explicit on a flag not the existence of "FileCache" object as we are using that behind a lock and in Open / Close operations
-	FileCacheEnabled = true;
+	FileCacheEnabled = ShouldEnableFileCache();
 	FPipelineCacheFile::GameVersion = InGameVersion;
 	if (FPipelineCacheFile::GameVersion == 0)
 	{
@@ -2323,19 +2449,56 @@ void FPipelineFileCache::Initialize(uint32 InGameVersion)
 	SET_MEMORY_STAT(STAT_PSOStatMemory, 0);
 }
 
+bool FPipelineFileCache::ShouldEnableFileCache()
+{
+#if PLATFORM_IOS
+	if (CVarAlwaysGeneratePOSSOFileCache.GetValueOnAnyThread() == 0)
+	{
+		struct stat FileInfo;
+		static FString PrivateWritePathBase = FString([NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES) objectAtIndex:0]) + TEXT("/");
+		FString Result = PrivateWritePathBase + FString([NSString stringWithFormat:@"/Caches/%@/com.apple.metal/functions.data", [NSBundle mainBundle].bundleIdentifier]);
+		FString Result2 = PrivateWritePathBase + FString([NSString stringWithFormat:@"/Caches/%@/com.apple.metal/usecache.txt", [NSBundle mainBundle].bundleIdentifier]);
+		if (stat(TCHAR_TO_UTF8(*Result), &FileInfo) != -1 && stat(TCHAR_TO_UTF8(*Result2), &FileInfo) != -1)
+		{
+			return false;
+		}
+	}
+#endif
+	return true;
+}
+
+void FPipelineFileCache::PreCompileComplete()
+{
+#if PLATFORM_IOS
+	// write out a file signifying we have completed a pre-compile of the PSO cache. Used on successive runs of the game to determine how much caching we need to still perform
+	static FString PrivateWritePathBase = FString([NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES) objectAtIndex:0]) + TEXT("/");
+	FString Result = PrivateWritePathBase + FString([NSString stringWithFormat:@"/Caches/%@/com.apple.metal/usecache.txt", [NSBundle mainBundle].bundleIdentifier]);
+	int32 Handle = open(TCHAR_TO_UTF8(*Result), O_CREAT, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
+	FString Version = FEngineVersion::Current().ToString();
+	write(Handle, TCHAR_TO_ANSI(*Version), Version.Len());
+	close(Handle);
+#endif
+}
+
 void FPipelineFileCache::ClearOSPipelineCache()
 {
-	if (CVarClearOSPSOFileCache.GetValueOnAnyThread() > 0)
+	UE_LOG(LogTemp, Warning, TEXT("Clearing the OS Cache"));
+	
+	bool bCmdLineSkip = FParse::Param(FCommandLine::Get(), TEXT("skippsoclear"));
+	if (CVarClearOSPSOFileCache.GetValueOnAnyThread() > 0 && !bCmdLineSkip)
 	{
-#if PLATFORM_IOS
 		// clear the PSO cache on IOS if the executable is newer
+#if PLATFORM_IOS
+		SCOPED_AUTORELEASE_POOL;
+
 		static FString ExecutablePath = FString([[NSBundle mainBundle] bundlePath]) + TEXT("/") + FPlatformProcess::ExecutableName();
 		struct stat FileInfo;
 		if(stat(TCHAR_TO_UTF8(*ExecutablePath), &FileInfo) != -1)
 		{
+			// TODO: add ability to only do this change on major release as opposed to minor release (e.g. 10.30 -> 10.40 (delete) vs 10.40 -> 10.40.1 (don't delete)), this is very much game specific, so need a way to have games be able to modify this
 			FTimespan ExecutableTime(0, 0, FileInfo.st_atime);
 			static FString PrivateWritePathBase = FString([NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES) objectAtIndex:0]) + TEXT("/");
-			FString Result = PrivateWritePathBase + TEXT("/Caches/com.chairentertainment.Fortnite/com.apple.metal/functions.data");
+			FString Result = PrivateWritePathBase + FString([NSString stringWithFormat:@"/Caches/%@/com.apple.metal/functions.data", [NSBundle mainBundle].bundleIdentifier]);
 			if (stat(TCHAR_TO_UTF8(*Result), &FileInfo) != -1)
 			{
 				FTimespan DataTime(0, 0, FileInfo.st_atime);
@@ -2344,13 +2507,47 @@ void FPipelineFileCache::ClearOSPipelineCache()
 					unlink(TCHAR_TO_UTF8(*Result));
 				}
 			}
-			Result = PrivateWritePathBase + TEXT("/Caches/com.chairentertainment.Fortnite/com.apple.metal/functions.maps");
+			Result = PrivateWritePathBase + FString([NSString stringWithFormat:@"/Caches/%@/com.apple.metal/functions.maps", [NSBundle mainBundle].bundleIdentifier]);
 			if (stat(TCHAR_TO_UTF8(*Result), &FileInfo) != -1)
 			{
 				FTimespan MapsTime(0, 0, FileInfo.st_atime);
 				if (ExecutableTime > MapsTime)
 				{
 					unlink(TCHAR_TO_UTF8(*Result));
+				}
+			}
+		}
+#elif PLATFORM_MAC && (UE_BUILD_TEST || UE_BUILD_SHIPPING)
+		if (!FPlatformProcess::IsSandboxedApplication())
+		{
+			SCOPED_AUTORELEASE_POOL;
+
+			static FString ExecutablePath = FString([[NSBundle mainBundle] executablePath]);
+			struct stat FileInfo;
+			if (stat(TCHAR_TO_UTF8(*ExecutablePath), &FileInfo) != -1)
+			{
+				FTimespan ExecutableTime(0, 0, FileInfo.st_atime);
+				FString CacheDir = FString([NSString stringWithFormat:@"%@/../C/%@/com.apple.metal", NSTemporaryDirectory(), [NSBundle mainBundle].bundleIdentifier]);
+				TArray<FString> FoundFiles;
+				IPlatformFile::GetPlatformPhysical().FindFilesRecursively(FoundFiles, *CacheDir, TEXT(".data"));
+
+				// Find functions.data file in cache subfolders. If it's older than the executable, delete the whole cache.
+				bool bIsCacheOutdated = false;
+				for (FString& DataFile : FoundFiles)
+				{
+					if (FPaths::GetCleanFilename(DataFile) == TEXT("functions.data") && stat(TCHAR_TO_UTF8(*DataFile), &FileInfo) != -1)
+					{
+						FTimespan DataTime(0, 0, FileInfo.st_atime);
+						if (ExecutableTime > DataTime)
+						{
+							bIsCacheOutdated = true;
+						}
+					}
+				}
+
+				if (bIsCacheOutdated)
+				{
+					IPlatformFile::GetPlatformPhysical().DeleteDirectoryRecursively(*CacheDir);
 				}
 			}
 		}

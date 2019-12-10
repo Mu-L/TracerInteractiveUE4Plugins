@@ -2,6 +2,7 @@
 
 using UnrealBuildTool;
 
+[SupportedPlatformsAttribute(new string[] {"Win32", "Win64", "Linux", "Android", "LinuxAArch64"})]
 public class OpenGLDrv : ModuleRules
 {
 	public OpenGLDrv(ReadOnlyTargetRules Target) : base(Target)
@@ -16,7 +17,6 @@ public class OpenGLDrv : ModuleRules
 				"Engine",
 				"RHI",
 				"RenderCore",
-				"UtilityShaders",
 				"PreLoadScreen"
 			}
 			);
@@ -24,18 +24,15 @@ public class OpenGLDrv : ModuleRules
 		PrivateIncludePathModuleNames.Add("ImageWrapper");
 		DynamicallyLoadedModuleNames.Add("ImageWrapper");
 
-        if (Target.Platform != UnrealTargetPlatform.HTML5)
-		{
-		    AddEngineThirdPartyPrivateStaticDependencies(Target, "OpenGL");
-		}
+		AddEngineThirdPartyPrivateStaticDependencies(Target, "OpenGL");
 
-		if (Target.Platform == UnrealTargetPlatform.Linux)
+		if (Target.IsInPlatformGroup(UnrealPlatformGroup.Linux))
 		{
 			string GLPath = Target.UEThirdPartySourceDirectory + "OpenGL/";
 			PublicIncludePaths.Add(GLPath);
 		}
 
-		if (Target.Platform == UnrealTargetPlatform.Linux || Target.Platform == UnrealTargetPlatform.HTML5)
+		if (Target.IsInPlatformGroup(UnrealPlatformGroup.Linux))
 		{
 			AddEngineThirdPartyPrivateStaticDependencies(Target, "SDL2");
 		}
@@ -46,18 +43,18 @@ public class OpenGLDrv : ModuleRules
 				new string[]
 				{
 					"TaskGraph"
-                }
+				}
 			);
 		}
-		
+
 		if ((Target.Platform == UnrealTargetPlatform.Android) || (Target.Platform == UnrealTargetPlatform.Lumin))
-        {
+		{
 			PrivateDependencyModuleNames.Add("detex");
 		}
 
-		if(Target.Platform != UnrealTargetPlatform.Win32 && Target.Platform != UnrealTargetPlatform.Win64 
+		if(Target.Platform != UnrealTargetPlatform.Win32 && Target.Platform != UnrealTargetPlatform.Win64
 			&& Target.Platform != UnrealTargetPlatform.IOS && Target.Platform != UnrealTargetPlatform.Android
-			&& Target.Platform != UnrealTargetPlatform.HTML5 && Target.Platform != UnrealTargetPlatform.Linux
+			&& !Target.IsInPlatformGroup(UnrealPlatformGroup.Linux)
 			&& Target.Platform != UnrealTargetPlatform.TVOS && Target.Platform != UnrealTargetPlatform.Lumin)
 		{
 			PrecompileForTargets = PrecompileTargetsType.None;

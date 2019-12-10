@@ -37,8 +37,10 @@ namespace Gauntlet
 		public string DeviceData;
 
 		// legacy - remove!
+		[JsonConverter(typeof(UnrealTargetPlatformConvertor))]
 		public UnrealTargetPlatform Type;
 
+		[JsonConverter(typeof(UnrealTargetPlatformConvertor))]
 		public UnrealTargetPlatform? Platform;
 
 		public EPerfSpec PerfSpec;
@@ -90,8 +92,19 @@ namespace Gauntlet
 
 		public bool Check(DeviceDefinition DeviceDef)
 		{
-			bool Match = (PerfSpec == EPerfSpec.Unspecified) ? DeviceDef.Model == Model : PerfSpec == DeviceDef.PerfSpec;
-			return Platform == DeviceDef.Platform && (IsIdentity() || Match );
+			if (Platform != DeviceDef.Platform)
+			{
+				return false;
+			}
+
+			if (IsIdentity())
+			{
+				return true;
+			}
+
+			bool ModelMatch = Model == string.Empty ? true : Model.Equals(DeviceDef.Model, StringComparison.InvariantCultureIgnoreCase);
+			bool PerfMatch = (PerfSpec == EPerfSpec.Unspecified) ? true : PerfSpec == DeviceDef.PerfSpec;
+			return ModelMatch && PerfMatch;
 		}
 
 		public bool Equals(UnrealTargetConstraint Other)
@@ -103,7 +116,7 @@ namespace Gauntlet
 
 			if (ReferenceEquals(this, Other)) return true;
 
-			return Other.Platform == Platform && Other.PerfSpec == PerfSpec && Other.Model == Model;
+			return Other.Platform == Platform && Other.PerfSpec == PerfSpec && Other.Model.Equals(Model, StringComparison.InvariantCultureIgnoreCase);
 		}
 
 		public override bool Equals(object Obj)
@@ -528,7 +541,7 @@ namespace Gauntlet
 				{ UnrealTargetPlatform.XboxOne , "XboxOne-DevKit" },
 				{ UnrealTargetPlatform.Android , "Android" },
 				{ UnrealTargetPlatform.Switch , "Switch" }
-		};
+			};
 
 			List<string> Devices = new List<string>();
 
@@ -549,15 +562,24 @@ namespace Gauntlet
 
 				if (!string.IsNullOrEmpty(Entry.Key.Model))
 				{
-					// if specific device model, we can't currently reserve it from service
-					Log.Info("Unable to reserve service device of model: {0}", Entry.Key.Model);
-					return false;
+					// if specific device model, we can't currently reserve it from (legacy) service
+					if (DeviceURL.ToLower().Contains("deviceservice.epicgames.net"))
+					{
+						Log.Info("Unable to reserve service device of model: {0} on legacy service", Entry.Key.Model);
+						return false;
+					}
+									
 				}
 
 				for (int i = 0; i < Entry.Value; i++)
 				{
 					// @todo: if any additional reservation requirements, encode constraint into json
-					Devices.Add(DeviceMap[Entry.Key.Platform.Value] + ":" + Entry.Key.PerfSpec);
+					string Constraint = Entry.Key.PerfSpec.ToString();
+					if (!string.IsNullOrEmpty(Entry.Key.Model))
+					{
+						Constraint = Entry.Key.Model;
+					}
+					Devices.Add(DeviceMap[Entry.Key.Platform.Value] + ":" + Constraint);
 				}				
 			}
 
@@ -567,9 +589,11 @@ namespace Gauntlet
 			{
 				DeviceReservationAutoRenew DeviceReservation = null;
 
+				string PoolID = Globals.WorkerPoolID != -1 ? Globals.WorkerPoolID.ToString() : "";
+
 				try
 				{
-					DeviceReservation = new DeviceReservationAutoRenew(DeviceURL, 0, Devices.ToArray());
+					DeviceReservation = new DeviceReservationAutoRenew(DeviceURL, 0, PoolID, Devices.ToArray());
 				}
 				catch (Exception Ex)
 				{
@@ -758,7 +782,7 @@ namespace Gauntlet
 
 							if (M.Success)
 							{
-								if (UnrealTargetPlatform.TryParse(M.Groups[1].ToString(), out DevicePlatform))
+								if (!UnrealTargetPlatform.TryParse(M.Groups[1].ToString(), out DevicePlatform))
 								{
 									throw new AutomationException("platform {0} is not a recognized device type", M.Groups[1].ToString());
 								}
@@ -966,10 +990,23 @@ namespace Gauntlet
 			var TooFewTotalDevices = RequiredDevices.Where(KP => TotalDeviceTypes[KP.Key] < RequiredDevices[KP.Key]).Select(KP => KP.Key);
 			var TooFewCurrentDevices = RequiredDevices.Where(KP => AvailableDeviceTypes[KP.Key] < RequiredDevices[KP.Key]).Select(KP => KP.Key);
 
-			// Request devices from the service if we need them
-			if (UseServiceDevices && !String.IsNullOrEmpty(DeviceURL) && (TooFewTotalDevices.Count() > 0 || TooFewCurrentDevices.Count() > 0))
+			List<UnrealTargetPlatform> ServicePlatforms = new List<UnrealTargetPlatform>()
 			{
-				var Devices = TooFewTotalDevices.Concat(TooFewCurrentDevices);
+				UnrealTargetPlatform.PS4, UnrealTargetPlatform.XboxOne, UnrealTargetPlatform.Switch
+			};
+
+			// support Android over wifi, though not on workers
+			if (!Globals.IsWorker)
+			{
+				ServicePlatforms.Add(UnrealTargetPlatform.Android);
+			}
+
+			var Devices = TooFewTotalDevices.Concat(TooFewCurrentDevices);
+			var UnsupportedPlatforms = Devices.Where(D => !ServicePlatforms.Contains(D.Platform.Value));
+
+			// Request devices from the service if we need them
+			if (UseServiceDevices && !String.IsNullOrEmpty(DeviceURL) && UnsupportedPlatforms.Count() == 0 && (TooFewTotalDevices.Count() > 0 || TooFewCurrentDevices.Count() > 0))
+			{				
 
 				Dictionary<UnrealTargetConstraint, int> DeviceCounts = new Dictionary<UnrealTargetConstraint, int>();
 

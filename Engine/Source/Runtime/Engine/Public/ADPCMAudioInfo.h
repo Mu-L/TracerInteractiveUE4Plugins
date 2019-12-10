@@ -10,6 +10,7 @@
 #include "Audio.h"
 #include "AudioDecompress.h"
 #include "Sound/SoundWave.h"
+#include "ContentStreaming.h"
 
 #define NUM_ADAPTATION_TABLE 16
 #define NUM_ADAPTATION_COEFF 7
@@ -112,7 +113,32 @@ public:
 		return CurrentChunkIndex;
 	}
 	virtual int32 GetCurrentChunkOffset() const override {return CurrentChunkBufferOffset;}
+	virtual bool ReleaseStreamChunk(bool bBlockUntilReleased) override;
 	// End of ICompressedAudioInfo Interface
+
+	uint16 GetFormatTag()
+	{
+		if (WaveInfo.pFormatTag)
+		{
+			return *WaveInfo.pFormatTag;
+		}
+		else
+		{
+			return 0;
+		}
+	}
+
+	int32 GetNumChannels()
+	{
+		return NumChannels;
+	}
+
+private:
+
+	// Wrapper function that returns a pointer to the currently used compressed data.
+	// If a non-zero chunk is requested, this function also aquires a reference to that chunk
+	// until we move on to a different chunk.
+	const uint8* GetLoadedChunk(USoundWave* InSoundWave, uint32 ChunkIndex, uint32& OutChunkSize);
 
 	FWaveModInfo WaveInfo;
 	const uint8*	SrcBufferData;
@@ -135,9 +161,22 @@ public:
 	uint32			TotalSamplesPerChannel;			// Number of samples per channel, used to detect when an audio waveform has ended
 	uint32			SamplesPerBlock;				// The number of samples per block
 	uint32			FirstChunkSampleDataOffset;		// The size of the header in the first chunk, used to skip over it when looping or starting the sample over
+	uint32          FirstChunkSampleDataIndex;
 	const uint8*	CurCompressedChunkData;			// A pointer to the current chunk of data
+	FAudioChunkHandle CurCompressedChunkHandle;     // Shared reference to the current chunk of data.
+	FCriticalSection CurCompressedChunkHandleCriticalSection;
+	bool bDecompressorReleased;                     // When the chunk is released, we raise this to true, then early exit on future decodes.
 
 	uint32			CurrentCompressedBlockIndex;		// For non disk streaming - the current compressed block in the compressed source data
 	uint32			TotalCompressedBlocksPerChannel;	// For non disk streaming - the total number of compressed blocks per channel
 	uint8			bSeekPending : 1;					// Whether or not seek has been requested and pending a read
+
+private:
+	void ProcessSeekRequest();
+	void SeekToTimeInternal(const float InSeekTime);
+
+	float TargetSeekTime;
+	float LastSeekTime;
+
+	FCriticalSection StreamSeekCriticalSection;
 };

@@ -78,10 +78,9 @@ public:
 		ConstructCompiledType InConstructCompiledRef,
 		ModifyCompilationEnvironmentType InModifyCompilationEnvironmentRef,
 		ShouldCompilePermutationType InShouldCompilePermutationRef,
-		ValidateCompiledResultType InValidateCompiledResultRef,
-		GetStreamOutElementsType InGetStreamOutElementsRef
+		ValidateCompiledResultType InValidateCompiledResultRef
 		):
-		FShaderType(EShaderTypeForDynamicCast::MeshMaterial, InName,InSourceFilename,InFunctionName,InFrequency,InTotalPermutationCount,InConstructSerializedRef,InGetStreamOutElementsRef, nullptr),
+		FShaderType(EShaderTypeForDynamicCast::MeshMaterial, InName,InSourceFilename,InFunctionName,InFrequency,InTotalPermutationCount,InConstructSerializedRef, nullptr),
 		ConstructCompiledRef(InConstructCompiledRef),
 		ShouldCompilePermutationRef(InShouldCompilePermutationRef),
 		ValidateCompiledResultRef(InValidateCompiledResultRef),
@@ -199,6 +198,17 @@ private:
  * // Instantiates shader's global variable that will take care of compilation process of the shader. This needs imperatively to be
  * done in a .cpp file regardless of whether FMyMeshMaterialShaderPS is in a header or not.
  * IMPLEMENT_MESH_MATERIAL_SHADER(FMyMaterialShaderPS, "/Engine/Private/MyShaderFile.usf", "MainPS", SF_Pixel);
+ *
+ * When the shader class is a public header, let say in Engine module public header, the shader class then should have the ENGINE_API
+ * like this:
+ *
+ * class ENGINE_API FMyMeshMaterialShaderPS : public FMeshMaterialShader
+ * {
+ *		// Setup the shader's boiler plate.
+ *		DECLARE_MESH_MATERIAL_SHADER(FMyMeshMaterialShaderPS);
+ *
+ *		// ...
+ * };
  */
 #define DECLARE_MESH_MATERIAL_SHADER(ShaderClass) \
 	public: \
@@ -232,6 +242,5 @@ private:
 		ShaderClass::ConstructCompiledInstance, \
 		ShaderClass::ModifyCompilationEnvironmentImpl, \
 		ShaderClass::ShouldCompilePermutation, \
-		ShaderClass::ValidateCompiledResult, \
-		ShaderClass::GetStreamOutElements \
+		ShaderClass::ValidateCompiledResult \
 		)

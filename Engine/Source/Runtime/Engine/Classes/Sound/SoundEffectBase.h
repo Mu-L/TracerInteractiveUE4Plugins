@@ -25,7 +25,7 @@
 #define GET_EFFECT_SETTINGS(EFFECT_NAME) \
 		U##EFFECT_NAME##Preset* _Preset = CastChecked<U##EFFECT_NAME##Preset>(Preset); \
 		F##EFFECT_NAME##Settings Settings = _Preset->GetSettings(); \
-	
+
 #define EFFECT_PRESET_METHODS(EFFECT_NAME) \
 		virtual FText GetAssetActionName() const override { return FText::FromString(#EFFECT_NAME); } \
 		virtual UClass* GetSupportedClass() const override { return EFFECT_PRESET_NAME(EFFECT_NAME)::StaticClass(); } \
@@ -78,13 +78,15 @@ public:
 	/** Enables the submix effect. */
 	void SetEnabled(const bool bInIsEnabled);
 
-	/** Updates preset on audio render thread. */
-	void Update();
+	/** Updates preset on audio render thread. Returns true if update processed a preset update, false if not. */
+	bool Update();
 
 	void SetPreset(USoundEffectPreset* Inpreset);
 
+	USoundEffectPreset* GetPreset();
+
 	/** Removes the instance from the preset. */
-	void ClearPreset();
+	void ClearPreset(bool bRemoveFromPreset = true);
 
 	/** Queries if the given preset object is the uobject preset for this preset instance, i.e. the preset which spawned this effect instance. */
 	bool IsPreset(USoundEffectPreset* InPreset) const;
@@ -100,7 +102,7 @@ protected:
 	TArray<uint8> CurrentAudioThreadSettingsData;
 
 	FThreadSafeBool bChanged;
-	USoundEffectPreset* Preset;
+	TWeakObjectPtr<USoundEffectPreset> Preset;
 
 	FThreadSafeBool bIsRunning;
 	FThreadSafeBool bIsActive;

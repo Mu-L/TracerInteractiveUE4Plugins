@@ -9,7 +9,7 @@
 #include "/Engine/Generated/VertexFactory.ush"
 
 #if NUM_VIRTUALTEXTURE_SAMPLES
-	RWTexture2D<uint> VTFeedbackBuffer : register(VT_FEEDBACK_REGISTER); //MUST match FDecalRenderTargetManager::VirtualTextureFeedbackIndex
+	RWTexture2D<uint> VTFeedbackBuffer REGISTER(VT_FEEDBACK_REGISTER); //MUST match FDecalRenderTargetManager::VirtualTextureFeedbackIndex
 #endif
 
 // Additional guard to remove all struct usage if empty to avoid platform conflicts.
@@ -112,7 +112,6 @@ void MainVS(
 	// Isolate instructions used for world position offset on xbox 360, 
 	// As these cause the optimizer to generate different position calculating instructions in each pass, resulting in self-z-fighting.
 	// This is only necessary for shaders used in passes that have depth testing enabled.
-	ISOLATE
 	{
 		WorldPosition.xyz += GetMaterialWorldPositionOffset(VertexParameters);
 	}

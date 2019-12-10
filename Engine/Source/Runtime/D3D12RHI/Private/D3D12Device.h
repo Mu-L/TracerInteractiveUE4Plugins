@@ -110,6 +110,7 @@ public:
 	TArray<FD3D12CommandListHandle> PendingCommandLists;
 
 	void RegisterGPUWork(uint32 NumPrimitives = 0, uint32 NumVertices = 0);
+	void RegisterGPUDispatch(FIntVector GroupCount);
 	void PushGPUEvent(const TCHAR* Name, FColor Color);
 	void PopGPUEvent();
 
@@ -195,3 +196,28 @@ protected:
 	void DestroyRayTracingDescriptorCache();
 #endif
 };
+
+template <typename TDesc> 
+void TD3D12ViewDescriptorHandle<TDesc>::AllocateDescriptorSlot()
+{
+	if (Parent)
+	{
+		FD3D12Device* Device = GetParentDevice();
+		FD3D12OfflineDescriptorManager& DescriptorAllocator = Device->template GetViewDescriptorAllocator<TDesc>();
+		Handle = DescriptorAllocator.AllocateHeapSlot(Index);
+		check(Handle.ptr != 0);
+	}
+}
+
+template <typename TDesc> 
+void TD3D12ViewDescriptorHandle<TDesc>::FreeDescriptorSlot()
+{
+	if (Parent)
+	{
+		FD3D12Device* Device = GetParentDevice();
+		FD3D12OfflineDescriptorManager& DescriptorAllocator = Device->template GetViewDescriptorAllocator<TDesc>();
+		DescriptorAllocator.FreeHeapSlot(Handle, Index);
+		Handle.ptr = 0;
+	}
+	check(!Handle.ptr);
+}

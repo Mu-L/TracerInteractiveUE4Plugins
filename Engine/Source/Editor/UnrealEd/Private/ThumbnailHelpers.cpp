@@ -359,6 +359,11 @@ void FMaterialThumbnailScene::SetMaterialInterface(UMaterialInterface* InMateria
 	PreviewActor->GetStaticMeshComponent()->RecreateRenderState_Concurrent();
 }
 
+bool FMaterialThumbnailScene::ShouldSetSeparateTranslucency(class UMaterialInterface* InMaterial) const
+{
+	return InMaterial->GetMaterialResource(GMaxRHIFeatureLevel) != nullptr ? InMaterial->GetMaterialResource(GMaxRHIFeatureLevel)->IsTranslucencyAfterDOFEnabled() : false;
+}
+
 void FMaterialThumbnailScene::GetViewMatrixParameters(const float InFOVDegrees, FVector& OutOrigin, float& OutOrbitPitch, float& OutOrbitYaw, float& OutOrbitZoom) const
 {
 	check(PreviewActor);
@@ -506,8 +511,9 @@ void FStaticMeshThumbnailScene::SetStaticMesh(UStaticMesh* StaticMesh)
 		// Center the mesh at the world origin then offset to put it on top of the plane
 		const float BoundsZOffset = GetBoundsZOffset(PreviewActor->GetStaticMeshComponent()->Bounds);
 		PreviewActor->SetActorLocation( -PreviewActor->GetStaticMeshComponent()->Bounds.Origin + FVector(0, 0, BoundsZOffset), false );
-		PreviewActor->GetStaticMeshComponent()->RecreateRenderState_Concurrent();
 	}
+
+	PreviewActor->GetStaticMeshComponent()->RecreateRenderState_Concurrent();
 }
 
 void FStaticMeshThumbnailScene::SetOverrideMaterials(const TArray<class UMaterialInterface*>& OverrideMaterials)

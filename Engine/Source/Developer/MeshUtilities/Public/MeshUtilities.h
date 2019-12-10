@@ -218,6 +218,7 @@ public:
 		, bComputeNormals(true)
 		, bComputeTangents(true)
 		, bUseMikkTSpace(false)
+		, bComputeWeightedNormals(false)
 		{
 		}
 
@@ -225,7 +226,20 @@ public:
 		bool bComputeNormals;
 		bool bComputeTangents;
 		bool bUseMikkTSpace;
+		bool bComputeWeightedNormals;
 		FOverlappingThresholds OverlappingThresholds;
+
+		void FillOptions(const FSkeletalMeshBuildSettings& SkeletalMeshBuildSettings)
+		{
+			OverlappingThresholds.ThresholdPosition = SkeletalMeshBuildSettings.ThresholdPosition;
+			OverlappingThresholds.ThresholdTangentNormal = SkeletalMeshBuildSettings.ThresholdTangentNormal;
+			OverlappingThresholds.ThresholdUV = SkeletalMeshBuildSettings.ThresholdUV;
+			bComputeNormals = SkeletalMeshBuildSettings.bRecomputeNormals;
+			bComputeTangents = SkeletalMeshBuildSettings.bRecomputeTangents;
+			bUseMikkTSpace = SkeletalMeshBuildSettings.bUseMikkTSpace;
+			bComputeWeightedNormals = SkeletalMeshBuildSettings.bComputeWeightedNormals;
+			bRemoveDegenerateTriangles = SkeletalMeshBuildSettings.bRemoveDegenerates;
+		}
 	};
 	
 	/**

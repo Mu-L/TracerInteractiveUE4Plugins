@@ -60,8 +60,13 @@ namespace UnrealBuildTool.Rules
 				// Additional dependencies on android...
 				PrivateDependencyModuleNames.Add("Launch");
 
-				// Register Plugin Language
-				AdditionalPropertiesForReceipt.Add("AndroidPlugin", Path.Combine(ModuleDirectory, "GoogleARCoreBase_APL.xml"));
+                // Register Plugin Language
+                string PluginPath = Utils.MakePathRelativeTo(ModuleDirectory, Target.RelativeEnginePath);
+                AdditionalPropertiesForReceipt.Add("AndroidPlugin", Path.Combine(PluginPath, "GoogleARCoreBase_APL.xml"));
+				
+				// Needed for including "AndroidEGL.h"
+				string EnginePath = Path.GetFullPath(Target.RelativeEnginePath);
+				PrivateIncludePaths.Add(Path.Combine(EnginePath, "Source/Runtime/OpenGLDrv/Private"));
 			}
 
 			if (Target.bBuildEditor)
@@ -85,8 +90,6 @@ namespace UnrealBuildTool.Rules
 					RuntimeDependencies.Add("$(EngineDir)/Plugins/Runtime/AR/Google/GoogleARCore/Binaries/ThirdParty/Google/ARCoreImg/" + ExecName);
 				}
 			}
-			
-			bFasterWithoutUnity = false;
         }
     }
 }

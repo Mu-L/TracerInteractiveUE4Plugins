@@ -27,14 +27,14 @@
 	#define ENABLE_TFUNCTIONREF_VISUALIZATION 0
 #endif
 
-#if defined(_WIN32) && !defined(_WIN64)
+#if defined(_WIN32) && !defined(_WIN64) && (!defined(ALLOW_TFUNCTION_INLINE_ALLOCATORS_ON_WIN32) || !ALLOW_TFUNCTION_INLINE_ALLOCATORS_ON_WIN32)
 	// Don't use inline storage on Win32, because that will affect the alignment of TFunction, and we can't pass extra-aligned types by value on Win32.
 	#define TFUNCTION_USES_INLINE_STORAGE 0
-#elif USE_SMALL_TFUNCTIONS
+#elif !defined(NUM_TFUNCTION_INLINE_BYTES) || NUM_TFUNCTION_INLINE_BYTES == 0
 	#define TFUNCTION_USES_INLINE_STORAGE 0
 #else
 	#define TFUNCTION_USES_INLINE_STORAGE 1
-	#define TFUNCTION_INLINE_SIZE         32
+	#define TFUNCTION_INLINE_SIZE         NUM_TFUNCTION_INLINE_BYTES
 	#define TFUNCTION_INLINE_ALIGNMENT    16
 #endif
 
@@ -255,6 +255,26 @@ namespace UE4Function_Private
 	{
 	};
 
+#if PLATFORM_COMPILER_HAS_IF_CONSTEXPR
+
+	template <typename T>
+	FORCEINLINE bool IsBound(const T& Func)
+	{
+		if constexpr (TIsNullableBinding<T>::Value)
+		{
+			// Function pointers, data member pointers, member function pointers and TFunctions
+			// can all be null/unbound, so test them using their boolean state.
+			return !!Func;
+		}
+		else
+		{
+			// We can't tell if any other generic callable can be invoked, so just assume they can be.
+			return true;
+		}
+	}
+
+#else
+
 	template <typename T>
 	FORCEINLINE typename TEnableIf<TIsNullableBinding<T>::Value, bool>::Type IsBound(const T& Func)
 	{
@@ -269,6 +289,8 @@ namespace UE4Function_Private
 		// We can't tell if any other generic callable can be invoked, so just assume they can be.
 		return true;
 	}
+
+#endif
 
 	template <typename FunctorType, bool bUnique, bool bOnHeap>
 	struct TStorageOwnerType;
@@ -371,6 +393,44 @@ namespace UE4Function_Private
 		{
 		}
 
+#if PLATFORM_COMPILER_HAS_IF_CONSTEXPR
+
+		template <typename FunctorType>
+		typename TDecay<FunctorType>::Type* Bind(FunctorType&& InFunc)
+		{
+			if (!IsBound(InFunc))
+			{
+				return nullptr;
+			}
+
+#if TFUNCTION_USES_INLINE_STORAGE
+			constexpr bool bUseInline = sizeof(TStorageOwnerTypeT<FunctorType, bUnique, false>) <= TFUNCTION_INLINE_SIZE;
+#else
+			constexpr bool bUseInline = false;
+#endif
+
+			using OwnedType = TStorageOwnerTypeT<FunctorType, bUnique, !bUseInline>;
+
+			void* NewAlloc;
+#if TFUNCTION_USES_INLINE_STORAGE
+			if constexpr (bUseInline)
+			{
+				NewAlloc = &InlineAllocation;
+			}
+			else
+#endif
+			{
+				NewAlloc = FMemory::Malloc(sizeof(OwnedType), alignof(OwnedType));
+				HeapAllocation = NewAlloc;
+			}
+
+			CA_ASSUME(NewAlloc);
+			auto* NewOwned = new (NewAlloc) OwnedType(Forward<FunctorType>(InFunc));
+			return &NewOwned->Obj;
+		}
+
+#else
+
 		#if TFUNCTION_USES_INLINE_STORAGE
 		template <typename FunctorType>
 		typename TEnableIf<
@@ -417,6 +477,8 @@ namespace UE4Function_Private
 
 			return &NewOwned->Obj;
 		}
+
+#endif
 	};
 
 	template <typename T, bool bOnHeap>

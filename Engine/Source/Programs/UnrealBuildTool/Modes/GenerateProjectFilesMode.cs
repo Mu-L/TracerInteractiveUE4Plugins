@@ -36,10 +36,11 @@ namespace UnrealBuildTool
 		[CommandLine("-VSCode", Value = nameof(ProjectFileFormat.VisualStudioCode))]
 		[CommandLine("-VSMac", Value = nameof(ProjectFileFormat.VisualStudioMac))]
 		[CommandLine("-CLion", Value = nameof(ProjectFileFormat.CLion))]
+		[CommandLine("-Rider", Value = nameof(ProjectFileFormat.Rider))]
 		HashSet<ProjectFileFormat> ProjectFileFormats = new HashSet<ProjectFileFormat>();
 
 		/// <summary>
-		/// Platforms to disable native project file generators for. Platforms with native project file generators typically require IDE extensions to be installed.
+		/// Disable native project file generators for platforms. Platforms with native project file generators typically require IDE extensions to be installed.
 		/// </summary>
 		[XmlConfigFile(Category = "ProjectFileGenerator")]
 		string[] DisablePlatformProjectGenerators = null;
@@ -156,6 +157,9 @@ namespace UnrealBuildTool
 						break;
 					case ProjectFileFormat.VisualStudioMac:
 						Generator = new VCMacProjectFileGenerator(ProjectFile, Arguments);
+						break;
+					case ProjectFileFormat.Rider:
+						Generator = new RiderProjectFileGenerator(ProjectFile, Arguments);
 						break;
 					default:
 						throw new BuildException("Unhandled project file type '{0}", ProjectFileFormat);

@@ -299,7 +299,7 @@ void FD3D12Heap::BeginTrackingResidency(uint64 Size)
 //	FD3D12 Adapter
 /////////////////////////////////////////////////////////////////////
 
-HRESULT FD3D12Adapter::CreateCommittedResource(const D3D12_RESOURCE_DESC& InDesc, const D3D12_HEAP_PROPERTIES& HeapProps, const D3D12_RESOURCE_STATES& InitialUsage, const D3D12_CLEAR_VALUE* ClearValue, FD3D12Resource** ppOutResource, const TCHAR* Name)
+HRESULT FD3D12Adapter::CreateCommittedResource(const D3D12_RESOURCE_DESC& InDesc, FRHIGPUMask CreationNode, const D3D12_HEAP_PROPERTIES& HeapProps, const D3D12_RESOURCE_STATES& InitialUsage, const D3D12_CLEAR_VALUE* ClearValue, FD3D12Resource** ppOutResource, const TCHAR* Name, bool bVerifyHResult)
 {
 	if (!ppOutResource)
 	{
@@ -309,8 +309,17 @@ HRESULT FD3D12Adapter::CreateCommittedResource(const D3D12_RESOURCE_DESC& InDesc
 	LLM_PLATFORM_SCOPE(ELLMTag::GraphicsPlatform);
 
 	TRefCountPtr<ID3D12Resource> pResource;
-	const HRESULT hr = RootDevice->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE, &InDesc, InitialUsage, ClearValue, IID_PPV_ARGS(pResource.GetInitReference()));
-	VERIFYD3D12RESULT_EX(hr, RootDevice);
+	D3D12_HEAP_FLAGS HeapFlags = D3D12_HEAP_FLAG_NONE;
+	if (InDesc.Flags & D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS)
+	{
+		HeapFlags |= D3D12_HEAP_FLAG_SHARED;
+	}
+
+	const HRESULT hr = RootDevice->CreateCommittedResource(&HeapProps, HeapFlags, &InDesc, InitialUsage, ClearValue, IID_PPV_ARGS(pResource.GetInitReference()));
+	if (bVerifyHResult)
+	{
+		VERIFYD3D12RESULT_EX(hr, RootDevice);
+	}
 
 	if (SUCCEEDED(hr))
 	{
@@ -318,7 +327,7 @@ HRESULT FD3D12Adapter::CreateCommittedResource(const D3D12_RESOURCE_DESC& InDesc
 		SetName(pResource, Name);
 
 		// Set the output pointer
-		*ppOutResource = new FD3D12Resource(GetDevice(FRHIGPUMask(HeapProps.CreationNodeMask).ToIndex()), FRHIGPUMask(HeapProps.VisibleNodeMask), pResource, InitialUsage, InDesc, nullptr, HeapProps.Type);
+		*ppOutResource = new FD3D12Resource(GetDevice(CreationNode.ToIndex()), CreationNode, pResource, InitialUsage, InDesc, nullptr, HeapProps.Type);
 		(*ppOutResource)->AddRef();
 
 		// Only track resources that cannot be accessed on the CPU.
@@ -331,7 +340,7 @@ HRESULT FD3D12Adapter::CreateCommittedResource(const D3D12_RESOURCE_DESC& InDesc
 	return hr;
 }
 
-HRESULT FD3D12Adapter::CreatePlacedResource(const D3D12_RESOURCE_DESC& InDesc, FD3D12Heap* BackingHeap, uint64 HeapOffset, const D3D12_RESOURCE_STATES& InitialUsage, const D3D12_CLEAR_VALUE* ClearValue, FD3D12Resource** ppOutResource, const TCHAR* Name)
+HRESULT FD3D12Adapter::CreatePlacedResource(const D3D12_RESOURCE_DESC& InDesc, FD3D12Heap* BackingHeap, uint64 HeapOffset, const D3D12_RESOURCE_STATES& InitialUsage, const D3D12_CLEAR_VALUE* ClearValue, FD3D12Resource** ppOutResource, const TCHAR* Name, bool bVerifyHResult)
 {
 	if (!ppOutResource)
 	{
@@ -342,7 +351,11 @@ HRESULT FD3D12Adapter::CreatePlacedResource(const D3D12_RESOURCE_DESC& InDesc, F
 
 	TRefCountPtr<ID3D12Resource> pResource;
 	const HRESULT hr = RootDevice->CreatePlacedResource(Heap, HeapOffset, &InDesc, InitialUsage, nullptr, IID_PPV_ARGS(pResource.GetInitReference()));
-	VERIFYD3D12RESULT_EX(hr, RootDevice);
+
+	if (bVerifyHResult)
+	{
+		VERIFYD3D12RESULT_EX(hr, RootDevice);
+	}
 
 	if (SUCCEEDED(hr))
 	{
@@ -369,18 +382,19 @@ HRESULT FD3D12Adapter::CreatePlacedResource(const D3D12_RESOURCE_DESC& InDesc, F
 
 HRESULT FD3D12Adapter::CreateBuffer(D3D12_HEAP_TYPE HeapType, FRHIGPUMask CreationNode, FRHIGPUMask VisibleNodes, uint64 HeapSize, FD3D12Resource** ppOutResource, const TCHAR* Name, D3D12_RESOURCE_FLAGS Flags)
 {
-	const D3D12_HEAP_PROPERTIES HeapProps = CD3DX12_HEAP_PROPERTIES(HeapType, (uint32)CreationNode, (uint32)VisibleNodes);
+	const D3D12_HEAP_PROPERTIES HeapProps = CD3DX12_HEAP_PROPERTIES(HeapType, CreationNode.GetNative(), VisibleNodes.GetNative());
 	const D3D12_RESOURCE_STATES InitialState = DetermineInitialResourceState(HeapProps.Type, &HeapProps);
-	return CreateBuffer(HeapProps, InitialState, HeapSize, ppOutResource, Name, Flags);
+	return CreateBuffer(HeapProps, CreationNode, InitialState, HeapSize, ppOutResource, Name, Flags);
 }
 
 HRESULT FD3D12Adapter::CreateBuffer(D3D12_HEAP_TYPE HeapType, FRHIGPUMask CreationNode, FRHIGPUMask VisibleNodes, D3D12_RESOURCE_STATES InitialState, uint64 HeapSize, FD3D12Resource** ppOutResource, const TCHAR* Name, D3D12_RESOURCE_FLAGS Flags)
 {
-	const D3D12_HEAP_PROPERTIES HeapProps = CD3DX12_HEAP_PROPERTIES(HeapType, (uint32)CreationNode, (uint32)VisibleNodes);
-	return CreateBuffer(HeapProps, InitialState, HeapSize, ppOutResource, Name, Flags);
+	const D3D12_HEAP_PROPERTIES HeapProps = CD3DX12_HEAP_PROPERTIES(HeapType, CreationNode.GetNative(), VisibleNodes.GetNative());
+	return CreateBuffer(HeapProps, CreationNode, InitialState, HeapSize, ppOutResource, Name, Flags);
 }
 
 HRESULT FD3D12Adapter::CreateBuffer(const D3D12_HEAP_PROPERTIES& HeapProps,
+	FRHIGPUMask CreationNode,
 	D3D12_RESOURCE_STATES InitialState,
 	uint64 HeapSize,
 	FD3D12Resource** ppOutResource,
@@ -394,6 +408,7 @@ HRESULT FD3D12Adapter::CreateBuffer(const D3D12_HEAP_PROPERTIES& HeapProps,
 
 	const D3D12_RESOURCE_DESC BufDesc = CD3DX12_RESOURCE_DESC::Buffer(HeapSize, Flags);
 	return CreateCommittedResource(BufDesc,
+		CreationNode,
 		HeapProps,
 		InitialState,
 		nullptr,
@@ -464,7 +479,7 @@ void FD3D12ResourceLocation::TransferOwnership(FD3D12ResourceLocation& Destinati
 
 	// update tracked allocation
 #if !PLATFORM_WINDOWS && ENABLE_LOW_LEVEL_MEM_TRACKER
-	if (Source.GetType() == ResourceLocationType::eSubAllocation)
+	if (Source.GetType() == ResourceLocationType::eSubAllocation && Source.AllocatorType != AT_SegList)
 	{
 		FLowLevelMemTracker::Get().OnLowLevelAllocMoved( ELLMTracker::Default, &Destination, &Source );
 	}
@@ -476,6 +491,25 @@ void FD3D12ResourceLocation::TransferOwnership(FD3D12ResourceLocation& Destinati
 
 void FD3D12ResourceLocation::Swap(FD3D12ResourceLocation& Other)
 {
+	// TODO: Probably shouldn't manually track suballocations. It's error-prone and inaccurate
+#if !PLATFORM_WINDOWS && ENABLE_LOW_LEVEL_MEM_TRACKER
+	const bool bRequiresManualTracking = GetType() == ResourceLocationType::eSubAllocation && AllocatorType != AT_SegList;
+	const bool bOtherRequiresManualTracking = Other.GetType() == ResourceLocationType::eSubAllocation && Other.AllocatorType != AT_SegList;
+
+	if (bRequiresManualTracking)
+	{
+		FLowLevelMemTracker::Get().OnLowLevelFree(ELLMTracker::Default, this);
+	}
+	if (bOtherRequiresManualTracking)
+	{
+		FLowLevelMemTracker::Get().OnLowLevelAllocMoved(ELLMTracker::Default, this, &Other);
+	}
+	if (bRequiresManualTracking)
+	{
+		FLowLevelMemTracker::Get().OnLowLevelAlloc(ELLMTracker::Default, &Other, GetSize());
+	}
+#endif
+
 	::Swap(*this, Other);
 }
 
@@ -567,12 +601,6 @@ void FD3D12ResourceLocation::ReleaseResource()
 		}
 		break;
 	}
-	case ResourceLocationType::eMultiFrameFastAllocation:
-	{
-		check(UnderlyingResource->GetRefCount() > 1);
-		UnderlyingResource->Release();
-		break;
-	}
 	case ResourceLocationType::eFastAllocation:
 	case ResourceLocationType::eUndefined:
 	default:
@@ -590,30 +618,4 @@ void FD3D12ResourceLocation::SetResource(FD3D12Resource* Value)
 
 	UnderlyingResource = Value;
 	ResidencyHandle = UnderlyingResource->GetResidencyHandle();
-}
-
-/////////////////////////////////////////////////////////////////////
-//	FD3D12 Dynamic Buffer
-/////////////////////////////////////////////////////////////////////
-
-FD3D12DynamicBuffer::FD3D12DynamicBuffer(FD3D12Device* InParent)
-	: FD3D12DeviceChild(InParent)
-	, ResourceLocation(InParent)
-{
-}
-
-FD3D12DynamicBuffer::~FD3D12DynamicBuffer()
-{
-}
-
-void* FD3D12DynamicBuffer::Lock(uint32 Size)
-{
-	FD3D12Adapter* Adapter = GetParentDevice()->GetParentAdapter();
-
-	return 	Adapter->GetUploadHeapAllocator(GetParentDevice()->GetGPUIndex()).AllocUploadResource(Size, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT, ResourceLocation);
-}
-
-FD3D12ResourceLocation* FD3D12DynamicBuffer::Unlock()
-{
-	return &ResourceLocation;
 }

@@ -6,7 +6,7 @@
 #include "NiagaraGraph.h"
 #include "Framework/Commands/UIAction.h"
 #include "ScopedTransaction.h"
-#include "Framework/MultiBox/MultiBoxBuilder.h"
+#include "ToolMenus.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Layout/SBox.h"
 #include "SNiagaraGraphPinAdd.h"
@@ -14,6 +14,7 @@
 #include "NiagaraEditorUtilities.h"
 #include "SNiagaraParameterMapView.h"
 #include "Framework/Application/SlateApplication.h"
+#include "NiagaraNodeParameterMapBase.h"
 
 #define LOCTEXT_NAMESPACE "NiagaraNodeWithDynamicPins"
 
@@ -161,15 +162,15 @@ void UNiagaraNodeWithDynamicPins::MoveDynamicPin(UEdGraphPin* Pin, int32 Directi
 	}
 }
 
-void UNiagaraNodeWithDynamicPins::GetContextMenuActions(const FGraphNodeContextMenuBuilder& Context) const
+void UNiagaraNodeWithDynamicPins::GetNodeContextMenuActions(UToolMenu* Menu, UGraphNodeContextMenuContext* Context) const
 {
-	Super::GetContextMenuActions(Context);
-	if (Context.Pin != nullptr)
+	Super::GetNodeContextMenuActions(Menu, Context);
+	if (Context->Pin != nullptr)
 	{
-		Context.MenuBuilder->BeginSection("EdGraphSchema_NiagaraPinActions", LOCTEXT("EditPinMenuHeader", "Edit Pin"));
-		if (CanRenamePin(Context.Pin))
+		FToolMenuSection& Section = Menu->AddSection("EdGraphSchema_NiagaraPinActions", LOCTEXT("EditPinMenuHeader", "Edit Pin"));
+		if (CanRenamePin(Context->Pin))
 		{
-			UEdGraphPin* Pin = const_cast<UEdGraphPin*>(Context.Pin);
+			UEdGraphPin* Pin = const_cast<UEdGraphPin*>(Context->Pin);
 			TSharedRef<SWidget> RenameWidget =
 				SNew(SBox)
 				.WidthOverride(100)
@@ -179,20 +180,21 @@ void UNiagaraNodeWithDynamicPins::GetContextMenuActions(const FGraphNodeContextM
 					.Text_UObject(this, &UNiagaraNodeWithDynamicPins::GetPinNameText, Pin)
 					.OnTextCommitted_UObject(const_cast<UNiagaraNodeWithDynamicPins*>(this), &UNiagaraNodeWithDynamicPins::PinNameTextCommitted, Pin)
 				];
-			Context.MenuBuilder->AddWidget(RenameWidget, LOCTEXT("NameMenuItem", "Name"));
+			Section.AddEntry(FToolMenuEntry::InitWidget("RenameWidget", RenameWidget, LOCTEXT("NameMenuItem", "Name")));
 		}
-		if (CanRemovePin(Context.Pin))
+		if (CanRemovePin(Context->Pin))
 		{
-			Context.MenuBuilder->AddMenuEntry(
+			Section.AddMenuEntry(
+				"RemoveDynamicPin",
 				LOCTEXT("RemoveDynamicPin", "Remove pin"),
 				LOCTEXT("RemoveDynamicPinToolTip", "Remove this pin and any connections."),
 				FSlateIcon(),
-				FUIAction(FExecuteAction::CreateUObject(const_cast<UNiagaraNodeWithDynamicPins*>(this), &UNiagaraNodeWithDynamicPins::RemoveDynamicPinFromMenu, const_cast<UEdGraphPin*>(Context.Pin))));
+				FUIAction(FExecuteAction::CreateUObject(const_cast<UNiagaraNodeWithDynamicPins*>(this), &UNiagaraNodeWithDynamicPins::RemoveDynamicPinFromMenu, const_cast<UEdGraphPin*>(Context->Pin))));
 		}
-		if (CanMovePin(Context.Pin))
+		if (CanMovePin(Context->Pin))
 		{
 			TArray<UEdGraphPin*> SameDirectionPins;
-			if (Context.Pin->Direction == EEdGraphPinDirection::EGPD_Input)
+			if (Context->Pin->Direction == EEdGraphPinDirection::EGPD_Input)
 			{
 				GetInputPins(SameDirectionPins);
 			}
@@ -201,26 +203,27 @@ void UNiagaraNodeWithDynamicPins::GetContextMenuActions(const FGraphNodeContextM
 				GetOutputPins(SameDirectionPins);
 			}
 			int32 PinIdx = INDEX_NONE;
-			SameDirectionPins.Find(const_cast<UEdGraphPin*>(Context.Pin), PinIdx);
+			SameDirectionPins.Find(const_cast<UEdGraphPin*>(Context->Pin), PinIdx);
 
 			if (PinIdx != 0)
 			{
-				Context.MenuBuilder->AddMenuEntry(
+				Section.AddMenuEntry(
+					"MoveDynamicPinUp",
 					LOCTEXT("MoveDynamicPinUp", "Move pin up"),
 					LOCTEXT("MoveDynamicPinToolTipUp", "Move this pin and any connections one slot up."),
 					FSlateIcon(),
-					FUIAction(FExecuteAction::CreateUObject(const_cast<UNiagaraNodeWithDynamicPins*>(this), &UNiagaraNodeWithDynamicPins::MoveDynamicPinFromMenu, const_cast<UEdGraphPin*>(Context.Pin), -1)));
+					FUIAction(FExecuteAction::CreateUObject(const_cast<UNiagaraNodeWithDynamicPins*>(this), &UNiagaraNodeWithDynamicPins::MoveDynamicPinFromMenu, const_cast<UEdGraphPin*>(Context->Pin), -1)));
 			}
 			if (PinIdx >= 0 && PinIdx < SameDirectionPins.Num() - 1)
 			{
-				Context.MenuBuilder->AddMenuEntry(
+				Section.AddMenuEntry(
+					"MoveDynamicPinDown",
 					LOCTEXT("MoveDynamicPinDown", "Move pin down"),
 					LOCTEXT("MoveDynamicPinToolTipDown", "Move this pin and any connections one slot down."),
 					FSlateIcon(),
-					FUIAction(FExecuteAction::CreateUObject(const_cast<UNiagaraNodeWithDynamicPins*>(this), &UNiagaraNodeWithDynamicPins::MoveDynamicPin, const_cast<UEdGraphPin*>(Context.Pin), 1)));
+					FUIAction(FExecuteAction::CreateUObject(const_cast<UNiagaraNodeWithDynamicPins*>(this), &UNiagaraNodeWithDynamicPins::MoveDynamicPin, const_cast<UEdGraphPin*>(Context->Pin), 1)));
 			}
 		}
-		Context.MenuBuilder->EndSection();
 	}
 }
 
@@ -255,7 +258,28 @@ void UNiagaraNodeWithDynamicPins::CollectAddPinActions(FGraphActionListBuilderBa
 void UNiagaraNodeWithDynamicPins::AddParameter(FNiagaraVariable Parameter, UEdGraphPin* AddPin)
 {
 	FScopedTransaction AddNewPinTransaction(LOCTEXT("AddNewPinTransaction", "Add pin to node"));
-	this->RequestNewTypedPin(AddPin->Direction, Parameter.GetType(), Parameter.GetName());
+		{
+		// We need to create new UNiagaraScriptVariable instances only when creating a new variable
+		if (UNiagaraNodeParameterMapBase* Map = Cast<UNiagaraNodeParameterMapBase>(this))
+		{
+			if (UNiagaraGraph* Graph = GetNiagaraGraph())
+			{	
+				UNiagaraScriptVariable* Variable = Graph->GetScriptVariable(Parameter);
+				if (Variable == nullptr)
+				{
+					TSet<FName> Names;
+					for (const auto& ParameterElement : Graph->GetParameterReferenceMap())
+					{
+						Names.Add(ParameterElement.Key.GetName());
+					}
+					Parameter.SetName(FNiagaraUtilities::GetUniqueName(Parameter.GetName(), Names));
+					Graph->AddParameter(Parameter);
+				}
+			}
+		}
+	}
+	UEdGraphPin* Pin = this->RequestNewTypedPin(AddPin->Direction, Parameter.GetType(), Parameter.GetName());
+
 }
 
 void UNiagaraNodeWithDynamicPins::RemoveDynamicPin(UEdGraphPin* Pin)

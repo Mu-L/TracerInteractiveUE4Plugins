@@ -63,10 +63,6 @@ public:
 	UPROPERTY()
 	FGuid UsageId;
 
-	/** The compile ID last associated with this traversal.*/
-	UPROPERTY()
-	FGuid GeneratedCompileId;
-
 	/** The hash that we calculated last traversal. */
 	UPROPERTY()
 	FNiagaraCompileHash CompileHash;
@@ -80,6 +76,9 @@ public:
 private:
 	UPROPERTY()
 	TArray<uint8> DataHash_DEPRECATED;
+
+	UPROPERTY()
+	FGuid GeneratedCompileId_DEPRECATED;
 };
 
 struct FNiagaraGraphFunctionAliasContext
@@ -157,8 +156,8 @@ class UNiagaraGraph : public UEdGraph
 	TArray<FNiagaraVariable> FindStaticSwitchInputs(bool bReachableOnly = false) const;
 
 	/** Get an in-order traversal of a graph by the specified target output script usage.*/
-	void BuildTraversal(TArray<class UNiagaraNode*>& OutNodesTraversed, ENiagaraScriptUsage TargetUsage, FGuid TargetUsageId) const;
-	static void BuildTraversal(TArray<class UNiagaraNode*>& OutNodesTraversed, UNiagaraNode* FinalNode);
+	void BuildTraversal(TArray<class UNiagaraNode*>& OutNodesTraversed, ENiagaraScriptUsage TargetUsage, FGuid TargetUsageId, bool bEvaluateStaticSwitches = false) const;
+	static void BuildTraversal(TArray<class UNiagaraNode*>& OutNodesTraversed, UNiagaraNode* FinalNode, bool bEvaluateStaticSwitches = false);
 
 	/** Generates a list of unique input and output parameters for when this script is used as a function. */
 	void GetParameters(TArray<FNiagaraVariable>& Inputs, TArray<FNiagaraVariable>& Outputs) const;
@@ -182,7 +181,7 @@ class UNiagaraGraph : public UEdGraph
 	void GetAllReferencedGraphs(TArray<const UNiagaraGraph*>& Graphs) const;
 
 	/** Gather all the change ids of external references for this specific graph traversal.*/
-	void GatherExternalDependencyIDs(ENiagaraScriptUsage InUsage, const FGuid& InUsageId, TArray<FNiagaraCompileHash>& InReferencedCompileHashes, TArray<FGuid>& InReferencedIDs, TArray<UObject*>& InReferencedObjs);
+	void GatherExternalDependencyData(ENiagaraScriptUsage InUsage, const FGuid& InUsageId, TArray<FNiagaraCompileHash>& InReferencedCompileHashes, TArray<UObject*>& InReferencedObjs);
 
 	/** Determine if there are any external dependencies wrt to scripts and ensure that those dependencies are sucked into the existing package.*/
 	void SubsumeExternalDependencies(TMap<const UObject*, UObject*>& ExistingConversions);
@@ -200,9 +199,6 @@ class UNiagaraGraph : public UEdGraph
 	value that third parties can poll to see if their cached handling of the graph needs to potentially adjust to changes. Furthermore, for script compilation we cache 
 	the changes that were produced during the traversal of each output node, which are referred to as the CompileID.*/
 	FGuid GetChangeID() { return ChangeId; }
-
-	/** Recomputes the current compile id associated with the output node traversal specified by InUsage and InUsageId. If the usage is not found, an invalid Guid is returned.*/
-	FGuid ComputeCompileID(ENiagaraScriptUsage InUsage, const FGuid& InUsageId);
 
 	/** Gets the current compile data hash associated with the output node traversal specified by InUsage and InUsageId. If the usage is not found, an invalid hash is returned.*/
 	FNiagaraCompileHash GetCompileDataHash(ENiagaraScriptUsage InUsage, const FGuid& InUsageId) const;
@@ -225,24 +221,26 @@ class UNiagaraGraph : public UEdGraph
 	const TMap<FNiagaraVariable, UNiagaraScriptVariable*>& GetAllMetaData() const;
 	TMap<FNiagaraVariable, UNiagaraScriptVariable*>& GetAllMetaData();
 
-	const TMap<FNiagaraVariable, FNiagaraGraphParameterReferenceCollection>& GetParameterReferenceMap() const;
+	const TMap<FNiagaraVariable, FNiagaraGraphParameterReferenceCollection>& GetParameterReferenceMap() const; // NOTE: The const is a lie! (This indirectly calls RefreshParameterReferences, which can recreate the entire map)
+
+	UNiagaraScriptVariable* GetScriptVariable(FNiagaraVariable Parameter) const;
+	UNiagaraScriptVariable* GetScriptVariable(FName ParameterName) const;
 
 	/** Adds parameter to parameters map setting it as created by the user.*/
-	void AddParameter(const FNiagaraVariable& Parameter);
+	void AddParameter(const FNiagaraVariable& Parameter, bool bIsStaticSwitch = false);
 
 	/** Adds parameter to parameters map setting it as created by the user.*/
 	void AddParameterReference(const FNiagaraVariable& Parameter, const UEdGraphPin* Pin);
 
 	/** Remove parameter from map and all the pins associated. */
-	void RemoveParameter(const FNiagaraVariable& Parameter);
+	void RemoveParameter(const FNiagaraVariable& Parameter, bool bFromStaticSwitch = false);
 
 	/** Rename parameter from map and all the pins associated. */
-	bool RenameParameter(const FNiagaraVariable& Parameter, FName NewName);
+	bool RenameParameter(const FNiagaraVariable& Parameter, FName NewName, bool bFromStaticSwitch = false);
 
 	/** Gets a delegate which is called whenever a contained data interfaces changes. */
 	FOnDataInterfaceChanged& OnDataInterfaceChanged();
 
-	void SynchronizeInternalCacheWithGraph(UNiagaraGraph* Other);
 	void InvalidateCachedCompileIds();
 
 	/** Add a listener for OnGraphNeedsRecompile events */
@@ -274,9 +272,6 @@ protected:
 	void ResolveNumerics(TMap<UNiagaraNode*, bool>& VisitedNodes, UEdGraphNode* Node);
 
 private:
-	/** Remove any meta-data that is no longer being referenced within this graph.*/
-	void PurgeUnreferencedMetaData() const;
-
 	virtual void NotifyGraphChanged(const FEdGraphEditAction& InAction) override;
 
 	/** Find parameters in the graph. */
@@ -318,7 +313,5 @@ private:
 	bool bIsRenamingParameter;
 
 	mutable bool bParameterReferenceRefreshPending;
-
-	mutable bool bUnreferencedMetaDataPurgePending;
 };
 

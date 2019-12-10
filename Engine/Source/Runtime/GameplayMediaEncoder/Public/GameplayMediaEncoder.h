@@ -105,7 +105,11 @@ private:
 
 	uint64 NumCapturedFrames = 0;
 	FTimespan StartTime = 0;
-	FTimespan LastAudioInputTimestamp = 0;
+	// Instead of using the AudioClock parameter ISubmixBufferListener::OnNewSubmixBuffer gives us, we calculate our own, by
+	// advancing it as we receive more data.
+	// This is so that we can adjust the clock if things get out of sync, such as if we break into the debugger.
+	double AudioClock = 0;
+
 	FTimespan LastVideoInputTimestamp = 0;
 
 	// It is possible to suspend the processing of media samples which is

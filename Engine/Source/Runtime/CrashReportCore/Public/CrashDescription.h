@@ -383,6 +383,21 @@ struct FPrimaryCrashProperties
 	 */
 	FString CrashType;
 
+	/**
+	 *	The cpu brand of the device, e.g. Intel, iPhone6, etc.
+	 */
+	FCrashProperty CPUBrand;
+
+	/**
+	 * Whether it was an OOM or not
+	 */
+	bool bIsOOM;
+	
+	/**
+	 * Whether we got a low memory warning or not
+	 */
+	bool bLowMemoryWarning;
+	
 protected:
 	/** Default constructor. */
 	FPrimaryCrashProperties();
@@ -438,8 +453,8 @@ public:
 	void Save();
 
 protected:
-	/** Reads previously set XML file. */
-	void ReadXML( const FString& CrashContextFilepath );
+	/** Reads previously set XML file. Optionally give a buffer to parse from. Any changes will be stored to CrashContextFilePath. */
+	void ReadXML( const FString& CrashContextFilepath, const TCHAR* Buffer = nullptr );
 
 	/** Sets the CrasgGUID based on the report's path. */
 	void SetCrashGUID( const FString& Filepath );
@@ -448,13 +463,16 @@ protected:
 	template <typename Type>
 	void GetCrashProperty( Type& out_ReadValue, const FString& MainCategory, const FString& SecondCategory ) const
 	{
-		const FXmlNode* MainNode = XmlFile->GetRootNode()->FindChildNode( MainCategory );
-		if (MainNode)
+		if (XmlFile->IsValid())
 		{
-			const FXmlNode* CategoryNode = MainNode->FindChildNode( SecondCategory );
-			if (CategoryNode)
+			const FXmlNode* MainNode = XmlFile->GetRootNode()->FindChildNode( MainCategory );
+			if (MainNode)
 			{
-				LexFromString( out_ReadValue, *FGenericCrashContext::UnescapeXMLString( CategoryNode->GetContent() ) );
+				const FXmlNode* CategoryNode = MainNode->FindChildNode( SecondCategory );
+				if (CategoryNode)
+				{
+					LexFromString( out_ReadValue, *FGenericCrashContext::UnescapeXMLString( CategoryNode->GetContent() ) );
+				}
 			}
 		}
 	}
@@ -469,19 +487,22 @@ protected:
 	/** Sets a crash property to a new value. */
 	void SetCrashProperty( const FString& MainCategory, const FString& SecondCategory, const FString& NewValue )
 	{
-		FXmlNode* MainNode = XmlFile->GetRootNode()->FindChildNode( MainCategory );
-		if (MainNode)
+		if (XmlFile->IsValid())
 		{
-			FXmlNode* CategoryNode = MainNode->FindChildNode( SecondCategory );
-			FString EscapedValue;
-			FGenericCrashContext::AppendEscapedXMLString(EscapedValue, *NewValue);
-			if (CategoryNode)
+			FXmlNode* MainNode = XmlFile->GetRootNode()->FindChildNode( MainCategory );
+			if (MainNode)
 			{
-				CategoryNode->SetContent( EscapedValue );
-			}
-			else
-			{
-				MainNode->AppendChildNode( SecondCategory, EscapedValue );
+				FXmlNode* CategoryNode = MainNode->FindChildNode( SecondCategory );
+				FString EscapedValue;
+				FGenericCrashContext::AppendEscapedXMLString(EscapedValue, *NewValue);
+				if (CategoryNode)
+				{
+					CategoryNode->SetContent( EscapedValue );
+				}
+				else
+				{
+					MainNode->AppendChildNode( SecondCategory, EscapedValue );
+				}
 			}
 		}
 	}
@@ -513,6 +534,14 @@ struct FCrashContext : public FPrimaryCrashProperties
 {
 	/** Initializes instance based on specified Crash Context filepath. */
 	explicit FCrashContext( const FString& CrashContextFilepath );
+
+	/** Initializes an instance based on a in memory buffer. */
+	FCrashContext(const FString& CrashContextFilepath, const TCHAR* Buffer);
+
+private:
+
+	/** Initializes the primary crash property fields from the xml file */
+	void SetupPrimaryCrashProperties();
 };
 
 /** Crash context based on the Window Error Reporting WER files, obsolete, only for backward compatibility. */

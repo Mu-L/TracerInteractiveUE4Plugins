@@ -42,7 +42,7 @@ FString FIOSErrorReport::FindCrashedAppPath() const
 		CFRelease(CFString);
 		
 		static const TCHAR AppPathLineStart[] = TEXT("AppPath=");
-		static const int AppPathIdLength = ARRAY_COUNT(AppPathLineStart) - 1;
+		static const int AppPathIdLength = UE_ARRAY_COUNT(AppPathLineStart) - 1;
 		int32 AppPathStart = FileData.Find(AppPathLineStart);
 		if(AppPathStart >= 0)
 		{
@@ -102,7 +102,7 @@ void FIOSErrorReport::FindMostRecentErrorReports(TArray<FString>& ErrorReportPat
 FText FIOSErrorReport::DiagnoseReport() const
 {
 	// Should check if there are local PDBs before doing anything
-	ICrashDebugHelper* CrashDebugHelper = CrashHelperModule ? CrashHelperModule->Get() : nullptr;
+	ICrashDebugHelper* CrashDebugHelper = CrashHelperModule ? CrashHelperModule->GetNew() : nullptr;
 	if (!CrashDebugHelper)
 	{
 		// Not localized: should never be seen

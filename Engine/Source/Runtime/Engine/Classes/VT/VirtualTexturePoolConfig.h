@@ -18,18 +18,30 @@ struct FVirtualTextureSpacePoolConfig
 {
 	GENERATED_USTRUCT_BODY()
 
-	FVirtualTextureSpacePoolConfig() : SizeInMegabyte(0), TileSize(0), Format(PF_Unknown) {}
+	FVirtualTextureSpacePoolConfig() : MinTileSize(0), MaxTileSize(0), SizeInMegabyte(0), bAllowSizeScale(false) {}
 
+	/** Minimum tile size to match (including tile border). */
 	UPROPERTY()
-	int32 SizeInMegabyte; // Size counted in tiles of the pool
+	int32 MinTileSize;
 
+	/** Maximum tile size to match (including tile border). */
 	UPROPERTY()
-	int32 TileSize; // This is *including* any filtering borders
+	int32 MaxTileSize;
 
+	/** Format set to match. One pool can contain multiple layers with synchronized page table mappings. */
 	UPROPERTY()
-	TEnumAsByte<EPixelFormat> Format;
+	TArray< TEnumAsByte<EPixelFormat> > Formats;
 
-	bool IsDefault() const { return TileSize == 0; }
+	/** Upper limit of size in megabytes to allocate for the pool. The allocator will allocate as close as possible to this limit. */
+	UPROPERTY()
+	int32 SizeInMegabyte;
+
+	/** Allow the size to allocate for the pool to be scaled by some factor. */
+	UPROPERTY()
+	bool bAllowSizeScale;
+
+	/** Is this the default config? Use this setting when we can't find any other match. */
+	bool IsDefault() const { return Formats.Num() == 0; }
 };
 
 UCLASS(config = Engine, transient)
@@ -43,12 +55,5 @@ public:
 	UPROPERTY(config)
 	TArray<FVirtualTextureSpacePoolConfig> Pools; // All the VT pools specified in the config
 
-	const FVirtualTextureSpacePoolConfig *FindPoolConfig(int32 TileSize, EPixelFormat Format);
-
-	virtual ~UVirtualTexturePoolConfig();
-
-	virtual void PostLoad() override;
-
-private:
-	FVirtualTextureSpacePoolConfig DefaultConfig;
+	void FindPoolConfig(TEnumAsByte<EPixelFormat> const* InFormats, int32 InNumLayers, int32 InTileSize, FVirtualTextureSpacePoolConfig& OutConfig) const;
 };

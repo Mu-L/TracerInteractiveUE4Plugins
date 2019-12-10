@@ -100,7 +100,6 @@ void UImage::SetBrush(const FSlateBrush& InBrush)
 		if (MyImage.IsValid())
 		{
 			MyImage->SetImage(&Brush);
-			MyImage->Invalidate(EInvalidateWidget::LayoutAndVolatility);
 		}
 	}
 }
@@ -114,7 +113,6 @@ void UImage::SetBrushSize(FVector2D DesiredSize)
 		if (MyImage.IsValid())
 		{
 			MyImage->SetImage(&Brush);
-			MyImage->Invalidate(EInvalidateWidget::LayoutAndVolatility);
 		}
 	}
 }
@@ -128,7 +126,6 @@ void UImage::SetBrushTintColor(FSlateColor TintColor)
 		if (MyImage.IsValid())
 		{
 			MyImage->SetImage(&Brush);
-			MyImage->Invalidate(EInvalidateWidget::PaintAndVolatility);
 		}
 	}
 }
@@ -142,7 +139,6 @@ void UImage::SetBrushResourceObject(UObject* ResourceObject)
 		if (MyImage.IsValid())
 		{
 			MyImage->SetImage(&Brush);
-			MyImage->Invalidate(EInvalidateWidget::PaintAndVolatility);
 		}
 	}
 }
@@ -157,7 +153,6 @@ void UImage::SetBrushFromAsset(USlateBrushAsset* Asset)
 		if (MyImage.IsValid())
 		{
 			MyImage->SetImage(&Brush);
-			MyImage->Invalidate(EInvalidateWidget::LayoutAndVolatility);
 		}
 	}
 }
@@ -172,6 +167,7 @@ void UImage::SetBrushFromTexture(UTexture2D* Texture, bool bMatchSize)
 
 		if (Texture) // Since this texture is used as UI, don't allow it affected by budget.
 		{
+			Texture->bForceMiplevelsToBeResident = true;
 			Texture->bIgnoreStreamingMipBias = true;
 		}
 
@@ -191,7 +187,6 @@ void UImage::SetBrushFromTexture(UTexture2D* Texture, bool bMatchSize)
 		if (MyImage.IsValid())
 		{
 			MyImage->SetImage(&Brush);
-			MyImage->Invalidate(EInvalidateWidget::LayoutAndVolatility);
 		}
 	}
 }
@@ -219,7 +214,6 @@ void UImage::SetBrushFromAtlasInterface(TScriptInterface<ISlateTextureAtlasInter
 		if (MyImage.IsValid())
 		{
 			MyImage->SetImage(&Brush);
-			MyImage->Invalidate(EInvalidateWidget::LayoutAndVolatility);
 		}
 	}
 }
@@ -240,7 +234,6 @@ void UImage::SetBrushFromTextureDynamic(UTexture2DDynamic* Texture, bool bMatchS
 		if (MyImage.IsValid())
 		{
 			MyImage->SetImage(&Brush);
-			MyImage->Invalidate(EInvalidateWidget::LayoutAndVolatility);
 		}
 	}
 }
@@ -257,7 +250,6 @@ void UImage::SetBrushFromMaterial(UMaterialInterface* Material)
 		if (MyImage.IsValid())
 		{
 			MyImage->SetImage(&Brush);
-			MyImage->Invalidate(EInvalidateWidget::LayoutAndVolatility);
 		}
 	}
 }
@@ -373,7 +365,6 @@ UMaterialInstanceDynamic* UImage::GetDynamicMaterial()
 			if ( MyImage.IsValid() )
 			{
 				MyImage->SetImage(&Brush);
-				MyImage->Invalidate(EInvalidateWidget::LayoutAndVolatility);
 			}
 		}
 		

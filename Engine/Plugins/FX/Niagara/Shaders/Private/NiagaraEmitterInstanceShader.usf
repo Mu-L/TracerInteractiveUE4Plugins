@@ -37,13 +37,25 @@ float Reciprocal(float x){ return 1.0f/x; }
  */
 #if GPU_SIMULATION
 
-	#include "/Engine/Private/SceneTexturesCommon.ush"
+	#define THREADGROUP_SIZE 64
 
 	static uint3 GDispatchThreadId;
+	static uint3 GGroupThreadId;
 	static uint GCurrentPhase;
+	static uint GEmitterTickCounter;
+	static uint GSimStart;
+
+	// To be removed as well but don't know who is using it
+	#include "/Engine/Private/SceneTexturesCommon.ush"
+
+	// Temporary include while everything is moved to plugins
+	#if USE_SHADER_STAGES == 1
+		#include "NiagaraStrandsPhysics.ush"
+	#endif
+
 	uint EmitterTickCounter;
 
-	#define THREADGROUP_SIZE 64
+	
 
 	float4 Modulo(float4 x, float4 y){ return fmod(x,y); }
 	float3 Modulo(float3 x, float3 y){ return fmod(x,y); }
@@ -57,16 +69,45 @@ float Reciprocal(float x){ return 1.0f/x; }
 		return HomogeneousWorldPosition.xyz / HomogeneousWorldPosition.w;
 	}
 
+
+	static uint GRandomSeedOffset;
+
 	// MASSIVE HACK - Tracked in JIRA UE-69298
 	// Hardcoded random function accessible from inner part of node implementation.
 	// It works for now at least and avoids exposing every random needed in the UI. 
 	// Temporary solution, it will be replaced when a design is validated.
 	float NiagaraInternalNoise(uint u, uint v, uint s)
 	{
-		static uint RandomSeedOffset = 0;
-		uint Seed = (u * 1664525u + v) + s + RandomSeedOffset;
-		RandomSeedOffset += Seed;
+		uint Seed = (u * 1664525u + v) + s + GRandomSeedOffset;
+		GRandomSeedOffset += Seed;
 		return float(Rand3DPCG32(int3(u,v,Seed)).x) / 4294967296.0f;
+	}
+
+	// NIAGARA_MAX_GPU_SPAWN_INFOS is set from the shader compiler
+	#define NIAGARA_MAX_GPU_SPAWN_INFOS_V4	((NIAGARA_MAX_GPU_SPAWN_INFOS + 3) / 4)
+
+	float4	EmitterSpawnInfoOffsets[NIAGARA_MAX_GPU_SPAWN_INFOS_V4];
+	float4	EmitterSpawnInfoParams[NIAGARA_MAX_GPU_SPAWN_INFOS];			// Packed data where x = IntervalDt, y = InterpStartDt, z = Group, w = Start Particle Index
+
+	static int GInterpSpawnIndex;
+	static float Emitter_SpawnInterval;
+	static float Emitter_InterpSpawnStartDt;
+	static int Emitter_SpawnGroup;
+
+	void GetEmitterSpawnInfoForParticle(int ParticleIndex)
+	{
+		int SpawnInfoIndex = 0;
+		UNROLL
+		for ( int i=0; i < NIAGARA_MAX_GPU_SPAWN_INFOS_V4; ++i )
+		{
+			SpawnInfoIndex += (int)dot(1.0f, ParticleIndex >= EmitterSpawnInfoOffsets[i]);
+		}
+
+		Emitter_SpawnInterval		= EmitterSpawnInfoParams[SpawnInfoIndex].x;
+		Emitter_InterpSpawnStartDt	= EmitterSpawnInfoParams[SpawnInfoIndex].y;
+		Emitter_SpawnGroup			= asint(EmitterSpawnInfoParams[SpawnInfoIndex].z);
+
+		GInterpSpawnIndex		= ParticleIndex - asint(EmitterSpawnInfoParams[SpawnInfoIndex].w);
 	}
 #endif
 
@@ -81,28 +122,19 @@ float Reciprocal(float x){ return 1.0f/x; }
  * all relevant architectures.
  *
  * Warning: Only contains 24 bits of randomness, since we produce values in 
- *          the unit interval. 
+ *          the unit interval. Uses the upper 24 bits, as they have the best
+ *          quality.
  *
- * Note: Deterministic as long as Seed1, Seed2 and Seed3 are the same *and* as 
- *       long as no Random or Seeded Random ops are inserted into or removed 
- *       from the current script.
- *
- * TODO(mv): Might want to use a special case based on NiagaraRand3DPCG32 if 
- *           only 3 or less components are needed, and we can drop one of the 
- *           seeds, to reduce the operation count
+ *          By removing the bit swaps in NiagaraRand4DPCG32 we save a few 
+ *          operations, but lose a bit of statistical (but not visual) quality, 
+ *          and for our use case this is an acceptable compromise.
  * ----------------------------------------------------------------------------
  */
 
-// static counter that is incremented every time rand3 or rand4 is called. 
-static int RandomCounter = 0;
-
-// Returns 4 random normalized floats based on 3 explicit integer seeds and one 
-// implicit integer seed. 
-float4 rand4(int Seed1, int Seed2, int Seed3)
+// Returns 4 random normalized floats based on 4 explicit integer seeds
+float4 rand4(int Seed1, int Seed2, int Seed3, int Seed4)
 {
-	RandomCounter += 1;
-
-	int4 v = int4(RandomCounter, Seed1, Seed2, Seed3) * 1664525 + 1013904223;
+	int4 v = int4(Seed4, Seed1, Seed2, Seed3) * 1664525 + 1013904223;
 
 	v.x += v.y*v.w;
 	v.y += v.z*v.x;
@@ -113,73 +145,73 @@ float4 rand4(int Seed1, int Seed2, int Seed3)
 	v.z += v.x*v.y;
 	v.w += v.y*v.z;
 
-	// NOTE(mv): We can use 24 bits of randomness, as all integers in [0, 2^24] 
-    //           are exactly representable in single precision floats.
-    //           We use the upper 24 bits as they tend to be higher quality.
+	// We can use 24 bits of randomness, as all integers in [0, 2^24] 
+	// are exactly representable in single precision floats.
+	// We use the upper 24 bits as they tend to be higher quality.
 
-    // NOTE(mv): The divide can often be folded with the range scale in the rand functions
-
-    return float4((v >> 8) & 0x00ffffff) / 16777216.0; // 0x01000000 == 16777216
-    // return float4((v >> 8) & 0x00ffffff) * (1.0/16777216.0); // bugged, see UE-67738
+	// The divide is often folded with the range scale in the rand functions
+	return float4((v >> 8) & 0x00ffffff) / 16777216.0; // 0x01000000 == 16777216
+	// return float4((v >> 8) & 0x00ffffff) * (1.0/16777216.0); // bugged, see UE-67738
 }
 
 // float3 specialization of the above:
-// Returns 3 random normalized floats based on 3 explicit integer seeds and one 
-// implicit integer seed. The implicit seed takes the upper 16 bits of the third 
-// explicit seed, as this is often a global seed. 
-// The expression 
 // 
-//    RandomCounter | (Seed3 << 16)
-//
-// should be optimized away at compile time, as the third seed is typically 
-// a global constant.
-float3 rand3(int Seed1, int Seed2, int Seed3)
+// Returns 3 random normalized floats based on 4 explicit integer seeds.
+// 
+// All bits of the first and second seeds are used, while only 
+// the lower 16 bits of the third and fourth seeds are used.
+float3 rand3(int Seed1, int Seed2, int Seed3, int Seed4)
 {
-    RandomCounter += 1;
+	int3 v = int3(Seed1, Seed2, Seed4 | (Seed3 << 16)) * 1664525 + 1013904223;
 
-    int3 v = int3(Seed1, Seed2, RandomCounter | (Seed3 << 16)) * 1664525 + 1013904223;
+	v.x += v.y*v.z;
+	v.y += v.z*v.x;
+	v.z += v.x*v.y;
+	v.x += v.y*v.z;
+	v.y += v.z*v.x;
+	v.z += v.x*v.y;
 
-    v.x += v.y*v.z;
-    v.y += v.z*v.x;
-    v.z += v.x*v.y;
-    v.x += v.y*v.z;
-    v.y += v.z*v.x;
-    v.z += v.x*v.y;
-
-    return float3((v >> 8) & 0x00ffffff) / 16777216.0; // 0x01000000 == 16777216
+	return float3((v >> 8) & 0x00ffffff) / 16777216.0; // 0x01000000 == 16777216
 }
+
+// Internal counter used to generate a different sequence of random numbers for each call
+static int RandomCounterDeterministic = 0;
 
 // Cost using rand4: 6 imad, 1 itof, 1 ishr, 1 add, 2 mul
 float rand(float x, int Seed1, int Seed2, int Seed3)
 {
-	return rand3(Seed1, Seed2, Seed3).x * x;
+	RandomCounterDeterministic += 1;
+	return rand3(Seed1, Seed2, Seed3, RandomCounterDeterministic).x * x;
 }
 
 // Cost using rand4: 7 imad, 1 itof, 1 ishr, 1 add, 2 mul
 float2 rand(float2 x, int Seed1, int Seed2, int Seed3)
 {
-	return rand3(Seed1, Seed2, Seed3).xy * x;
+	RandomCounterDeterministic += 1;
+	return rand3(Seed1, Seed2, Seed3, RandomCounterDeterministic).xy * x;
 }
 
 // Cost using rand4: 8 imad, 1 itof, 1 ishr, 1 add, 2 mul
 float3 rand(float3 x, int Seed1, int Seed2, int Seed3)
 {
-	return rand3(Seed1, Seed2, Seed3).xyz * x;
+	RandomCounterDeterministic += 1;
+	return rand3(Seed1, Seed2, Seed3, RandomCounterDeterministic).xyz * x;
 }
 
 // Cost using rand4: 9 imad, 1 itof, 1 ishr, 1 and, 2 mul
 float4 rand(float4 x, int Seed1, int Seed2, int Seed3) 
 {
-    return rand4(Seed1, Seed2, Seed3).xyzw * x;
+	RandomCounterDeterministic += 1;
+	return rand4(Seed1, Seed2, Seed3, RandomCounterDeterministic).xyzw * x;
 }
 
 // Cost using rand4: 6 imad, 2 itof, 1 ishr, 1 add, 2 mul, 1 ftoi
 int rand(int x, int Seed1, int Seed2, int Seed3)
 {
-	// NOTE: Scaling a uniform float range provides better distribution of 
-	//       numbers than using %.
-	// NOTE: Inclusive! So [0, x] instead of [0, x)
-	return int(rand3(Seed1, Seed2, Seed3).x * (x+1));
+	// Scaling a uniform float range provides better distribution of numbers than using %.
+	// Inclusive! So [0, x] instead of [0, x)
+	RandomCounterDeterministic += 1;
+	return int(rand3(Seed1, Seed2, Seed3, RandomCounterDeterministic).x * (x+1));
 }
 
 /* -----------------------------------------------------------------
@@ -187,41 +219,45 @@ int rand(int x, int Seed1, int Seed2, int Seed3)
  * -----------------------------------------------------------------
  */
 #if GPU_SIMULATION
-	// NOTE(mv): This simply calls the deterministic random number functions 
-    //           from the Seeded RNG section, but uses non-deterministic seeds 
-    //           as input. In particular, GDispatchThreadId for the first seed 
-	//           and EmitterTickCounter for the second seed. Also note that 
-	//           EmitterTickCounter does *not* reset for each frame, which 
-	//           secures non-determinism across simulations.
+	// This simply calls the deterministic random number functions from the Seeded RNG section, 
+	// but uses non-deterministic seeds as input. 
 
-	// TODO(mv): This could perhaps be optimized a little bit using slightly 
-	//           cheaper functions, but the difference is likely negligible. 
-	//           So for the sake of brevity and cleanliness, keep it like this.
+	// This could perhaps be optimized by using slightly cheaper functions, but the difference is likely negligible. 
+	
+	// Internal counter used to generate a different sequence of random numbers for each call
+	// We need to keep this separate from the Deterministic version so that non-deterministic 
+	// calls do not interfere with the deterministic ones. 
+	static int RandomCounterNonDeterministic = -1;
 
 	float rand(float x)
 	{
-		return rand4(GDispatchThreadId.x, EmitterTickCounter, 0).x * x;
+		RandomCounterNonDeterministic -= 1;
+		return rand4(GDispatchThreadId.x, EmitterTickCounter, GDispatchThreadId.x, RandomCounterNonDeterministic).x * x;
 	}
 
 	float2 rand(float2 x)
 	{
-		return rand4(GDispatchThreadId.x, EmitterTickCounter, 0).xy * x;
+		RandomCounterNonDeterministic -= 1;
+		return rand4(GDispatchThreadId.x, EmitterTickCounter, GDispatchThreadId.x, RandomCounterNonDeterministic).xy * x;
 	}
 
 	float3 rand(float3 x)
 	{
-		return rand4(GDispatchThreadId.x, EmitterTickCounter, 0).xyz * x;
+		RandomCounterNonDeterministic -= 1;
+		return rand4(GDispatchThreadId.x, EmitterTickCounter, GDispatchThreadId.x, RandomCounterNonDeterministic).xyz * x;
 	}
 
 	float4 rand(float4 x) 
 	{
-		return rand4(GDispatchThreadId.x, EmitterTickCounter, 0).xyzw * x;
+		RandomCounterNonDeterministic -= 1;
+		return rand4(GDispatchThreadId.x, EmitterTickCounter, GDispatchThreadId.x, RandomCounterNonDeterministic).xyzw * x;
 	}
 
-	// Note: integer randoms are INCLUSIVE, i.e. includes both the upper and lower limit
+	// Integer randoms are INCLUSIVE, i.e. includes both the upper and lower limits
 	int rand(int x)
 	{
-		return int(rand4(GDispatchThreadId.x, EmitterTickCounter, 0).x * (x+1));
+		RandomCounterNonDeterministic -= 1;
+		return int(rand4(GDispatchThreadId.x, EmitterTickCounter, GDispatchThreadId.x, RandomCounterNonDeterministic).x * (x+1));
 	}
 #else
 	// Old unseeded, passthrough to FRandomStream
@@ -297,6 +333,8 @@ int rand(int x, int Seed1, int Seed2, int Seed3)
 	/* Parameters for spawning and simulations
 	 */
 	uint UpdateStartInstance;
+	uint ShaderStageIndex;
+	int IterationInterfaceCount;
 	uint SpawnedInstances;
 
 	uint ComponentBufferSizeRead;
@@ -305,6 +343,7 @@ int rand(int x, int Seed1, int Seed2, int Seed3)
 	int NumParticlesPerEvent;
 	uint CopyInstancesBeforeStart;
 
+	uint SimStart;
 
 	/* Buffers for particle data and DrawIndirect calls
 	 */
@@ -346,19 +385,37 @@ int rand(int x, int Seed1, int Seed2, int Seed3)
 		MustBe0[DataSetID] = 0;
 		// End static assert
 
-		int PrevIdx = GSpawnStartInstance + SpawnedInstances;	// scratch instance as default; write to that for dead particles
-		if (bDoAcquire)
-		{
-			// Have to use uint's here to avoid PS4 compiler warnings about InterlockedAdd, cannot propagate uint due to CPU VM limitations...
-			uint RetPrevIdx;
-			// @TODO : add some TLS logic to avoid thread group for doing atomic for each thread. (gathering the actual required count)
-			InterlockedAdd(RWInstanceCounts[WriteInstanceCountOffset], (uint)1U, RetPrevIdx);
-			PrevIdx = (int)RetPrevIdx;
-		}
-		return PrevIdx;
+		#if USE_SHADER_STAGES
+			if(ShaderStageIndex == 0)
+			{
+				int PrevIdx = GSpawnStartInstance + SpawnedInstances;	// scratch instance as default; write to that for dead particles
+				if(bDoAcquire == true)
+				{
+					// Have to use uint's here to avoid PS4 compiler warnings about InterlockedAdd, cannot propagate uint due to CPU VM limitations...
+					uint RetPrevIdx;
+					// @TODO : add some TLS logic to avoid thread group for doing atomic for each thread. (gathering the actual required count)
+					InterlockedAdd(RWInstanceCounts[WriteInstanceCountOffset], (uint)1U, RetPrevIdx);
+					PrevIdx = (int)RetPrevIdx;
+				}
+				return PrevIdx;
+			}
+			else
+			{
+				return ExecIndex();
+			}
+		#else
+			int PrevIdx = GSpawnStartInstance + SpawnedInstances;	// scratch instance as default; write to that for dead particles
+			if(bDoAcquire == true)
+			{
+				// Have to use uint's here to avoid PS4 compiler warnings about InterlockedAdd, cannot propagate uint due to CPU VM limitations...
+				uint RetPrevIdx;
+				// @TODO : add some TLS logic to avoid thread group for doing atomic for each thread. (gathering the actual required count)
+				InterlockedAdd(RWInstanceCounts[WriteInstanceCountOffset], (uint)1U, RetPrevIdx);
+				PrevIdx = (int)RetPrevIdx;
+			}
+			return PrevIdx;
+		#endif
 	}
-
-
 
 	/* ---------------------------------------------------------------------
 	 * InputData operations 
@@ -403,6 +460,20 @@ int rand(int x, int Seed1, int Seed2, int Seed3)
 	void ExitStatScope()	{}
 #endif
 
+	/* 
+	 * Get the index to write onto the output buffer
+	 */
+	int OutputIndex(const int DataSetID, const bool bIsPersistent, const bool bIsValid)
+	{
+		#if USE_SHADER_STAGES
+			const int DenseIndex = AcquireIndex(DataSetID,bIsValid);
+			const int SparseIndex = ExecIndex();
+			return (bIsPersistent && (DenseIndex != SparseIndex) ) ? SparseIndex : DenseIndex;
+		#else
+			return AcquireIndex(DataSetID,bIsValid);
+		#endif
+	}
+
 //Include the simulation shader code generated by the node graph.
 #include "/Engine/Generated/NiagaraEmitterInstance.ush"
 
@@ -420,7 +491,10 @@ void SimulateMainComputeCS(
 	uint3 GroupThreadId : SV_GroupThreadID)
 {
 	GDispatchThreadId = DispatchThreadId;
-
+	GGroupThreadId = GroupThreadId;
+	GEmitterTickCounter = EmitterTickCounter;
+	GSimStart = SimStart;
+	GRandomSeedOffset = 0;
 	/*
 	if(CopyInstancesBeforeStart == 1)
 	{
@@ -429,10 +503,35 @@ void SimulateMainComputeCS(
 	*/
 
 	uint InstanceID = UpdateStartInstance + DispatchThreadId.x;
-	GSpawnStartInstance = RWInstanceCounts[ReadInstanceCountOffset];				// needed by ExecIndex()
+	if (ReadInstanceCountOffset == 0xFFFFFFFF)
+	{
+		GSpawnStartInstance = 0;
+	}
+	else
+	{
+		GSpawnStartInstance = RWInstanceCounts[ReadInstanceCountOffset];				// needed by ExecIndex()
+	}
 	int MaxInstances = GSpawnStartInstance + SpawnedInstances;
 
-	if(InstanceID < UpdateStartInstance + MaxInstances )
+	bool UseInterface = false;
+	#if USE_SHADER_STAGES
+	if (IterationInterfaceCount > 0)
+	{
+		if (InstanceID < IterationInterfaceCount)
+		{
+			if (GSimStart == 1)
+			{
+				SimulateMain(InstanceID, 0, 0);
+			}
+			else
+			{
+				SimulateMain(InstanceID, 0, 1);
+			}
+		}
+		UseInterface = true;
+	}
+	#endif
+	if( !UseInterface && InstanceID < UpdateStartInstance + MaxInstances )
 	{
 		// calculate event index for the current instance; this is primarily for spawn events, where we do a single read from a secondary DataSet for a subset of particles
 		//  for all-particle events, this will always end up being 0 because NumParticlesPerEvent = total particles in the set

@@ -21,6 +21,7 @@
 #include "Widgets/Layout/SSpacer.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SWrapBox.h"
 #include "Widgets/Layout/SGridPanel.h"
 #include "Widgets/Layout/SScrollBar.h"
 #include "Widgets/Layout/SScrollBorder.h"
@@ -30,6 +31,8 @@
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Docking/SDockTab.h"
 #include "EditorStyleSet.h"
+#include "Kismet2/KismetEditorUtilities.h"
+#include "MovieSceneSequenceEditor.h"
 #include "Engine/Selection.h"
 #include "LevelEditorViewport.h"
 #include "Widgets/Navigation/SBreadcrumbTrail.h"
@@ -82,6 +85,7 @@
 #include "LevelSequence.h"
 #include "SequencerLog.h"
 #include "MovieSceneCopyableBinding.h"
+#include "SObjectBindingTagManager.h"
 #include "MovieSceneCopyableTrack.h"
 #include "IPropertyRowGenerator.h"
 #include "Fonts/FontMeasure.h"
@@ -126,6 +130,7 @@ public:
 	TSharedRef<SWidget> MakeToolbar(TSharedRef<SCurveEditorPanel> InEditorPanel)
 	{
 		FToolBarBuilder ToolBarBuilder(InEditorPanel->GetCommands(), FMultiBoxCustomization::None, InEditorPanel->GetToolbarExtender(), EOrientation::Orient_Horizontal, true);
+		ToolBarBuilder.SetStyle(&FEditorStyle::Get(), "Sequencer.ToolBar");
 		ToolBarBuilder.BeginSection("Asset");
 		ToolBarBuilder.EndSection();
 		// We just use all of the extenders as our toolbar, we don't have a need to create a separate toolbar.
@@ -290,6 +295,12 @@ void SSequencer::Construct(const FArguments& InArgs, TSharedRef<FSequencer> InSe
 
 	OnReceivedFocus = InArgs._OnReceivedFocus;
 
+	OnReceivedDragOver = InArgs._OnReceivedDragOver;
+	OnReceivedDrop = InArgs._OnReceivedDrop;
+	OnAssetsDrop = InArgs._OnAssetsDrop;
+	OnClassesDrop = InArgs._OnClassesDrop;
+	OnActorsDrop = InArgs._OnActorsDrop;
+
 	USequencerSettings* SequencerSettings = Settings;
 
 	// Get the desired display format from the user's settings each time.
@@ -397,7 +408,23 @@ void SSequencer::Construct(const FArguments& InArgs, TSharedRef<FSequencer> InSe
 
 	TSharedRef<SScrollBar> ScrollBar = SNew(SScrollBar)
 		.Thickness(FVector2D(9.0f, 9.0f));
+
+	TSharedRef<SScrollBar> PinnedAreaScrollBar = SNew(SScrollBar)
+		.Thickness(FVector2D(9.0f, 9.0f));
+	
 	SAssignNew(TrackOutliner, SSequencerTrackOutliner);
+
+	SAssignNew(PinnedTrackArea, SSequencerTrackArea, TimeSliderControllerRef, InSequencer);
+	SAssignNew(PinnedTreeView, SSequencerTreeView, InSequencer->GetNodeTree(), PinnedTrackArea.ToSharedRef())
+		.ExternalScrollbar(PinnedAreaScrollBar)
+		.Clipping(EWidgetClipping::ClipToBounds)
+		.OnGetContextMenuContent(FOnGetContextMenuContent::CreateSP(this, &SSequencer::GetContextMenuContent));
+
+	PinnedTrackArea->SetTreeView(PinnedTreeView);
+	PinnedTrackArea->SetShowPinned(true);
+	PinnedTrackArea->SetIsSlave(true);
+	PinnedTreeView->SetShowPinned(true);
+
 	SAssignNew(TrackArea, SSequencerTrackArea, TimeSliderControllerRef, InSequencer);
 	SAssignNew(TreeView, SSequencerTreeView, InSequencer->GetNodeTree(), TrackArea.ToSharedRef())
 		.ExternalScrollbar(ScrollBar)
@@ -405,6 +432,8 @@ void SSequencer::Construct(const FArguments& InArgs, TSharedRef<FSequencer> InSe
 		.OnGetContextMenuContent(FOnGetContextMenuContent::CreateSP(this, &SSequencer::GetContextMenuContent));
 
 	TrackArea->SetTreeView(TreeView);
+
+	TreeView->AddSlaveTreeView(PinnedTreeView);
 
 	TAttribute<FAnimatedRange> ViewRangeAttribute = InArgs._ViewRange;
 
@@ -524,54 +553,89 @@ void SSequencer::Construct(const FArguments& InArgs, TSharedRef<FSequencer> InSe
 						.BorderImage(FEditorStyle::GetBrush("ToolPanel.GroupBorder"))
 						.Padding(FMargin(CommonPadding, 0.f))
 						[
-							SNew(SHorizontalBox)
+							SNew(SWrapBox)
+							.UseAllottedWidth(true)
+							.InnerSlotPadding(FVector2D(5, 2))
 
-							// Left aligned Toolbar Icons
-							+SHorizontalBox::Slot()
-							.AutoWidth()
+							+ SWrapBox::Slot()
+							.FillEmptySpace(true)
+							.FillLineWhenWidthLessThan(600)
 							[
 								MakeToolBar()
 							]
 
-							// Right Aligned Breadcrumbs
-							+ SHorizontalBox::Slot()
-							.HAlign(HAlign_Right)
-							.VAlign(VAlign_Center)
+							+ SWrapBox::Slot()
+							.FillEmptySpace(true)
 							[
-								SNew(SSpacer)
-							]
+								SNew(SBorder)
+								.Padding(FMargin(3.0f, 0.0f))
+								.BorderImage(FEditorStyle::GetBrush("ToolPanel.GroupBorder"))
+								[
+									SNew(SHorizontalBox)
 
-							+ SHorizontalBox::Slot()
-							.HAlign(HAlign_Right)
-							.VAlign(VAlign_Center)
-							[
-								SAssignNew(BreadcrumbTrail, SBreadcrumbTrail<FSequencerBreadcrumb>)
-								.Visibility(this, &SSequencer::GetBreadcrumbTrailVisibility)
-								.OnCrumbClicked(this, &SSequencer::OnCrumbClicked)
-								.ButtonStyle(FEditorStyle::Get(), "FlatButton")
-								.DelimiterImage(FEditorStyle::GetBrush("Sequencer.BreadcrumbIcon"))
-								.TextStyle(FEditorStyle::Get(), "Sequencer.BreadcrumbText")
-							]
+									// Right Aligned Breadcrumbs
+									+ SHorizontalBox::Slot()
+									.HAlign(HAlign_Right)
+									.VAlign(VAlign_Center)
+									[
+										SNew(SSpacer)
+									]
 
-							// Sequence Locking symbol
-							+SHorizontalBox::Slot()
-							.HAlign(HAlign_Right)
-							.VAlign(VAlign_Center)
-							.AutoWidth()
-							.Padding(2, 0, 0, 0)
-							[
-								SNew(SCheckBox)
-								.IsFocusable(false)		
-								.IsChecked_Lambda([this] { return GetIsSequenceReadOnly() ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; } )
-								.OnCheckStateChanged(this, &SSequencer::OnSetSequenceReadOnly)
-								.ToolTipText_Lambda([this] { return GetIsSequenceReadOnly() ? LOCTEXT("UnlockSequence", "Unlock the animation so that it is editable") : LOCTEXT("LockSequence", "Lock the animation so that it is not editable"); } )
-								.ForegroundColor(FLinearColor::White)
-								.CheckedImage(FEditorStyle::GetBrush("Sequencer.LockSequence"))
-								.CheckedHoveredImage(FEditorStyle::GetBrush("Sequencer.LockSequence"))
-								.CheckedPressedImage(FEditorStyle::GetBrush("Sequencer.LockSequence"))
-								.UncheckedImage(FEditorStyle::GetBrush("Sequencer.UnlockSequence"))
-								.UncheckedHoveredImage(FEditorStyle::GetBrush("Sequencer.UnlockSequence"))
-								.UncheckedPressedImage(FEditorStyle::GetBrush("Sequencer.UnlockSequence"))
+									+ SHorizontalBox::Slot()
+									.HAlign(HAlign_Right)
+									.VAlign(VAlign_Center)
+									[
+										SAssignNew(BreadcrumbPickerButton, SComboButton)
+										.Visibility(this, &SSequencer::GetBreadcrumbTrailVisibility)
+										.ButtonStyle(FEditorStyle::Get(), "FlatButton")
+										.ForegroundColor(FLinearColor::White)
+										.OnGetMenuContent(this, &SSequencer::GetBreadcrumbPickerContent)
+										.HasDownArrow(false)
+										.ContentPadding(FMargin(3, 3))
+										.ButtonContent()
+										[
+											SNew(STextBlock)
+											.TextStyle(FEditorStyle::Get(), "Sequencer.BreadcrumbText")
+											.Font(FEditorStyle::Get().GetFontStyle("FontAwesome.11"))
+											.Text(FText::FromString(FString(TEXT("\xf07c"))) /*fa-folder-open*/)
+										]
+									]
+
+									// Right Aligned Breadcrumbs
+									+ SHorizontalBox::Slot()
+									.HAlign(HAlign_Right)
+									.VAlign(VAlign_Center)
+									.AutoWidth()
+									[
+										SAssignNew(BreadcrumbTrail, SBreadcrumbTrail<FSequencerBreadcrumb>)
+										.Visibility(this, &SSequencer::GetBreadcrumbTrailVisibility)
+										.OnCrumbClicked(this, &SSequencer::OnCrumbClicked)
+										.ButtonStyle(FEditorStyle::Get(), "FlatButton")
+										.DelimiterImage(FEditorStyle::GetBrush("Sequencer.BreadcrumbIcon"))
+										.TextStyle(FEditorStyle::Get(), "Sequencer.BreadcrumbText")
+									]
+
+									// Sequence Locking symbol
+									+SHorizontalBox::Slot()
+									.HAlign(HAlign_Right)
+									.VAlign(VAlign_Center)
+									.AutoWidth()
+									.Padding(2, 0, 0, 0)
+									[
+										SNew(SCheckBox)
+										.IsFocusable(false)		
+										.IsChecked_Lambda([this] { return GetIsSequenceReadOnly() ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; } )
+										.OnCheckStateChanged(this, &SSequencer::OnSetSequenceReadOnly)
+										.ToolTipText_Lambda([this] { return GetIsSequenceReadOnly() ? LOCTEXT("UnlockSequence", "Unlock the animation so that it is editable") : LOCTEXT("LockSequence", "Lock the animation so that it is not editable"); } )
+										.ForegroundColor(FLinearColor::White)
+										.CheckedImage(FEditorStyle::GetBrush("Sequencer.LockSequence"))
+										.CheckedHoveredImage(FEditorStyle::GetBrush("Sequencer.LockSequence"))
+										.CheckedPressedImage(FEditorStyle::GetBrush("Sequencer.LockSequence"))
+										.UncheckedImage(FEditorStyle::GetBrush("Sequencer.UnlockSequence"))
+										.UncheckedHoveredImage(FEditorStyle::GetBrush("Sequencer.UnlockSequence"))
+										.UncheckedPressedImage(FEditorStyle::GetBrush("Sequencer.UnlockSequence"))
+									]
+								]
 							]
 						]
 					]
@@ -654,46 +718,105 @@ void SSequencer::Construct(const FArguments& InArgs, TSharedRef<FSequencer> InSe
 					+ SGridPanel::Slot( Column0, Row2, SGridPanel::Layer(10) )
 					.ColumnSpan(2)
 					[
-						SNew(SHorizontalBox)
+						SAssignNew(MainSequencerArea, SVerticalBox)
 
-						+ SHorizontalBox::Slot()
+						+SVerticalBox::Slot()
+						.AutoHeight()
+						.MaxHeight(TAttribute<float>::Create(TAttribute<float>::FGetter::CreateSP(this, &SSequencer::GetPinnedAreaMaxHeight)))
 						[
-							SNew( SOverlay )
-
-							+ SOverlay::Slot()
+							SNew(SBorder)
+							.Visibility(this, &SSequencer::GetPinnedAreaVisibility)
+							.Padding(FMargin(0.0f, 0.0f, 0.0f, CommonPadding))
 							[
-								SNew(SScrollBorder, TreeView.ToSharedRef())
-								[
-									SNew(SHorizontalBox)
 
-									// outliner tree
-									+ SHorizontalBox::Slot()
-									.FillWidth( FillCoefficient_0 )
+								SNew(SHorizontalBox)
+
+								+ SHorizontalBox::Slot()
+								[
+									SNew(SOverlay)
+
+									+ SOverlay::Slot()
 									[
-										SNew(SBox)
+										SNew(SScrollBorder, TreeView.ToSharedRef())
 										[
-											TreeView.ToSharedRef()
+											SNew(SHorizontalBox)
+
+											// outliner tree
+											+ SHorizontalBox::Slot()
+											.FillWidth( FillCoefficient_0 )
+											[
+												SNew(SBox)
+												[
+													PinnedTreeView.ToSharedRef()
+												]
+											]
+
+											// track area
+											+ SHorizontalBox::Slot()
+											.FillWidth( FillCoefficient_1 )
+											[
+												SNew(SBox)
+												.Padding(ResizeBarPadding)
+												.Clipping(EWidgetClipping::ClipToBounds)
+												[
+													PinnedTrackArea.ToSharedRef()
+												]
+											]
 										]
 									]
 
-									// track area
-									+ SHorizontalBox::Slot()
-									.FillWidth( FillCoefficient_1 )
+									+ SOverlay::Slot()
+									.HAlign(HAlign_Right)
 									[
-										SNew(SBox)
-										.Padding(ResizeBarPadding)
-										.Clipping(EWidgetClipping::ClipToBounds)
-										[
-											TrackArea.ToSharedRef()
-										]
+										PinnedAreaScrollBar
 									]
 								]
 							]
+						]
 
-							+ SOverlay::Slot()
-							.HAlign( HAlign_Right )
+						+SVerticalBox::Slot()
+						[
+							SNew(SHorizontalBox)
+
+							+ SHorizontalBox::Slot()
 							[
-								ScrollBar
+								SNew(SOverlay)
+
+								+ SOverlay::Slot()
+								[
+									SNew(SScrollBorder, TreeView.ToSharedRef())
+									[
+										SNew(SHorizontalBox)
+
+										// outliner tree
+										+ SHorizontalBox::Slot()
+										.FillWidth( FillCoefficient_0 )
+										[
+											SNew(SBox)
+											[
+												TreeView.ToSharedRef()
+											]
+										]
+
+										// track area
+										+ SHorizontalBox::Slot()
+										.FillWidth( FillCoefficient_1 )
+										[
+											SNew(SBox)
+											.Padding(ResizeBarPadding)
+											.Clipping(EWidgetClipping::ClipToBounds)
+											[
+												TrackArea.ToSharedRef()
+											]
+										]
+									]
+								]
+
+								+ SOverlay::Slot()
+								.HAlign(HAlign_Right)
+								[
+									ScrollBar
+								]
 							]
 						]
 					]
@@ -886,10 +1009,6 @@ void SSequencer::BindCommands(TSharedRef<FUICommandList> SequencerCommandBinding
 		FExecuteAction::CreateLambda([this] { TransformBox->ToggleVisibility(); })
 	);
 
-	SequencerCommandBindings->MapAction(
-		FSequencerCommands::Get().ToggleShowStretchBox,
-		FExecuteAction::CreateLambda([this] { StretchBox->ToggleVisibility(); })
-	);
 	// Allow jumping to the Sequencer tree search if you have Sequencer focused
 	SequencerCommandBindings->MapAction(
 		FSequencerCommands::Get().QuickTreeSearch,
@@ -900,6 +1019,35 @@ void SSequencer::BindCommands(TSharedRef<FUICommandList> SequencerCommandBinding
 	SequencerPtr.Pin()->GetCurveEditor()->GetCommands()->MapAction(
 		FSequencerCommands::Get().QuickTreeSearch,
 		FExecuteAction::CreateLambda([this] { FSlateApplication::Get().SetKeyboardFocus(CurveEditorSearchBox, EFocusCause::SetDirectly); })
+	);
+	
+	SequencerCommandBindings->MapAction(
+		FSequencerCommands::Get().ToggleShowStretchBox,
+		FExecuteAction::CreateLambda([this] { StretchBox->ToggleVisibility(); })
+	);
+
+	auto OpenDirectorBlueprint = [WeakSequencer = SequencerPtr]
+	{
+		UMovieSceneSequence*       Sequence       = WeakSequencer.Pin()->GetFocusedMovieSceneSequence();
+		FMovieSceneSequenceEditor* SequenceEditor = Sequence ? FMovieSceneSequenceEditor::Find(Sequence) : nullptr;
+		if (SequenceEditor)
+		{
+			UBlueprint* DirectorBP = SequenceEditor->GetOrCreateDirectorBlueprint(Sequence);
+			if (DirectorBP)
+			{
+				FKismetEditorUtilities::BringKismetToFocusAttentionOnObject(DirectorBP);
+			}
+		}
+	};
+
+	SequencerCommandBindings->MapAction(
+		FSequencerCommands::Get().OpenDirectorBlueprint,
+		FExecuteAction::CreateLambda(OpenDirectorBlueprint)
+	);
+
+	SequencerCommandBindings->MapAction(
+		FSequencerCommands::Get().OpenTaggedBindingManager,
+		FExecuteAction::CreateSP(this, &SSequencer::OpenTaggedBindingManager)
 	);
 }
 
@@ -1146,6 +1294,7 @@ TSharedRef<SWidget> SSequencer::MakeToolBar()
 	}
 
 	FToolBarBuilder ToolBarBuilder( SequencerPtr.Pin()->GetCommandBindings(), FMultiBoxCustomization::None, Extender, Orient_Horizontal, true);
+	ToolBarBuilder.SetStyle(&FEditorStyle::Get(), "Sequencer.ToolBar");
 
 	ToolBarBuilder.BeginSection("Base Commands");
 	{
@@ -1188,19 +1337,6 @@ TSharedRef<SWidget> SSequencer::MakeToolBar()
 					LOCTEXT("SaveDirtyPackagesTooltip", "Saves the current sequence and any subsequences"),
 					SaveIcon
 				);
-
-				ToolBarBuilder.AddToolBarButton(
-					FUIAction(FExecuteAction::CreateSP(this, &SSequencer::OnSaveMovieSceneAsClicked)),
-					NAME_None,
-					LOCTEXT("SaveAs", "Save As"),
-					LOCTEXT("SaveAsTooltip", "Saves the current sequence under a different name"),
-					FSlateIcon(FEditorStyle::GetStyleSetName(), "Sequencer.SaveAs")
-				);
-			}
-
-			if (SequencerPtr.Pin()->GetHostCapabilities().bSupportsDiscardChanges)
-			{
-				ToolBarBuilder.AddToolBarButton( FSequencerCommands::Get().DiscardChanges );
 			}
 
 			ToolBarBuilder.AddToolBarButton( FSequencerCommands::Get().FindInContentBrowser );
@@ -1208,8 +1344,6 @@ TSharedRef<SWidget> SSequencer::MakeToolBar()
 			ToolBarBuilder.AddToolBarButton( FSequencerCommands::Get().RenderMovie );
 			ToolBarBuilder.AddSeparator("Level Sequence Separator");
 		}
-
-		ToolBarBuilder.AddToolBarButton( FSequencerCommands::Get().RestoreAnimatedState );
 
 		ToolBarBuilder.AddComboButton(
 			FUIAction(),
@@ -1433,6 +1567,12 @@ TSharedRef<SWidget> SSequencer::MakeFilterMenu()
 	MenuBuilder.BeginSection("SequencerTracksResetFilters");
 	{
 		MenuBuilder.AddMenuEntry(
+			LOCTEXT("FilterListEnableAll", "Enable All"),
+			LOCTEXT("FilterListEnableAllToolTip", "Selects all filters"),
+			FSlateIcon(),
+			FUIAction(FExecuteAction::CreateSP(this, &SSequencer::OnEnableAllFilters)));
+
+		MenuBuilder.AddMenuEntry(
 			LOCTEXT("FilterListResetFilters", "Reset Filters"),
 			LOCTEXT("FilterListResetToolTip", "Resets current filter selection"),
 			FSlateIcon(),
@@ -1497,8 +1637,8 @@ void SSequencer::FillLevelFilterMenu(FMenuBuilder& InMenuBarBuilder)
 				FUIAction(FExecuteAction::CreateSP(this, &SSequencer::OnEnableAllLevelFilters, true)));
 
 			InMenuBarBuilder.AddMenuEntry(
-				LOCTEXT("DisableAllLevelFilters", "Disable All"),
-				LOCTEXT("DisableAllLevelFiltersToolTip", "Disable all level filters"),
+				LOCTEXT("ResetLevelFilters", "Reset Filters"),
+				LOCTEXT("ResetLevelFiltersToolTip", "Resets current level filter selection"),
 				FSlateIcon(),
 				FUIAction(FExecuteAction::CreateSP(this, &SSequencer::OnEnableAllLevelFilters, false)));
 
@@ -1529,6 +1669,22 @@ void SSequencer::OnResetFilters()
 {
 	TSharedPtr<FSequencer> Sequencer = SequencerPtr.Pin();
 	Sequencer->GetNodeTree()->RemoveAllFilters();
+}
+
+void SSequencer::OnEnableAllFilters()
+{
+	TSharedPtr<FSequencer> Sequencer = SequencerPtr.Pin();
+
+	for (TSharedRef<FSequencerTrackFilter> TrackFilter : AllTrackFilters)
+	{
+		if (TrackFilter->SupportsSequence(Sequencer->GetFocusedMovieSceneSequence()))
+		{
+			if (!Sequencer->GetNodeTree()->IsTrackFilterActive(TrackFilter))
+			{
+				Sequencer->GetNodeTree()->AddFilter(TrackFilter);
+			}
+		}
+	}
 }
 
 void SSequencer::OnTrackFilterClicked(TSharedRef<FSequencerTrackFilter> TrackFilter)
@@ -1600,6 +1756,21 @@ TSharedRef<SWidget> SSequencer::MakeGeneralMenu()
 	FMenuBuilder MenuBuilder( true, SequencerPtr.Pin()->GetCommandBindings() );
 	TSharedPtr<FSequencer> Sequencer = SequencerPtr.Pin();
 
+
+	MenuBuilder.BeginSection("SequenceOptions", LOCTEXT("SequenceOptionsHeader", "Sequence"));
+	{
+		UMovieSceneSequence* RootSequence = SequencerPtr.Pin()->GetRootMovieSceneSequence();
+		if (RootSequence->GetTypedOuter<UBlueprint>() == nullptr)
+		{
+			// Only show this button where it makes sense (ie, if the sequence is not contained within a blueprint already)
+			MenuBuilder.AddMenuEntry(FSequencerCommands::Get().OpenDirectorBlueprint);
+		}
+
+		MenuBuilder.AddMenuEntry(FSequencerCommands::Get().RestoreAnimatedState);
+	}
+	MenuBuilder.EndSection();
+
+
 	// view options
 	MenuBuilder.BeginSection( "ViewOptions", LOCTEXT( "ViewMenuHeader", "View" ) );
 	{
@@ -1624,13 +1795,18 @@ TSharedRef<SWidget> SSequencer::MakeGeneralMenu()
 
 	MenuBuilder.AddMenuEntry(FSequencerCommands::Get().ToggleShowGotoBox);
 
-	MenuBuilder.AddMenuSeparator();
+	MenuBuilder.BeginSection( "Bindings", LOCTEXT( "BindingsMenuHeader", "Bindings" ) );
 
 	if (SequencerPtr.Pin()->IsLevelEditorSequencer())
 	{
+
 		MenuBuilder.AddMenuEntry(FSequencerCommands::Get().FixActorReferences);
 		MenuBuilder.AddMenuEntry(FSequencerCommands::Get().RebindPossessableReferences);
 	}
+
+	MenuBuilder.AddMenuEntry(FSequencerCommands::Get().OpenTaggedBindingManager);
+
+	MenuBuilder.EndSection();
 
 	if ( SequencerPtr.Pin()->IsLevelEditorSequencer() )
 	{
@@ -1641,6 +1817,36 @@ TSharedRef<SWidget> SSequencer::MakeGeneralMenu()
 	}
 
 	return MenuBuilder.MakeWidget();
+}
+
+void SSequencer::OpenTaggedBindingManager()
+{
+	if (TSharedPtr<SWindow> Window = WeakExposedBindingsWindow.Pin())
+	{
+		Window->DrawAttention(FWindowDrawAttentionParameters());
+		return;
+	}
+
+	TSharedRef<SWindow> ExposedBindingsWindow = SNew(SWindow)
+		.Title(FText::Format(LOCTEXT("ExposedBindings_Title", "Bindings Exposed in {0}"), FText::FromName(SequencerPtr.Pin()->GetRootMovieSceneSequence()->GetFName())))
+		.SupportsMaximize(false)
+		.ClientSize(FVector2D(600.f, 500.f))
+		.Content()
+		[
+			SNew(SObjectBindingTagManager, SequencerPtr)
+		];
+
+	TSharedPtr<SWindow> ParentWindow = FSlateApplication::Get().FindWidgetWindow(AsShared());
+	if (ParentWindow)
+	{
+		FSlateApplication::Get().AddWindowAsNativeChild(ExposedBindingsWindow, ParentWindow.ToSharedRef());
+	}
+	else
+	{
+		FSlateApplication::Get().AddWindow(ExposedBindingsWindow);
+	}
+
+	WeakExposedBindingsWindow = ExposedBindingsWindow;
 }
 
 void SSequencer::FillPlaybackSpeedMenu(FMenuBuilder& InMenuBarBuilder)
@@ -2124,7 +2330,7 @@ SSequencer::~SSequencer()
 
 
 	TSharedPtr<FSequencer> Sequencer = SequencerPtr.Pin();
-	if(Sequencer)
+	if(Sequencer && Sequencer->GetToolkitHost() && Sequencer->GetToolkitHost()->GetTabManager())
 	{
 		if (Sequencer->GetHostCapabilities().bSupportsCurveEditor)
 		{
@@ -2135,6 +2341,11 @@ SSequencer::~SSequencer()
 				CurveEditorTab->RequestCloseTab();
 			}
 		}
+	}
+
+	if (TSharedPtr<SWindow> Window = WeakExposedBindingsWindow.Pin())
+	{
+		Window->DestroyWindowImmediately();
 	}
 }
 
@@ -2181,6 +2392,7 @@ void RestoreSelectionState(const TArray<TSharedRef<FSequencerDisplayNode>>& Disp
 void SSequencer::UpdateLayoutTree()
 {
 	TrackArea->Empty();
+	PinnedTrackArea->Empty();
 
 	TSharedPtr<FSequencer> Sequencer = SequencerPtr.Pin();
 	if ( Sequencer.IsValid() )
@@ -2231,6 +2443,7 @@ void SSequencer::UpdateLayoutTree()
 					while (Parent.IsValid())
 					{
 						TreeView->SetItemExpansion(Parent->AsShared(), true);
+						PinnedTreeView->SetItemExpansion(Parent->AsShared(), true);
 						Parent = Parent->GetParent();
 					}
 
@@ -2241,6 +2454,33 @@ void SSequencer::UpdateLayoutTree()
 		}
 
 		AdditionalSelectionsToAdd.Empty();
+
+		if (Sequencer->GetFocusedMovieSceneSequence())
+		{
+			bool bAnyChanged = false;
+
+			TSharedPtr<FSequencerNodeTree> NodeTree = Sequencer->GetNodeTree();
+			const bool bHasSoloNodes = NodeTree->HasSoloNodes();
+			for (TSharedRef<FSequencerDisplayNode> Node : NodeTree->GetAllNodes())
+			{
+				if (Node->GetType() == ESequencerNode::Track)
+				{
+					UMovieSceneTrack* Track = static_cast<FSequencerTrackNode&>(Node.Get()).GetTrack();
+					bool bDisableEval = NodeTree->IsNodeMute(&Node.Get()) || (bHasSoloNodes && !NodeTree->IsNodeSolo(&Node.Get()));
+					if (bDisableEval != Track->IsEvalDisabled())
+					{
+						Track->Modify();
+						Track->SetEvalDisabled(bDisableEval);
+						bAnyChanged = true;
+					}
+					
+				}
+			}
+			if (bAnyChanged)
+			{
+				Sequencer->NotifyMovieSceneDataChanged(EMovieSceneDataChangeType::TrackValueChanged);
+			}
+		}
 
 		// Continue broadcasting selection changes
 		Sequencer->GetSelection().ResumeBroadcast();
@@ -2268,7 +2508,7 @@ void SSequencer::UpdateBreadcrumbs()
 		TAttribute<FText> CrumbNameAttribute = MakeAttributeSP(this, &SSequencer::GetBreadcrumbTextForSection, SubSection);
 
 		// The current breadcrumb is not a moviescene so we need to make a new breadcrumb in order return to the parent moviescene later
-		BreadcrumbTrail->PushCrumb( CrumbNameAttribute, FSequencerBreadcrumb( FocusedID ) );
+		BreadcrumbTrail->PushCrumb( CrumbNameAttribute, FSequencerBreadcrumb( FocusedID, CrumbNameAttribute.Get()) );
 	}
 }
 
@@ -2278,7 +2518,7 @@ void SSequencer::ResetBreadcrumbs()
 	BreadcrumbTrail->ClearCrumbs();
 
 	TAttribute<FText> CrumbNameAttribute = MakeAttributeSP(this, &SSequencer::GetBreadcrumbTextForSequence, MakeWeakObjectPtr(SequencerPtr.Pin()->GetRootMovieSceneSequence()), true);
-	BreadcrumbTrail->PushCrumb(CrumbNameAttribute, FSequencerBreadcrumb(MovieSceneSequenceID::Root));
+	BreadcrumbTrail->PushCrumb(CrumbNameAttribute, FSequencerBreadcrumb(MovieSceneSequenceID::Root, CrumbNameAttribute.Get()));
 }
 
 void SSequencer::PopBreadcrumb()
@@ -2323,6 +2563,15 @@ void SSequencer::OnDragLeave( const FDragDropEvent& DragDropEvent )
 
 FReply SSequencer::OnDragOver( const FGeometry& MyGeometry, const FDragDropEvent& DragDropEvent )
 {
+	if (OnReceivedDragOver.IsBound())
+	{
+		FReply DelegateReply = FReply::Unhandled();
+		if (OnReceivedDragOver.Execute(MyGeometry, DragDropEvent, DelegateReply))
+		{
+			return DelegateReply;
+		}
+	}
+
 	bool bIsDragSupported = false;
 
 	TSharedPtr<FDragDropOperation> Operation = DragDropEvent.GetOperation();
@@ -2340,6 +2589,15 @@ FReply SSequencer::OnDragOver( const FGeometry& MyGeometry, const FDragDropEvent
 
 FReply SSequencer::OnDrop( const FGeometry& MyGeometry, const FDragDropEvent& DragDropEvent )
 {
+	if (OnReceivedDrop.IsBound())
+	{
+		FReply DelegateReply = FReply::Unhandled();
+		if (OnReceivedDrop.Execute(MyGeometry, DragDropEvent, DelegateReply))
+		{
+			return DelegateReply;
+		}
+	}
+
 	bool bWasDropHandled = false;
 
 	// @todo sequencer: Get rid of hard-code assumptions about dealing with ACTORS at this level?
@@ -2463,33 +2721,40 @@ void SSequencer::OnAssetsDropped( const FAssetDragDropOp& DragDropOp )
 		}
 	}
 
-	for( auto CurObjectIter = DroppedObjects.CreateConstIterator(); CurObjectIter; ++CurObjectIter )
+	if (OnAssetsDrop.IsBound())
 	{
-		UObject* CurObject = *CurObjectIter;
-
-		if (!SequencerRef.OnHandleAssetDropped(CurObject, TargetObjectGuid))
+		bObjectAdded = OnAssetsDrop.Execute(DroppedObjects, DragDropOp);
+	}
+	else
+	{
+		for (TArray<UObject*>::TConstIterator CurObjectIter = DroppedObjects.CreateConstIterator(); CurObjectIter; ++CurObjectIter)
 		{
-			// Doesn't make sense to drop a level sequence asset into sequencer as a spawnable actor
-			if (CurObject->IsA<ULevelSequence>())
+			UObject* CurObject = *CurObjectIter;
+
+			if (!SequencerRef.OnHandleAssetDropped(CurObject, TargetObjectGuid))
 			{
-				UE_LOG(LogSequencer, Warning, TEXT("Can't add '%s' as a spawnable"), *CurObject->GetName());
-				continue;
-			}
-
-			FGuid NewGuid = SequencerRef.MakeNewSpawnable( *CurObject, DragDropOp.GetActorFactory() );
-
-			UMovieScene* MovieScene = SequencerRef.GetFocusedMovieSceneSequence()->GetMovieScene();
-			if (MovieScene)
-			{
-				FMovieSceneSpawnable* Spawnable = MovieScene->FindSpawnable(NewGuid);
-
-				if (Spawnable && Spawnable->GetObjectTemplate()->IsA<ACameraActor>())
+				// Doesn't make sense to drop a level sequence asset into sequencer as a spawnable actor
+				if (CurObject->IsA<ULevelSequence>())
 				{
-					SequencerRef.NewCameraAdded(NewGuid);
+					UE_LOG(LogSequencer, Warning, TEXT("Can't add '%s' as a spawnable"), *CurObject->GetName());
+					continue;
+				}
+
+				FGuid NewGuid = SequencerRef.MakeNewSpawnable(*CurObject, DragDropOp.GetActorFactory());
+
+				UMovieScene* MovieScene = SequencerRef.GetFocusedMovieSceneSequence()->GetMovieScene();
+				if (MovieScene)
+				{
+					FMovieSceneSpawnable* Spawnable = MovieScene->FindSpawnable(NewGuid);
+
+					if (Spawnable && Spawnable->GetObjectTemplate()->IsA<ACameraActor>())
+					{
+						SequencerRef.NewCameraAdded(NewGuid);
+					}
 				}
 			}
+			bObjectAdded = true;
 		}
-		bObjectAdded = true;
 	}
 
 	if( bObjectAdded )
@@ -2507,23 +2772,37 @@ void SSequencer::OnAssetsDropped( const FAssetDragDropOp& DragDropOp )
 
 void SSequencer::OnClassesDropped( const FClassDragDropOp& DragDropOp )
 {
-	FSequencer& SequencerRef = *SequencerPtr.Pin();
-
-	for( auto ClassIter = DragDropOp.ClassesToDrop.CreateConstIterator(); ClassIter; ++ClassIter )
+	if (OnClassesDrop.IsBound())
 	{
-		UClass* Class = ( *ClassIter ).Get();
-		if( Class != nullptr )
-		{
-			UObject* Object = Class->GetDefaultObject();
+		OnClassesDrop.Execute(DragDropOp.ClassesToDrop, DragDropOp);
+	}
+	else
+	{
+		FSequencer& SequencerRef = *SequencerPtr.Pin();
 
-			FGuid NewGuid = SequencerRef.MakeNewSpawnable( *Object );
+		for (auto ClassIter = DragDropOp.ClassesToDrop.CreateConstIterator(); ClassIter; ++ClassIter)
+		{
+			UClass* Class = (*ClassIter).Get();
+			if (Class != nullptr)
+			{
+				UObject* Object = Class->GetDefaultObject();
+
+				FGuid NewGuid = SequencerRef.MakeNewSpawnable(*Object);
+			}
 		}
 	}
 }
 
 void SSequencer::OnActorsDropped( FActorDragDropGraphEdOp& DragDropOp )
 {
-	SequencerPtr.Pin()->OnActorsDropped( DragDropOp.Actors );
+	if (OnActorsDrop.IsBound())
+	{
+		OnActorsDrop.Execute(DragDropOp.Actors, DragDropOp);
+	}
+	else
+	{
+		SequencerPtr.Pin()->OnActorsDropped(DragDropOp.Actors);
+	}
 }
 
 void SSequencer::OnCrumbClicked(const FSequencerBreadcrumb& Item)
@@ -2541,6 +2820,38 @@ void SSequencer::OnCrumbClicked(const FSequencerBreadcrumb& Item)
 	}
 }
 
+void SSequencer::OnBreadcrumbPickerContentClicked(const FSequencerBreadcrumb& Breadcrumb)
+{
+	while (BreadcrumbTrail->NumCrumbs() > 1 && BreadcrumbTrail->PeekCrumb().SequenceID != Breadcrumb.SequenceID)
+	{
+		BreadcrumbTrail->PopCrumb();
+	}
+	OnCrumbClicked(Breadcrumb);
+}
+
+TSharedRef<SWidget> SSequencer::GetBreadcrumbPickerContent()
+{
+	TArray<FSequencerBreadcrumb> CrumbData;
+	BreadcrumbTrail->GetAllCrumbData(CrumbData);
+
+	FMenuBuilder MenuBuilder(true, nullptr);
+
+	MenuBuilder.BeginSection("SequencerBreadcrumbPicker");
+
+	for(FSequencerBreadcrumb& Breadcrumb : CrumbData)
+	{
+		MenuBuilder.AddMenuEntry(
+			Breadcrumb.BreadcrumbName,
+			FText::GetEmpty(),
+			FSlateIcon(),
+			FUIAction(FExecuteAction::CreateLambda(([this, Breadcrumb]() { return this->OnBreadcrumbPickerContentClicked(Breadcrumb); } )))
+		);
+	}
+	
+	MenuBuilder.EndSection();
+
+	return MenuBuilder.MakeWidget();
+}
 
 FText SSequencer::GetRootAnimationName() const
 {
@@ -2557,12 +2868,6 @@ TSharedPtr<SSequencerTreeView> SSequencer::GetTreeView() const
 void SSequencer::OnSaveMovieSceneClicked()
 {
 	SequencerPtr.Pin()->SaveCurrentMovieScene();
-}
-
-
-void SSequencer::OnSaveMovieSceneAsClicked()
-{
-	SequencerPtr.Pin()->SaveCurrentMovieSceneAs();
 }
 
 
@@ -2715,6 +3020,22 @@ void SSequencer::StepToKey(bool bStepToNextKey, bool bCameraOnly)
 }
 
 
+float SSequencer::GetPinnedAreaMaxHeight() const
+{
+	if (!MainSequencerArea.IsValid())
+	{
+		return 0.0f;
+	}
+
+	// Allow the pinned area to use up to 2/3rds of the sequencer area
+	return MainSequencerArea->GetCachedGeometry().GetLocalSize().Y * 0.666f;
+}
+
+EVisibility SSequencer::GetPinnedAreaVisibility() const
+{
+	return PinnedTreeView->GetNumRootNodes() > 0 ? EVisibility::Visible : EVisibility::Collapsed;
+}
+
 FText SSequencer::GetBreadcrumbTextForSection(TWeakObjectPtr<UMovieSceneSubSection> SubSection) const
 {
 	UMovieSceneSubSection* SubSectionPtr = SubSection.Get();
@@ -2803,6 +3124,12 @@ void SSequencer::OnCurveEditorVisibilityChanged(bool bShouldBeVisible)
 		// that the Toolkit Host's Tab Manager has already registered a tab with a NullWidget for content.
 		TSharedRef<SDockTab> CurveEditorTab = Sequencer->GetToolkitHost()->GetTabManager()->InvokeTab(TabId);
 		CurveEditorTab->SetContent(CurveEditorPanel.ToSharedRef());
+
+		const FSlateIcon SequencerGraphIcon = FSlateIcon(FEditorStyle::GetStyleSetName(), "GenericCurveEditor.TabIcon");
+		CurveEditorTab->SetTabIcon(SequencerGraphIcon.GetIcon());
+
+		CurveEditorTab->SetLabel(LOCTEXT("SequencerMainGraphEditorTitle", "Sequencer Curves"));
+
 		SequencerPtr.Pin()->GetCurveEditor()->ZoomToFit();
 	}
 	else
@@ -2854,9 +3181,18 @@ FPaintPlaybackRangeArgs SSequencer::GetSectionPlaybackRangeArgs() const
 }
 
 
-FVirtualTrackArea SSequencer::GetVirtualTrackArea() const
+FVirtualTrackArea SSequencer::GetVirtualTrackArea(const SSequencerTrackArea* InTrackArea) const
 {
-	return FVirtualTrackArea(*SequencerPtr.Pin(), *TreeView.Get(), TrackArea->GetCachedGeometry());
+	const SSequencerTrackArea* TargetTrackArea = TrackArea.Get();
+	TSharedPtr<SSequencerTreeView> TargetTreeView = TreeView;
+	
+	if (InTrackArea != nullptr)
+	{
+		TargetTrackArea = InTrackArea;
+		TargetTreeView = TargetTrackArea->GetTreeView().Pin();
+	}
+
+	return FVirtualTrackArea(*SequencerPtr.Pin(), *TargetTreeView.Get(), TargetTrackArea->GetCachedGeometry());
 }
 
 FPasteContextMenuArgs SSequencer::GeneratePasteArgs(FFrameNumber PasteAtTime, TSharedPtr<FMovieSceneClipboard> Clipboard)
@@ -2881,6 +3217,7 @@ FPasteContextMenuArgs SSequencer::GeneratePasteArgs(FFrameNumber PasteAtTime, TS
 	TArray<TSharedRef<FSequencerDisplayNode>> PasteIntoNodes;
 	{
 		TSet<TWeakObjectPtr<UMovieSceneSection>> Sections = Sequencer->GetSelection().GetSelectedSections();
+		
 		for (const FSequencerSelectedKey& Key : Sequencer->GetSelection().GetSelectedKeys())
 		{
 			Sections.Add(Key.Section);
@@ -2891,6 +3228,15 @@ FPasteContextMenuArgs SSequencer::GeneratePasteArgs(FFrameNumber PasteAtTime, TS
 			if (TOptional<FSectionHandle> Handle = Sequencer->GetNodeTree()->GetSectionHandle(WeakSection.Get()))
 			{
 				PasteIntoNodes.Add(Handle->GetTrackNode());
+			}
+		}
+
+		auto SelectedNodes = Sequencer->GetSelection().GetSelectedOutlinerNodes();
+		for (const TSharedRef<FSequencerDisplayNode>& SelectedNode : SelectedNodes)
+		{
+			if (SelectedNode->GetType() == ESequencerNode::Category || SelectedNode->GetType() == ESequencerNode::Track || SelectedNode->GetType() == ESequencerNode::KeyArea)
+			{
+				PasteIntoNodes.Add(SelectedNode);
 			}
 		}
 	}
@@ -2913,13 +3259,20 @@ void SSequencer::OnPaste()
 	TSet<TSharedRef<FSequencerDisplayNode>> SelectedNodes = Sequencer->GetSelection().GetSelectedOutlinerNodes();
 	if (SelectedNodes.Num() == 0)
 	{
-		if (OpenPasteMenu())
+		if (!OpenPasteMenu())
 		{
-			return;
+			DoPaste();
+		}
+	}
+	else
+	{
+		if (!DoPaste())
+		{
+			OpenPasteMenu();
 		}
 	}
 
-	DoPaste();
+	
 }
 
 bool SSequencer::CanPaste()
@@ -2953,11 +3306,11 @@ bool SSequencer::CanPaste()
 	return SequencerPtr.Pin()->GetClipboardStack().Num() != 0;
 }
 
-void SSequencer::DoPaste()
+bool SSequencer::DoPaste()
 {
 	TSharedPtr<FSequencer> Sequencer = SequencerPtr.Pin();
 
-	Sequencer->DoPaste();
+	return Sequencer->DoPaste();
 }
 
 bool SSequencer::OpenPasteMenu()

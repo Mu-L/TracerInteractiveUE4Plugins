@@ -12,7 +12,7 @@
 #include "GameFramework/Actor.h"
 #include "Editor.h"
 #include "Engine/Texture2D.h"
-#include "Toolkits/AssetEditorManager.h"
+
 #include "DetailLayoutBuilder.h"
 #include "GameModeInfoCustomizer.h"
 #include "Settings/EditorExperimentalSettings.h"
@@ -23,15 +23,6 @@
 
 FWorldSettingsDetails::~FWorldSettingsDetails()
 {
-	GetMutableDefault<UEditorExperimentalSettings>()->OnSettingChanged().Remove(ExperimentalDelegateHandle);
-}
-
-void FWorldSettingsDetails::OnEditorExperimentalSettingsChanged(FName InPropertyName)
-{
-	if (DetailLayoutBuilder && InPropertyName == GET_MEMBER_NAME_CHECKED(UEditorExperimentalSettings, bLandscapeLayerSystem))
-	{
-		DetailLayoutBuilder->ForceRefreshDetails();
-	}
 }
 
 /* IDetailCustomization overrides
@@ -39,19 +30,12 @@ void FWorldSettingsDetails::OnEditorExperimentalSettingsChanged(FName InProperty
 
 void FWorldSettingsDetails::CustomizeDetails( IDetailLayoutBuilder& DetailBuilder )
 {
-	DetailLayoutBuilder = &DetailBuilder;
-
-	if (!ExperimentalDelegateHandle.IsValid())
-	{
-		ExperimentalDelegateHandle = GetMutableDefault<UEditorExperimentalSettings>()->OnSettingChanged().AddSP(this, &FWorldSettingsDetails::OnEditorExperimentalSettingsChanged);
-	}
-
 	IDetailCategoryBuilder& Category = DetailBuilder.EditCategory("GameMode");
 	CustomizeGameInfoProperty("DefaultGameMode", DetailBuilder, Category);
 
 	AddLightmapCustomization(DetailBuilder);
 
-	DetailBuilder.HideProperty(GET_MEMBER_NAME_CHECKED(AActor, bHidden), AActor::StaticClass());
+	DetailBuilder.HideProperty(AActor::GetHiddenPropertyName(), AActor::StaticClass());
 }
 
 
@@ -299,7 +283,7 @@ void FLightmapCustomNodeBuilder::ExecuteViewLightmap(FString SelectedLightmapPat
 	UObject* LightMapObject = FindObject<UObject>(NULL, *SelectedLightmapPath);
 	if ( LightMapObject )
 	{
-		FAssetEditorManager::Get().OpenEditorForAsset(LightMapObject);
+		GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(LightMapObject);
 	}
 }
 

@@ -17,6 +17,7 @@
 #include "Materials/MaterialExpressionConstant4Vector.h"
 #include "Materials/MaterialExpressionMultiply.h"
 #include "Engine/TextureCube.h"
+#include "Engine/Texture2DArray.h"
 #include "SceneView.h"
 #include "RendererInterface.h"
 #include "EngineModule.h"
@@ -40,9 +41,7 @@
 #include "MaterialBakingStructures.h"
 #include "MaterialOptions.h"
 
-#include "MeshDescription.h"
-#include "MeshAttributes.h"
-#include "MeshAttributeArray.h"
+#include "StaticMeshAttributes.h"
 #include "MeshDescriptionOperations.h"
 
 #if WITH_EDITOR
@@ -392,8 +391,7 @@ struct FExportMaterialCompiler : public FProxyMaterialCompiler
 		}
 	}
 	
-	virtual int32 LightmassReplace(int32 Realtime, int32 Lightmass) override { return Realtime; }
-	virtual int32 MaterialProxyReplace(int32 Realtime, int32 MaterialProxy) override { return MaterialProxy; }
+	virtual EMaterialCompilerType GetCompilerType() const override { return EMaterialCompilerType::MaterialProxy; }
 };
 
 
@@ -420,6 +418,9 @@ public:
 
 		FMaterialShaderMapId ResourceId;
 		Resource->GetShaderMapId(GMaxRHIShaderPlatform, ResourceId);
+
+		FStaticParameterSet StaticParamSet;
+		Resource->GetStaticParameterSet(GMaxRHIShaderPlatform, StaticParamSet);
 
 		{
 			TArray<FShaderType*> ShaderTypes;
@@ -450,7 +451,7 @@ public:
 			break;
 		};
 		
-		CacheShaders(ResourceId, GMaxRHIShaderPlatform);
+		CacheShaders(ResourceId, StaticParamSet, GMaxRHIShaderPlatform);
 	}
 
 	virtual bool IsUsedWithStaticLighting() const { return true; }
@@ -509,6 +510,11 @@ public:
 		return MaterialInterface->GetRenderProxy()->GetTextureValue(ParameterInfo,OutValue,Context);
 	}
 
+	virtual bool GetTextureValue(const FMaterialParameterInfo& ParameterInfo, const URuntimeVirtualTexture** OutValue, const FMaterialRenderContext& Context) const override
+	{
+		return MaterialInterface->GetRenderProxy()->GetTextureValue(ParameterInfo, OutValue, Context);
+	}
+
 	// Material properties.
 	/** Entry point for compiling a specific material property.  This must call SetMaterialProperty. */
 	virtual int32 CompilePropertyAndSetMaterialProperty(EMaterialProperty Property, FMaterialCompiler* Compiler, EShaderFrequency OverrideShaderFrequency, bool bUsePreviousFrameTime) const override
@@ -518,7 +524,7 @@ public:
 
 		int32 Ret = CompilePropertyAndSetMaterialPropertyWithoutCast(Property, Compiler);
 
-		return Compiler->ForceCast(Ret, FMaterialAttributeDefinitionMap::GetValueType(Property));
+		return Compiler->ForceCast(Ret, FMaterialAttributeDefinitionMap::GetValueType(Property), MFCF_ExactMatch | MFCF_ReplicateValue);
 	}
 
 	/** helper for CompilePropertyAndSetMaterialProperty() */
@@ -711,6 +717,11 @@ public:
 				UTextureCube* TexCube = (UTextureCube*)Texture;
 				LocalSize = FIntPoint(TexCube->GetSizeX(), TexCube->GetSizeY());
 			}
+			else if (Texture->IsA(UTexture2DArray::StaticClass())) 
+			{
+				UTexture2DArray* TexArray = (UTexture2DArray*)Texture;
+				LocalSize = FIntPoint(TexArray->GetSizeX(), TexArray->GetSizeY());
+			}
 
 			int32 LocalBias = GameTextureLODSettings->CalculateLODBias(Texture);
 
@@ -754,6 +765,15 @@ public:
 	{
 		return Material && Material->MaterialDomain == MD_Volume;
 	}
+
+	virtual void GatherExpressionsForCustomInterpolators(TArray<UMaterialExpression*>& OutExpressions) const override
+	{
+		if(Material)
+		{
+			Material->GetAllExpressionsForCustomInterpolators(OutExpressions);
+		}
+	}
+
 private:
 	/** The material interface for this proxy */
 	UMaterialInterface* MaterialInterface;
@@ -1603,7 +1623,7 @@ void FMaterialUtilities::AnalyzeMaterial(UMaterialInterface* InMaterial, const s
 	PropertyBeingBaked[MP_Metallic] = InMaterialSettings.bOpacityMap;
 	PropertyBeingBaked[MP_EmissiveColor] = InMaterialSettings.bEmissiveMap;
 
-	for (int32 PropertyIndex = 0; PropertyIndex < ARRAY_COUNT(PropertyBeingBaked); ++PropertyIndex)
+	for (int32 PropertyIndex = 0; PropertyIndex < UE_ARRAY_COUNT(PropertyBeingBaked); ++PropertyIndex)
 	{
 		if (PropertyBeingBaked[PropertyIndex])
 		{
@@ -2605,7 +2625,7 @@ bool FMaterialUtilities::RenderMaterialPropertyToTexture(struct FMaterialMergeDa
 
 	FMaterialRenderProxy* MaterialProxy = nullptr;
 
-	check(InMaterialProperty >= 0 && InMaterialProperty < ARRAY_COUNT(InMaterialData.ProxyCache->Proxies));
+	check(InMaterialProperty >= 0 && InMaterialProperty < UE_ARRAY_COUNT(InMaterialData.ProxyCache->Proxies));
 	if (InMaterialData.ProxyCache->Proxies[InMaterialProperty])
 	{
 		MaterialProxy = InMaterialData.ProxyCache->Proxies[InMaterialProperty];
@@ -2799,7 +2819,7 @@ FExportMaterialProxyCache::~FExportMaterialProxyCache()
 
 void FExportMaterialProxyCache::Release()
 {
-	for (int32 PropertyIndex = 0; PropertyIndex < ARRAY_COUNT(Proxies); PropertyIndex++)
+	for (int32 PropertyIndex = 0; PropertyIndex < UE_ARRAY_COUNT(Proxies); PropertyIndex++)
 	{
 		FMaterialRenderProxy* Proxy = Proxies[PropertyIndex];
 		if (Proxy)

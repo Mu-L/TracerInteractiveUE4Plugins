@@ -92,17 +92,6 @@ enum class ECrossplayPreference : uint8
 	OptedOutRestricted
 };
 
-UENUM()
-enum class ESendFriendInviteFailureReason : uint8
-{
-	NotFound,
-	AlreadyFriends,
-	InvitePending,
-	AddingSelfFail,
-	AddingBlockedFail,
-	UnknownError
-};
-
 /** Thin wrapper to infuse a raw platform string with some meaning */
 USTRUCT()
 struct PARTY_API FUserPlatform
@@ -172,6 +161,16 @@ private:
 	};
 
 	TArray<FSocialActionStep> ActionSteps;
+};
+
+UENUM()
+enum class EPlatformIconDisplayRule : uint8
+{
+	Always,									// always show the platform icon
+	AlwaysIfDifferent,						// always show the icon if it's a different platform from my own
+	AlwaysWhenInCrossplayParty,				// always show the icon if I'm in a crossplay party
+	AlwaysIfDifferentWhenInCrossplayParty,	// only show the icon if it's different from my own and I'm in a crossplay party
+	Never,									// never show the icon
 };
 
 #define DECLARE_SHARED_PTR_ALIASES(Type)	\

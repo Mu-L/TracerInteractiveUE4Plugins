@@ -908,6 +908,11 @@ static int32 ApplyResults(const FScene* Scene, FViewInfo& View, const FOcclusion
 				View.PrimitiveDefinitelyUnoccludedMap[PrimitiveIndex] = true;
 			}
 		}
+		else
+		{
+			// This applies for those are not occludees, so just follow the frustum culling result.
+			View.PrimitiveDefinitelyUnoccludedMap[PrimitiveIndex] = View.PrimitiveVisibilityMap[PrimitiveIndex];
+		}
 	}
 
 	INC_DWORD_STAT_BY(STAT_SoftwareCulledPrimitives, NumOccluded);
@@ -940,7 +945,7 @@ static const ENamedThreads::Type ThreadNameMap[] =
 
 static ENamedThreads::Type GetOcclusionThreadName()
 {
-	int32 Index = FMath::Clamp<int32>(GSOThreadName, 0, ARRAY_COUNT(ThreadNameMap)-1);
+	int32 Index = FMath::Clamp<int32>(GSOThreadName, 0, UE_ARRAY_COUNT(ThreadNameMap)-1);
 	return ThreadNameMap[Index];
 }
 

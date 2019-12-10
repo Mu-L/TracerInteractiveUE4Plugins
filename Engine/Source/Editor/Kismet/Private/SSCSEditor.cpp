@@ -71,6 +71,11 @@
 #include "Algo/Find.h"
 #include "ActorEditorUtils.h"
 
+#include "ToolMenus.h"
+#include "SSCSEditorMenuContext.h"
+#include "Kismet2/ComponentEditorContextMenuContex.h"
+#include "Subsystems/AssetEditorSubsystem.h"
+
 #define LOCTEXT_NAMESPACE "SSCSEditor"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSCSEditor, Log, All);
@@ -2579,9 +2584,9 @@ void SSCS_RowWidget::OnAttachToDropAction(const TArray<FSCSEditorTreeNodePtrType
 				FRotator OldRelativeRotation;
 				if(SceneComponentTemplate)
 				{
-					OldRelativeLocation = SceneComponentTemplate->RelativeLocation;
-					OldRelativeRotation = SceneComponentTemplate->RelativeRotation;
-					OldRelativeScale3D = SceneComponentTemplate->RelativeScale3D;
+					OldRelativeLocation = SceneComponentTemplate->GetRelativeLocation();
+					OldRelativeRotation = SceneComponentTemplate->GetRelativeRotation();
+					OldRelativeScale3D = SceneComponentTemplate->GetRelativeScale3D();
 				}
 
 				// Check for a valid parent node
@@ -2612,9 +2617,9 @@ void SSCS_RowWidget::OnAttachToDropAction(const TArray<FSCSEditorTreeNodePtrType
 						{
 							// If we find a match, save off the world position
 							FTransform ComponentToWorld = InstancedSceneComponent->GetComponentToWorld();
-							SceneComponentTemplate->RelativeLocation = ComponentToWorld.GetTranslation();
-							SceneComponentTemplate->RelativeRotation = ComponentToWorld.Rotator();
-							SceneComponentTemplate->RelativeScale3D = ComponentToWorld.GetScale3D();
+							SceneComponentTemplate->SetRelativeLocation_Direct(ComponentToWorld.GetTranslation());
+							SceneComponentTemplate->SetRelativeRotation_Direct(ComponentToWorld.Rotator());
+							SceneComponentTemplate->SetRelativeScale3D_Direct(ComponentToWorld.GetScale3D());
 						}
 					}
 				}
@@ -2627,26 +2632,26 @@ void SSCS_RowWidget::OnAttachToDropAction(const TArray<FSCSEditorTreeNodePtrType
 				if(SceneComponentTemplate && ParentSceneComponent && ParentSceneComponent->IsRegistered())
 				{
 					// If we find a match, calculate its new position relative to the scene root component instance in its current scene
-					FTransform ComponentToWorld(SceneComponentTemplate->RelativeRotation, SceneComponentTemplate->RelativeLocation, SceneComponentTemplate->RelativeScale3D);
+					FTransform ComponentToWorld(SceneComponentTemplate->GetRelativeRotation(), SceneComponentTemplate->GetRelativeLocation(), SceneComponentTemplate->GetRelativeScale3D());
 					FTransform ParentToWorld = SceneComponentTemplate->GetAttachSocketName() != NAME_None ? ParentSceneComponent->GetSocketTransform(SceneComponentTemplate->GetAttachSocketName(), RTS_World) : ParentSceneComponent->GetComponentToWorld();
 					FTransform RelativeTM = ComponentToWorld.GetRelativeTransform(ParentToWorld);
 
 					// Store new relative location value (if not set to absolute)
-					if(!SceneComponentTemplate->bAbsoluteLocation)
+					if(!SceneComponentTemplate->IsUsingAbsoluteLocation())
 					{
-						SceneComponentTemplate->RelativeLocation = RelativeTM.GetTranslation();
+						SceneComponentTemplate->SetRelativeLocation_Direct(RelativeTM.GetTranslation());
 					}
 
 					// Store new relative rotation value (if not set to absolute)
-					if(!SceneComponentTemplate->bAbsoluteRotation)
+					if(!SceneComponentTemplate->IsUsingAbsoluteRotation())
 					{
-						SceneComponentTemplate->RelativeRotation = RelativeTM.Rotator();
+						SceneComponentTemplate->SetRelativeRotation_Direct(RelativeTM.Rotator());
 					}
 
 					// Store new relative scale value (if not set to absolute)
-					if(!SceneComponentTemplate->bAbsoluteScale)
+					if(!SceneComponentTemplate->IsUsingAbsoluteScale())
 					{
-						SceneComponentTemplate->RelativeScale3D = RelativeTM.GetScale3D();
+						SceneComponentTemplate->SetRelativeScale3D_Direct(RelativeTM.GetScale3D());
 					}
 				}
 
@@ -2660,9 +2665,9 @@ void SSCS_RowWidget::OnAttachToDropAction(const TArray<FSCSEditorTreeNodePtrType
 						USceneComponent* InstancedSceneComponent = Cast<USceneComponent>(InstancedSceneComponents[InstanceIndex]);
 						if(InstancedSceneComponent != nullptr)
 						{
-							FComponentEditorUtils::ApplyDefaultValueChange(InstancedSceneComponent, InstancedSceneComponent->RelativeLocation, OldRelativeLocation, SceneComponentTemplate->RelativeLocation);
-							FComponentEditorUtils::ApplyDefaultValueChange(InstancedSceneComponent, InstancedSceneComponent->RelativeRotation, OldRelativeRotation, SceneComponentTemplate->RelativeRotation);
-							FComponentEditorUtils::ApplyDefaultValueChange(InstancedSceneComponent, InstancedSceneComponent->RelativeScale3D,  OldRelativeScale3D,  SceneComponentTemplate->RelativeScale3D);
+							FComponentEditorUtils::ApplyDefaultValueChange(InstancedSceneComponent, InstancedSceneComponent->GetRelativeLocation_DirectMutable(), OldRelativeLocation, SceneComponentTemplate->GetRelativeLocation());
+							FComponentEditorUtils::ApplyDefaultValueChange(InstancedSceneComponent, InstancedSceneComponent->GetRelativeRotation_DirectMutable(), OldRelativeRotation, SceneComponentTemplate->GetRelativeRotation());
+							FComponentEditorUtils::ApplyDefaultValueChange(InstancedSceneComponent, InstancedSceneComponent->GetRelativeScale3D_DirectMutable(),  OldRelativeScale3D,  SceneComponentTemplate->GetRelativeScale3D());
 						}
 					}
 				}
@@ -2724,9 +2729,9 @@ void SSCS_RowWidget::OnDetachFromDropAction(const TArray<FSCSEditorTreeNodePtrTy
 			if(SceneComponentTemplate)
 			{
 				// Cache current default values for propagation
-				OldRelativeLocation = SceneComponentTemplate->RelativeLocation;
-				OldRelativeRotation = SceneComponentTemplate->RelativeRotation;
-				OldRelativeScale3D = SceneComponentTemplate->RelativeScale3D;
+				OldRelativeLocation = SceneComponentTemplate->GetRelativeLocation();
+				OldRelativeRotation = SceneComponentTemplate->GetRelativeRotation();
+				OldRelativeScale3D = SceneComponentTemplate->GetRelativeScale3D();
 
 				// Save current state
 				SceneComponentTemplate->Modify();
@@ -2746,9 +2751,9 @@ void SSCS_RowWidget::OnDetachFromDropAction(const TArray<FSCSEditorTreeNodePtrTy
 				{
 					// If we find a match, save off the world position
 					FTransform ComponentToWorld = InstancedSceneComponent->GetComponentToWorld();
-					SceneComponentTemplate->RelativeLocation = ComponentToWorld.GetTranslation();
-					SceneComponentTemplate->RelativeRotation = ComponentToWorld.Rotator();
-					SceneComponentTemplate->RelativeScale3D = ComponentToWorld.GetScale3D();
+					SceneComponentTemplate->SetRelativeLocation_Direct(ComponentToWorld.GetTranslation());
+					SceneComponentTemplate->SetRelativeRotation_Direct(ComponentToWorld.Rotator());
+					SceneComponentTemplate->SetRelativeScale3D_Direct(ComponentToWorld.GetScale3D());
 				}
 			}
 
@@ -2762,26 +2767,26 @@ void SSCS_RowWidget::OnDetachFromDropAction(const TArray<FSCSEditorTreeNodePtrTy
 			if(SceneComponentTemplate && InstancedSceneRootComponent && InstancedSceneRootComponent->IsRegistered())
 			{
 				// If we find a match, calculate its new position relative to the scene root component instance in the preview scene
-				FTransform ComponentToWorld(SceneComponentTemplate->RelativeRotation, SceneComponentTemplate->RelativeLocation, SceneComponentTemplate->RelativeScale3D);
+				FTransform ComponentToWorld(SceneComponentTemplate->GetRelativeRotation(), SceneComponentTemplate->GetRelativeLocation(), SceneComponentTemplate->GetRelativeScale3D());
 				FTransform ParentToWorld = SceneComponentTemplate->GetAttachSocketName() != NAME_None ? InstancedSceneRootComponent->GetSocketTransform(SceneComponentTemplate->GetAttachSocketName(), RTS_World) : InstancedSceneRootComponent->GetComponentToWorld();
 				FTransform RelativeTM = ComponentToWorld.GetRelativeTransform(ParentToWorld);
 
 				// Store new relative location value (if not set to absolute)
-				if(!SceneComponentTemplate->bAbsoluteLocation)
+				if(!SceneComponentTemplate->IsUsingAbsoluteLocation())
 				{
-					SceneComponentTemplate->RelativeLocation = RelativeTM.GetTranslation();
+					SceneComponentTemplate->SetRelativeLocation_Direct(RelativeTM.GetTranslation());
 				}
 
 				// Store new relative rotation value (if not set to absolute)
-				if(!SceneComponentTemplate->bAbsoluteRotation)
+				if(!SceneComponentTemplate->IsUsingAbsoluteRotation())
 				{
-					SceneComponentTemplate->RelativeRotation = RelativeTM.Rotator();
+					SceneComponentTemplate->SetRelativeRotation_Direct(RelativeTM.Rotator());
 				}
 
 				// Store new relative scale value (if not set to absolute)
-				if(!SceneComponentTemplate->bAbsoluteScale)
+				if(!SceneComponentTemplate->IsUsingAbsoluteScale())
 				{
-					SceneComponentTemplate->RelativeScale3D = RelativeTM.GetScale3D();
+					SceneComponentTemplate->SetRelativeScale3D_Direct(RelativeTM.GetScale3D());
 				}
 			}
 
@@ -2795,9 +2800,9 @@ void SSCS_RowWidget::OnDetachFromDropAction(const TArray<FSCSEditorTreeNodePtrTy
 					USceneComponent* InstancedSceneComponent = Cast<USceneComponent>(InstancedSceneComponents[InstanceIndex]);
 					if(InstancedSceneComponent != nullptr)
 					{
-						FComponentEditorUtils::ApplyDefaultValueChange(InstancedSceneComponent, InstancedSceneComponent->RelativeLocation, OldRelativeLocation, SceneComponentTemplate->RelativeLocation);
-						FComponentEditorUtils::ApplyDefaultValueChange(InstancedSceneComponent, InstancedSceneComponent->RelativeRotation, OldRelativeRotation, SceneComponentTemplate->RelativeRotation);
-						FComponentEditorUtils::ApplyDefaultValueChange(InstancedSceneComponent, InstancedSceneComponent->RelativeScale3D,  OldRelativeScale3D,  SceneComponentTemplate->RelativeScale3D);
+						FComponentEditorUtils::ApplyDefaultValueChange(InstancedSceneComponent, InstancedSceneComponent->GetRelativeLocation_DirectMutable(), OldRelativeLocation, SceneComponentTemplate->GetRelativeLocation());
+						FComponentEditorUtils::ApplyDefaultValueChange(InstancedSceneComponent, InstancedSceneComponent->GetRelativeRotation_DirectMutable(), OldRelativeRotation, SceneComponentTemplate->GetRelativeRotation());
+						FComponentEditorUtils::ApplyDefaultValueChange(InstancedSceneComponent, InstancedSceneComponent->GetRelativeScale3D_DirectMutable(),  OldRelativeScale3D,  SceneComponentTemplate->GetRelativeScale3D());
 					}
 				}
 			}
@@ -2893,8 +2898,8 @@ void SSCS_RowWidget::OnMakeNewRootDropAction(FSCSEditorTreeNodePtrType DroppedNo
 				}
 
 				// Cache the current relative location and rotation values (for propagation)
-				const FVector OldRelativeLocation = SceneComponentTemplate->RelativeLocation;
-				const FRotator OldRelativeRotation = SceneComponentTemplate->RelativeRotation;
+				const FVector OldRelativeLocation = SceneComponentTemplate->GetRelativeLocation();
+				const FRotator OldRelativeRotation = SceneComponentTemplate->GetRelativeRotation();
 
 				// Reset the relative transform (location and rotation only; scale is preserved)
 				SceneComponentTemplate->SetRelativeLocation(FVector::ZeroVector);
@@ -2913,8 +2918,8 @@ void SSCS_RowWidget::OnMakeNewRootDropAction(FSCSEditorTreeNodePtrType DroppedNo
 						SceneComponentInstance->DetachFromComponent(DetachmentTransformRules);
 
 						// Propagate the default relative location & rotation reset from the template to the instance
-						FComponentEditorUtils::ApplyDefaultValueChange(SceneComponentInstance, SceneComponentInstance->RelativeLocation, OldRelativeLocation, SceneComponentTemplate->RelativeLocation);
-						FComponentEditorUtils::ApplyDefaultValueChange(SceneComponentInstance, SceneComponentInstance->RelativeRotation, OldRelativeRotation, SceneComponentTemplate->RelativeRotation);
+						FComponentEditorUtils::ApplyDefaultValueChange(SceneComponentInstance, SceneComponentInstance->GetRelativeLocation_DirectMutable(), OldRelativeLocation, SceneComponentTemplate->GetRelativeLocation());
+						FComponentEditorUtils::ApplyDefaultValueChange(SceneComponentInstance, SceneComponentInstance->GetRelativeRotation_DirectMutable(), OldRelativeRotation, SceneComponentTemplate->GetRelativeRotation());
 
 						// Must also reset the root component here, so that RerunConstructionScripts() will cache the correct root component instance data
 						AActor* Owner = SceneComponentInstance->GetOwner();
@@ -2934,7 +2939,7 @@ void SSCS_RowWidget::OnMakeNewRootDropAction(FSCSEditorTreeNodePtrType DroppedNo
 		check(bWasDefaultSceneRoot || SceneRootNodePtr->CanReparent());
 
 		// Remove the current scene root node from the SCS context
-		Blueprint->SimpleConstructionScript->RemoveNode(SceneRootNodePtr->GetSCSNode());
+		Blueprint->SimpleConstructionScript->RemoveNode(SceneRootNodePtr->GetSCSNode(), /*bValidateSceneRootNodes=*/false);
 
 		// Save old root node
 		OldSceneRootNodePtr = SceneRootNodePtr;
@@ -3917,15 +3922,12 @@ void SSCSEditor::GetSelectedItemsForContextMenu(TArray<FComponentEventConstructi
 	}
 }
 
-TSharedPtr< SWidget > SSCSEditor::CreateContextMenu()
+void SSCSEditor::PopulateContextMenu(UToolMenu* Menu)
 {
 	TArray<FSCSEditorTreeNodePtrType> SelectedItems = SCSTreeWidget->GetSelectedItems();
 
 	if (SelectedItems.Num() > 0 || CanPasteNodes())
 	{
-		const bool CloseAfterSelection = true;
-		FMenuBuilder MenuBuilder( CloseAfterSelection, CommandList );
-
 		bool bOnlyShowPasteOption = false;
 
 		if (SelectedItems.Num() > 0)
@@ -3964,9 +3966,10 @@ TSharedPtr< SWidget > SSCSEditor::CreateContextMenu()
 
 					if (EditorMode == EComponentEditorMode::BlueprintSCS)
 					{
+						FToolMenuSection& BlueprintSCSSection = Menu->AddSection("BlueprintSCS");
 						if (SelectedItems.Num() == 1)
 						{
-							MenuBuilder.AddMenuEntry(FGraphEditorCommands::Get().FindReferences);
+							BlueprintSCSSection.AddMenuEntry(FGraphEditorCommands::Get().FindReferences);
 						}
 
 						// Collect the classes of all selected objects
@@ -3987,7 +3990,9 @@ TSharedPtr< SWidget > SSCSEditor::CreateContextMenu()
 							// Build an event submenu if we can generate events
 							if( FBlueprintEditorUtils::CanClassGenerateEvents( SelectedClass ))
 							{
-								MenuBuilder.AddSubMenu(	LOCTEXT("AddEventSubMenu", "Add Event"), 
+								BlueprintSCSSection.AddSubMenu(
+									"AddEventSubMenu",
+									LOCTEXT("AddEventSubMenu", "Add Event"), 
 									LOCTEXT("ActtionsSubMenu_ToolTip", "Add Event"), 
 									FNewMenuDelegate::CreateStatic( &SSCSEditor::BuildMenuEventsSection,
 									GetBlueprint(), SelectedClass, FCanExecuteAction::CreateSP(this, &SSCSEditor::IsEditingAllowed),
@@ -3996,7 +4001,7 @@ TSharedPtr< SWidget > SSCSEditor::CreateContextMenu()
 						}
 					}					
 
-					FComponentEditorUtils::FillComponentContextMenuOptions(MenuBuilder, SelectedComponents);
+					FComponentEditorUtils::FillComponentContextMenuOptions(Menu, SelectedComponents);
 				}
 			}
 		}
@@ -4007,14 +4012,42 @@ TSharedPtr< SWidget > SSCSEditor::CreateContextMenu()
 
 		if (bOnlyShowPasteOption)
 		{
-			MenuBuilder.BeginSection("PasteComponent", LOCTEXT("EditComponentHeading", "Edit") );
+			FToolMenuSection& Section = Menu->AddSection("PasteComponent", LOCTEXT("EditComponentHeading", "Edit") );
 			{
-				MenuBuilder.AddMenuEntry( FGenericCommands::Get().Paste );
+				Section.AddMenuEntry( FGenericCommands::Get().Paste );
 			}
-			MenuBuilder.EndSection();
 		}
+	}
+}
 
-		return MenuBuilder.MakeWidget();
+void SSCSEditor::RegisterContextMenu()
+{
+	UToolMenus* ToolMenus = UToolMenus::Get();
+	if (!ToolMenus->IsMenuRegistered("Kismet.SCSEditorContextMenu"))
+	{
+		UToolMenu* Menu = ToolMenus->RegisterMenu("Kismet.SCSEditorContextMenu");
+		Menu->AddDynamicSection("SCSEditorDynamic", FNewToolMenuDelegate::CreateLambda([](UToolMenu* InMenu)
+		{
+			USSCSEditorMenuContext* ContextObject = InMenu->FindContext<USSCSEditorMenuContext>();
+			if (ContextObject && ContextObject->SCSEditor.IsValid())
+			{
+				ContextObject->SCSEditor.Pin()->PopulateContextMenu(InMenu);
+			}
+		}));
+	}
+}
+
+TSharedPtr< SWidget > SSCSEditor::CreateContextMenu()
+{
+	TArray<FSCSEditorTreeNodePtrType> SelectedItems = SCSTreeWidget->GetSelectedItems();
+
+	if (SelectedItems.Num() > 0 || CanPasteNodes())
+	{
+		RegisterContextMenu();
+		USSCSEditorMenuContext* ContextObject = NewObject<USSCSEditorMenuContext>();
+		ContextObject->SCSEditor = SharedThis(this);
+		FToolMenuContext ToolMenuContext(CommandList, TSharedPtr<FExtender>(), ContextObject);
+		return UToolMenus::Get()->GenerateWidget("Kismet.SCSEditorContextMenu", ToolMenuContext);
 	}
 	return TSharedPtr<SWidget>();
 }
@@ -4208,7 +4241,7 @@ void SSCSEditor::OnDuplicateComponent()
 				// otherwise we'll end up with the square of the root's scale instead of being the same size.
 				if (OriginalNodePtr == GetSceneRootNode())
 				{
-					NewSceneComponent->RelativeScale3D = FVector(1.f);
+					NewSceneComponent->SetRelativeScale3D_Direct(FVector(1.f));
 				}
 				else
 				{
@@ -5063,7 +5096,7 @@ UClass* SSCSEditor::CreateNewBPComponent(TSubclassOf<UActorComponent> ComponentC
 					GEditor->SyncBrowserToObjects(Objects);
 
 					// Open the editor for the new blueprint
-					FAssetEditorManager::Get().OpenEditorForAsset(NewBP);
+					GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(NewBP);
 				}
 			}
 		}
@@ -5223,9 +5256,9 @@ UActorComponent* SSCSEditor::AddNewComponent( UClass* NewComponentClass, UObject
 		if (ComponentTemplate)
 		{
 			// Create a duplicate of the provided template
-			UActorComponent* NewInstanceComponent = FComponentEditorUtils::DuplicateComponent(ComponentTemplate);
-			FSCSEditorTreeNodePtrType ParentNodePtr = FindParentForNewComponent(NewInstanceComponent);
-			NewComponent = AddNewNodeForInstancedComponent(MoveTemp(AddTransaction), NewInstanceComponent, ParentNodePtr, nullptr, bSetFocusToNewItem);
+			NewComponent = FComponentEditorUtils::DuplicateComponent(ComponentTemplate);
+			FSCSEditorTreeNodePtrType ParentNodePtr = FindParentForNewComponent(NewComponent);
+			AddNewNodeForInstancedComponent(MoveTemp(AddTransaction), NewComponent, ParentNodePtr, nullptr, bSetFocusToNewItem);
 		}
 		else if (AActor* ActorInstance = GetActorContext())
 		{
@@ -5295,7 +5328,12 @@ UActorComponent* SSCSEditor::AddNewComponent( UClass* NewComponentClass, UObject
 			// Rerun construction scripts
 			ActorInstance->RerunConstructionScripts();
 
-			NewComponent = AddNewNodeForInstancedComponent(MoveTemp(AddTransaction), NewInstanceComponent, ParentNodePtr, Asset, bSetFocusToNewItem);
+			// If the running the construction script destroyed the new node, don't create an entry for it
+			if (!NewInstanceComponent->IsPendingKill())
+			{
+				AddNewNodeForInstancedComponent(MoveTemp(AddTransaction), NewInstanceComponent, ParentNodePtr, Asset, bSetFocusToNewItem);
+				NewComponent = NewInstanceComponent;
+			}
 		}
 	}
 
@@ -5411,7 +5449,7 @@ FSCSEditorTreeNodePtrType SSCSEditor::FindParentForNewComponent(UActorComponent*
 	}
 
 	return TargetParentNode;
-	}
+}
 
 FSCSEditorTreeNodePtrType SSCSEditor::FindParentForNewNode(USCS_Node* NewNode) const
 {
@@ -5463,7 +5501,7 @@ UActorComponent* SSCSEditor::AddNewNode(TUniquePtr<FScopedTransaction> InOngoing
 	return NewNode->ComponentTemplate;
 }
 
-UActorComponent* SSCSEditor::AddNewNodeForInstancedComponent(TUniquePtr<FScopedTransaction> InOngoingCreateTransaction, UActorComponent* NewInstanceComponent, FSCSEditorTreeNodePtrType InParentNodePtr, UObject* Asset, bool bSetFocusToNewItem)
+void SSCSEditor::AddNewNodeForInstancedComponent(TUniquePtr<FScopedTransaction> InOngoingCreateTransaction, UActorComponent* NewInstanceComponent, FSCSEditorTreeNodePtrType InParentNodePtr, UObject* Asset, bool bSetFocusToNewItem)
 {
 	check(NewInstanceComponent != nullptr);
 
@@ -5480,8 +5518,6 @@ UActorComponent* SSCSEditor::AddNewNodeForInstancedComponent(TUniquePtr<FScopedT
 	}
 
 	UpdateTree(false);
-
-	return NewInstanceComponent;
 }
 
 bool SSCSEditor::IsComponentSelected(const UPrimitiveComponent* PrimComponent) const
@@ -5906,6 +5942,22 @@ void SSCSEditor::RemoveComponentNode(FSCSEditorTreeNodePtrType InNodePtr)
 				SCS_Node->ComponentTemplate->Modify();
 				SCS_Node->ComponentTemplate->Rename(*RemovedName, /*NewOuter =*/nullptr, REN_DontCreateRedirectors);
 
+				TArray<UObject*> ArchetypeInstances;
+				auto DestroyArchetypeInstances = [&ArchetypeInstances, &RemovedName](UActorComponent* ComponentTemplate)
+				{
+					ComponentTemplate->GetArchetypeInstances(ArchetypeInstances);
+					for (UObject* ArchetypeInstance : ArchetypeInstances)
+					{
+						if (!ArchetypeInstance->HasAllFlags(RF_ArchetypeObject | RF_InheritableComponentTemplate))
+						{
+							CastChecked<UActorComponent>(ArchetypeInstance)->DestroyComponent();
+							ArchetypeInstance->Rename(*RemovedName, nullptr, REN_DontCreateRedirectors);
+						}
+					}
+				};
+
+				DestroyArchetypeInstances(SCS_Node->ComponentTemplate);
+				
 				if (Blueprint)
 				{
 					// Children need to have their inherited component template instance of the component renamed out of the way as well
@@ -5920,6 +5972,8 @@ void SSCSEditor::RemoveComponentNode(FSCSEditorTreeNodePtrType InNodePtr)
 						{
 							Component->Modify();
 							Component->Rename(*RemovedName, /*NewOuter =*/nullptr, REN_DontCreateRedirectors);
+
+							DestroyArchetypeInstances(Component);
 						}
 					}
 				}
@@ -6259,24 +6313,31 @@ bool SSCSEditor::CanRenameComponent() const
 	return IsEditingAllowed() && SCSTreeWidget->GetSelectedItems().Num() == 1 && SCSTreeWidget->GetSelectedItems()[0]->CanRename();
 }
 
-void SSCSEditor::GetCollapsedNodes(const FSCSEditorTreeNodePtrType& InNodePtr, TSet<FSCSEditorTreeNodePtrType>& OutCollapsedNodes) const
+void SSCSEditor::DepthFirstTraversal(const FSCSEditorTreeNodePtrType& InNodePtr, TSet<FSCSEditorTreeNodePtrType>& OutVisitedNodes, const TFunctionRef<void(const FSCSEditorTreeNodePtrType&)> InFunction) const
 {
-	if(InNodePtr.IsValid())
+	if (InNodePtr.IsValid()
+		&& ensureMsgf(!OutVisitedNodes.Contains(InNodePtr), TEXT("Already visited node: %s (Parent: %s)"), *InNodePtr->GetDisplayString(), InNodePtr->GetParent().IsValid() ? *InNodePtr->GetParent()->GetDisplayString() : TEXT("NULL")))
 	{
-		const TArray<FSCSEditorTreeNodePtrType>& Children = InNodePtr->GetChildren();
-		if(Children.Num() > 0)
-		{
-			if(!SCSTreeWidget->IsItemExpanded(InNodePtr))
-			{
-				OutCollapsedNodes.Add(InNodePtr);
-			}
+		InFunction(InNodePtr);
+		OutVisitedNodes.Add(InNodePtr);
 
-			for(int32 i = 0; i < Children.Num(); ++i)
-			{
-				GetCollapsedNodes(Children[i], OutCollapsedNodes);
-			}
+		for (const FSCSEditorTreeNodePtrType& Child : InNodePtr->GetChildren())
+		{
+			DepthFirstTraversal(Child, OutVisitedNodes, InFunction);
 		}
 	}
+}
+
+void SSCSEditor::GetCollapsedNodes(const FSCSEditorTreeNodePtrType& InNodePtr, TSet<FSCSEditorTreeNodePtrType>& OutCollapsedNodes) const
+{
+	TSet<FSCSEditorTreeNodePtrType> VisitedNodes;
+	DepthFirstTraversal(InNodePtr, VisitedNodes, [SCSTreeWidget = this->SCSTreeWidget, &OutCollapsedNodes](const FSCSEditorTreeNodePtrType& InNodePtr)
+	{
+		if (InNodePtr->GetChildren().Num() > 0 && !SCSTreeWidget->IsItemExpanded(InNodePtr))
+		{
+			OutCollapsedNodes.Add(InNodePtr);
+		}
+	});
 }
 
 EVisibility SSCSEditor::GetPromoteToBlueprintButtonVisibility() const
@@ -6383,7 +6444,7 @@ void SSCSEditor::OnOpenBlueprintEditor(bool bForceCodeEditing) const
 			}
 			else
 			{
-				FAssetEditorManager::Get().OpenEditorForAsset(Blueprint);
+				GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(Blueprint);
 			}
 		}
 	}

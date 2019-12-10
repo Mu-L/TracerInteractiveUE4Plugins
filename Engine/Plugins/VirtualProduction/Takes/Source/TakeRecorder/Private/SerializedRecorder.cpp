@@ -24,7 +24,7 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "GameFramework/MovementComponent.h"
 #include "GameFramework/Character.h"
-#include "Toolkits/AssetEditorManager.h"
+
 #include "IAssetTools.h"
 #include "AssetData.h"
 #include "AssetToolsModule.h"
@@ -442,7 +442,7 @@ AActor* FSerializedRecorder::SetActorPossesableOrSpawnable(UMovieSceneSequence* 
 				SkeletalMeshComponent->SetAnimationMode(EAnimationMode::AnimationSingleNode);
 				SkeletalMeshComponent->bEnableUpdateRateOptimizations = false;
 				SkeletalMeshComponent->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
-				SkeletalMeshComponent->ForcedLodModel = 1;
+				SkeletalMeshComponent->SetForcedLOD(1);
 			}
 
 			// Disable auto-possession on recorded Pawns so that when the Spawnable is spawned it doesn't auto-possess the player

@@ -35,8 +35,10 @@ THIRD_PARTY_INCLUDES_END
 #undef CreateFont
 #undef CreateDesktop
 #undef GetMessage
+#undef PostMessage
 #undef GetCommandLine
 #undef GetProp
+#undef SetPort
 #undef SetProp
 #undef GetFileAttributes
 #undef ReportEvent
@@ -44,6 +46,7 @@ THIRD_PARTY_INCLUDES_END
 #undef GetClassInfo
 #undef Yield
 #undef IMediaEventSink
+#undef GetTempFileName
 
 // Undefine all the atomics. AllowWindowsPlatformAtomics/HideWindowsPlatformAtomics temporarily defining these macros.
 #if !PLATFORM_XBOXONE
@@ -74,9 +77,12 @@ THIRD_PARTY_INCLUDES_END
 #pragma pop_macro("FALSE")
 
 // Restore the struct packing setting
-#if PLATFORM_WINDOWS && PLATFORM_32BITS
-	#pragma pack(pop)
-#endif
+PRAGMA_POP_PLATFORM_DEFAULT_PACKING
+
+// Restore the warning that the pack size is changed in this header.
+#ifdef __clang__
+	#pragma clang diagnostic pop
+#endif	// __clang__
 
 // Redefine CDECL to our version of the #define.  <AJS> Is this really necessary?
 #define CDECL	    __cdecl					/* Standard C function */

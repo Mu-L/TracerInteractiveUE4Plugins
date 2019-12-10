@@ -7,7 +7,7 @@
 #include "Widgets/SWidget.h"
 #include "Engine/Engine.h"
 #include "EngineGlobals.h"
-#include "Toolkits/AssetEditorManager.h"
+
 #include "Toolkits/AssetEditorToolkit.h"
 #include "WorkflowOrientedApp/WorkflowTabFactory.h"
 #include "WorkflowOrientedApp/WorkflowTabManager.h"
@@ -83,6 +83,7 @@ public:
 
 private:
 	TSharedRef<SWidget> CreateOptionalDataOnlyMessage() const;
+	TSharedRef<SWidget> CreateOptionalEditableWarning() const;
 
 	void OnChangeBlueprintToNotDataOnly();
 };

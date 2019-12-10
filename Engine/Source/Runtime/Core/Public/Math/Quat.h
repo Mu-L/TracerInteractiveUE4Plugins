@@ -69,13 +69,6 @@ public:
 	FORCEINLINE FQuat(float InX, float InY, float InZ, float InW);
 
 	/**
-	 * Copy constructor.
-	 *
-	 * @param Q A FQuat object to use to create new quaternion from.
-	 */
-	FORCEINLINE FQuat(const FQuat& Q);
-	
-	/**
 	 * Creates and initializes a new quaternion from the given matrix.
 	 *
 	 * @param M The rotation matrix to initialize from.
@@ -328,9 +321,18 @@ public:
 	 * @param InTwistAxis Axis to use for decomposition
 	 * @param OutSwing swing component quaternion
 	 * @param OutTwist Twist component quaternion
-	 * @warning assumes normalised quaternion and twist axis
+	 * @warning assumes normalized quaternion and twist axis
 	 */
 	CORE_API void ToSwingTwist(const FVector& InTwistAxis, FQuat& OutSwing, FQuat& OutTwist) const;
+
+	/**
+	 * Get the twist angle (in radians) for a specified axis
+	 *
+	 * @param TwistAxis Axis to use for decomposition
+	 * @return Twist angle (in radians)
+	 * @warning assumes normalized quaternion and twist axis
+	 */
+	CORE_API float GetTwistAngle(const FVector& TwistAxis) const;
 
 	/**
 	 * Rotate a vector by this quaternion.
@@ -705,14 +707,6 @@ FORCEINLINE FQuat::FQuat(float InX, float InY, float InZ, float InW)
 {
 	DiagnosticCheckNaN();
 }
-
-
-FORCEINLINE FQuat::FQuat(const FQuat& Q)
-	: X(Q.X)
-	, Y(Q.Y)
-	, Z(Q.Z)
-	, W(Q.W)
-{ }
 
 
 FORCEINLINE FString FQuat::ToString() const

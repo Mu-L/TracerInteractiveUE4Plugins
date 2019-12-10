@@ -305,19 +305,75 @@ FText UField::GetToolTipText(bool bShortTooltip) const
 		{
 			NativeToolTip = FName::NameToDisplayString(FDisplayNameHelper::Get(*this), IsA<UBoolProperty>());
 		}
-		else
+		else if (!bShortTooltip && IsNative())
 		{
-			static const FString DoxygenSee(TEXT("@see"));
-			static const FString TooltipSee(TEXT("See:"));
-			if (NativeToolTip.ReplaceInline(*DoxygenSee, *TooltipSee) > 0)
-			{
-				NativeToolTip.TrimEndInline();
-			}
+			FormatNativeToolTip(NativeToolTip, true);
 		}
 		LocalizedToolTip = FText::FromString(NativeToolTip);
 	}
 
 	return LocalizedToolTip;
+}
+
+void UField::FormatNativeToolTip(FString& ToolTipString, bool bRemoveExtraSections)
+{
+	// First do doxygen replace
+	static const FString DoxygenSee(TEXT("@see"));
+	static const FString TooltipSee(TEXT("See:"));
+	ToolTipString.ReplaceInline(*DoxygenSee, *TooltipSee);
+
+	bool bCurrentLineIsEmpty = true;
+	int32 EmptyLineCount = 0;
+	int32 LastContentIndex = INDEX_NONE;
+	const int32 ToolTipLength = ToolTipString.Len();
+		
+	// Start looking for empty lines and whitespace to strip
+	for (int32 StrIndex = 0; StrIndex < ToolTipLength; StrIndex++)
+	{
+		TCHAR CurrentChar = ToolTipString[StrIndex];
+
+		if (!FChar::IsWhitespace(CurrentChar))
+		{
+			if (FChar::IsPunct(CurrentChar))
+			{
+				// Punctuation is considered content if it's on a line with alphanumeric text
+				if (!bCurrentLineIsEmpty)
+				{
+					LastContentIndex = StrIndex;
+				}
+			}
+			else
+			{
+				// This is something alphanumeric, this is always content and mark line as not empty
+				bCurrentLineIsEmpty = false;
+				LastContentIndex = StrIndex;
+			}
+		}
+		else if (CurrentChar == TEXT('\n'))
+		{
+			if (bCurrentLineIsEmpty)
+			{
+				EmptyLineCount++;
+				if (bRemoveExtraSections && EmptyLineCount >= 2)
+				{
+					// If we get two empty or punctuation/separator lines in a row, cut off the string if requested
+					break;
+				}
+			}
+			else
+			{
+				EmptyLineCount = 0;
+			}
+
+			bCurrentLineIsEmpty = true;
+		}
+	}
+
+	// Trim string to last content character, this strips trailing whitespace as well as extra sections if needed
+	if (LastContentIndex >= 0 && LastContentIndex != ToolTipLength - 1)
+	{
+		ToolTipString.RemoveAt(LastContentIndex + 1, ToolTipLength - (LastContentIndex + 1));
+	}
 }
 
 /**
@@ -921,6 +977,7 @@ void UStruct::SerializeTaggedProperties(FStructuredArchive::FSlot Slot, uint8* D
 
 	// Determine if this struct supports optional property guid's (UBlueprintGeneratedClasses Only)
 	const bool bArePropertyGuidsAvailable = (UnderlyingArchive.UE4Ver() >= VER_UE4_PROPERTY_GUID_IN_PROPERTY_TAG) && !FPlatformProperties::RequiresCookedData() && ArePropertyGuidsAvailable();
+	const bool bUseRedirects = !FPlatformProperties::RequiresCookedData() || UnderlyingArchive.IsSaveGame();
 
 	if( UnderlyingArchive.IsLoading() )
 	{
@@ -940,15 +997,10 @@ void UStruct::SerializeTaggedProperties(FStructuredArchive::FSlot Slot, uint8* D
 			FStructuredArchive::FRecord PropertyRecord = PropertiesStream.EnterElement().EnterRecord();
 
 			FPropertyTag Tag;
-			PropertyRecord << NAMED_FIELD(Tag);
+			PropertyRecord << SA_VALUE(TEXT("Tag"), Tag);
 
-			if( Tag.Name == NAME_None )
+			if (Tag.Name.IsNone())
 			{
-				break;
-			}
-			if (!Tag.Name.IsValid())
-			{
-				UE_LOG(LogClass, Warning, TEXT("Invalid tag name: struct '%s', archive '%s'"), *GetName(), *UnderlyingArchive.GetArchiveName());
 				break;
 			}
 
@@ -979,26 +1031,15 @@ void UStruct::SerializeTaggedProperties(FStructuredArchive::FSlot Slot, uint8* D
 			if( Property == nullptr || Property->GetFName() != Tag.Name )
 			{
 				// No need to check redirects on platforms where everything is cooked. Always check for save games
-				if ((!FPlatformProperties::RequiresCookedData() || UnderlyingArchive.IsSaveGame()) && !UnderlyingArchive.HasAnyPortFlags(PPF_DuplicateForPIE|PPF_Duplicate))
+				if (bUseRedirects && !UnderlyingArchive.HasAnyPortFlags(PPF_DuplicateForPIE|PPF_Duplicate))
 				{
-					FName EachName = GetFName();
-					FName PackageName = GetOutermost()->GetFName();
-					// Search the current class first, then work up the class hierarchy to see if theres a match for our fixup.
-					UStruct* Owner = GetOwnerStruct();
-					if( Owner )
+					for (UStruct* CheckStruct = GetOwnerStruct(); CheckStruct; CheckStruct = CheckStruct->GetSuperStruct())
 					{
-						UStruct* CheckStruct = Owner;
-						while(CheckStruct)
+						FName NewTagName = UProperty::FindRedirectedPropertyName(CheckStruct, Tag.Name);
+						if (!NewTagName.IsNone())
 						{
-							FName NewTagName = UProperty::FindRedirectedPropertyName(CheckStruct, Tag.Name);
-
-							if (NewTagName != NAME_None)
-							{
-								Tag.Name = NewTagName;
-								break;
-							}
-
-							CheckStruct = CheckStruct->GetSuperStruct();
+							Tag.Name = NewTagName;
+							break;
 						}
 					}
 				}
@@ -1033,93 +1074,92 @@ void UStruct::SerializeTaggedProperties(FStructuredArchive::FSlot Slot, uint8* D
 				RemainingArrayDim = Property ? Property->ArrayDim : 0;
 			}
 
+			const int64 StartOfProperty = UnderlyingArchive.Tell();
+
 			if (!Property)
 			{
 				Property = CustomFindProperty(Tag.Name);
 			}
 
-			FName PropID = Property ? Property->GetID() : NAME_None;
-			FName ArrayInnerID = NAME_None;
-
-			// Check if this is a struct property and we have a redirector
-			// No need to check redirects on platforms where everything is cooked. Always check for save games
-			if (!FPlatformProperties::RequiresCookedData() || UnderlyingArchive.IsSaveGame())
+			if (Property)
 			{
-				if (Tag.Type == NAME_StructProperty && PropID == NAME_StructProperty)
+				FName PropID = Property->GetID();
+
+				// Check if this is a struct property and we have a redirector
+				// No need to check redirects on platforms where everything is cooked. Always check for save games
+				if (bUseRedirects)
 				{
-					const FName NewName = FLinkerLoad::FindNewNameForStruct(Tag.StructName);
-					const FName StructName = CastChecked<UStructProperty>(Property)->Struct->GetFName();
-					if (NewName == StructName)
+					if (Tag.Type == NAME_StructProperty && PropID == NAME_StructProperty)
 					{
-						Tag.StructName = NewName;
+						const FName NewName = FLinkerLoad::FindNewNameForStruct(Tag.StructName);
+						const FName StructName = CastChecked<UStructProperty>(Property)->Struct->GetFName();
+						if (NewName == StructName)
+						{
+							Tag.StructName = NewName;
+						}
+					}
+					else if ((PropID == NAME_EnumProperty) && ((Tag.Type == NAME_EnumProperty) || (Tag.Type == NAME_ByteProperty)))
+					{
+						const FName NewName = FLinkerLoad::FindNewNameForEnum(Tag.EnumName);
+						if (!NewName.IsNone())
+						{
+							Tag.EnumName = NewName;
+						}
 					}
 				}
-				else if ((PropID == NAME_EnumProperty) && ((Tag.Type == NAME_EnumProperty) || (Tag.Type == NAME_ByteProperty)))
-				{
-					const FName NewName = FLinkerLoad::FindNewNameForEnum(Tag.EnumName);
-					if (!NewName.IsNone())
-					{
-						Tag.EnumName = NewName;
-					}
-				}
-			}
 
-			const int64 StartOfProperty = UnderlyingArchive.Tell();
-			if( !Property )
-			{
-				//UE_LOG(LogClass, Warning, TEXT("Property %s of %s not found for package:  %s"), *Tag.Name.ToString(), *GetFullName(), *UnderlyingArchive.GetArchiveName() );
-			}
 #if WITH_EDITOR
-			else if (BreakRecursionIfFullyLoad && BreakRecursionIfFullyLoad->HasAllFlags(RF_LoadCompleted))
-			{
-			}
-#endif // WITH_EDITOR
-			// editoronly properties should be skipped if we are NOT the editor, or we are 
-			// the editor but are cooking for console (editoronly implies notforconsole)
-			else if ((Property->PropertyFlags & CPF_EditorOnly) && !FPlatformProperties::HasEditorOnlyData() && !GForceLoadEditorOnly)
-			{
-			}
-			// check for valid array index
-			else if( Tag.ArrayIndex >= Property->ArrayDim || Tag.ArrayIndex < 0 )
-			{
-				UE_LOG(LogClass, Warning, TEXT("Array bound exceeded (var %s=%d, exceeds %s [0-%d] in package:  %s"),
-					*Tag.Name.ToString(), Tag.ArrayIndex, *GetName(), Property->ArrayDim-1, *UnderlyingArchive.GetArchiveName());
-			}
-			else if( !Property->ShouldSerializeValue(UnderlyingArchive) )
-			{
-				UE_CLOG((UnderlyingArchive.IsPersistent() && FPlatformProperties::RequiresCookedData()), LogClass, Warning, TEXT("Skipping saved property %s of %s since it is no longer serializable for asset:  %s. (Maybe resave asset?)"), *Tag.Name.ToString(), *GetName(), *UnderlyingArchive.GetArchiveName() );
-			}
-			else
-			{
-				FStructuredArchive::FSlot ValueSlot = PropertyRecord.EnterField(FIELD_NAME_TEXT("Value"));
-
-				switch (Property->ConvertFromType(Tag, ValueSlot, Data, DefaultsStruct))
+				if (BreakRecursionIfFullyLoad && BreakRecursionIfFullyLoad->HasAllFlags(RF_LoadCompleted))
 				{
-					case EConvertFromTypeResult::Converted:
-						bAdvanceProperty = true;
-						break;
+				}
+#endif // WITH_EDITOR
+				// editoronly properties should be skipped if we are NOT the editor, or we are 
+				// the editor but are cooking for console (editoronly implies notforconsole)
+				else if ((Property->PropertyFlags & CPF_EditorOnly) && !FPlatformProperties::HasEditorOnlyData() && !GForceLoadEditorOnly)
+				{
+				}
+				// check for valid array index
+				else if (Tag.ArrayIndex >= Property->ArrayDim || Tag.ArrayIndex < 0)
+				{
+					UE_LOG(LogClass, Warning, TEXT("Array bound exceeded (var %s=%d, exceeds %s [0-%d] in package:  %s"),
+						*Tag.Name.ToString(), Tag.ArrayIndex, *GetName(), Property->ArrayDim - 1, *UnderlyingArchive.GetArchiveName());
+				}
+				else if (!Property->ShouldSerializeValue(UnderlyingArchive))
+				{
+					UE_CLOG((UnderlyingArchive.IsPersistent() && FPlatformProperties::RequiresCookedData()), LogClass, Warning, TEXT("Skipping saved property %s of %s since it is no longer serializable for asset:  %s. (Maybe resave asset?)"), *Tag.Name.ToString(), *GetName(), *UnderlyingArchive.GetArchiveName());
+				}
+				else
+				{
+					FStructuredArchive::FSlot ValueSlot = PropertyRecord.EnterField(SA_FIELD_NAME(TEXT("Value")));
 
-					case EConvertFromTypeResult::UseSerializeItem:
-						if (Tag.Type != PropID)
-						{
-							UE_LOG(LogClass, Warning, TEXT("Type mismatch in %s of %s - Previous (%s) Current(%s) for package:  %s"), *Tag.Name.ToString(), *GetName(), *Tag.Type.ToString(), *PropID.ToString(), *UnderlyingArchive.GetArchiveName() );
-						}
-						else
-						{
-							uint8* DestAddress = Property->ContainerPtrToValuePtr<uint8>(Data, Tag.ArrayIndex);
-							uint8* DefaultsFromParent = Property->ContainerPtrToValuePtrForDefaults<uint8>(DefaultsStruct, Defaults, Tag.ArrayIndex);
+					switch (Property->ConvertFromType(Tag, ValueSlot, Data, DefaultsStruct))
+					{
+						case EConvertFromTypeResult::Converted:
+							bAdvanceProperty = true;
+							break;
 
-							// This property is ok.
-							Tag.SerializeTaggedProperty(ValueSlot, Property, DestAddress, DefaultsFromParent);
-							bAdvanceProperty = !UnderlyingArchive.IsCriticalError();
-						}
-						break;
+						case EConvertFromTypeResult::UseSerializeItem:
+							if (Tag.Type != PropID)
+							{
+								UE_LOG(LogClass, Warning, TEXT("Type mismatch in %s of %s - Previous (%s) Current(%s) for package:  %s"), *Tag.Name.ToString(), *GetName(), *Tag.Type.ToString(), *PropID.ToString(), *UnderlyingArchive.GetArchiveName());
+							}
+							else
+							{
+								uint8* DestAddress = Property->ContainerPtrToValuePtr<uint8>(Data, Tag.ArrayIndex);
+								uint8* DefaultsFromParent = Property->ContainerPtrToValuePtrForDefaults<uint8>(DefaultsStruct, Defaults, Tag.ArrayIndex);
 
-					case EConvertFromTypeResult::CannotConvert:
-						break;
+								// This property is ok.
+								Tag.SerializeTaggedProperty(ValueSlot, Property, DestAddress, DefaultsFromParent);
+								bAdvanceProperty = !UnderlyingArchive.IsCriticalError();
+							}
+							break;
 
-					default:
-						check(false);
+						case EConvertFromTypeResult::CannotConvert:
+							break;
+
+						default:
+							check(false);
+					}
 				}
 			}
 
@@ -1181,7 +1221,7 @@ void UStruct::SerializeTaggedProperties(FStructuredArchive::FSlot Slot, uint8* D
 
 						FStructuredArchive::FRecord PropertyRecord = PropertiesStream.EnterElement().EnterRecord();
 
-						PropertyRecord << NAMED_FIELD(Tag);
+						PropertyRecord << SA_VALUE(TEXT("Tag"), Tag);
 
 						// need to know how much data this call to SerializeTaggedProperty consumes, so mark where we are
 						int64 DataOffset = UnderlyingArchive.Tell();
@@ -1194,7 +1234,7 @@ void UStruct::SerializeTaggedProperties(FStructuredArchive::FSlot Slot, uint8* D
 							UnderlyingArchive.ArCustomPropertyList = CustomPropertyNode->SubPropertyList;
 						}
 
-						FStructuredArchive::FSlot PropertyField = PropertyRecord.EnterField(FIELD_NAME_TEXT("Value"));
+						FStructuredArchive::FSlot PropertyField = PropertyRecord.EnterField(SA_FIELD_NAME(TEXT("Value")));
 						Tag.SerializeTaggedProperty(PropertyField, Property, DataPtr, DefaultValue);
 						if (!PropertyField.IsFilled())
 						{
@@ -1228,7 +1268,7 @@ void UStruct::SerializeTaggedProperties(FStructuredArchive::FSlot Slot, uint8* D
 		}
 
 		static FName Temp(NAME_None);
-		PropertiesStream.EnterElement().EnterRecord().EnterField(FIELD_NAME_TEXT("Tag")).EnterRecord() << NAMED_ITEM("Name", Temp);
+		PropertiesStream.EnterElement().EnterRecord().EnterField(SA_FIELD_NAME(TEXT("Tag"))).EnterRecord() << SA_VALUE(TEXT("Name"), Temp);
 	}
 }
 void UStruct::FinishDestroy()
@@ -1969,7 +2009,10 @@ void UScriptStruct::PrepareCppStructOps()
 			bPrepareCppStructOpsCompleted = true;
 			return;
 		}
-
+#if !HACK_HEADER_GENERATOR
+		StructFlags = EStructFlags(StructFlags | STRUCT_Native);
+#endif
+		
 #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
 		// test that the constructor is initializing everything
 		if (!CppStructOps->HasZeroConstructor()
@@ -2164,13 +2207,15 @@ void UScriptStruct::SerializeItem(FStructuredArchive::FSlot Slot, void* Value, v
 		else
 		{
 #if WITH_TEXT_ARCHIVE_SUPPORT
-			FArchiveUObjectFromStructuredArchive Ar(Slot);
+			FArchiveUObjectFromStructuredArchive Adapter(Slot);
+			FArchive& Ar = Adapter.GetArchive();
 			bItemSerialized = TheCppStructOps->Serialize(Ar, Value);
 			if (bItemSerialized && !Slot.IsFilled())
 			{
 				// The struct said that serialization succeeded but it didn't actually write anything.
 				Slot.EnterRecord();
 			}
+			Adapter.Close();
 #else
 			bItemSerialized = TheCppStructOps->Serialize(Slot.GetUnderlyingArchive(), Value);
 #endif
@@ -2206,6 +2251,11 @@ void UScriptStruct::SerializeItem(FStructuredArchive::FSlot Slot, void* Value, v
 }
 
 const TCHAR* UScriptStruct::ImportText(const TCHAR* InBuffer, void* Value, UObject* OwnerObject, int32 PortFlags, FOutputDevice* ErrorText, const FString& StructName, bool bAllowNativeOverride)
+{
+	return ImportText(InBuffer, Value, OwnerObject, PortFlags, ErrorText, [&StructName](){return StructName;}, bAllowNativeOverride);
+}
+
+const TCHAR* UScriptStruct::ImportText(const TCHAR* InBuffer, void* Value, UObject* OwnerObject, int32 PortFlags, FOutputDevice* ErrorText, const TFunctionRef<FString()>& StructNameGetter, bool bAllowNativeOverride)
 {
 	if (bAllowNativeOverride && StructFlags & STRUCT_ImportTextItemNative)
 	{
@@ -2245,7 +2295,7 @@ const TCHAR* UScriptStruct::ImportText(const TCHAR* InBuffer, void* Value, UObje
 
 					if (*Buffer != TCHAR('\"'))
 					{
-						ErrorText->Logf(TEXT("%sImportText (%s): Bad quoted string at: %s"), ErrorCount++ > 0 ? LINE_TERMINATOR : TEXT(""), *StructName, Buffer);
+						ErrorText->Logf(TEXT("%sImportText (%s): Bad quoted string at: %s"), ErrorCount++ > 0 ? LINE_TERMINATOR : TEXT(""), *StructNameGetter(), Buffer);
 						return nullptr;
 					}
 				}
@@ -2258,7 +2308,7 @@ const TCHAR* UScriptStruct::ImportText(const TCHAR* InBuffer, void* Value, UObje
 					SubCount--;
 					if (SubCount < 0)
 					{
-						ErrorText->Logf(TEXT("%sImportText (%s): Too many closing parenthesis in: %s"), ErrorCount++ > 0 ? LINE_TERMINATOR : TEXT(""), *StructName, InBuffer);
+						ErrorText->Logf(TEXT("%sImportText (%s): Too many closing parenthesis in: %s"), ErrorCount++ > 0 ? LINE_TERMINATOR : TEXT(""), *StructNameGetter(), InBuffer);
 						return nullptr;
 					}
 				}
@@ -2266,7 +2316,7 @@ const TCHAR* UScriptStruct::ImportText(const TCHAR* InBuffer, void* Value, UObje
 			}
 			if (SubCount > 0)
 			{
-				ErrorText->Logf(TEXT("%sImportText(%s): Not enough closing parenthesis in: %s"), ErrorCount++ > 0 ? LINE_TERMINATOR : TEXT(""), *StructName, InBuffer);
+				ErrorText->Logf(TEXT("%sImportText(%s): Not enough closing parenthesis in: %s"), ErrorCount++ > 0 ? LINE_TERMINATOR : TEXT(""), *StructNameGetter(), InBuffer);
 				return nullptr;
 			}
 
@@ -2278,7 +2328,7 @@ const TCHAR* UScriptStruct::ImportText(const TCHAR* InBuffer, void* Value, UObje
 			}
 			else if (*Buffer != TCHAR(')'))
 			{
-				ErrorText->Logf(TEXT("%sImportText (%s): Missing closing parenthesis: %s"), ErrorCount++ > 0 ? LINE_TERMINATOR : TEXT(""), *StructName, InBuffer);
+				ErrorText->Logf(TEXT("%sImportText (%s): Missing closing parenthesis: %s"), ErrorCount++ > 0 ? LINE_TERMINATOR : TEXT(""), *StructNameGetter(), InBuffer);
 				return nullptr;
 			}
 
@@ -2290,7 +2340,7 @@ const TCHAR* UScriptStruct::ImportText(const TCHAR* InBuffer, void* Value, UObje
 	}
 	else
 	{
-		ErrorText->Logf(TEXT("%sImportText (%s): Missing opening parenthesis: %s"), ErrorCount++ > 0 ? LINE_TERMINATOR : TEXT(""), *StructName, InBuffer); //-V547
+		ErrorText->Logf(TEXT("%sImportText (%s): Missing opening parenthesis: %s"), ErrorCount++ > 0 ? LINE_TERMINATOR : TEXT(""), *StructNameGetter(), InBuffer); //-V547
 		return nullptr;
 	}
 	return Buffer;
@@ -2486,7 +2536,7 @@ uint32 UScriptStruct::GetStructTypeHash(const void* Src) const
 	// UMapProperty::ConvertFromType).
 
 	UScriptStruct::ICppStructOps* TheCppStructOps = GetCppStructOps();
-	return TheCppStructOps->GetTypeHash(Src);
+	return TheCppStructOps->GetStructTypeHash(Src);
 }
 
 void UScriptStruct::InitializeStruct(void* InDest, int32 ArrayDim) const
@@ -2939,7 +2989,7 @@ class FRestoreClassInfo: public FRestoreForUObjectOverwrite
 	UClass*			Target;
 	/** Saved ClassWithin **/
 	UClass*			Within;
-	/** Save ClassGeneratedBy */
+	/** Saved ClassGeneratedBy */
 	UObject*		GeneratedBy;
 	/** Saved ClassDefaultObject **/
 	UObject*		DefaultObject;
@@ -3081,6 +3131,13 @@ UObject* UClass::CreateDefaultObject()
 					USparseDelegateFunction* SparseDelegateFunction = CastChecked<USparseDelegateFunction>(SparseDelegateIt->SignatureFunction);
 					FSparseDelegateStorage::RegisterDelegateOffset(ClassDefaultObject, SparseDelegateFunction->DelegateName, (size_t)&SparseDelegate - (size_t)ClassDefaultObject);
 				}
+				if (HasAnyClassFlags(CLASS_CompiledFromBlueprint))
+				{
+					if (UDynamicClass* DynamicClass = Cast<UDynamicClass>(this))
+					{
+						(*(DynamicClass->DynamicClassInitializer))(DynamicClass);
+					}
+				}
 				(*ClassConstructor)(FObjectInitializer(ClassDefaultObject, ParentDefaultObject, false, bShouldInitializeProperties));
 				if (bDoNotify)
 				{
@@ -3165,7 +3222,7 @@ FFeedbackContext& UClass::GetDefaultPropertiesFeedbackContext()
 * Get the name of the CDO for the this class
 * @return The name of the CDO
 */
-FName UClass::GetDefaultObjectName()
+FName UClass::GetDefaultObjectName() const
 {
 	FString DefaultName;
 	DefaultName.Reserve(NAME_SIZE);
@@ -3611,6 +3668,15 @@ void UClass::SetSuperStruct(UStruct* NewSuperStruct)
 	UnhashObject(this);
 	ClearFunctionMapsCaches();
 	Super::SetSuperStruct(NewSuperStruct);
+
+	if (!GetSparseClassDataStruct())
+	{
+		if (UScriptStruct* SparseClassDataStructArchetype = GetSparseClassDataArchetypeStruct())
+		{
+			SetSparseClassDataStruct(SparseClassDataStructArchetype);
+		}
+	}
+
 	HashObject(this);
 }
 
@@ -3836,6 +3902,14 @@ void UClass::Serialize( FArchive& Ar )
 		}
 	}
 
+	if (!Ar.IsLoading() && !Ar.IsSaving())
+	{
+		if (GetSparseClassDataStruct() != nullptr)
+		{
+			SerializeSparseClassData(FStructuredArchiveFromArchive(Ar).GetSlot());
+		}
+	}
+
 	// mark the archive we that we are no longer serializing defaults
 	Ar.StopSerializingDefaults();
 
@@ -3911,6 +3985,36 @@ void UClass::SerializeDefaultObject(UObject* Object, FStructuredArchive::FSlot S
 	UnderlyingArchive.StopSerializingDefaults();
 }
 
+void UClass::SerializeSparseClassData(FStructuredArchive::FSlot Slot)
+{
+	if (!SparseClassDataStruct)
+	{
+		return;
+	}
+
+	// tell the archive that it's allowed to load data for transient properties
+	FArchive& UnderlyingArchive = Slot.GetUnderlyingArchive();
+
+	// make sure we always have sparse class a sparse class data struct to read from/write to
+	GetOrCreateSparseClassData();
+
+	if (((UnderlyingArchive.IsLoading() || UnderlyingArchive.IsSaving()) && !UnderlyingArchive.WantBinaryPropertySerialization()))
+	{
+		// class default objects do not always have a vtable when saved
+		// so use script serialization as opposed to native serialization to
+		// guarantee that all property data is loaded into the correct location
+		SparseClassDataStruct->SerializeItem(Slot, SparseClassData, GetArchetypeForSparseClassData());
+	}
+	else if (UnderlyingArchive.GetPortFlags() != 0)
+	{
+		SparseClassDataStruct->SerializeBinEx(Slot, (uint8*)SparseClassData, SparseClassDataStruct, GetSparseClassDataArchetypeStruct());
+	}
+	else
+	{
+		SparseClassDataStruct->SerializeBin(Slot, (uint8*)SparseClassData);
+	}
+}
+
 
 FArchive& operator<<(FArchive& Ar, FImplementedInterface& A)
 {
@@ -3921,9 +4025,21 @@ FArchive& operator<<(FArchive& Ar, FImplementedInterface& A)
 	return Ar;
 }
 
+void* UClass::GetArchetypeForSparseClassData() const
+{
+	UClass* SuperClass = GetSuperClass();
+	return SuperClass ? SuperClass->GetOrCreateSparseClassData() : nullptr;
+}
+
+UScriptStruct* UClass::GetSparseClassDataArchetypeStruct() const
+{
+	UClass* SuperClass = GetSuperClass();
+	return SuperClass ? SuperClass->GetSparseClassDataStruct() : nullptr;
+}
+
 UObject* UClass::GetArchetypeForCDO() const
 {
-	auto SuperClass = GetSuperClass();
+	UClass* SuperClass = GetSuperClass();
 	return SuperClass ? SuperClass->GetDefaultObject() : nullptr;
 }
 
@@ -4031,10 +4147,17 @@ UClass::UClass(const FObjectInitializer& ObjectInitializer)
 ,	ClassWithin( UObject::StaticClass() )
 ,	ClassGeneratedBy(nullptr)
 ,	ClassDefaultObject(nullptr)
+,	SparseClassData(nullptr)
+,	SparseClassDataStruct(nullptr)
 {
 	// If you add properties here, please update the other constructors and PurgeClass()
 
 	SetCppTypeInfoStatic(&DefaultCppClassTypeInfoStatic);
+#if LOADTIMEPROFILERTRACE_ENABLED
+	TCHAR Buffer[NAME_SIZE];
+	GetFName().GetPlainNameString(Buffer);
+	TRACE_LOADTIME_CLASS_INFO(this, Buffer);
+#endif
 }
 
 /**
@@ -4049,6 +4172,8 @@ UClass::UClass(const FObjectInitializer& ObjectInitializer, UClass* InBaseClass)
 ,	ClassWithin(UObject::StaticClass())
 ,	ClassGeneratedBy(nullptr)
 ,	ClassDefaultObject(nullptr)
+,	SparseClassData(nullptr)
+,	SparseClassDataStruct(nullptr)
 {
 	// If you add properties here, please update the other constructors and PurgeClass()
 
@@ -4104,6 +4229,8 @@ UClass::UClass
 ,	ClassConfigName			()
 ,	NetFields				()
 ,	ClassDefaultObject		( nullptr )
+,	SparseClassData			( nullptr )
+,	SparseClassDataStruct	( nullptr )
 {
 	// If you add properties here, please update the other constructors and PurgeClass()
 
@@ -4114,6 +4241,60 @@ UClass::UClass
 	// complains about this operation, but AFAIK it is safe (and we've been doing it a long time)
 	// so the warning has been disabled for now:
 	*(const TCHAR**)&ClassConfigName = InConfigName; //-V580
+}
+
+void* UClass::CreateSparseClassData()
+{
+	check(SparseClassData == nullptr);
+
+	if (SparseClassDataStruct)
+	{
+		SparseClassData = FMemory::Malloc(SparseClassDataStruct->GetStructureSize(), SparseClassDataStruct->GetMinAlignment());
+		SparseClassDataStruct->GetCppStructOps()->Construct(SparseClassData);
+	}
+	if (SparseClassData)
+	{
+		// initialize per class data from the archetype if we have one
+		void* SparseArchetypeData = GetArchetypeForSparseClassData();
+		UStruct* SparseClassDataArchetypeStruct = GetSparseClassDataArchetypeStruct();
+
+		if (SparseArchetypeData)
+		{
+			for (UProperty* P = SparseClassDataArchetypeStruct->PropertyLink; P; P = P->PropertyLinkNext)
+			{
+				P->CopyCompleteValue_InContainer(SparseClassData, SparseArchetypeData);
+			}
+		}
+	}
+
+	return SparseClassData;
+}
+
+void UClass::CleanupSparseClassData()
+{
+	if (SparseClassData)
+	{
+		SparseClassDataStruct->GetCppStructOps()->Destruct(SparseClassData);
+		FMemory::Free(SparseClassData);
+		SparseClassData = nullptr;
+	}
+}
+
+UScriptStruct* UClass::GetSparseClassDataStruct() const
+{
+	// this info is specified on the object via code generation so we use it instead of looking at the UClass
+	return SparseClassDataStruct;
+}
+
+void UClass::SetSparseClassDataStruct(UScriptStruct* InSparseClassDataStruct)
+{ 
+	if (SparseClassDataStruct != InSparseClassDataStruct)
+	{
+		SparseClassDataStruct = InSparseClassDataStruct;
+
+		// the old type and new type may not match when we do a hot reload so get rid of the old data
+		CleanupSparseClassData();
+	}
 }
 
 #if WITH_HOT_RELOAD
@@ -4556,7 +4737,8 @@ void GetPrivateStaticClassBody(
 	UClass::ClassAddReferencedObjectsType InClassAddReferencedObjects,
 	UClass::StaticClassFunctionType InSuperClassFn,
 	UClass::StaticClassFunctionType InWithinClassFn,
-	bool bIsDynamic /*= false*/
+	bool bIsDynamic /*= false*/,
+	UDynamicClass::DynamicClassInitializerType InDynamicClassInitializerFn /*= nullptr*/
 	)
 {
 #if WITH_HOT_RELOAD
@@ -4634,7 +4816,8 @@ void GetPrivateStaticClassBody(
 			EObjectFlags(RF_Public | RF_Standalone | RF_Transient | RF_Dynamic | (GIsInitialLoad ? RF_MarkAsRootSet : RF_NoFlags)),
 			InClassConstructor,
 			InClassVTableHelperCtorCaller,
-			InClassAddReferencedObjects
+			InClassAddReferencedObjects,
+			InDynamicClassInitializerFn
 			);
 		check(ReturnClass);
 	}
@@ -5221,7 +5404,8 @@ UDynamicClass::UDynamicClass(
 	EObjectFlags	InFlags,
 	ClassConstructorType InClassConstructor,
 	ClassVTableHelperCtorCallerType InClassVTableHelperCtorCaller,
-	ClassAddReferencedObjectsType InClassAddReferencedObjects)
+	ClassAddReferencedObjectsType InClassAddReferencedObjects,
+	DynamicClassInitializerType InDynamicClassInitializer)
 : UClass(
   EC_StaticConstructor
 , InName
@@ -5235,6 +5419,7 @@ UDynamicClass::UDynamicClass(
 , InClassVTableHelperCtorCaller
 , InClassAddReferencedObjects)
 , AnimClassImplementation(nullptr)
+, DynamicClassInitializer(InDynamicClassInitializer)
 {
 }
 
@@ -5248,6 +5433,11 @@ void UDynamicClass::AddReferencedObjects(UObject* InThis, FReferenceCollector& C
 	Collector.AddReferencedObjects(This->DynamicBindingObjects, This);
 	Collector.AddReferencedObjects(This->ComponentTemplates, This);
 	Collector.AddReferencedObjects(This->Timelines, This);
+
+	for (TPair<FName, UClass*>& Override : This->ComponentClassOverrides)
+	{
+		Collector.AddReferencedObject(Override.Value);
+	}
 
 	Collector.AddReferencedObject(This->AnimClassImplementation, This);
 
@@ -5276,14 +5466,14 @@ void UDynamicClass::PurgeClass(bool bRecompilingOnLoad)
 	DynamicBindingObjects.Empty();
 	ComponentTemplates.Empty();
 	Timelines.Empty();
+	ComponentClassOverrides.Empty();
 
 	AnimClassImplementation = nullptr;
 }
 
-UObject* UDynamicClass::FindArchetype(UClass* ArchetypeClass, const FName ArchetypeName) const
+UObject* UDynamicClass::FindArchetype(const UClass* ArchetypeClass, const FName ArchetypeName) const
 {
-	UDynamicClass* ThisClass = const_cast<UDynamicClass*>(this);
-	UObject* Archetype = static_cast<UObject*>(FindObjectWithOuter(ThisClass, ArchetypeClass, ArchetypeName));
+	UObject* Archetype = static_cast<UObject*>(FindObjectWithOuter(this, ArchetypeClass, ArchetypeName));
 	if (!Archetype)
 	{
 		// See UBlueprintGeneratedClass::FindArchetype, UE-35259, UE-37480
@@ -5301,6 +5491,17 @@ UObject* UDynamicClass::FindArchetype(UClass* ArchetypeClass, const FName Archet
 	return Archetype ? Archetype :
 		(SuperClass ? SuperClass->FindArchetype(ArchetypeClass, ArchetypeName) : nullptr);
 }
+
+void UDynamicClass::SetupObjectInitializer(FObjectInitializer& ObjectInitializer) const
+{
+	for (const TPair<FName, UClass*>& Override : ComponentClassOverrides)
+	{
+		ObjectInitializer.SetDefaultSubobjectClass(Override.Key, Override.Value);
+	}
+
+	GetSuperClass()->SetupObjectInitializer(ObjectInitializer);
+}
+
 
 UStructProperty* UDynamicClass::FindStructPropertyChecked(const TCHAR* PropertyName) const
 {

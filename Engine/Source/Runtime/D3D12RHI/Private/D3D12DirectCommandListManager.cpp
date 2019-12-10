@@ -28,6 +28,12 @@ bool FD3D12GPUFence::Poll() const
 	return !Value || (Fence && Fence->PeekLastCompletedFence() >= Value);
 }
 
+bool FD3D12GPUFence::Poll(FRHIGPUMask GPUMask) const
+{
+	// @todo-mattc Value of 0 means signaled? Revisit this...
+	return !Value || (Fence && Fence->PeekLastCompletedFence(GPUMask) >= Value);
+}
+
 void FD3D12GPUFence::Clear()
 {
 	Value = MAX_uint64;
@@ -222,14 +228,19 @@ bool FD3D12Fence::IsFenceComplete(uint64 FenceValue)
 
 uint64 FD3D12Fence::PeekLastCompletedFence() const
 {
+	return PeekLastCompletedFence(GetGPUMask());
+}
+
+uint64 FD3D12Fence::PeekLastCompletedFence(FRHIGPUMask InGPUMask) const
+{
 	uint64 CompletedFence = MAXUINT64;
-	for (uint32 GPUIndex : GetGPUMask())
+	check(GetGPUMask().ContainsAll(InGPUMask));
+	for (uint32 GPUIndex : InGPUMask)
 	{
 		CompletedFence = FMath::Min<uint64>(FenceCores[GPUIndex]->GetFence()->GetCompletedValue(), CompletedFence);
 	}
 	return CompletedFence;
 }
-
 
 uint64 FD3D12Fence::UpdateLastCompletedFence()
 {
@@ -354,7 +365,7 @@ void FD3D12CommandListManager::Create(const TCHAR* Name, uint32 NumCommandLists,
 
 	D3D12_COMMAND_QUEUE_DESC CommandQueueDesc = {};
 	CommandQueueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
-	CommandQueueDesc.NodeMask = (uint32)GetGPUMask();
+	CommandQueueDesc.NodeMask = GetGPUMask().GetNative();
 	CommandQueueDesc.Priority = Priority;
 	CommandQueueDesc.Type = CommandListType;
 	D3DCommandQueue = Adapter->GetOwningRHI()->CreateCommandQueue(Device, CommandQueueDesc);

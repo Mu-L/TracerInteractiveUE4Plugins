@@ -40,9 +40,10 @@ public:
 
 struct FD3D11ShaderData
 {
-	FD3D11ShaderResourceTable	ShaderResourceTable;
-	TArray<FName>				UniformBuffers;
-	bool						bShaderNeedsGlobalConstantBuffer;
+	FD3D11ShaderResourceTable			ShaderResourceTable;
+	TArray<FName>						UniformBuffers;
+	TArray<FShaderCodeVendorExtension>	VendorExtensions;
+	bool								bShaderNeedsGlobalConstantBuffer;
 };
 
 /** This represents a vertex shader that hasn't been combined with a specific declaration to create a bound shader. */
@@ -305,6 +306,13 @@ public:
 		check(MemorySize == Texture->MemorySize);
 		check(bCreatedRTVsPerSlice == Texture->bCreatedRTVsPerSlice);
 		check(RTVArraySize == Texture->RTVArraySize);
+
+		// If we're creating an aliased texture, make sure we handle this case correctly.
+		if (Texture->NumDepthStencilViews && !NumDepthStencilViews)
+		{
+			NumDepthStencilViews = Texture->NumDepthStencilViews;
+		}
+
 		check(NumDepthStencilViews == Texture->NumDepthStencilViews);
 
 		// Do not copy the BaseShaderResource from the source texture (this is initialized correctly here, and is used for
@@ -553,10 +561,14 @@ class FD3D11BaseTextureCube : public FRHITextureCube
 public:
 	FD3D11BaseTextureCube(uint32 InSizeX, uint32 InSizeY, uint32 InSizeZ, uint32 InNumMips, uint32 InNumSamples, EPixelFormat InFormat, uint32 InFlags, const FClearValueBinding& InClearValue)
 	: FRHITextureCube(InSizeX,InNumMips,InFormat,InFlags,InClearValue)
+	, SliceCount(InSizeZ)
 	{ check(InNumSamples == 1); }
 	uint32 GetSizeX() const { return GetSize(); }
 	uint32 GetSizeY() const { return GetSize(); } //-V524
-	uint32 GetSizeZ() const { return 0; }
+	uint32 GetSizeZ() const { return SliceCount; }
+
+private:
+	uint32 SliceCount;
 };
 
 typedef TD3D11Texture2D<FRHITexture>              FD3D11Texture;

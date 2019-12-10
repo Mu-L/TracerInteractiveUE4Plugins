@@ -30,6 +30,7 @@
 #include "SceneInterface.h"
 #include "Engine/NetDriver.h"
 #include "Engine/PackageMapClient.h"
+#include "Serialization/LoadTimeTrace.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogLevelStreaming, Log, All);
 
@@ -83,15 +84,25 @@ FStreamLevelAction::FStreamLevelAction(bool bIsLoading, const FName& InLevelName
 	, LevelName(InLevelName)
 	, LatentInfo(InLatentInfo)
 {
-	Level = FindAndCacheLevelStreamingObject( LevelName, World );
-	ActivateLevel( Level );
+	ULevelStreaming* LocalLevel = FindAndCacheLevelStreamingObject( LevelName, World );
+	Level = LocalLevel;
+	ActivateLevel( LocalLevel );
 }
 
 void FStreamLevelAction::UpdateOperation(FLatentResponse& Response)
 {
-	ULevelStreaming* LevelStreamingObject = Level; // to avoid confusion.
-	bool bIsOperationFinished = UpdateLevel( LevelStreamingObject );
-	Response.FinishAndTriggerIf(bIsOperationFinished, LatentInfo.ExecutionFunction, LatentInfo.Linkage, LatentInfo.CallbackTarget);
+	ULevelStreaming* LevelStreamingObject = Level.Get(); // to avoid confusion.
+	const bool bIsLevelValid = LevelStreamingObject != nullptr;
+	UE_LOG(LogLevelStreaming, Display, TEXT("FStreamLevelAction::UpdateOperation() LevelName %s, bIsLevelValid %d"), *LevelName.ToString(), (int32)bIsLevelValid);
+	if (bIsLevelValid)
+	{
+		bool bIsOperationFinished = UpdateLevel(LevelStreamingObject);
+		Response.FinishAndTriggerIf(bIsOperationFinished, LatentInfo.ExecutionFunction, LatentInfo.Linkage, LatentInfo.CallbackTarget);
+	}
+	else
+	{
+		Response.DoneIf(true);
+	}
 }
 
 #if WITH_EDITOR
@@ -882,12 +893,17 @@ bool ULevelStreaming::RequestLevel(UWorld* PersistentWorld, bool bAllowLevelLoad
 		return false;
 	}
 
+	TRACE_LOADTIME_REQUEST_GROUP_SCOPE(TEXT("LevelStreaming - %s"), *GetPathName());
+
 	EPackageFlags PackageFlags = PKG_ContainsMap;
 	int32 PIEInstanceID = INDEX_NONE;
 
+	// Try to find the [to be] loaded package.
+	UPackage* LevelPackage = (UPackage*)StaticFindObjectFast(UPackage::StaticClass(), nullptr, DesiredPackageName, 0, 0, RF_NoFlags, EInternalObjectFlags::PendingKill);
+
 	// copy streaming level on demand if we are in PIE
 	// (the world is already loaded for the editor, just find it and copy it)
-	if ( PersistentWorld->IsPlayInEditor() )
+	if ( LevelPackage == nullptr && PersistentWorld->IsPlayInEditor() )
 	{
 		if (PersistentWorld->GetOutermost()->HasAnyPackageFlags(PKG_PlayInEditor))
 		{
@@ -929,9 +945,6 @@ bool ULevelStreaming::RequestLevel(UWorld* PersistentWorld, bool bAllowLevelLoad
 			}
 		}
 	}
-
-	// Try to find the [to be] loaded package.
-	UPackage* LevelPackage = (UPackage*)StaticFindObjectFast(UPackage::StaticClass(), nullptr, DesiredPackageName, 0, 0, RF_NoFlags, EInternalObjectFlags::PendingKill);
 
 	// Package is already or still loaded.
 	if (LevelPackage)
@@ -1010,7 +1023,7 @@ bool ULevelStreaming::RequestLevel(UWorld* PersistentWorld, bool bAllowLevelLoad
 			// Kick off async load request.
 			STAT_ADD_CUSTOMMESSAGE_NAME( STAT_NamedMarker, *(FString( TEXT( "RequestLevel - " ) + DesiredPackageName.ToString() )) );
 			TRACE_BOOKMARK(TEXT("RequestLevel - %s"), *DesiredPackageName.ToString());
-			LoadPackageAsync(DesiredPackageName.ToString(), nullptr, *PackageNameToLoadFrom, FLoadPackageAsyncDelegate::CreateUObject(this, &ULevelStreaming::AsyncLevelLoadComplete), PackageFlags, PIEInstanceID);
+			LoadPackageAsync(DesiredPackageName.ToString(), nullptr, *PackageNameToLoadFrom, FLoadPackageAsyncDelegate::CreateUObject(this, &ULevelStreaming::AsyncLevelLoadComplete), PackageFlags, PIEInstanceID, GetPriority());
 
 			// streamingServer: server loads everything?
 			// Editor immediately blocks on load and we also block if background level streaming is disabled.
@@ -1408,8 +1421,9 @@ FName ULevelStreaming::GetLoadedLevelPackageName() const
 
 void ULevelStreaming::SetWorldAssetByPackageName(FName InPackageName)
 {
+	// Need to strip PIE prefix from object name, only the package has it
 	const FString TargetWorldPackageName = InPackageName.ToString();
-	const FString TargetWorldObjectName = FPackageName::GetLongPackageAssetName(TargetWorldPackageName);
+	const FString TargetWorldObjectName = UWorld::RemovePIEPrefix(FPackageName::GetLongPackageAssetName(TargetWorldPackageName));
 	TSoftObjectPtr<UWorld> NewWorld;
 	NewWorld = FString::Printf(TEXT("%s.%s"), *TargetWorldPackageName, *TargetWorldObjectName);
 	SetWorldAsset(NewWorld);

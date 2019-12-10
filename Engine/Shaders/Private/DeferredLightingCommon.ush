@@ -47,6 +47,8 @@ struct FDeferredLightData
 	uint ShadowedBits;
 	float RectLightBarnCosAngle;
 	float RectLightBarnLength;
+
+	FHairTransmittanceData HairTransmittance;
 };
 
 /** Data about a single light to be shaded with the simple shading model, designed for speed and limited feature set. */
@@ -199,12 +201,23 @@ void GetShadowTerms(FGBufferData GBuffer, FDeferredLightData LightData, float3 W
 		Shadow.SurfaceShadow *= ContactShadow;
 
 		FLATTEN
-		if( GBuffer.ShadingModelID == SHADINGMODELID_HAIR )
-			Shadow.TransmissionShadow *= ContactShadow;
-		else if( GBuffer.ShadingModelID != SHADINGMODELID_EYE )
+		if( GBuffer.ShadingModelID == SHADINGMODELID_HAIR ||  GBuffer.ShadingModelID == SHADINGMODELID_EYE  )
+		{
+			// If hair transmittance is enabled, sharp shadowing should already be handled by 
+			// the dedicated deep shadow maps. Thus no need for contact shadow
+			const bool bUseComplexTransmittance = (LightData.HairTransmittance.ScatteringComponent & HAIR_COMPONENT_MULTISCATTER) > 0;
+			if (!bUseComplexTransmittance)
+			{
+				Shadow.TransmissionShadow *= ContactShadow;
+			}
+		}
+		else
 			Shadow.TransmissionShadow *= ContactShadow * 0.5 + 0.5;
 	}
 #endif
+
+	Shadow.HairTransmittance = LightData.HairTransmittance;
+	Shadow.HairTransmittance.OpaqueVisibility = Shadow.SurfaceShadow;
 }
 
 float GetLocalLightAttenuation(
@@ -270,7 +283,10 @@ FCapsuleLight GetCapsule( float3 ToLight, FDeferredLightData LightData )
 }
 
 /** Calculates lighting for a given position, normal, etc with a fully featured lighting model designed for quality. */
-float4 GetDynamicLighting(float3 WorldPosition, float3 CameraVector, FGBufferData GBuffer, float AmbientOcclusion, uint ShadingModelID, FDeferredLightData LightData, float4 LightAttenuation, float Dither, uint2 SVPos, FRectTexture SourceTexture)
+float4 GetDynamicLighting(
+	float3 WorldPosition, float3 CameraVector, FGBufferData GBuffer, float AmbientOcclusion, uint ShadingModelID, 
+	FDeferredLightData LightData, float4 LightAttenuation, float Dither, uint2 SVPos, FRectTexture SourceTexture,
+	inout float SurfaceShadow)
 {
 	FLightAccumulator LightAccumulator = (FLightAccumulator)0;
 
@@ -300,7 +316,10 @@ float4 GetDynamicLighting(float3 WorldPosition, float3 CameraVector, FGBufferDat
 		Shadow.SurfaceShadow = AmbientOcclusion;
 		Shadow.TransmissionShadow = 1;
 		Shadow.TransmissionThickness = 1;
+		Shadow.HairTransmittance.Transmittance = 1;
+		Shadow.HairTransmittance.OpaqueVisibility = 1;
 		GetShadowTerms(GBuffer, LightData, WorldPosition, L, LightAttenuation, Dither, Shadow);
+		SurfaceShadow = Shadow.SurfaceShadow;
 
 		LightAccumulator.EstimatedCost += 0.3f;		// add the cost of getting the shadow terms
 

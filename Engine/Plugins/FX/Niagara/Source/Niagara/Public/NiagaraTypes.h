@@ -176,8 +176,11 @@ struct FNiagaraID
 	int32 AcquireTag;
 
 	bool operator==(const FNiagaraID& Other)const { return Index == Other.Index && AcquireTag == Other.AcquireTag; }
+	bool operator!=(const FNiagaraID& Other)const { return !(*this == Other); }
 	bool operator<(const FNiagaraID& Other)const { return Index < Other.Index && AcquireTag < Other.AcquireTag; }
 };
+
+#define NIAGARA_INVALID_ID (FNiagaraID({(INDEX_NONE), (INDEX_NONE)}))
 
 FORCEINLINE uint32 GetTypeHash(const FNiagaraID& ID)
 {
@@ -185,19 +188,28 @@ FORCEINLINE uint32 GetTypeHash(const FNiagaraID& ID)
 }
 
 /** Information about how this type should be laid out in an FNiagaraDataSet */
+USTRUCT()
 struct FNiagaraTypeLayoutInfo
 {
+	GENERATED_BODY()
+
 	FNiagaraTypeLayoutInfo()
 	{}
 
 	/** Byte offset of each float component in a structured layout. */
+	UPROPERTY()
 	TArray<uint32> FloatComponentByteOffsets;
+
 	/** Offset into register table for each float component. */
+	UPROPERTY()
 	TArray<uint32> FloatComponentRegisterOffsets;
 
 	/** Byte offset of each int32 component in a structured layout. */
+	UPROPERTY()
 	TArray<uint32> Int32ComponentByteOffsets;
+
 	/** Offset into register table for each int32 component. */
+	UPROPERTY()
 	TArray<uint32> Int32ComponentRegisterOffsets;
 
 	FORCEINLINE uint32 GetNumComponents()const { return FloatComponentByteOffsets.Num() + Int32ComponentByteOffsets.Num(); }
@@ -291,10 +303,10 @@ enum class ENiagaraExecutionState : uint32
 	/** Complete. When the system or all emitters are complete the effect is considered finished. */
 	Complete,
 	/** Emitter only. Emitter is disabled. Will not tick or render again until a full re initialization of the system. */
-	Disabled,
+	Disabled UMETA(Hidden),
 
 	// insert new states before
-	Num
+	Num UMETA(Hidden)
 };
 
 /** Defines options for conditionally editing and showing script inputs in the UI. */
@@ -345,22 +357,23 @@ public:
 	bool bInlineEditConditionToggle;
 
 	/** Declares the associated input should be conditionally editable based on the value of another input. */
-	UPROPERTY(EditAnywhere, Category = "Input Conditions", meta = (EditCondition = "!bIsStaticSwitch"))
+	UPROPERTY(EditAnywhere, Category = "Variable")
 	FNiagaraInputConditionMetadata EditCondition;
 
 	/** Declares the associated input should be conditionally visible based on the value of another input. */
-	UPROPERTY(EditAnywhere, Category = "Input Conditions", meta = (EditCondition = "!bIsStaticSwitch"))
+	UPROPERTY(EditAnywhere, Category = "Variable")
 	FNiagaraInputConditionMetadata VisibleCondition;
 
 	UPROPERTY(EditAnywhere, Category = "Variable", DisplayName = "Property Metadata", meta = (ToolTip = "Property Metadata"))
 	TMap<FName, FString> PropertyMetaData;
 
-	UPROPERTY(AdvancedDisplay, VisibleAnywhere, Category = "Variable", meta = (ToolTip = "This is a read-only variable that designates if the metadata is tied to a static switch or not."))
-	bool bIsStaticSwitch;
+	/** This is a read-only variable that designates if the metadata is tied to a static switch or not. */
+	UPROPERTY()
+	bool bIsStaticSwitch; // TODO: This should be moved to the UNiagaraScriptVariable in the future
 
 	/** The default value to use when creating new pins or stack entries for a static switch parameter */
 	UPROPERTY()
-	int32 StaticSwitchDefaultValue;
+	int32 StaticSwitchDefaultValue;  // TODO: This should be moved to the UNiagaraScriptVariable in the future
 };
 
 USTRUCT()
@@ -370,40 +383,40 @@ struct NIAGARA_API FNiagaraTypeDefinition
 public:
 
 	// Construct blank raw type definition 
-	FNiagaraTypeDefinition(UClass *ClassDef)
+	FORCEINLINE FNiagaraTypeDefinition(UClass *ClassDef)
 		: Struct(ClassDef), Enum(nullptr), Size(INDEX_NONE), Alignment(INDEX_NONE)
 	{
 		checkSlow(Struct != nullptr);
 	}
 
-	FNiagaraTypeDefinition(UEnum *EnumDef)
+	FORCEINLINE FNiagaraTypeDefinition(UEnum *EnumDef)
 		: Struct(IntStruct), Enum(EnumDef), Size(INDEX_NONE), Alignment(INDEX_NONE)
 	{
 		checkSlow(Struct != nullptr);
 	}
 
-	FNiagaraTypeDefinition(UScriptStruct *StructDef)
+	FORCEINLINE FNiagaraTypeDefinition(UScriptStruct *StructDef)
 		: Struct(StructDef), Enum(nullptr), Size(INDEX_NONE), Alignment(INDEX_NONE)
 	{
 		checkSlow(Struct != nullptr);
 	}
 
-	FNiagaraTypeDefinition(const FNiagaraTypeDefinition &Other)
+	FORCEINLINE FNiagaraTypeDefinition(const FNiagaraTypeDefinition &Other)
 		: Struct(Other.Struct), Enum(Other.Enum), Size(INDEX_NONE), Alignment(INDEX_NONE)
 	{
 	}
 
 	// Construct a blank raw type definition
-	FNiagaraTypeDefinition()
+	FORCEINLINE FNiagaraTypeDefinition()
 		: Struct(nullptr), Enum(nullptr), Size(INDEX_NONE), Alignment(INDEX_NONE)
 	{}
 
-	bool operator !=(const FNiagaraTypeDefinition &Other) const
+	FORCEINLINE bool operator !=(const FNiagaraTypeDefinition &Other) const
 	{
 		return !(*this == Other);
 	}
 
-	bool operator == (const FNiagaraTypeDefinition &Other) const
+	FORCEINLINE bool operator == (const FNiagaraTypeDefinition &Other) const
 	{
 		return Struct == Other.Struct && Enum == Other.Enum;
 	}
@@ -476,6 +489,11 @@ public:
 	}
 
 	bool IsDataInterface()const;
+
+	FORCEINLINE bool IsUObject()const
+	{
+		return Struct->IsChildOf<UObject>();
+	}
 
 	bool IsEnum() const { return Enum != nullptr; }
 	
@@ -555,6 +573,8 @@ public:
 	static const FNiagaraTypeDefinition& GetGenericNumericDef() { return NumericDef; }
 	static const FNiagaraTypeDefinition& GetParameterMapDef() { return ParameterMapDef; }
 	static const FNiagaraTypeDefinition& GetIDDef() { return IDDef; }
+	static const FNiagaraTypeDefinition& GetUObjectDef() { return UObjectDef; }
+	static const FNiagaraTypeDefinition& GetUMaterialDef() { return UMaterialDef; }
 
 	static UScriptStruct* GetFloatStruct() { return FloatStruct; }
 	static UScriptStruct* GetBoolStruct() { return BoolStruct; }
@@ -570,6 +590,7 @@ public:
 	static UScriptStruct* GetIDStruct() { return IDStruct; }
 
 	static UEnum* GetExecutionStateEnum() { return ExecutionStateEnum; }
+	static UEnum* GetExecutionStateSouceEnum() { return ExecutionStateSourceEnum; }
 	static UEnum* GetSimulationTargetEnum() { return SimulationTargetEnum; }
 	static UEnum* GetScriptUsageEnum() { return ScriptUsageEnum; }
 
@@ -607,6 +628,8 @@ private:
 	static FNiagaraTypeDefinition NumericDef;
 	static FNiagaraTypeDefinition ParameterMapDef;
 	static FNiagaraTypeDefinition IDDef;
+	static FNiagaraTypeDefinition UObjectDef;
+	static FNiagaraTypeDefinition UMaterialDef;
 
 	static UScriptStruct* FloatStruct;
 	static UScriptStruct* BoolStruct;
@@ -618,6 +641,9 @@ private:
 	static UScriptStruct* ColorStruct;
 	static UScriptStruct* Matrix4Struct;
 	static UScriptStruct* NumericStruct;
+
+	static UClass* UObjectClass;
+	static UClass* UMaterialClass;
 
 	static UEnum* SimulationTargetEnum;
 	static UEnum* ScriptUsageEnum;
@@ -713,6 +739,15 @@ public:
 		}
 	}
 
+	static void Deregister(const FNiagaraTypeDefinition& Type)
+	{
+		RegisteredTypes.Remove(Type);
+		RegisteredParamTypes.Remove(Type);
+		RegisteredPayloadTypes.Remove(Type);
+		RegisteredUserDefinedTypes.Remove(Type);
+		RegisteredNumericTypes.Remove(Type);
+	}
+
 	FNiagaraTypeDefinition GetTypeDefFromStruct(UStruct* Struct)
 	{
 		for (FNiagaraTypeDefinition& TypeDef : RegisteredTypes)
@@ -762,7 +797,7 @@ struct FNiagaraVariable
 		}
 	}
 
-	FNiagaraVariable(FNiagaraTypeDefinition InType, FName InName)
+	FORCEINLINE FNiagaraVariable(const FNiagaraTypeDefinition& InType, const FName& InName)
 		: Name(InName)
 		, TypeDef(InType)
 	{
@@ -786,13 +821,14 @@ struct FNiagaraVariable
 		return Name == Other.Name && (TypeDef == Other.TypeDef || (bAllowAssignableTypes && FNiagaraTypeDefinition::TypesAreAssignable(TypeDef, Other.TypeDef)));
 	}
 	
-	void SetName(FName InName) { Name = InName; }
-	FName GetName()const { return Name; }
+	FORCEINLINE void SetName(FName InName) { Name = InName; }
+	FORCEINLINE const FName& GetName() const { return Name; }
 
 	void SetType(const FNiagaraTypeDefinition& InTypeDef) { TypeDef = InTypeDef; }
 	const FNiagaraTypeDefinition& GetType()const { return TypeDef; }
 
 	FORCEINLINE bool IsDataInterface()const { return GetType().IsDataInterface(); }
+	FORCEINLINE bool IsUObject()const { return GetType().IsUObject(); }
 
 	void AllocateData()
 	{
@@ -844,6 +880,11 @@ struct FNiagaraVariable
 	uint8* GetData()
 	{
 		return VarData.GetData();
+	}
+
+	void ClearData()
+	{
+		VarData.Empty();
 	}
 
 	int32 GetSizeInBytes() const

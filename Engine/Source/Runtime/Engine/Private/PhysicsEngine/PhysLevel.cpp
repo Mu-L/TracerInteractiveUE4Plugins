@@ -15,10 +15,7 @@
 #include "Modules/ModuleManager.h"
 #include "PhysicsInitialization.h"
 #include "PhysicsEngine/PhysicsSettings.h"
-
-#if INCLUDE_CHAOS
 #include "ChaosSolversModule.h"
-#endif
 
 #if WITH_PHYSX
 	#include "PhysicsEngine/PhysXSupport.h"
@@ -41,7 +38,6 @@ FPhysicsDelegates::FOnPhysSceneInit FPhysicsDelegates::OnPhysSceneInit;
 FPhysicsDelegates::FOnPhysSceneTerm FPhysicsDelegates::OnPhysSceneTerm;
 FPhysicsDelegates::FOnPhysDispatchNotifications FPhysicsDelegates::OnPhysDispatchNotifications;
 
-#if INCLUDE_CHAOS
 /**
  *  Chaos is external to engine but utilizes IChaosSettingsProvider to take settings
  *  From external callers, this implementation allows Chaos to request settings from
@@ -96,8 +92,6 @@ private:
 };
 
 static FEngineChaosSettingsProvider GEngineChaosSettingsProvider;
-
-#endif
 
 //////////////////////////////////////////////////////////////////////////
 // UWORLD
@@ -258,7 +252,6 @@ FName FEndPhysicsTickFunction::DiagnosticContext(bool bDetailed)
 //////// GAME-LEVEL RIGID BODY PHYSICS STUFF ///////
 void PostEngineInitialize()
 {
-#if INCLUDE_CHAOS
 	FChaosSolversModule* ChaosModule = FChaosSolversModule::GetModule();
 
 	if(ChaosModule)
@@ -266,10 +259,11 @@ void PostEngineInitialize()
 		// If the solver module is available, pass along our settings provider
 		// #BG - Collect all chaos modules settings into one provider?
 		ChaosModule->SetSettingsProvider(&GEngineChaosSettingsProvider);
-		ChaosModule->Initialize();
+		ChaosModule->OnSettingsChanged();
 	}
-#endif
 }
+
+FDelegateHandle GPostInitHandle;
 
 bool InitGamePhys()
 {
@@ -280,11 +274,9 @@ bool InitGamePhys()
 
 	// We need to defer initializing the module as it will attempt to read from the settings provider. If the settings
 	// provider is backed by a UObject in any way access to it will fail because we're too early in the init process.
-	FDelegateHandle PostInitHandle;
-	PostInitHandle = FCoreDelegates::OnPostEngineInit.AddLambda([&PostInitHandle]
+	GPostInitHandle = FCoreDelegates::OnPostEngineInit.AddLambda([]()
 	{
 		PostEngineInitialize();
-		FCoreDelegates::OnPostEngineInit.Remove(PostInitHandle);
 	});
 
 #if WITH_PHYSX
@@ -305,6 +297,12 @@ bool InitGamePhys()
 
 void TermGamePhys()
 {
+	if (GPostInitHandle.IsValid())
+	{
+		FCoreDelegates::OnPostEngineInit.Remove(GPostInitHandle);
+		GPostInitHandle.Reset();
+	}
+
 #if WITH_PHYSX
 
 	// Do nothing if they were never initialized

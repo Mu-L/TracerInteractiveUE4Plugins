@@ -17,18 +17,56 @@
 
 #define LOCTEXT_NAMESPACE "DatasmithMeshOperations"
 
+#ifdef LOG_TIME
+namespace DataprepOperationTime
+{
+	typedef TFunction<void(FText)> FLogFunc;
+
+	class FTimeLogger
+	{
+	public:
+		FTimeLogger(const FString& InText, FLogFunc&& InLogFunc)
+		: StartTime( FPlatformTime::Cycles64() )
+		, Text( InText )
+		, LogFunc(MoveTemp(InLogFunc))
+		{
+			UE_LOG( LogDataprep, Log, TEXT("%s ..."), *Text );
+		}
+
+		~FTimeLogger()
+		{
+			// Log time spent to import incoming file in minutes and seconds
+			double ElapsedSeconds = FPlatformTime::ToSeconds64(FPlatformTime::Cycles64() - StartTime);
+
+			int ElapsedMin = int(ElapsedSeconds / 60.0);
+			ElapsedSeconds -= 60.0 * (double)ElapsedMin;
+			FText Msg = FText::Format( LOCTEXT("DataprepOperation_LogTime", "{0} took {1} min {2} s."), FText::FromString( Text ), ElapsedMin, FText::FromString( FString::Printf( TEXT("%.3f"), ElapsedSeconds ) ) );
+			LogFunc( Msg );
+		}
+
+	private:
+		uint64 StartTime;
+		FString Text;
+		FLogFunc LogFunc;
+	};
+}
+#endif
+
+
 void UDataprepSetLODsOperation::OnExecution_Implementation(const FDataprepContext& InContext)
 {
-	// Collect start time to log amount of time spent to import incoming file
-	uint64 StartTime = FPlatformTime::Cycles64();
+	if(ReductionSettings.Num() > MAX_STATIC_MESH_LODS)
+	{
+		FText Message = FText::Format( LOCTEXT( "DatasmithMeshOperations_SetLODs_Max", "Limiting number of reduction settings to max allowed, {0}" ), MAX_STATIC_MESH_LODS );
+		LogWarning( Message );
+	}
 
+	// Limit size of array to MAX_STATIC_MESH_LODS
 	const int32 LODCount = FMath::Min( ReductionSettings.Num(), MAX_STATIC_MESH_LODS );
 	if( LODCount == 0 )
 	{
 		FText OutReason = FText( LOCTEXT( "DatasmithMeshOperations_SetLODs", "No reduction settings. Aborting operation..." ) );
 		LogInfo( OutReason );
-		// #ueent_todo: Remove call to UE_LOG when DataprepLogger is operational
-		UE_LOG(LogDataprep, Log, TEXT("UDataprepSetLODsOperation: %s"), *OutReason.ToString());
 		return;
 	}
 
@@ -44,17 +82,18 @@ void UDataprepSetLODsOperation::OnExecution_Implementation(const FDataprepContex
 		ReductionOptions.ReductionSettings[Index].ScreenSize = FMath::Clamp( ReductionSettings[Index].ScreenSize, 0.f, 1.f );
 	}
 
+#ifdef LOG_TIME
+	DataprepOperationTime::FTimeLogger TimeLogger( TEXT("SetLods"), [&]( FText Text) { this->LogInfo( Text ); });
+#endif
+
 	// Execute operation
-	UDataprepOperationsLibrary::SetLods( InContext.Objects, ReductionOptions );
+	TArray<UObject*> ModifiedStaticMeshes;
+	UDataprepOperationsLibrary::SetLods( InContext.Objects, ReductionOptions, ModifiedStaticMeshes );
 
-	// Log time spent to import incoming file in minutes and seconds
-	double ElapsedSeconds = FPlatformTime::ToSeconds64(FPlatformTime::Cycles64() - StartTime);
-
-	int ElapsedMin = int(ElapsedSeconds / 60.0);
-	ElapsedSeconds -= 60.0 * (double)ElapsedMin;
-	FText OutReason = FText::Format( LOCTEXT("DatasmithMeshOperations_SetLODsTime", "SetLODs took {0} min {1} s."), ElapsedMin, FText::FromString( FString::Printf( TEXT("%.3f"), ElapsedSeconds ) ) );
-	LogInfo( OutReason );
-	UE_LOG(LogDataprep, Log, TEXT("%s"), *OutReason.ToString());
+	if(ModifiedStaticMeshes.Num() > 0)
+	{
+		AssetsModified( MoveTemp( ModifiedStaticMeshes ) );
+	}
 }
 
 UDataprepSetLODGroupOperation::UDataprepSetLODGroupOperation()
@@ -67,119 +106,77 @@ UDataprepSetLODGroupOperation::UDataprepSetLODGroupOperation()
 
 void UDataprepSetLODGroupOperation::OnExecution_Implementation(const FDataprepContext& InContext)
 {
-	// Collect start time to log amount of time spent to import incoming file
-	uint64 StartTime = FPlatformTime::Cycles64();
+#ifdef LOG_TIME
+	DataprepOperationTime::FTimeLogger TimeLogger( TEXT("SetLODGroup"), [&]( FText Text) { this->LogInfo( Text ); });
+#endif
 
 	// Execute operation
-	UDataprepOperationsLibrary::SetLODGroup( InContext.Objects, GroupName );
+	TArray<UObject*> ModifiedStaticMeshes;
+	UDataprepOperationsLibrary::SetLODGroup( InContext.Objects, GroupName, ModifiedStaticMeshes );
 
-	// Log time spent to import incoming file in minutes and seconds
-	double ElapsedSeconds = FPlatformTime::ToSeconds64(FPlatformTime::Cycles64() - StartTime);
-
-	int ElapsedMin = int(ElapsedSeconds / 60.0);
-	ElapsedSeconds -= 60.0 * (double)ElapsedMin;
-	FText OutReason = FText::Format( LOCTEXT("DatasmithMeshOperations_SetLODGroupTime", "SetLODs took {0} min {1} s."), ElapsedMin, FText::FromString( FString::Printf( TEXT("%.3f"), ElapsedSeconds ) ) );
-	LogInfo( OutReason );
-	UE_LOG(LogDataprep, Log, TEXT("%s"), *OutReason.ToString());
+	if(ModifiedStaticMeshes.Num() > 0)
+	{
+		AssetsModified( MoveTemp( ModifiedStaticMeshes ) );
+	}
 }
 
 void UDataprepSetSimpleCollisionOperation::OnExecution_Implementation(const FDataprepContext& InContext)
 {
-	// Collect start time to log amount of time spent to import incoming file
-	uint64 StartTime = FPlatformTime::Cycles64();
+#ifdef LOG_TIME
+	DataprepOperationTime::FTimeLogger TimeLogger( TEXT("SetSimpleCollision"), [&]( FText Text) { this->LogInfo( Text ); });
+#endif
 
 	// Execute operation
-	UDataprepOperationsLibrary::SetSimpleCollision( InContext.Objects, ShapeType );
+	TArray<UObject*> ModifiedStaticMeshes;
+	UDataprepOperationsLibrary::SetSimpleCollision( InContext.Objects, ShapeType, ModifiedStaticMeshes );
 
-	// Log time spent to import incoming file in minutes and seconds
-	double ElapsedSeconds = FPlatformTime::ToSeconds64(FPlatformTime::Cycles64() - StartTime);
-
-	int ElapsedMin = int(ElapsedSeconds / 60.0);
-	ElapsedSeconds -= 60.0 * (double)ElapsedMin;
-	FText OutReason = FText::Format( LOCTEXT("DatasmithMeshOperations_SetSimpleCollisionTime", "SetLODs took {0} min {1} s."), ElapsedMin, FText::FromString( FString::Printf( TEXT("%.3f"), ElapsedSeconds ) ) );
-	LogInfo( OutReason );
-	UE_LOG(LogDataprep, Log, TEXT("%s"), *OutReason.ToString());
+	if(ModifiedStaticMeshes.Num() > 0)
+	{
+		AssetsModified( MoveTemp( ModifiedStaticMeshes ) );
+	}
 }
 
 void UDataprepSetConvexDecompositionCollisionOperation::OnExecution_Implementation(const FDataprepContext& InContext)
 {
-	// Collect start time to log amount of time spent to import incoming file
-	uint64 StartTime = FPlatformTime::Cycles64();
+#ifdef LOG_TIME
+	DataprepOperationTime::FTimeLogger TimeLogger( TEXT("SetConvexDecompositionCollision"), [&]( FText Text) { this->LogInfo( Text ); });
+#endif
 
 	// Execute operation
-	UDataprepOperationsLibrary::SetConvexDecompositionCollision( InContext.Objects, HullCount, MaxHullVerts, HullPrecision );
+	TArray<UObject*> ModifiedStaticMeshes;
+	UDataprepOperationsLibrary::SetConvexDecompositionCollision( InContext.Objects, HullCount, MaxHullVerts, HullPrecision, ModifiedStaticMeshes );
 
-	// Log time spent to import incoming file in minutes and seconds
-	double ElapsedSeconds = FPlatformTime::ToSeconds64(FPlatformTime::Cycles64() - StartTime);
-
-	int ElapsedMin = int(ElapsedSeconds / 60.0);
-	ElapsedSeconds -= 60.0 * (double)ElapsedMin;
-	FText OutReason = FText::Format( LOCTEXT("DatasmithMeshOperations_SetConvexDecompositionCollisionTime", "SetLODs took {0} min {1} s."), ElapsedMin, FText::FromString( FString::Printf( TEXT("%.3f"), ElapsedSeconds ) ) );
-	LogInfo( OutReason );
-	UE_LOG(LogDataprep, Log, TEXT("%s"), *OutReason.ToString());
-}
-
-void UDataprepSetGenerateLightmapUVsOperation::OnExecution_Implementation(const FDataprepContext& InContext)
-{
-	// Collect start time to log amount of time spent to import incoming file
-	uint64 StartTime = FPlatformTime::Cycles64();
-
-	// Execute operation
-	UDataprepOperationsLibrary::SetGenerateLightmapUVs( InContext.Objects, bGenerateLightmapUVs );
-
-	// Log time spent to import incoming file in minutes and seconds
-	double ElapsedSeconds = FPlatformTime::ToSeconds64(FPlatformTime::Cycles64() - StartTime);
-
-	int ElapsedMin = int(ElapsedSeconds / 60.0);
-	ElapsedSeconds -= 60.0 * (double)ElapsedMin;
-	FText OutReason = FText::Format( LOCTEXT("DatasmithMeshOperations_SetGenerateLightmapUVsTime", "SetLODs took {0} min {1} s."), ElapsedMin, FText::FromString( FString::Printf( TEXT("%.3f"), ElapsedSeconds ) ) );
-	LogInfo( OutReason );
-	UE_LOG(LogDataprep, Log, TEXT("%s"), *OutReason.ToString());
+	if(ModifiedStaticMeshes.Num() > 0)
+	{
+		AssetsModified( MoveTemp( ModifiedStaticMeshes ) );
+	}
 }
 
 void UDataprepSetMobilityOperation::OnExecution_Implementation(const FDataprepContext& InContext)
 {
-	// Collect start time to log amount of time spent to import incoming file
-	uint64 StartTime = FPlatformTime::Cycles64();
+#ifdef LOG_TIME
+	DataprepOperationTime::FTimeLogger TimeLogger( TEXT("SetMobility"), [&]( FText Text) { this->LogInfo( Text ); });
+#endif
 
 	// Execute operation
 	UDataprepOperationsLibrary::SetMobility( InContext.Objects, MobilityType );
-
-	// Log time spent to import incoming file in minutes and seconds
-	double ElapsedSeconds = FPlatformTime::ToSeconds64(FPlatformTime::Cycles64() - StartTime);
-
-	int ElapsedMin = int(ElapsedSeconds / 60.0);
-	ElapsedSeconds -= 60.0 * (double)ElapsedMin;
-	FText OutReason = FText::Format( LOCTEXT("DatasmithMeshOperations_SetMobilityTime", "SetLODs took {0} min {1} s."), ElapsedMin, FText::FromString( FString::Printf( TEXT("%.3f"), ElapsedSeconds ) ) );
-	LogInfo( OutReason );
-	UE_LOG(LogDataprep, Log, TEXT("%s"), *OutReason.ToString());
 }
 
 void UDataprepSetMaterialOperation::OnExecution_Implementation(const FDataprepContext& InContext)
 {
-	if(MaterialSubstitute == nullptr)
+	if(Material == nullptr)
 	{
 		FText OutReason = FText( LOCTEXT( "DatasmithMeshOperations_SetMaterial", "No material specified. Aborting operation..." ) );
 		LogInfo( OutReason );
-		// #ueent_todo: Remove call to UE_LOG when DataprepLogger is operational
-		UE_LOG(LogDataprep, Log, TEXT("UDataprepSetMaterialOperation: %s"), *OutReason.ToString());
 		return;
 	}
 
-	// Collect start time to log amount of time spent to import incoming file
-	uint64 StartTime = FPlatformTime::Cycles64();
+#ifdef LOG_TIME
+	DataprepOperationTime::FTimeLogger TimeLogger( TEXT("SetMaterial"), [&]( FText Text) { this->LogInfo( Text ); });
+#endif
 
 	// Execute operation
-	UDataprepOperationsLibrary::SetMaterial( InContext.Objects, MaterialSubstitute );
-
-	// Log time spent to import incoming file in minutes and seconds
-	double ElapsedSeconds = FPlatformTime::ToSeconds64(FPlatformTime::Cycles64() - StartTime);
-
-	int ElapsedMin = int(ElapsedSeconds / 60.0);
-	ElapsedSeconds -= 60.0 * (double)ElapsedMin;
-	FText OutReason = FText::Format( LOCTEXT("DatasmithMeshOperations_SetMaterialTime", "SetLODs took {0} min {1} s."), ElapsedMin, FText::FromString( FString::Printf( TEXT("%.3f"), ElapsedSeconds ) ) );
-	LogInfo( OutReason );
-	UE_LOG(LogDataprep, Log, TEXT("%s"), *OutReason.ToString());
+	UDataprepOperationsLibrary::SetMaterial( InContext.Objects, Material );
 }
 
 void UDataprepSubstituteMaterialOperation::OnExecution_Implementation(const FDataprepContext& InContext)
@@ -188,25 +185,15 @@ void UDataprepSubstituteMaterialOperation::OnExecution_Implementation(const FDat
 	{
 		FText OutReason = FText( LOCTEXT( "DatasmithDirProducer_SubstituteMaterial", "No material specified. Aborting operation..." ) );
 		LogInfo( OutReason );
-		// #ueent_todo: Remove call to UE_LOG when DataprepLogger is operational
-		UE_LOG(LogDataprep, Log, TEXT("UDataprepSubstituteMaterialOperation: %s"), *OutReason.ToString());
 		return;
 	}
 
-	// Collect start time to log amount of time spent to import incoming file
-	uint64 StartTime = FPlatformTime::Cycles64();
+#ifdef LOG_TIME
+	DataprepOperationTime::FTimeLogger TimeLogger( TEXT("SubstituteMaterial"), [&]( FText Text) { this->LogInfo( Text ); });
+#endif
 
 	// Execute operation
 	UDataprepOperationsLibrary::SubstituteMaterial( InContext.Objects, MaterialSearch, StringMatch, MaterialSubstitute );
-
-	// Log time spent to import incoming file in minutes and seconds
-	double ElapsedSeconds = FPlatformTime::ToSeconds64(FPlatformTime::Cycles64() - StartTime);
-
-	int ElapsedMin = int(ElapsedSeconds / 60.0);
-	ElapsedSeconds -= 60.0 * (double)ElapsedMin;
-	FText OutReason = FText::Format( LOCTEXT("DatasmithMeshOperations_SubstituteMaterialTime", "SetLODs took {0} min {1} s."), ElapsedMin, FText::FromString( FString::Printf( TEXT("%.3f"), ElapsedSeconds ) ) );
-	LogInfo( OutReason );
-	UE_LOG(LogDataprep, Log, TEXT("%s"), *OutReason.ToString());
 }
 
 void UDataprepSubstituteMaterialByTableOperation::OnExecution_Implementation(const FDataprepContext& InContext)
@@ -215,41 +202,15 @@ void UDataprepSubstituteMaterialByTableOperation::OnExecution_Implementation(con
 	{
 		FText OutReason = FText( LOCTEXT( "DatasmithDirProducer_SubstituteMaterialByTable", "No data table specified. Aborting operation..." ) );
 		LogInfo( OutReason );
-		// #ueent_todo: Remove call to UE_LOG when DataprepLogger is operational
-		UE_LOG(LogDataprep, Log, TEXT("UDataprepSubstituteMaterialByTableOperation: %s"), *OutReason.ToString());
 		return;
 	}
 
-	// Collect start time to log amount of time spent to import incoming file
-	uint64 StartTime = FPlatformTime::Cycles64();
+#ifdef LOG_TIME
+	DataprepOperationTime::FTimeLogger TimeLogger( TEXT("SubstituteMaterialsByTable"), [&]( FText Text) { this->LogInfo( Text ); });
+#endif
 
 	// Execute operation
 	UDataprepOperationsLibrary::SubstituteMaterialsByTable( InContext.Objects, MaterialDataTable );
-
-	// Log time spent to import incoming file in minutes and seconds
-	double ElapsedSeconds = FPlatformTime::ToSeconds64(FPlatformTime::Cycles64() - StartTime);
-
-	int ElapsedMin = int(ElapsedSeconds / 60.0);
-	ElapsedSeconds -= 60.0 * (double)ElapsedMin;
-	FText OutReason = FText::Format( LOCTEXT("DatasmithMeshOperations_SubstituteMaterialsByTableTime", "SetLODs took {0} min {1} s."), ElapsedMin, FText::FromString( FString::Printf( TEXT("%.3f"), ElapsedSeconds ) ) );
-	LogInfo( OutReason );
-	UE_LOG(LogDataprep, Log, TEXT("%s"), *OutReason.ToString());
-}
-
-void UDataprepRemoveObjectsOperation::OnExecution_Implementation(const FDataprepContext& InContext)
-{
-	// Collect start time to log amount of time spent to import incoming file
-	uint64 StartTime = FPlatformTime::Cycles64();
-	int32 ObjectsCount = InContext.Objects.Num();
-
-	UDataprepOperationsLibrary::RemoveObjects( InContext.Objects );
-
-	// Log time spent to import incoming file in minutes and seconds
-	double ElapsedSeconds = FPlatformTime::ToSeconds64(FPlatformTime::Cycles64() - StartTime);
-
-	int ElapsedMin = int(ElapsedSeconds / 60.0);
-	ElapsedSeconds -= 60.0 * (double)ElapsedMin;
-	UE_LOG( LogDataprep, Log, TEXT("Removal of %d object(s) took [%d min %.3f s]"), ObjectsCount, ElapsedMin, ElapsedSeconds );
 }
 
 void FDataprepSetLOGGroupDetails::OnLODGroupChanged(TSharedPtr<FString> NewValue, ESelectInfo::Type /*SelectInfo*/)
@@ -329,6 +290,23 @@ void FDataprepSetLOGGroupDetails::CustomizeDetails(IDetailLayoutBuilder & Detail
 	[
 		CreateWidget()
 	];
+}
+
+void UDataprepSetMeshOperation::OnExecution_Implementation(const FDataprepContext& InContext)
+{
+	if(StaticMesh == nullptr)
+	{
+		FText OutReason = FText( LOCTEXT( "DatasmithMeshOperations_SetMesh", "No mesh specified. Aborting operation..." ) );
+		LogInfo( OutReason );
+		return;
+	}
+
+#ifdef LOG_TIME
+	DataprepOperationTime::FTimeLogger TimeLogger( TEXT("SetMesh"), [&]( FText Text) { this->LogInfo( Text ); });
+#endif
+
+	// Execute operation
+	UDataprepOperationsLibrary::SetMesh( InContext.Objects, StaticMesh );
 }
 
 #undef LOCTEXT_NAMESPACE

@@ -52,6 +52,7 @@
 #include "Serialization/DeferredMessageLog.h"
 #include "UObject/CoreRedirects.h"
 #include "HAL/LowLevelMemTracker.h"
+#include "HAL/LowLevelMemStats.h"
 
 DEFINE_LOG_CATEGORY(LogObj);
 
@@ -345,7 +346,8 @@ void UObject::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent
 	// This allows listeners to be notified of intermediate changes of state
 	if (PropertyChangedEvent.ChangeType == EPropertyChangeType::Interactive)
 	{
-		SnapshotTransactionBuffer(this);
+		const UProperty* ChangedProperty = PropertyChangedEvent.MemberProperty;
+		SnapshotTransactionBuffer(this, TArrayView<const UProperty*>(&ChangedProperty, 1));
 	}
 }
 
@@ -703,42 +705,34 @@ bool UObject::CanCreateInCurrentContext(UObject* Template)
 
 void UObject::GetArchetypeInstances( TArray<UObject*>& Instances )
 {
-	Instances.Empty();
+	Instances.Reset();
 
 	if ( HasAnyFlags(RF_ArchetypeObject|RF_ClassDefaultObject) )
 	{
-		// we need to evaluate CDOs as well, but nothing pending kill
-		TArray<UObject*> IterObjects;
-		{
-			const bool bIncludeNestedObjects = true;
-			GetObjectsOfClass(GetClass(), IterObjects, bIncludeNestedObjects, RF_NoFlags, EInternalObjectFlags::PendingKill);
-		}
 
 		// if this object is the class default object, any object of the same class (or derived classes) could potentially be affected
 		if ( !HasAnyFlags(RF_ArchetypeObject) )
 		{
-			Instances.Reserve(IterObjects.Num()-1);
-			for (UObject* It : IterObjects)
+			const bool bIncludeNestedObjects = true;
+			ForEachObjectOfClass(GetClass(), [this, &Instances](UObject* Obj)
 			{
-				UObject* Obj = It;
-				if ( Obj != this )
+				if (Obj != this)
 				{
 					Instances.Add(Obj);
 				}
-			}
+			}, bIncludeNestedObjects, RF_NoFlags, EInternalObjectFlags::PendingKill); // we need to evaluate CDOs as well, but nothing pending kill
 		}
 		else
 		{
-			for (UObject* It : IterObjects)
+			const bool bIncludeNestedObjects = true;
+			ForEachObjectOfClass(GetClass(), [this, &Instances](UObject* Obj)
 			{
-				UObject* Obj = It;
-				
-				// if this object is the correct type and its archetype is this object, add it to the list
-				if ( Obj && Obj != this && Obj->IsBasedOnArchetype(this) )
+				if (Obj != this && Obj->IsBasedOnArchetype(this))
 				{
 					Instances.Add(Obj);
 				}
-			}
+			}, bIncludeNestedObjects, RF_NoFlags, EInternalObjectFlags::PendingKill); // we need to evaluate CDOs as well, but nothing pending kill
+
 		}
 	}
 }
@@ -1112,32 +1106,37 @@ void UObject::PostLoadSubobjects( FObjectInstancingGraph* OuterInstanceGraph/*=N
 		// clear the flag so that we don't re-enter this method
 		ClearFlags(RF_NeedPostLoadSubobjects);
 
-		FObjectInstancingGraph CurrentInstanceGraph;
-
-		FObjectInstancingGraph* InstanceGraph = OuterInstanceGraph;
-		if ( InstanceGraph == NULL )
+		// Cooked data will already have its subobjects fully instanced as uninstanced subobjects are only due to newly introduced subobjects in
+		// an archetype that an instance of that object hasn't been saved with
+		if (!FPlatformProperties::RequiresCookedData())
 		{
-			CurrentInstanceGraph.SetDestinationRoot(this);
-			CurrentInstanceGraph.SetLoadingObject(true);
+			FObjectInstancingGraph CurrentInstanceGraph;
 
-			// if we weren't passed an instance graph to use, create a new one and use that
-			InstanceGraph = &CurrentInstanceGraph;
+			FObjectInstancingGraph* InstanceGraph = OuterInstanceGraph;
+			if (InstanceGraph == NULL)
+			{
+				CurrentInstanceGraph.SetDestinationRoot(this);
+				CurrentInstanceGraph.SetLoadingObject(true);
+
+				// if we weren't passed an instance graph to use, create a new one and use that
+				InstanceGraph = &CurrentInstanceGraph;
+			}
+
+			// this will be filled with the list of component instances which were serialized from disk
+			TArray<UObject*> SerializedComponents;
+			// fill the array with the component contained by this object that were actually serialized to disk through property references
+			CollectDefaultSubobjects(SerializedComponents, false);
+
+			// now, add all of the instanced components to the instance graph that will be used for instancing any components that have been added
+			// to this object's archetype since this object was last saved
+			for (int32 ComponentIndex = 0; ComponentIndex < SerializedComponents.Num(); ComponentIndex++)
+			{
+				UObject* PreviouslyInstancedComponent = SerializedComponents[ComponentIndex];
+				InstanceGraph->AddNewInstance(PreviouslyInstancedComponent);
+			}
+
+			InstanceSubobjectTemplates(InstanceGraph);
 		}
-
-		// this will be filled with the list of component instances which were serialized from disk
-		TArray<UObject*> SerializedComponents;
-		// fill the array with the component contained by this object that were actually serialized to disk through property references
-		CollectDefaultSubobjects(SerializedComponents, false);
-
-		// now, add all of the instanced components to the instance graph that will be used for instancing any components that have been added
-		// to this object's archetype since this object was last saved
-		for ( int32 ComponentIndex = 0; ComponentIndex < SerializedComponents.Num(); ComponentIndex++ )
-		{
-			UObject* PreviouslyInstancedComponent = SerializedComponents[ComponentIndex];
-			InstanceGraph->AddNewInstance(PreviouslyInstancedComponent);
-		}
-
-		InstanceSubobjectTemplates(InstanceGraph);
 	}
 	else
 	{
@@ -1146,6 +1145,11 @@ void UObject::PostLoadSubobjects( FObjectInstancingGraph* OuterInstanceGraph/*=N
 	}
 }
 
+UScriptStruct* UObject::GetSparseClassDataStruct() const
+{
+	UClass* Class = GetClass();
+	return Class ? Class->GetSparseClassDataStruct() : nullptr;
+}
 
 void UObject::ConditionalPostLoadSubobjects( FObjectInstancingGraph* OuterInstanceGraph/*=NULL*/ )
 {
@@ -1163,6 +1167,7 @@ void UObject::PreSave(const class ITargetPlatform* TargetPlatform)
 #endif
 }
 
+#if WITH_EDITOR
 bool UObject::CanModify() const
 {
 	return (!HasAnyFlags(RF_NeedInitialization) && !IsGarbageCollecting() && !GExitPurge && !IsUnreachable());
@@ -1191,13 +1196,12 @@ bool UObject::Modify( bool bAlwaysMarkDirty/*=true*/ )
 				MarkPackageDirty();
 			}
 		}
-#if WITH_EDITOR
 		FCoreUObjectDelegates::BroadcastOnObjectModified(this);
-#endif
 	}
 
 	return bSavedToTransactionBuffer;
 }
+#endif
 
 bool UObject::IsSelected() const
 {
@@ -1277,14 +1281,14 @@ void UObject::Serialize(FStructuredArchive::FRecord Record)
 		// Special info.
 		if ((!UnderlyingArchive.IsLoading() && !UnderlyingArchive.IsSaving() && !UnderlyingArchive.IsObjectReferenceCollector()))
 		{
-			Record << NAMED_FIELD(LoadName);
+			Record << SA_VALUE(TEXT("LoadName"), LoadName);
 			if (!UnderlyingArchive.IsIgnoringOuterRef())
 			{
-				Record << NAMED_FIELD(LoadOuter);
+				Record << SA_VALUE(TEXT("LoadOuter"), LoadOuter);
 			}
 			if (!UnderlyingArchive.IsIgnoringClassRef())
 			{
-				Record << NAMED_FIELD(ObjClass);
+				Record << SA_VALUE(TEXT("ObjClass"), ObjClass);
 			}
 		}
 		// Special support for supporting undo/redo of renaming and changing Archetype.
@@ -1294,7 +1298,7 @@ void UObject::Serialize(FStructuredArchive::FRecord Record)
 			{
 				if (UnderlyingArchive.IsLoading())
 				{
-					Record << NAMED_FIELD(LoadName) << NAMED_FIELD(LoadOuter);
+					Record << SA_VALUE(TEXT("LoadName"), LoadName) << SA_VALUE(TEXT("LoadOuter"), LoadOuter);
 
 					// If the name we loaded is different from the current one,
 					// unhash the object, change the name and hash it again.
@@ -1302,12 +1306,34 @@ void UObject::Serialize(FStructuredArchive::FRecord Record)
 					bool bDifferentOuter = LoadOuter != GetOuter();
 					if ( bDifferentName == true || bDifferentOuter == true )
 					{
+						// Clear the name for use by this:
+						UObject* Collision = StaticFindObjectFast(UObject::StaticClass(), LoadOuter, LoadName);
+						if(Collision && Collision != this)
+						{
+							FName NewNameForCollision = MakeUniqueObjectName(LoadOuter, Collision->GetClass(), LoadName);
+							checkf( StaticFindObjectFast(UObject::StaticClass(), LoadOuter, NewNameForCollision) == nullptr,
+								TEXT("Failed to MakeUniqueObjectName for object colliding with transaction buffer state: %s %s"),
+								*LoadName.ToString(),
+								*NewNameForCollision.ToString()
+							);
+							Collision->LowLevelRename(NewNameForCollision,LoadOuter);
+#if DO_CHECK
+							UObject* SubsequentCollision = StaticFindObjectFast(UObject::StaticClass(), LoadOuter, LoadName);
+							checkf( SubsequentCollision == nullptr,
+								TEXT("Multiple name collisions detected in the transaction buffer: %x %x with name %s"),
+								Collision,
+								SubsequentCollision,
+								*LoadName.ToString()
+							);
+#endif
+						}
+						
 						LowLevelRename(LoadName,LoadOuter);
 					}
 				}
 				else
 				{
-					Record << NAMED_FIELD(LoadName) << NAMED_FIELD(LoadOuter);
+					Record << SA_VALUE(TEXT("LoadName"), LoadName) << SA_VALUE(TEXT("LoadOuter"), LoadOuter);
 				}
 			}
 		}
@@ -1316,7 +1342,7 @@ void UObject::Serialize(FStructuredArchive::FRecord Record)
 		// Handle derived UClass objects (exact UClass objects are native only and shouldn't be touched)
 		if (ObjClass != UClass::StaticClass())
 		{
-			SerializeScriptProperties(Record.EnterField(FIELD_NAME_TEXT("Properties")));
+			SerializeScriptProperties(Record.EnterField(SA_FIELD_NAME(TEXT("Properties"))));
 		}
 
 		// Keep track of pending kill
@@ -1325,7 +1351,7 @@ void UObject::Serialize(FStructuredArchive::FRecord Record)
 			bool WasKill = IsPendingKill();
 			if (UnderlyingArchive.IsLoading())
 			{
-				Record << NAMED_FIELD(WasKill);
+				Record << SA_VALUE(TEXT("WasKill"), WasKill);
 				if (WasKill)
 				{
 					MarkPendingKill();
@@ -1337,7 +1363,7 @@ void UObject::Serialize(FStructuredArchive::FRecord Record)
 			}
 			else if (UnderlyingArchive.IsSaving())
 			{
-				Record << NAMED_FIELD(WasKill);
+				Record << SA_VALUE(TEXT("WasKill"), WasKill);
 			}
 		}
 
@@ -1400,7 +1426,7 @@ void UObject::SerializeScriptProperties( FStructuredArchive::FSlot Slot ) const
 		FArchive::FScopeAddDebugData S(UnderlyingArchive, ObjClass->GetFName());
 #endif
 
-		ObjClass->SerializeTaggedProperties(Slot, (uint8*)this, HasAnyFlags(RF_ClassDefaultObject) ? ObjClass->GetSuperClass() : ObjClass, (uint8*)DiffObject, bBreakSerializationRecursion ? this : NULL);
+		ObjClass->SerializeTaggedProperties(Slot, (uint8*)this, HasAnyFlags(RF_ClassDefaultObject) ? ObjClass->GetSuperClass() : ObjClass, (uint8*)DiffObject, bBreakSerializationRecursion ? this : nullptr);
 	}
 	else if (UnderlyingArchive.GetPortFlags() != 0 && !UnderlyingArchive.ArUseCustomPropertyList )
 	{
@@ -1417,7 +1443,7 @@ void UObject::SerializeScriptProperties( FStructuredArchive::FSlot Slot ) const
 		ObjClass->SerializeBin(Slot, const_cast<UObject *>(this));
 	}
 
-	if( HasAnyFlags(RF_ClassDefaultObject) )
+	if (HasAnyFlags(RF_ClassDefaultObject))
 	{
 		UnderlyingArchive.StopSerializingDefaults();
 	}
@@ -1463,19 +1489,19 @@ void UObject::BuildSubobjectMapping(UObject* OtherObject, TMap<UObject*, UObject
 
 void UObject::CollectDefaultSubobjects( TArray<UObject*>& OutSubobjectArray, bool bIncludeNestedSubobjects/*=false*/ ) const
 {
-	OutSubobjectArray.Empty();
-	GetObjectsWithOuter(this, OutSubobjectArray, bIncludeNestedSubobjects);
+		OutSubobjectArray.Empty();
+		GetObjectsWithOuter(this, OutSubobjectArray, bIncludeNestedSubobjects);
 
-	// Remove contained objects that are not subobjects.
-	for ( int32 ComponentIndex = 0; ComponentIndex < OutSubobjectArray.Num(); ComponentIndex++ )
-	{
-		UObject* PotentialComponent = OutSubobjectArray[ComponentIndex];
-		if (!PotentialComponent->IsDefaultSubobject())
+		// Remove contained objects that are not subobjects.
+		for (int32 ComponentIndex = 0; ComponentIndex < OutSubobjectArray.Num(); ComponentIndex++)
 		{
-			OutSubobjectArray.RemoveAtSwap(ComponentIndex--);
+			UObject* PotentialComponent = OutSubobjectArray[ComponentIndex];
+			if (!PotentialComponent->IsDefaultSubobject())
+			{
+				OutSubobjectArray.RemoveAtSwap(ComponentIndex--);
+			}
 		}
 	}
-}
 
 /**
  * FSubobjectReferenceFinder.
@@ -1541,7 +1567,6 @@ protected:
 };
 
 
-#define ALLOW_SUB_SUB_OBJECTS (1)
 // if this is set to fatal, then we don't run any testing since it is time consuming.
 DEFINE_LOG_CATEGORY_STATIC(LogCheckSubobjects, Fatal, All);
 
@@ -1621,16 +1646,6 @@ bool UObject::CheckDefaultSubobjectsInternal() const
 		CompCheck(GetFName() == ObjClass->GetDefaultObjectName());
 	}
 
-
-	TArray<UObject *> AllCollectedComponents;
-	CollectDefaultSubobjects(AllCollectedComponents, true);
-	TArray<UObject *> DirectCollectedComponents;
-	CollectDefaultSubobjects(DirectCollectedComponents, false);
-		
-	AllCollectedComponents.Sort();
-	DirectCollectedComponents.Sort();
-
-	CompCheck(ALLOW_SUB_SUB_OBJECTS || AllCollectedComponents == DirectCollectedComponents); // just say no to subobjects of subobjects
 
 	return Result;
 }
@@ -1924,18 +1939,18 @@ void UObject::TagSubobjects(EObjectFlags NewFlags)
 
 void UObject::ReloadConfig( UClass* ConfigClass/*=NULL*/, const TCHAR* InFilename/*=NULL*/, uint32 PropagationFlags/*=LCPF_None*/, UProperty* PropertyToLoad/*=NULL*/ )
 {
-		if (!GIsEditor)
-		{
-			LoadConfig(ConfigClass, InFilename, PropagationFlags | UE4::LCPF_ReloadingConfigData | UE4::LCPF_ReadParentSections, PropertyToLoad);
-		}
+	if (!GIsEditor)
+	{
+		LoadConfig(ConfigClass, InFilename, PropagationFlags | UE4::LCPF_ReloadingConfigData | UE4::LCPF_ReadParentSections, PropertyToLoad);
+	}
 #if WITH_EDITOR
-		else
-		{
-			// When in the editor, raise change events so that the UI will update correctly when object configs are reloaded.
-			PreEditChange(NULL);
-			LoadConfig(ConfigClass, InFilename, PropagationFlags | UE4::LCPF_ReloadingConfigData | UE4::LCPF_ReadParentSections, PropertyToLoad);
-			PostEditChange();
-		}
+	else
+	{
+		// When in the editor, raise change events so that the UI will update correctly when object configs are reloaded.
+		PreEditChange(NULL);
+		LoadConfig(ConfigClass, InFilename, PropagationFlags | UE4::LCPF_ReloadingConfigData | UE4::LCPF_ReadParentSections, PropertyToLoad);
+		PostEditChange();
+	}
 #endif // WITH_EDITOR
 }
 
@@ -2013,7 +2028,7 @@ void UObject::LoadConfig( UClass* ConfigClass/*=NULL*/, const TCHAR* InFilename/
 	checkf(ConfigClass->PropertyLink != nullptr
 		|| (ConfigClass->GetSuperStruct() && HaveSameProperties(ConfigClass, ConfigClass->GetSuperStruct()))
 		|| ConfigClass->PropertiesSize == 0
-		|| GIsRequestingExit, // Ignore this check when exiting as we may have requested exit during init when not everything is initialized
+		|| IsEngineExitRequested(), // Ignore this check when exiting as we may have requested exit during init when not everything is initialized
 		TEXT("class %s has uninitialized properties. Accessed too early?"), *ConfigClass->GetName());
 #endif
 
@@ -2190,6 +2205,10 @@ void UObject::LoadConfig( UClass* ConfigClass/*=NULL*/, const TCHAR* InFilename/
 
 	for ( UProperty* Property = ConfigClass->PropertyLink; Property; Property = Property->PropertyLinkNext )
 	{
+#if WITH_EDITOR
+		FSoftObjectPathSerializationScope SerializationScope(NAME_None, Property->GetFName(), Property->IsEditorOnlyProperty() ? ESoftObjectPathCollectType::EditorOnlyCollect : ESoftObjectPathCollectType::AlwaysCollect, ESoftObjectPathSerializeType::AlwaysSerialize);
+#endif
+
 		if ( !Property->HasAnyPropertyFlags(CPF_Config) )
 		{
 			continue;
@@ -2447,6 +2466,7 @@ void UObject::SaveConfig( uint64 Flags, const TCHAR* InFilename, FConfigCacheIni
 
 			// Properties that are the same as the parent class' defaults should not be saved to ini
 			// Before modifying any key in the section, first check to see if it is different from the parent.
+			const bool bPropDeprecated = Property->HasAnyPropertyFlags(CPF_Deprecated);
 			const bool bIsPropertyInherited = Property->GetOwnerClass() != GetClass();
 			const bool bShouldCheckIfIdenticalBeforeAdding = !GetClass()->HasAnyClassFlags(CLASS_ConfigDoNotCheckDefaults) && !bPerObject && bIsPropertyInherited;
 			UObject* SuperClassDefaultObject = GetClass()->GetSuperClass()->GetDefaultObject();
@@ -2454,7 +2474,7 @@ void UObject::SaveConfig( uint64 Flags, const TCHAR* InFilename, FConfigCacheIni
 			UArrayProperty* Array   = dynamic_cast<UArrayProperty*>( Property );
 			if( Array )
 			{
-				if ( !bShouldCheckIfIdenticalBeforeAdding || !Property->Identical_InContainer(this, SuperClassDefaultObject) )
+				if (!bPropDeprecated && (!bShouldCheckIfIdenticalBeforeAdding || !Property->Identical_InContainer(this, SuperClassDefaultObject)))
 				{
 					FConfigSection* Sec = Config->GetSectionPrivate( *Section, 1, 0, *PropFileName );
 					check(Sec);
@@ -2471,7 +2491,7 @@ void UObject::SaveConfig( uint64 Flags, const TCHAR* InFilename, FConfigCacheIni
 						Sec->Add(*CompleteKey, *Buffer);
 					}
 				}
-				else if( Property->Identical_InContainer(this, SuperClassDefaultObject) )
+				else
 				{
 					// If we are not writing it to config above, we should make sure that this property isn't stagnant in the cache.
 					FConfigSection* Sec = Config->GetSectionPrivate( *Section, 1, 0, *PropFileName );
@@ -2493,13 +2513,13 @@ void UObject::SaveConfig( uint64 Flags, const TCHAR* InFilename, FConfigCacheIni
 						Key = TempKey;
 					}
 
-					if ( !bShouldCheckIfIdenticalBeforeAdding || !Property->Identical_InContainer(this, SuperClassDefaultObject, Index) )
+					if (!bPropDeprecated && (!bShouldCheckIfIdenticalBeforeAdding || !Property->Identical_InContainer(this, SuperClassDefaultObject, Index)))
 					{
 						FString	Value;
 						Property->ExportText_InContainer( Index, Value, this, this, this, PortFlags );
 						Config->SetString( *Section, *Key, *Value, *PropFileName );
 					}
-					else if( Property->Identical_InContainer(this, SuperClassDefaultObject, Index) )
+					else
 					{
 						// If we are not writing it to config above, we should make sure that this property isn't stagnant in the cache.
 						FConfigSection* Sec = Config->GetSectionPrivate( *Section, 1, 0, *PropFileName );
@@ -2543,10 +2563,28 @@ FString UObject::GetDefaultConfigFilename() const
 	FString OverridePlatform = GetFinalOverridePlatform(this);
 	if (OverridePlatform.Len())
 	{
-		// use platform extension path if it exists
-		FString PlatformExtPath = FString::Printf(TEXT("%s%s/Config/%s%s.ini"), *FPaths::PlatformExtensionsDir(), FApp::GetProjectName(), *OverridePlatform, *GetClass()->ClassConfigName.ToString());
-		return FPaths::FileExists(*PlatformExtPath) ? PlatformExtPath : 
-			FString::Printf(TEXT("%s%s/%s%s.ini"), *FPaths::SourceConfigDir(), *OverridePlatform, *OverridePlatform, *GetClass()->ClassConfigName.ToString());
+		bool bIsPlatformExtension = FPaths::DirectoryExists(FPaths::Combine(FPaths::EnginePlatformExtensionsDir(), OverridePlatform));
+		FString RegularPath = FString::Printf(TEXT("%s%s"), *FPaths::SourceConfigDir(), *OverridePlatform, *OverridePlatform, *GetClass()->ClassConfigName.ToString());
+		FString SelectedPath = RegularPath;
+
+		bool bPlatformConfigExistsInRegular = FPaths::DirectoryExists(*RegularPath);
+
+		// if the platform is an extension, create the new config in the extension path (Platforms/PlatformName/Config),
+		// unless there exists a platform config in the regular path (Config/PlatformName)
+
+		// PlatformExtension | ConfigExistsInRegularPath  |   Use path
+		//   false                  false                      regular
+		//   true                   false                      extension
+		//   false                  true                       regular
+		//   true                   true                       regular
+
+		// if the project already uses platform configs in the regular directory, just use that, otherwise check if this is a platform extensions
+		if (bIsPlatformExtension && !bPlatformConfigExistsInRegular)
+		{
+			SelectedPath = FString::Printf(TEXT("%s%s/Config"), *FPaths::ProjectPlatformExtensionsDir(), *OverridePlatform);
+		}
+
+		return FString::Printf(TEXT("%s/%s%s.ini"), *SelectedPath, *OverridePlatform, *GetClass()->ClassConfigName.ToString());
 	}
 	return FString::Printf(TEXT("%sDefault%s.ini"), *FPaths::SourceConfigDir(), *GetClass()->ClassConfigName.ToString());
 }
@@ -3022,7 +3060,7 @@ static void PerformSetCommand( const TCHAR* Str, FOutputDevice& Ar, bool bNotify
 {
 	// Set a class default variable.
 	TCHAR ObjectName[256], PropertyName[256];
-	if (FParse::Token(Str, ObjectName, ARRAY_COUNT(ObjectName), true) && FParse::Token(Str, PropertyName, ARRAY_COUNT(PropertyName), true))
+	if (FParse::Token(Str, ObjectName, UE_ARRAY_COUNT(ObjectName), true) && FParse::Token(Str, PropertyName, UE_ARRAY_COUNT(PropertyName), true))
 	{
 		UClass* Class = FindObject<UClass>(ANY_PACKAGE, ObjectName);
 		if (Class != NULL)
@@ -3231,11 +3269,11 @@ bool StaticExec( UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar )
 		UClass* Class;
 		UProperty* Property;
 		if
-		(	FParse::Token( Str, ClassName, ARRAY_COUNT(ClassName), 1 )
+		(	FParse::Token( Str, ClassName, UE_ARRAY_COUNT(ClassName), 1 )
 		&&	(Class=FindObject<UClass>( ANY_PACKAGE, ClassName))!=NULL )
 		{
 			if
-			(	FParse::Token( Str, PropertyName, ARRAY_COUNT(PropertyName), 1 )
+			(	FParse::Token( Str, PropertyName, UE_ARRAY_COUNT(PropertyName), 1 )
 			&&	(Property=FindField<UProperty>( Class, PropertyName))!=NULL )
 			{
 				FString	Temp;
@@ -3263,7 +3301,7 @@ bool StaticExec( UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar )
 		UClass* Class;
 		FString PropWildcard;
 
-		if ( FParse::Token(Str, ClassName, ARRAY_COUNT(ClassName), 1) &&
+		if ( FParse::Token(Str, ClassName, UE_ARRAY_COUNT(ClassName), 1) &&
 			(Class = FindObject<UClass>(ANY_PACKAGE, ClassName)) != NULL &&
 			FParse::Token(Str, PropWildcard, true) )
 		{
@@ -3392,10 +3430,10 @@ bool StaticExec( UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar )
 		UClass* Class;
 		UProperty* Property;
 
-		if ( FParse::Token(Str,ClassName,ARRAY_COUNT(ClassName), 1) &&
+		if ( FParse::Token(Str,ClassName,UE_ARRAY_COUNT(ClassName), 1) &&
 			(Class=FindObject<UClass>( ANY_PACKAGE, ClassName)) != NULL )
 		{
-			FParse::Token(Str,PropertyName,ARRAY_COUNT(PropertyName),1);
+			FParse::Token(Str,PropertyName,UE_ARRAY_COUNT(PropertyName),1);
 			{
 				Property=FindField<UProperty>(Class,PropertyName);
 				{
@@ -3408,7 +3446,7 @@ bool StaticExec( UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar )
 					// Check for a specific object name
 					TCHAR ObjNameStr[256];
 					FName ObjName(NAME_None);
-					if (FParse::Value(Str,TEXT("NAME="),ObjNameStr,ARRAY_COUNT(ObjNameStr)))
+					if (FParse::Value(Str,TEXT("NAME="),ObjNameStr,UE_ARRAY_COUNT(ObjNameStr)))
 					{
 						ObjName = FName(ObjNameStr);
 					}
@@ -3536,7 +3574,7 @@ bool StaticExec( UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar )
 		// LISTFUNCS <classname>
 		TCHAR ClassName[256];
 
-		if (FParse::Token(Str, ClassName, ARRAY_COUNT(ClassName), true))
+		if (FParse::Token(Str, ClassName, UE_ARRAY_COUNT(ClassName), true))
 		{
 			//if ( (Property=FindField<UProperty>(Class,PropertyName)) != NULL )
 			UClass* Class = FindObject<UClass>(ANY_PACKAGE, ClassName);
@@ -3563,7 +3601,7 @@ bool StaticExec( UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar )
 		// LISTFUNC <classname> <functionname>
 		TCHAR ClassName[256];
 		TCHAR FunctionName[256];
-		if (FParse::Token(Str, ClassName, ARRAY_COUNT(ClassName), true) && FParse::Token(Str, FunctionName, ARRAY_COUNT(FunctionName), true))
+		if (FParse::Token(Str, ClassName, UE_ARRAY_COUNT(ClassName), true) && FParse::Token(Str, FunctionName, UE_ARRAY_COUNT(FunctionName), true))
 		{
 			UClass* Class = FindObject<UClass>(ANY_PACKAGE, ClassName);
 
@@ -3916,7 +3954,7 @@ bool StaticExec( UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar )
 				ReferencerClass = NULL;
 			}
 			TCHAR TempStr[1024];
-			if (FParse::Value(Str, TEXT("REFNAME="), TempStr, ARRAY_COUNT(TempStr)))
+			if (FParse::Value(Str, TEXT("REFNAME="), TempStr, UE_ARRAY_COUNT(TempStr)))
 			{
 				ReferencerName = TempStr;
 			}
@@ -4178,7 +4216,7 @@ bool StaticExec( UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar )
 			// Dump all object flags for objects rooted at the named object.
 			TCHAR ObjectName[NAME_SIZE];
 			UObject* Obj = NULL;
-			if ( FParse::Token(Str,ObjectName,ARRAY_COUNT(ObjectName), 1) )
+			if ( FParse::Token(Str,ObjectName,UE_ARRAY_COUNT(ObjectName), 1) )
 			{
 				Obj = FindObject<UObject>(ANY_PACKAGE,ObjectName);
 			}
@@ -4230,7 +4268,7 @@ bool StaticExec( UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar )
 	{
 		TCHAR ClassName[256];
 		// Determine the object/class name
-		if (FParse::Token(Str,ClassName,ARRAY_COUNT(ClassName),1))
+		if (FParse::Token(Str,ClassName,UE_ARRAY_COUNT(ClassName),1))
 		{
 			// Try to find a corresponding class
 			UClass* ClassToReload = FindObject<UClass>(ANY_PACKAGE,ClassName);

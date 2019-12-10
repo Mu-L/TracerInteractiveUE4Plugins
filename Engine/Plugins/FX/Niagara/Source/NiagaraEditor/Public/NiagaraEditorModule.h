@@ -15,20 +15,36 @@ class INiagaraEditorTypeUtilities;
 class UNiagaraSettings;
 class USequencerSettings;
 class UNiagaraStackViewModel;
+class UNiagaraStackEntry;
+class UNiagaraStackIssue;
+class FNiagaraSystemViewModel;
 class FNiagaraScriptMergeManager;
 class FNiagaraCompileOptions;
 class FNiagaraCompileRequestDataBase;
 class UMovieSceneNiagaraParameterTrack;
 struct IConsoleCommand;
+class INiagaraEditorOnlyDataUtilities;
+class FNiagaraEditorCommands;
 
 DECLARE_STATS_GROUP(TEXT("Niagara Editor"), STATGROUP_NiagaraEditor, STATCAT_Advanced);
+
+/* Defines methods for allowing external modules to supply widgets to the core editor module. */
+class NIAGARAEDITOR_API INiagaraEditorWidgetProvider
+{
+public:
+	virtual TSharedRef<SWidget> CreateStackView(UNiagaraStackViewModel& StackViewModel) const = 0;
+	virtual TSharedRef<SWidget> CreateSystemOverview(TSharedRef<FNiagaraSystemViewModel> SystemViewModel) const = 0;
+	virtual TSharedRef<SWidget> CreateStackIssueIcon(UNiagaraStackViewModel& StackViewModel, UNiagaraStackEntry& StackEntry) const = 0;
+	virtual FLinearColor GetColorForExecutionCategory(FName ExecutionCategory) const = 0;
+};
+
+extern int32 GbShowFastPathOptions;
 
 /** Niagara Editor module */
 class FNiagaraEditorModule : public IModuleInterface,
 	public IHasMenuExtensibility, public IHasToolBarExtensibility, public FGCObject
 {
 public:
-	DECLARE_DELEGATE_RetVal_OneParam(TSharedRef<SWidget>, FOnCreateStackWidget, UNiagaraStackViewModel*);
 	DECLARE_DELEGATE_RetVal_OneParam(UMovieSceneNiagaraParameterTrack*, FOnCreateMovieSceneTrackForParameter, FNiagaraVariable);
 	DECLARE_MULTICAST_DELEGATE_OneParam(FOnCheckScriptToolkitsShouldFocusGraphElement, const FNiagaraScriptIDAndGraphFocusInfo*);
 
@@ -63,10 +79,10 @@ public:
 
 	static EAssetTypeCategories::Type GetAssetCategory() { return NiagaraAssetCategory; }
 
-	TSharedRef<SWidget> CreateStackWidget(UNiagaraStackViewModel* StackViewModel) const;
+	NIAGARAEDITOR_API void RegisterWidgetProvider(TSharedRef<INiagaraEditorWidgetProvider> InWidgetProvider);
+	NIAGARAEDITOR_API void UnregisterWidgetProvider(TSharedRef<INiagaraEditorWidgetProvider> InWidgetProvider);
 
-	FDelegateHandle NIAGARAEDITOR_API SetOnCreateStackWidget(FOnCreateStackWidget InOnCreateStackWidget);
-	void NIAGARAEDITOR_API ResetOnCreateStackWidget(FDelegateHandle DelegateHandle);
+	TSharedRef<INiagaraEditorWidgetProvider> GetWidgetProvider() const;
 
 	TSharedRef<FNiagaraScriptMergeManager> GetScriptMergeManager() const;
 
@@ -86,11 +102,16 @@ public:
 
 	FOnCheckScriptToolkitsShouldFocusGraphElement& GetOnScriptToolkitsShouldFocusGraphElement() { return OnCheckScriptToolkitsShouldFocusGraphElement; };
 
+	NIAGARAEDITOR_API TSharedPtr<FNiagaraSystemViewModel> GetExistingViewModelForSystem(UNiagaraSystem* InSystem);
+
+	NIAGARAEDITOR_API const FNiagaraEditorCommands& GetCommands() const;
+
 private:
 	void RegisterAssetTypeAction(IAssetTools& AssetTools, TSharedRef<IAssetTypeActions> Action);
 	void OnNiagaraSettingsChangedEvent(const FString& PropertyName, const UNiagaraSettings* Settings);
 	void OnPreGarbageCollection();
-
+	void OnExecParticleInvoked(const TCHAR* InStr);
+	void OnPostEngineInit();
 
 	/** FGCObject interface */
 	virtual void AddReferencedObjects( FReferenceCollector& Collector ) override;
@@ -119,14 +140,16 @@ private:
 	FDelegateHandle CreateVectorParameterTrackEditorHandle;
 	FDelegateHandle CreateColorParameterTrackEditorHandle;
 
-	FDelegateHandle CreateDefaultScriptSourceHandle;
 	FDelegateHandle ScriptCompilerHandle;
 	FDelegateHandle PrecompilerHandle;
 
 	USequencerSettings* SequencerSettings;
-	FOnCreateStackWidget OnCreateStackWidget;
+	
+	TSharedPtr<INiagaraEditorWidgetProvider> WidgetProvider;
 
 	TSharedPtr<FNiagaraScriptMergeManager> ScriptMergeManager;
+
+	TSharedPtr<INiagaraEditorOnlyDataUtilities> EditorOnlyDataUtilities;
 
 	TMap<const UScriptStruct*, FOnCreateMovieSceneTrackForParameter> TypeToParameterTrackCreatorMap;
 
@@ -134,7 +157,10 @@ private:
 	IConsoleCommand* DumpRapidIterationParametersForAsset;
 	IConsoleCommand* PreventSystemRecompileCommand;
 	IConsoleCommand* PreventAllSystemRecompilesCommand;
+	IConsoleCommand* UpgradeAllNiagaraAssetsCommand;
 	IConsoleCommand* DumpCompileIdDataForAssetCommand;
 
 	FOnCheckScriptToolkitsShouldFocusGraphElement OnCheckScriptToolkitsShouldFocusGraphElement;
+
+	bool bThumbnailRenderersRegistered;
 };

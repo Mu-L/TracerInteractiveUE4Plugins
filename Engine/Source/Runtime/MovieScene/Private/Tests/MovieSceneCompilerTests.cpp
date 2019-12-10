@@ -5,12 +5,12 @@
 #include "Compilation/MovieSceneCompiler.h"
 #include "Compilation/MovieSceneSegmentCompiler.h"
 #include "Compilation/MovieSceneCompilerRules.h"
-#include "MovieSceneTestsCommon.h"
 #include "Evaluation/MovieSceneEvaluationTrack.h"
 #include "Evaluation/MovieSceneEvaluationField.h"
 #include "Evaluation/MovieSceneSequenceTemplateStore.h"
 #include "Algo/Find.h"
 #include "UObject/Package.h"
+#include "MovieSceneTimeHelpers.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -260,7 +260,7 @@ bool FMovieSceneCompilerEmptySpaceOnTheFlyTest::RunTest(const FString& Parameter
 	{
 		Tests.Emplace();
 		Tests.Last().CompileRanges   = { TRange<FFrameNumber>(0, 70) };
-		Tests.Last().ExpectedResults = TArray<FResult>(&ExpectedResults[0], ARRAY_COUNT(ExpectedResults));
+		Tests.Last().ExpectedResults = TArray<FResult>(&ExpectedResults[0], UE_ARRAY_COUNT(ExpectedResults));
 	}
 
 	UTestMovieSceneSequence* Sequence = NewObject<UTestMovieSceneSequence>(GetTransientPackage());

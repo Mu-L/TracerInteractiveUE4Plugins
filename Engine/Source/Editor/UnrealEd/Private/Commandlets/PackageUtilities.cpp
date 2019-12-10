@@ -279,7 +279,7 @@ bool NormalizePackageNames( TArray<FString> PackageNames, TArray<FString>& Packa
 
 * @return true if successful
 */
-bool SavePackageHelper(UPackage* Package, FString Filename, EObjectFlags KeepObjectFlags, FOutputDevice* ErrorDevice, FLinkerLoad* LinkerToConformAgainst, ESaveFlags SaveFlags)
+bool SavePackageHelper(UPackage* Package, FString Filename, EObjectFlags KeepObjectFlags, FOutputDevice* ErrorDevice, FLinkerNull* LinkerToConformAgainst, ESaveFlags SaveFlags)
 {
 	// look for a world object in the package (if there is one, there's a map)
 	UWorld* World = UWorld::FindWorldInPackage(Package);
@@ -960,8 +960,12 @@ void FPkgInfoReporter_Log::GeneratePackageReport( FLinkerLoad* InLinker /*=nullp
 	Out.Logf(ELogVerbosity::Display, TEXT("\t  Custom Versions:\n%s"), *Linker->Summary.GetCustomVersionContainer().ToString("\t\t"));
 	
 
-	FString szGUID = Linker->Summary.Guid.ToString();
-	Out.Logf(ELogVerbosity::Display, TEXT("\t             Guid: %s"), *szGUID );
+	Out.Logf(ELogVerbosity::Display, TEXT("\t             Guid: %s"), *Linker->Summary.Guid.ToString() );
+	Out.Logf(ELogVerbosity::Display, TEXT("\t   PersistentGuid: %s"), *Linker->Summary.PersistentGuid.ToString() );
+	if (Linker->Summary.OwnerPersistentGuid.IsValid())
+	{
+		Out.Logf(ELogVerbosity::Display, TEXT("\t    OwnerGuid: %s"), *Linker->Summary.OwnerPersistentGuid.ToString() );
+	}
 	Out.Logf(ELogVerbosity::Display, TEXT("\t      Generations:"));
 	for( int32 i = 0; i < Linker->Summary.Generations.Num(); ++i )
 	{
@@ -1558,7 +1562,7 @@ int32 UPkgInfoCommandlet::Main( const FString& Params )
 
 		if (!bDumpProperties)
 		{
-			TGuardValue<bool> GuardAllowUnversionedContentInEditor(GAllowUnversionedContentInEditor, true);
+			TGuardValue<int32> GuardAllowUnversionedContentInEditor(GAllowUnversionedContentInEditor, 1);
 			TGuardValue<int32> GuardAllowCookedContentInEditor(GAllowCookedDataInEditorBuilds, 1);
 			TRefCountPtr<FUObjectSerializeContext> LoadContext(FUObjectThreadContext::Get().GetSerializeContext());
 			BeginLoad(LoadContext);
@@ -1584,7 +1588,7 @@ int32 UPkgInfoCommandlet::Main( const FString& Params )
 			Reader = FArchiveStackTraceReader::CreateFromFile(*Filename);
 			if (Reader)
 			{
-				TGuardValue<bool> GuardAllowUnversionedContentInEditor(GAllowUnversionedContentInEditor, true);
+				TGuardValue<int32> GuardAllowUnversionedContentInEditor(GAllowUnversionedContentInEditor, 1);
 				TGuardValue<int32> GuardAllowCookedContentInEditor(GAllowCookedDataInEditorBuilds, 1);
 				UPackage* LoadedPackage = LoadPackage(Package, *Filename, LOAD_NoVerify, Reader);
 				if (LoadedPackage)
@@ -2722,9 +2726,9 @@ int32 UReplaceActorCommandlet::Main(const FString& Params)
 	}
 
 	// UEditorEngine::FinishDestroy() expects GWorld to exist
-	if( GWorld )
+	if( UWorld* World = GWorld )
 	{
-		GWorld->DestroyWorld( false );
+		World->DestroyWorld( false );
 	}
 	GWorld = UWorld::CreateWorld(EWorldType::Editor, false );
 	return 0;

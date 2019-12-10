@@ -23,7 +23,8 @@ struct FInsightsManagerTabs
 {
 	static const FName StartPageTabId;
 	static const FName TimingProfilerTabId;
-	static const FName IoProfilerTabId;
+	static const FName LoadingProfilerTabId;
+	static const FName NetworkingProfilerTabId;
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -83,6 +84,9 @@ public:
 
 	/** @return an instance of the trace analysis session. */
 	TSharedPtr<const Trace::IAnalysisSession> GetSession() const;
+
+	/** @return the session handle of the trace analysis session. */
+	Trace::FSessionHandle GetSessionHandle() const;
 
 	/** @returns UI command list for the main manager. */
 	const TSharedRef<FUICommandList> GetCommandList() const;
@@ -173,6 +177,8 @@ private:
 
 	void SpawnAndActivateTabs();
 
+	void ActivateTimingInsightsTab();
+
 private:
 	/** The delegate to be invoked when this manager ticks. */
 	FTickerDelegate OnTick;
@@ -186,6 +192,9 @@ private:
 
 	/** The trace analysis session. */
 	TSharedPtr<const Trace::IAnalysisSession> Session;
+
+	/** The session handle. */
+	Trace::FSessionHandle CurrentSessionHandle;
 
 	/** List of UI commands for this manager. This will be filled by this and corresponding classes. */
 	TSharedRef<FUICommandList> CommandList;
@@ -204,4 +213,6 @@ private:
 
 	/** A shared pointer to the global instance of the main manager. */
 	static TSharedPtr<FInsightsManager> Instance;
+
+	bool bIsNetworkingProfilerAvailable;
 };

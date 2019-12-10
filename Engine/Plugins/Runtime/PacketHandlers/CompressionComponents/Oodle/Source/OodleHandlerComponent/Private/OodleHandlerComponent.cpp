@@ -33,7 +33,8 @@ DEFINE_LOG_CATEGORY(OodleHandlerComponentLog);
 // @todo #JohnB: If you could unwrap the analytics data shared pointer, by guaranteeing its lifetime, that would be a good optimization,
 //					as the multithreaded version is presently a bit expensive
 
-#if HAS_OODLE_SDK
+#if HAS_OODLE_NET_SDK
+
 #define OODLE_INI_SECTION TEXT("OodleHandlerComponent")
 
 // @todo #JohnB: Remove after Oodle update, and after checking with Luigi
@@ -97,6 +98,15 @@ static TArray<OodleHandlerComponent*> OodleComponentList;
 TAutoConsoleVariable<int32> CVarOodleMinSizeForCompression(
 	TEXT("net.OodleMinSizeForCompression"), 0,
 	TEXT("The minimum size an outgoing packet must be, for it to be considered for compression (does not count overhead of handler components which process packets after Oodle)."));
+
+
+TAutoConsoleVariable<FString> CVarOodleServerEnableMode(
+	TEXT("net.OodleServerEnableMode"), "",
+	TEXT("When to enable compression on the server (overrides the 'ServerEnableMode' .ini setting)."));
+
+TAutoConsoleVariable<FString> CVarOodleClientEnableMode(
+	TEXT("net.OodleClientEnableMode"), "",
+	TEXT("When to enable compression on the client (overrides the 'ClientEnableMode' .ini setting)."));
 
 
 
@@ -365,26 +375,50 @@ void OodleHandlerComponent::Initialize()
 
 	FString CurEnableModeStr;
 	UEnum* EnableModeEnum = StaticEnum<EOodleEnableMode>();
-
-	if (GConfig->GetString(OODLE_INI_SECTION, TEXT("ServerEnableMode"), CurEnableModeStr, GEngineIni))
-	{
-		int64 EnumVal = EnableModeEnum->GetValueByNameString(CurEnableModeStr);
-
-		if (EnumVal != INDEX_NONE)
+	bool bSetServerEnableMode = false;
+	bool bSetClientEnableMode = false;
+	auto SetEnableModeFromStr = [&EnableModeEnum](EOodleEnableMode& OutMode, FString ModeStr) -> bool
 		{
-			ServerEnableMode = (EOodleEnableMode)EnumVal;
-		}
+			bool bSuccess = false;
+
+			int64 EnumVal = EnableModeEnum->GetValueByNameString(ModeStr);
+
+			if (EnumVal != INDEX_NONE)
+			{
+				OutMode = (EOodleEnableMode)EnumVal;
+				bSuccess = true;
+			}
+			else
+			{
+				UE_LOG(OodleHandlerComponentLog, Error, TEXT("Failed to parse EOodleEnableMode value '%s'"), *ModeStr);
+			}
+
+			return bSuccess;
+		};
+
+	// ServerEnableMode
+	CurEnableModeStr = CVarOodleServerEnableMode.GetValueOnAnyThread();
+
+	bSetServerEnableMode = CurEnableModeStr.Len() > 0 && SetEnableModeFromStr(ServerEnableMode, CurEnableModeStr);
+
+	if (!bSetServerEnableMode)
+	{
+		bSetServerEnableMode = GConfig->GetString(OODLE_INI_SECTION, TEXT("ServerEnableMode"), CurEnableModeStr, GEngineIni) &&
+								SetEnableModeFromStr(ServerEnableMode, CurEnableModeStr);
 	}
 
-	if (GConfig->GetString(OODLE_INI_SECTION, TEXT("ClientEnableMode"), CurEnableModeStr, GEngineIni))
-	{
-		int64 EnumVal = EnableModeEnum->GetValueByNameString(CurEnableModeStr);
+	// ClientEnableMode
+	CurEnableModeStr = CVarOodleClientEnableMode.GetValueOnAnyThread();
 
-		if (EnumVal != INDEX_NONE)
-		{
-			ClientEnableMode = (EOodleEnableMode)EnumVal;
-		}
+	bSetClientEnableMode = CurEnableModeStr.Len() > 0 && SetEnableModeFromStr(ClientEnableMode, CurEnableModeStr);
+
+	if (!bSetClientEnableMode)
+	{
+		bSetClientEnableMode = GConfig->GetString(OODLE_INI_SECTION, TEXT("ClientEnableMode"), CurEnableModeStr, GEngineIni) &&
+								SetEnableModeFromStr(ClientEnableMode, CurEnableModeStr);
 	}
+
+
 
 #if !UE_BUILD_SHIPPING || OODLE_DEV_SHIPPING
 	GConfig->GetBool(OODLE_INI_SECTION, TEXT("bUseDictionaryIfPresent"), bUseDictionaryIfPresent, GEngineIni);
@@ -489,6 +523,18 @@ void OodleHandlerComponent::InitializeDictionaries()
 		{
 			LowLevelFatalError(TEXT("Failed to load Oodle dictionaries."));
 		}
+	}
+}
+
+void OodleHandlerComponent::RemoteInitializeDictionaries()
+{
+	InitializeDictionaries();
+
+	if (bOodleAnalytics && NetAnalyticsData.IsValid())
+	{
+		FOodleAnalyticsVars* AnalyticsVars = NetAnalyticsData->GetLocalData();
+
+		AnalyticsVars->NumOodleHandlersCompressionEnabled++;
 	}
 }
 
@@ -872,7 +918,7 @@ void OodleHandlerComponent::Incoming(FBitReader& Packet)
 			// Lazy-loading of dictionary when EOodleEnableMode::WhenCompressedPacketReceived is active
 			if (!bInitializedDictionaries && (bIsServer ? ServerEnableMode : ClientEnableMode) == EOodleEnableMode::WhenCompressedPacketReceived)
 			{
-				InitializeDictionaries();
+				RemoteInitializeDictionaries();
 			}
 
 			FOodleDictionary* CurDict = (bIsServer ? ClientDictionary.Get() : ServerDictionary.Get());
@@ -1065,7 +1111,7 @@ void OodleHandlerComponent::Outgoing(FBitWriter& Packet, FOutPacketTraits& Trait
 			uint32 UncompressedBits = Packet.GetNumBits();
 
 			bool bWithinBitBounds = UncompressedBits > 0 && ensure(UncompressedBits <= MaxAdjustedLengthBits) &&
-									ensure(OodleLZ_GetCompressedBufferSizeNeeded(UncompressedBytes) <= MAX_OODLE_BUFFER);
+				ensure(OodleNetwork1_CompressedBufferSizeNeeded(UncompressedBytes) <= MAX_OODLE_BUFFER);
 
 			if (bWithinBitBounds)
 			{
@@ -1266,7 +1312,31 @@ void OodleHandlerComponent::NotifyAnalyticsProvider()
 
 		if (Handler->GetProvider().IsValid() && Aggregator.IsValid())
 		{
-			NetAnalyticsData = REGISTER_NET_ANALYTICS(Aggregator, FOodleNetAnalyticsData, TEXT("Oodle.Stats"));
+			const bool bIsServer = (Handler->Mode == Handler::Mode::Server);
+
+			if (bIsServer)
+			{
+				NetAnalyticsData = REGISTER_NET_ANALYTICS(Aggregator, FOodleNetAnalyticsData, TEXT("Oodle.Stats"));
+			}
+			else
+			{
+				NetAnalyticsData = REGISTER_NET_ANALYTICS(Aggregator, FClientOodleNetAnalyticsData, TEXT("Oodle.ClientStats"));
+			}
+		}
+
+		// This depends upon NetAnalyticsData only being initialized once, so that this component is not counted more than once
+		if (NetAnalyticsData.IsValid())
+		{
+			if (FOodleAnalyticsVars* AnalyticsVars = NetAnalyticsData->GetLocalData())
+			{
+				AnalyticsVars->NumOodleHandlers++;
+
+				// If compression's already enabled, count it here - as InitializeDictionaries may happen before NetAnalyticsData is set
+				if (IsCompressionActive())
+				{
+					AnalyticsVars->NumOodleHandlersCompressionEnabled++;
+				}
+			}
 		}
 	}
 
@@ -1565,27 +1635,20 @@ void FOodleComponentModuleInterface::StartupModule()
 	GOodleSaveDir = FPaths::ConvertRelativePathToFull(FPaths::Combine(*FPaths::ProjectSavedDir(), TEXT("Oodle")));
 	GOodleContentDir = FPaths::ConvertRelativePathToFull(FPaths::Combine(*FPaths::ProjectContentDir(), TEXT("Oodle")));
 
-	// @todo #JohnB: Remove after Oodle update, and after checking with Luigi
-	OodlePlugins_SetAssertion(&UEOodleDisplayAssert);
+// 	// @todo #JohnB: Remove after Oodle update, and after checking with Luigi
+// 	OodlePlugins_SetAssertion(&UEOodleDisplayAssert);
 }
 
 void FOodleComponentModuleInterface::ShutdownModule()
 {
-	// @todo #JohnB: Remove after Oodle update, and after checking with Luigi
-	OodlePlugins_SetAssertion(nullptr);
-
-#if PLATFORM_WINDOWS
-	if (OodleDllHandle != nullptr)
-	{
-		FPlatformProcess::FreeDllHandle(OodleDllHandle);
-		OodleDllHandle = nullptr;
-	}
-#endif
+// 	// @todo #JohnB: Remove after Oodle update, and after checking with Luigi
+// 	OodlePlugins_SetAssertion(nullptr);
 }
+
 #else
 TSharedPtr<HandlerComponent> FOodleComponentModuleInterface::CreateComponentInstance(FString& Options)
 {
-	UE_LOG(OodleHandlerComponentLog, Error, TEXT("Can't create OodleHandlerComponent instance - HAS_OODLE_SDK is false."));
+	UE_LOG(OodleHandlerComponentLog, Error, TEXT("Can't create OodleHandlerComponent instance - HAS_OODLE_NET_SDK is false."));
 
 	return TSharedPtr<HandlerComponent>(nullptr);
 }

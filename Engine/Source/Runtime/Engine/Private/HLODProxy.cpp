@@ -24,6 +24,11 @@ void UHLODProxy::SetMap(const UWorld* InMap)
 	OwningMap = InMap;
 }
 
+TSoftObjectPtr<UWorld> UHLODProxy::GetMap() const
+{
+	return OwningMap;
+}
+
 void UHLODProxy::AddMesh(ALODActor* InLODActor, UStaticMesh* InStaticMesh, const FName& InKey)
 {
 	InLODActor->Proxy = this;
@@ -156,7 +161,7 @@ void UHLODProxy::ExtractComponents(const ALODActor* LODActor, TArray<UPrimitiveC
 	}
 }
 
-uint32 GetCRC(UMaterialInterface* InMaterialInterface, uint32 InCRC = 0)
+uint32 UHLODProxy::GetCRC(UMaterialInterface* InMaterialInterface, uint32 InCRC)
 {
 	TArray<uint8> KeyBuffer;
 
@@ -182,7 +187,7 @@ uint32 GetCRC(UMaterialInterface* InMaterialInterface, uint32 InCRC = 0)
 	return FCrc::MemCrc32(KeyBuffer.GetData(), KeyBuffer.Num(), InCRC);
 }
 
-uint32 GetCRC(UTexture* InTexture, uint32 InCRC = 0)
+uint32 UHLODProxy::GetCRC(UTexture* InTexture, uint32 InCRC)
 {
 	// Default to just the path name if we don't have render data
 	 if (InTexture->GetRunningPlatformData() != nullptr)
@@ -198,7 +203,7 @@ uint32 GetCRC(UTexture* InTexture, uint32 InCRC = 0)
      return FCrc::StrCrc32(*InTexture->GetPathName(), InCRC);
 }
 
-uint32 GetCRC(UStaticMesh* InStaticMesh, uint32 InCRC = 0)
+uint32 UHLODProxy::GetCRC(UStaticMesh* InStaticMesh, uint32 InCRC)
 {
 	TArray<uint8> KeyBuffer;
 
@@ -214,7 +219,7 @@ uint32 GetCRC(UStaticMesh* InStaticMesh, uint32 InCRC = 0)
 	return FCrc::MemCrc32(KeyBuffer.GetData(), KeyBuffer.Num(), InCRC);
 }
 
-uint32 GetCRC(UStaticMeshComponent* InComponent, uint32 InCRC = 0)
+uint32 UHLODProxy::GetCRC(UStaticMeshComponent* InComponent, uint32 InCRC)
 {
 	TArray<uint8> KeyBuffer;
 

@@ -44,7 +44,10 @@ enum class EGameplayContainerMatchType : uint8
 typedef uint16 FGameplayTagNetIndex;
 #define INVALID_TAGNETINDEX MAX_uint16
 
-/** A single gameplay tag, which represents a hierarchical name of the form x.y that is registered in the GameplayTagsManager */
+/**
+ * A single gameplay tag, which represents a hierarchical name of the form x.y that is registered in the GameplayTagsManager
+ * You can filter the gameplay tags displayed in the editor using, meta = (Categories = "Tag1.Tag2.Tag3"))
+ */
 USTRUCT(BlueprintType, meta = (HasNativeMake = "GameplayTags.BlueprintGameplayTagLibrary.MakeLiteralGameplayTag", HasNativeBreak = "GameplayTags.BlueprintGameplayTagLibrary.GetTagName"))
 struct GAMEPLAYTAGS_API FGameplayTag
 {
@@ -175,10 +178,9 @@ struct GAMEPLAYTAGS_API FGameplayTag
 		return TagName;
 	}
 
-	friend FArchive& operator<<(FArchive& Ar, FGameplayTag& GameplayTag)
+	friend void operator<<(FStructuredArchive::FSlot Slot, FGameplayTag& GameplayTag)
 	{
-		Ar << GameplayTag.TagName;
-		return Ar;
+		Slot << GameplayTag.TagName;
 	}
 
 	/** Overridden for fast serialize */
@@ -558,7 +560,7 @@ struct GAMEPLAYTAGS_API FGameplayTagContainer
 	void Reset(int32 Slack = 0);
 	
 	/** Serialize the tag container */
-	bool Serialize(FArchive& Ar);
+	bool Serialize(FStructuredArchive::FSlot Slot);
 
 	/** Efficient network serialize, takes advantage of the dictionary */
 	bool NetSerialize(FArchive& Ar, class UPackageMap* Map, bool& bOutSuccess);
@@ -867,7 +869,7 @@ struct TStructOpsTypeTraits<FGameplayTagContainer> : public TStructOpsTypeTraits
 {
 	enum
 	{
-		WithSerializer = true,
+		WithStructuredSerializer = true,
 		WithIdenticalViaEquality = true,
 		WithNetSerializer = true,
 		WithNetSharedSerialization = true,
@@ -982,24 +984,26 @@ public:
 	FGameplayTagQuery& operator=(FGameplayTagQuery&& Other);
 
 private:
+	// Note: Properties need to be editable to allow FComponentPropertyWriter to serialize them, but are hidden in the editor by the customizations mentioned above.
+
 	/** Versioning for future token stream protocol changes. See EGameplayTagQueryStreamVersion. */
-	UPROPERTY()
+	UPROPERTY(EditAnywhere, Category = Hidden)
 	int32 TokenStreamVersion;
 
 	/** List of tags referenced by this entire query. Token stream stored indices into this list. */
-	UPROPERTY()
+	UPROPERTY(EditAnywhere, Category = Hidden)
 	TArray<FGameplayTag> TagDictionary;
 
 	/** Stream representation of the actual hierarchical query */
-	UPROPERTY()
+	UPROPERTY(EditAnywhere, Category = Hidden)
 	TArray<uint8> QueryTokenStream;
 
 	/** User-provided string describing the query */
-	UPROPERTY()
+	UPROPERTY(EditAnywhere, Category = Hidden)
 	FString UserDescription;
 
 	/** Auto-generated string describing the query */
-	UPROPERTY()
+	UPROPERTY(EditAnywhere, Category = Hidden)
 	FString AutoDescription;
 
 	/** Returns a gameplay tag from the tag dictionary */

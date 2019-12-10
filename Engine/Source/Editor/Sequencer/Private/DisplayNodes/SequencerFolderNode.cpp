@@ -76,7 +76,7 @@ void FSequencerFolderNode::SetDisplayName( const FText& NewDisplayName )
 		{
 			for ( TSharedRef<FSequencerDisplayNode> SiblingNode : ParentSeqNode->GetChildNodes() )
 			{
-				if ( SiblingNode != AsShared() )
+				if ( SiblingNode != AsShared() && SiblingNode->GetType() == ESequencerNode::Folder )
 				{
 					SiblingNames.Add( FName(*SiblingNode->GetDisplayName().ToString()) );
 				}
@@ -86,7 +86,7 @@ void FSequencerFolderNode::SetDisplayName( const FText& NewDisplayName )
 		{
 			for (TSharedRef<FSequencerDisplayNode> RootNode : GetParentTree().GetRootNodes())
 			{
-				if ( RootNode != AsShared() )
+				if ( RootNode != AsShared() && RootNode->GetType() == ESequencerNode::Folder )
 				{
 					SiblingNames.Add( FName(*RootNode->GetDisplayName().ToString()) );
 				}
@@ -111,11 +111,21 @@ const FSlateBrush* FSequencerFolderNode::GetIconBrush() const
 
 FSlateColor FSequencerFolderNode::GetIconColor() const
 {
+	if (ParentTree.IsNodeMute(this))
+	{
+		return FSlateColor(MovieSceneFolder.GetFolderColor().ReinterpretAsLinear() * FLinearColor(0.6f, 0.6f, 0.6f, 0.6f));
+	}
+
 	return FSlateColor(MovieSceneFolder.GetFolderColor());
 }
 
 FLinearColor FSequencerFolderNode::GetDisplayNameColor() const
 {
+	if (ParentTree.IsNodeMute(this))
+	{
+		return FLinearColor(0.6f, 0.6f, 0.6f, 0.6f);
+	}
+
 	return FLinearColor::White;
 }
 

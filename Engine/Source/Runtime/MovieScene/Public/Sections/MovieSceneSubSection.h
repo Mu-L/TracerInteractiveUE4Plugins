@@ -96,6 +96,7 @@ public:
 	virtual void PostLoad() override;
 
 #if WITH_EDITOR
+	virtual void PreEditChange(UProperty* PropertyAboutToChange) override;
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 
 	/** Delegate to fire when our sequence is changed in the property editor */
@@ -138,8 +139,8 @@ public:
 
 	//~ UMovieSceneSection interface
 	virtual TOptional<TRange<FFrameNumber> > GetAutoSizeRange() const override;
-	virtual UMovieSceneSection* SplitSection( FQualifiedFrameTime SplitTime ) override;
-	virtual void TrimSection( FQualifiedFrameTime TrimTime, bool bTrimLeft ) override;
+	virtual UMovieSceneSection* SplitSection( FQualifiedFrameTime SplitTime, bool bDeleteKeys ) override;
+	virtual void TrimSection( FQualifiedFrameTime TrimTime, bool bTrimLeft, bool bDeleteKeys) override;
 	virtual TOptional<FFrameTime> GetOffsetTime() const override { return TOptional<FFrameTime>(FFrameTime(Parameters.StartFrameOffset)); }
 
 public:
@@ -186,5 +187,8 @@ protected:
 #if WITH_EDITOR
 	/** Delegate to fire when our sequence is changed in the property editor */
 	FOnSequenceChanged OnSequenceChangedDelegate;
+
+	/* Previous sub sequence, restored if changed sub sequence is invalid*/
+	UMovieSceneSequence* PreviousSubSequence;
 #endif
 };

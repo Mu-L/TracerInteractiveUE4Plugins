@@ -48,13 +48,15 @@
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "EngineGlobals.h"
 #include "Engine/Engine.h"
-#include "Toolkits/AssetEditorManager.h"
+
 #include "IContentBrowserSingleton.h"
 #include "ContentBrowserModule.h"
 
 #include "ObjectTools.h"
 
 #include "AI/Navigation/NavCollisionBase.h"
+#include "Subsystems/AssetEditorSubsystem.h"
+#include "Editor.h"
 
 #define LOCTEXT_NAMESPACE "FBXSceneReImportFactory"
 
@@ -607,11 +609,11 @@ EReimportResult::Type UReimportFbxSceneFactory::Reimport(UObject* Obj)
 	SFbxSceneOptionWindow::CopyFbxOptionsToFbxOptions(GlobalImportSettingsReference, GlobalImportSettings);
 	SFbxSceneOptionWindow::CopyFbxOptionsToStaticMeshOptions(GlobalImportSettingsReference, SceneImportOptionsStaticMesh);
 	SceneImportOptionsStaticMesh->FillStaticMeshInmportData(StaticMeshImportData, SceneImportOptions);
-	StaticMeshImportData->SaveConfig();
+	SceneImportOptionsStaticMesh->SaveConfig();
 
 	SFbxSceneOptionWindow::CopyFbxOptionsToSkeletalMeshOptions(GlobalImportSettingsReference, SceneImportOptionsSkeletalMesh);
 	SceneImportOptionsSkeletalMesh->FillSkeletalMeshInmportData(SkeletalMeshImportData, AnimSequenceImportData, SceneImportOptions);
-	SkeletalMeshImportData->SaveConfig();
+	SceneImportOptionsSkeletalMesh->SaveConfig();
 
 	//Update the blueprint
 	UBlueprint *ReimportBlueprint = nullptr;
@@ -925,7 +927,7 @@ UBlueprint *UReimportFbxSceneFactory::UpdateOriginalBluePrint(FString &BluePrint
 		return nullptr;
 	}
 	//Close all editor that edit this blueprint
-	FAssetEditorManager::Get().CloseAllEditorsForAsset(BluePrint);
+	GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->CloseAllEditorsForAsset(BluePrint);
 	//Set the import status for the next reimport
 	for (TSharedPtr<FFbxNodeInfo> NodeInfo : SceneInfoPtr->HierarchyInfo)
 	{

@@ -27,7 +27,7 @@
 
 void FStaticShadowDepthMap::InitRHI()
 {
-	if (FApp::CanEverRender() && Data && Data->ShadowMapSizeX > 0 && Data->ShadowMapSizeY > 0 && GMaxRHIFeatureLevel >= ERHIFeatureLevel::SM4)
+	if (FApp::CanEverRender() && Data && Data->ShadowMapSizeX > 0 && Data->ShadowMapSizeY > 0 && GMaxRHIFeatureLevel >= ERHIFeatureLevel::SM5)
 	{
 		FRHIResourceCreateInfo CreateInfo;
 		FTexture2DRHIRef Texture2DRHI = RHICreateTexture2D(Data->ShadowMapSizeX, Data->ShadowMapSizeY, PF_R16F, 1, 1, 0, CreateInfo);
@@ -67,6 +67,16 @@ void ULightComponentBase::SetCastVolumetricShadow(bool bNewValue)
 		&& bCastVolumetricShadow != bNewValue)
 	{
 		bCastVolumetricShadow = bNewValue;
+		MarkRenderStateDirty();
+	}
+}
+
+void ULightComponentBase::SetCastDeepShadow(bool bNewValue)
+{
+	if (AreDynamicDataChangesAllowed()
+		&& bCastDeepShadow != bNewValue)
+	{
+		bCastDeepShadow = bNewValue;
 		MarkRenderStateDirty();
 	}
 }
@@ -275,6 +285,7 @@ FLightSceneProxy::FLightSceneProxy(const ULightComponent* InLightComponent)
 	, bCastTranslucentShadows(InLightComponent->CastTranslucentShadows)
 	, bTransmission(InLightComponent->bTransmission && bCastDynamicShadow && !bStaticShadowing)
 	, bCastVolumetricShadow(InLightComponent->bCastVolumetricShadow)
+	, bCastHairStrandsDeepShadow(InLightComponent->bCastDeepShadow)
 	, bCastShadowsFromCinematicObjectsOnly(InLightComponent->bCastShadowsFromCinematicObjectsOnly)
 	, bForceCachedShadowsForMovablePrimitives(InLightComponent->bForceCachedShadowsForMovablePrimitives)
 	, bCastRaytracedShadow(InLightComponent->bCastRaytracedShadow)
@@ -288,6 +299,7 @@ FLightSceneProxy::FLightSceneProxy(const ULightComponent* InLightComponent)
 	, bCastModulatedShadows(false)
 	, bUseWholeSceneCSMForMovableObjects(false)
 	, bTiledDeferredLightingSupported(false)
+	, AtmosphereSunLightIndex(InLightComponent->GetAtmosphereSunLightIndex())
 	, LightType(InLightComponent->GetLightType())	
 	, LightingChannelMask(GetLightingChannelMaskForStruct(InLightComponent->LightingChannels))
 	, StatId(InLightComponent->GetStatID(true))
@@ -295,6 +307,7 @@ FLightSceneProxy::FLightSceneProxy(const ULightComponent* InLightComponent)
 	, LevelName(InLightComponent->GetOutermost()->GetFName())
 	, FarShadowDistance(0)
 	, FarShadowCascadeCount(0)
+	, ShadowAmount(1.0f)
 	, SamplesPerPixel(1)
 {
 	check(SceneInterface);
@@ -422,6 +435,7 @@ ULightComponent::ULightComponent(const FObjectInitializer& ObjectInitializer)
 	bEnableLightShaftBloom = false;
 	BloomScale = .2f;
 	BloomThreshold = 0;
+	BloomMaxBrightness = 100.0f;
 	BloomTint = FColor::White;
 
 	RayStartOffsetDepthScale = .003f;
@@ -614,6 +628,7 @@ bool ULightComponent::CanEditChange(const UProperty* InProperty) const
 
 		if (PropertyName == GET_MEMBER_NAME_STRING_CHECKED(ULightComponent, BloomScale)
 			|| PropertyName == GET_MEMBER_NAME_STRING_CHECKED(ULightComponent, BloomThreshold)
+			|| PropertyName == GET_MEMBER_NAME_STRING_CHECKED(ULightComponent, BloomMaxBrightness)
 			|| PropertyName == GET_MEMBER_NAME_STRING_CHECKED(ULightComponent, BloomTint))
 		{
 			return bEnableLightShaftBloom;
@@ -664,13 +679,15 @@ void ULightComponent::PostEditChangeProperty(FPropertyChangedEvent& PropertyChan
 		PropertyName != GET_MEMBER_NAME_STRING_CHECKED(ULightComponent, bEnableLightShaftBloom) &&
 		PropertyName != GET_MEMBER_NAME_STRING_CHECKED(ULightComponent, BloomScale) &&
 		PropertyName != GET_MEMBER_NAME_STRING_CHECKED(ULightComponent, BloomThreshold) &&
+		PropertyName != GET_MEMBER_NAME_STRING_CHECKED(ULightComponent, BloomMaxBrightness) &&
 		PropertyName != GET_MEMBER_NAME_STRING_CHECKED(ULightComponent, BloomTint) &&
 		PropertyName != GET_MEMBER_NAME_STRING_CHECKED(ULightComponent, bUseRayTracedDistanceFieldShadows) &&
 		PropertyName != GET_MEMBER_NAME_STRING_CHECKED(ULightComponent, RayStartOffsetDepthScale) &&
-		PropertyName != GET_MEMBER_NAME_STRING_CHECKED(ULightComponent, bVisible) &&
+		PropertyName != USceneComponent::GetVisiblePropertyName().ToString() &&
 		PropertyName != GET_MEMBER_NAME_STRING_CHECKED(ULightComponent, LightingChannels) &&
 		PropertyName != GET_MEMBER_NAME_STRING_CHECKED(ULightComponent, VolumetricScatteringIntensity) &&
 		PropertyName != GET_MEMBER_NAME_STRING_CHECKED(ULightComponent, bCastVolumetricShadow) &&
+		PropertyName != GET_MEMBER_NAME_STRING_CHECKED(ULightComponent, bCastDeepShadow) &&
 		PropertyName != GET_MEMBER_NAME_STRING_CHECKED(ULightComponent, bCastRaytracedShadow) &&
 		PropertyName != GET_MEMBER_NAME_STRING_CHECKED(ULightComponent, bAffectReflection) &&
 		PropertyName != GET_MEMBER_NAME_STRING_CHECKED(ULightComponent, bAffectGlobalIllumination) &&
@@ -696,6 +713,7 @@ void ULightComponent::PostEditChangeProperty(FPropertyChangedEvent& PropertyChan
 		PropertyName != GET_MEMBER_NAME_STRING_CHECKED(UDirectionalLightComponent, LightShaftOverrideDirection) &&
 		PropertyName != GET_MEMBER_NAME_STRING_CHECKED(UDirectionalLightComponent, bCastModulatedShadows) &&
 		PropertyName != GET_MEMBER_NAME_STRING_CHECKED(UDirectionalLightComponent, ModulatedShadowColor) &&
+		PropertyName != GET_MEMBER_NAME_STRING_CHECKED(UDirectionalLightComponent, ShadowAmount) &&
 		// Properties that should only unbuild lighting for a Static light (can be changed dynamically on a Stationary light)
 		(PropertyName != GET_MEMBER_NAME_STRING_CHECKED(ULightComponent, Intensity) || Mobility == EComponentMobility::Static) &&
 		(PropertyName != GET_MEMBER_NAME_STRING_CHECKED(ULightComponent, LightColor) || Mobility == EComponentMobility::Static) &&
@@ -1004,6 +1022,16 @@ void ULightComponent::SetBloomThreshold(float NewValue)
 		&& BloomThreshold != NewValue)
 	{
 		BloomThreshold = NewValue;
+		MarkRenderStateDirty();
+	}
+}
+
+void ULightComponent::SetBloomMaxBrightness(float NewValue)
+{
+	if (AreDynamicDataChangesAllowed()
+		&& BloomMaxBrightness != NewValue)
+	{
+		BloomMaxBrightness = NewValue;
 		MarkRenderStateDirty();
 	}
 }
@@ -1468,7 +1496,7 @@ void ULightComponent::ReassignStationaryLightChannels(UWorld* TargetWorld, bool 
 		}
 
 		// Use the lowest free channel
-		for (int32 ChannelIndex = 0; ChannelIndex < ARRAY_COUNT(bChannelUsed); ChannelIndex++)
+		for (int32 ChannelIndex = 0; ChannelIndex < UE_ARRAY_COUNT(bChannelUsed); ChannelIndex++)
 		{
 			if (!bChannelUsed[ChannelIndex])
 			{

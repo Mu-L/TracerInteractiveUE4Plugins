@@ -21,20 +21,17 @@ public:
 	
 	//FNiagaraRenderer Interface
 	virtual void CreateRenderThreadResources(NiagaraEmitterInstanceBatcher* Batcher) override;
-	virtual void ReleaseRenderThreadResources(NiagaraEmitterInstanceBatcher* Batcher) override;
+	virtual void ReleaseRenderThreadResources() override;
 
 	virtual void GetDynamicMeshElements(const TArray<const FSceneView*>& Views, const FSceneViewFamily& ViewFamily, uint32 VisibilityMap, FMeshElementCollector& Collector, const FNiagaraSceneProxy *SceneProxy) const override;
 	virtual FNiagaraDynamicDataBase* GenerateDynamicData(const FNiagaraSceneProxy* Proxy, const UNiagaraRendererProperties* InProperties, const FNiagaraEmitterInstance* Emitter) const override;
 	virtual int32 GetDynamicDataSize()const override;
-	virtual void TransformChanged() override;
 	virtual bool IsMaterialValid(UMaterialInterface* Mat)const override;
 	//FNiagaraRenderer Interface END
 
 	void SetupVertexFactory(FNiagaraMeshVertexFactory *InVertexFactory, const FStaticMeshLODResources& LODResources) const;
 
 private:
-	mutable TUniformBuffer<FPrimitiveUniformShaderParameters> WorldSpacePrimitiveUniformBuffer;
-	class FNiagaraMeshVertexFactory* VertexFactory;
 
 	/** Render data of the static mesh we use. */
 	FStaticMeshRenderData* MeshRenderData;
@@ -44,20 +41,7 @@ private:
 	uint32 bOverrideMaterials : 1;
 	uint32 bSortOnlyWhenTranslucent : 1;
 
-	int32 PositionOffset;
-	int32 VelocityOffset;
-	int32 ColorOffset;
-	int32 ScaleOffset;
-	int32 SizeOffset;
 	uint32 MaterialParamValidMask;
-	int32 MaterialParamOffset;
-	int32 MaterialParamOffset1;
-	int32 MaterialParamOffset2;
-	int32 MaterialParamOffset3;
-	int32 TransformOffset;
-	int32 NormalizedAgeOffset;
-	int32 MaterialRandomOffset;
-	int32 CustomSortingOffset;
 
 	int32 MeshMinimumLOD = 0;
 };

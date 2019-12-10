@@ -434,6 +434,14 @@ class ENGINE_API UKismetSystemLibrary : public UBlueprintFunctionLibrary
 	 */
 	UFUNCTION(BlueprintCallable, Category="Game",meta=(WorldContext="WorldContextObject"))
 	static void QuitGame(UObject* WorldContextObject, class APlayerController* SpecificPlayer, TEnumAsByte<EQuitPreference::Type> QuitPreference, bool bIgnorePlatformRestrictions);
+	
+#if WITH_EDITOR
+	/**
+	 *	Exit the editor
+	 */
+	UFUNCTION(BlueprintCallable, Category="Development")
+	static void QuitEditor();
+#endif	// WITH_EDITOR
 
 	//=============================================================================
 	// Latent Actions
@@ -1769,6 +1777,16 @@ class ENGINE_API UKismetSystemLibrary : public UBlueprintFunctionLibrary
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Transactions")
 	static void TransactObject(UObject* Object);
+
+	/**
+	 * Notify the current transaction (if any) that this object is about to be modified and should be snapshot for intermediate update.
+	 * @note Internally this calls SnapshotTransactionBuffer on the given object.
+	 * @note Only available in the editor.
+	 *
+	 * @param	Object		The object that is about to be modified.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Transactions")
+	static void SnapshotObject(UObject* Object);
 
 	// --- Asset Manager ------------------------------
 

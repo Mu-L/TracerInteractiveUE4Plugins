@@ -5,6 +5,7 @@
 #include "HAL/UnrealMemory.h"
 #include "Logging/LogMacros.h"
 #include "Misc/Parse.h"
+#include "Misc/ScopeLock.h"
 #include "Misc/CommandLine.h"
 #include "Stats/Stats.h"
 #include "Misc/ConfigCacheIni.h"
@@ -23,6 +24,7 @@ DEFINE_LOG_CATEGORY(LogCompression);
 DECLARE_STATS_GROUP( TEXT( "Compression" ), STATGROUP_Compression, STATCAT_Advanced );
 
 TMap<FName, struct ICompressionFormat*> FCompression::CompressionFormats;
+FCriticalSection FCompression::CompressionFormatsCriticalSection;
 
 
 static void *zalloc(void *opaque, unsigned int size, unsigned int num)
@@ -35,6 +37,15 @@ static void zfree(void *opaque, void *p)
 	FMemory::Free(p);
 }
 
+static const uint32 appZLIBVersion()
+{
+	return uint32(ZLIB_VERNUM);
+}
+
+static uint32 appGZIPVersion()
+{
+	return uint32(ZLIB_VERNUM); // we use zlib library for gzip
+}
 
 /**
  * Thread-safe abstract compression routine. Compresses memory from uncompressed buffer and writes it to compressed
@@ -303,9 +314,32 @@ static ECompressionFlags CheckGlobalCompressionFlags(ECompressionFlags Flags)
 }
 
 
+uint32 FCompression::GetCompressorVersion(FName FormatName)
+{
+	if (FormatName == NAME_Zlib)
+	{
+		return appZLIBVersion();
+	}
+	else if (FormatName == NAME_Gzip)
+	{
+		return appZLIBVersion();
+	}
+	else
+	{
+		// let the format module compress it
+		ICompressionFormat* Format = GetCompressionFormat(FormatName);
+		if (Format)
+		{
+			return Format->GetVersion();
+		}
+	}
+
+	return 0;
+}
 
 ICompressionFormat* FCompression::GetCompressionFormat(FName FormatName, bool bErrorOnFailure)
 {
+	FScopeLock Lock(&CompressionFormatsCriticalSection);
 	ICompressionFormat** ExistingFormat = CompressionFormats.Find(FormatName);
 	if (ExistingFormat == nullptr)
 	{
@@ -356,7 +390,6 @@ FName FCompression::GetCompressionFormatFromDeprecatedFlags(ECompressionFlags Fl
 	return NAME_None;
 }
 
-
 int32 FCompression::CompressMemoryBound(FName FormatName, int32 UncompressedSize, ECompressionFlags Flags, int32 CompressionData)
 {
 	int32 CompressionBound = UncompressedSize;
@@ -390,6 +423,7 @@ int32 FCompression::CompressMemoryBound(FName FormatName, int32 UncompressedSize
 
 	return CompressionBound;
 }
+
 
 bool FCompression::CompressMemory(FName FormatName, void* CompressedBuffer, int32& CompressedSize, const void* UncompressedBuffer, int32 UncompressedSize, ECompressionFlags Flags, int32 CompressionData)
 {
@@ -428,6 +462,37 @@ bool FCompression::CompressMemory(FName FormatName, void* CompressedBuffer, int3
 	}
 
 	return bCompressSucceeded;
+}
+
+#define ZLIB_DERIVEDDATA_VER TEXT("9810EC9C5D34401CBD57AA3852417A6C")
+#define GZIP_DERIVEDDATA_VER TEXT("FB2181277DF44305ABBE03FD1751CBDE")
+
+
+FString FCompression::GetCompressorDDCSuffix(FName FormatName)
+{
+	FString DDCSuffix = FString::Printf(TEXT("%s_VER%D_"), *FormatName.ToString(), FCompression::GetCompressorVersion(FormatName));
+
+
+	if (FormatName == NAME_Zlib)
+	{
+		// hardcoded zlib
+		DDCSuffix += ZLIB_DERIVEDDATA_VER;
+	}
+	if (FormatName == NAME_Gzip)
+	{
+		DDCSuffix += GZIP_DERIVEDDATA_VER;
+	}
+	else
+	{
+		// let the format module compress it
+		ICompressionFormat* Format = GetCompressionFormat(FormatName);
+		if (Format)
+		{
+			DDCSuffix += Format->GetDDCKeySuffix();
+		}
+	}
+	
+	return DDCSuffix;
 }
 
 DECLARE_FLOAT_ACCUMULATOR_STAT(TEXT("Uncompressor total time"),STAT_UncompressorTime,STATGROUP_Compression);
@@ -477,7 +542,7 @@ bool FCompression::UncompressMemory(FName FormatName, void* UncompressedBuffer, 
 			bUncompressSucceeded = true;
 		}
 		// Always log an error
-		UE_LOG(LogCompression, Error, TEXT("FCompression::UncompressMemory - Failed to uncompress memory (%d/%d) from address 0x%016X using format %s, this may indicate the asset is corrupt!"), CompressedSize, UncompressedSize, CompressedBuffer, *FormatName.ToString());
+		UE_LOG(LogCompression, Error, TEXT("FCompression::UncompressMemory - Failed to uncompress memory (%d/%d) from address %p using format %s, this may indicate the asset is corrupt!"), CompressedSize, UncompressedSize, CompressedBuffer, *FormatName.ToString());
 	}
 
 #if	STATS

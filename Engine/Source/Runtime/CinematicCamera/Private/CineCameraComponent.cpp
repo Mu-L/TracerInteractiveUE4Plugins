@@ -1,6 +1,8 @@
 // Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
 
 #include "CineCameraComponent.h"
+#include "UObject/CineCameraObjectVersion.h"
+#include "UObject/ReleaseObjectVersion.h"
 #include "UObject/ConstructorHelpers.h"
 #include "GameFramework/Actor.h"
 #include "Engine/World.h"
@@ -24,8 +26,8 @@ UCineCameraComponent::UCineCameraComponent()
 {
 	// Super 35mm 4 Perf
 	// These will be overridden if valid default presets are specified in ini
-	FilmbackSettings.SensorWidth = 24.89f;
-	FilmbackSettings.SensorHeight = 18.67;
+	Filmback.SensorWidth = 24.89f;
+	Filmback.SensorHeight = 18.67;
 	LensSettings.MinFocalLength = 50.f;
 	LensSettings.MaxFocalLength = 50.f;
 	LensSettings.MinFStop = 2.f;
@@ -49,8 +51,9 @@ UCineCameraComponent::UCineCameraComponent()
 	if (Template)
 	{
 		// default filmback
-		SetFilmbackPresetByName(Template->DefaultFilmbackPresetName);
-		SetLensPresetByName(Template->DefaultLensPresetName);
+		SetFilmbackPresetByNameInternal(Template->DefaultFilmbackPreset, Filmback);
+		SetFilmbackPresetByNameInternal(Template->DefaultFilmbackPresetName_DEPRECATED, FilmbackSettings_DEPRECATED);
+		SetLensPresetByNameInternal(Template->DefaultLensPresetName);
 		// other lens defaults
 		CurrentAperture = Template->DefaultLensFStop;
 		CurrentFocalLength = Template->DefaultLensFocalLength;
@@ -74,6 +77,14 @@ UCineCameraComponent::UCineCameraComponent()
 #endif
 }
 
+void UCineCameraComponent::Serialize(FArchive& Ar)
+{
+	Ar.UsingCustomVersion(FCineCameraObjectVersion::GUID);
+	Ar.UsingCustomVersion(FReleaseObjectVersion::GUID);
+
+	Super::Serialize(Ar);
+}
+
 void UCineCameraComponent::PostInitProperties()
 {
 	Super::PostInitProperties();
@@ -83,6 +94,42 @@ void UCineCameraComponent::PostInitProperties()
 
 void UCineCameraComponent::PostLoad()
 {
+	if (GetLinkerCustomVersion(FReleaseObjectVersion::GUID) < FReleaseObjectVersion::DeprecateFilmbackSettings)
+	{
+		bool bUpgradeFilmback = true;
+		if (GetLinkerCustomVersion(FCineCameraObjectVersion::GUID) == FCineCameraObjectVersion::ChangeDefaultFilmbackToDigitalFilm)
+		{
+			UCineCameraComponent* Template = Cast<UCineCameraComponent>(GetArchetype());
+			if (Template)
+			{
+				TArray<FNamedFilmbackPreset> const& Presets = UCineCameraComponent::GetFilmbackPresets();
+				int32 const NumPresets = Presets.Num();
+				for (int32 PresetIdx = 0; PresetIdx < NumPresets; ++PresetIdx)
+				{
+					FNamedFilmbackPreset const& P = Presets[PresetIdx];
+
+					// ChangeDefaultFilmbackToDigitalFilm was pre 4.24, but post 4.23. In that case, the filmback settings would have been DSLR 
+					// and RecalcDerivedData would not have been called yet, which equates to SensorAspectRatio being left at 1.33f. This isn't
+					// ideal for detecting this case, but it's the best notion of whether upgrading this film back should be skipped and get its 
+					// values from the default template object, which is the new Digital Film default.
+					if (P.FilmbackSettings == FilmbackSettings_DEPRECATED && FilmbackSettings_DEPRECATED.SensorAspectRatio == 1.33f)
+					{
+						if (P.Name == Template->DefaultFilmbackPresetName_DEPRECATED)
+						{
+							bUpgradeFilmback = false;
+							break;
+						}
+					}
+				}
+			}
+		}
+
+		if (bUpgradeFilmback)
+		{
+			Filmback = FilmbackSettings_DEPRECATED;
+		}
+	}
+
 	RecalcDerivedData();
 	bResetInterpolation = true;
 	Super::PostLoad();
@@ -183,20 +230,26 @@ void UCineCameraComponent::SetFieldOfView(float InFieldOfView)
 {
 	Super::SetFieldOfView(InFieldOfView);
 
-	CurrentFocalLength = (FilmbackSettings.SensorWidth / 2.f) / FMath::Tan(FMath::DegreesToRadians(InFieldOfView / 2.f));
+	CurrentFocalLength = (Filmback.SensorWidth / 2.f) / FMath::Tan(FMath::DegreesToRadians(InFieldOfView / 2.f));
+}
+
+void UCineCameraComponent::SetCurrentFocalLength(const float& InFocalLength)
+{
+	CurrentFocalLength = InFocalLength;
+	RecalcDerivedData();
 }
 
 float UCineCameraComponent::GetHorizontalFieldOfView() const
 {
 	return (CurrentFocalLength > 0.f)
-		? FMath::RadiansToDegrees(2.f * FMath::Atan(FilmbackSettings.SensorWidth / (2.f * CurrentFocalLength)))
+		? FMath::RadiansToDegrees(2.f * FMath::Atan(Filmback.SensorWidth / (2.f * CurrentFocalLength)))
 		: 0.f;
 }
 
 float UCineCameraComponent::GetVerticalFieldOfView() const
 {
 	return (CurrentFocalLength > 0.f)
-		? FMath::RadiansToDegrees(2.f * FMath::Atan(FilmbackSettings.SensorHeight / (2.f * CurrentFocalLength)))
+		? FMath::RadiansToDegrees(2.f * FMath::Atan(Filmback.SensorHeight / (2.f * CurrentFocalLength)))
 		: 0.f;
 }
 
@@ -207,7 +260,7 @@ FString UCineCameraComponent::GetFilmbackPresetName() const
 	for (int32 PresetIdx = 0; PresetIdx < NumPresets; ++PresetIdx)
 	{
 		FNamedFilmbackPreset const& P = Presets[PresetIdx];
-		if (P.FilmbackSettings == FilmbackSettings)
+		if (P.FilmbackSettings == Filmback)
 		{
 			return P.Name;
 		}
@@ -218,6 +271,13 @@ FString UCineCameraComponent::GetFilmbackPresetName() const
 
 void UCineCameraComponent::SetFilmbackPresetByName(const FString& InPresetName)
 {
+	SetFilmbackPresetByNameInternal(InPresetName, Filmback);
+	// Explicitely call RecalcDerivedData() when invoked via Blueprint, since no other method (incl. PostEditChangeProperty) will trigger
+	RecalcDerivedData();
+}
+
+void UCineCameraComponent::SetFilmbackPresetByNameInternal(const FString& InPresetName, FCameraFilmbackSettings& InOutFilmbackSettings)
+{
 	TArray<FNamedFilmbackPreset> const& Presets = UCineCameraComponent::GetFilmbackPresets();
 	int32 const NumPresets = Presets.Num();
 	for (int32 PresetIdx = 0; PresetIdx < NumPresets; ++PresetIdx)
@@ -225,7 +285,7 @@ void UCineCameraComponent::SetFilmbackPresetByName(const FString& InPresetName)
 		FNamedFilmbackPreset const& P = Presets[PresetIdx];
 		if (P.Name == InPresetName)
 		{
-			FilmbackSettings = P.FilmbackSettings;
+			InOutFilmbackSettings = P.FilmbackSettings;
 			break;
 		}
 	}
@@ -249,6 +309,13 @@ FString UCineCameraComponent::GetLensPresetName() const
 
 void UCineCameraComponent::SetLensPresetByName(const FString& InPresetName)
 {
+	SetLensPresetByNameInternal(InPresetName);
+	// Explicitely call RecalcDerivedData() when invoked via Blueprint, since no other method (incl. PostEditChangeProperty) will trigger
+	RecalcDerivedData();
+}
+
+void UCineCameraComponent::SetLensPresetByNameInternal(const FString& InPresetName)
+{
 	TArray<FNamedLensPreset> const& Presets = UCineCameraComponent::GetLensPresets();
 	int32 const NumPresets = Presets.Num();
 	for (int32 PresetIdx = 0; PresetIdx < NumPresets; ++PresetIdx)
@@ -267,6 +334,12 @@ float UCineCameraComponent::GetWorldToMetersScale() const
 	UWorld const* const World = GetWorld();
 	AWorldSettings const* const WorldSettings = World ? World->GetWorldSettings() : nullptr;
 	return WorldSettings ? WorldSettings->WorldToMeters : 100.f;
+}
+
+// static
+TArray<FNamedLensPreset> UCineCameraComponent::GetLensPresetsCopy()
+{
+	return GetDefault<UCineCameraComponent>()->LensPresets;
 }
 
 // static
@@ -291,8 +364,8 @@ void UCineCameraComponent::RecalcDerivedData()
 	FocusSettings.ManualFocusDistance = FMath::Max(FocusSettings.ManualFocusDistance, MinFocusDistInWorldUnits);
 
 	FieldOfView = GetHorizontalFieldOfView();
-	FilmbackSettings.SensorAspectRatio = (FilmbackSettings.SensorHeight > 0.f) ? (FilmbackSettings.SensorWidth / FilmbackSettings.SensorHeight) : 0.f;
-	AspectRatio = FilmbackSettings.SensorAspectRatio;
+	Filmback.SensorAspectRatio = (Filmback.SensorHeight > 0.f) ? (Filmback.SensorWidth / Filmback.SensorHeight) : 0.f;
+	AspectRatio = Filmback.SensorAspectRatio;
 
 #if WITH_EDITORONLY_DATA
 	CurrentHorizontalFOV = FieldOfView;			// informational variable only, for editor users
@@ -352,8 +425,8 @@ void UCineCameraComponent::GetCameraView(float DeltaTime, FMinimalViewInfo& Desi
 #if WITH_EDITOR
 FText UCineCameraComponent::GetFilmbackText() const
 {
-	const float SensorWidth = FilmbackSettings.SensorWidth;
-	const float SensorHeight = FilmbackSettings.SensorHeight;
+	const float SensorWidth = Filmback.SensorWidth;
+	const float SensorHeight = Filmback.SensorHeight;
 
 	// Search presets for one that matches
 	const FNamedFilmbackPreset* Preset = UCineCameraComponent::GetFilmbackPresets().FindByPredicate([&](const FNamedFilmbackPreset& InPreset) {
@@ -445,7 +518,7 @@ void UCineCameraComponent::UpdateCameraLens(float DeltaTime, FMinimalViewInfo& D
 		DesiredView.PostProcessSettings.DepthOfFieldFocalDistance = CurrentFocusDistance;
 
 		DesiredView.PostProcessSettings.bOverride_DepthOfFieldSensorWidth = true;
-		DesiredView.PostProcessSettings.DepthOfFieldSensorWidth = FilmbackSettings.SensorWidth;
+		DesiredView.PostProcessSettings.DepthOfFieldSensorWidth = Filmback.SensorWidth;
 	}
 }
 
@@ -474,8 +547,8 @@ void UCineCameraComponent::CreateDebugFocusPlane()
 			DebugFocusPlaneComponent->CreationMethod = CreationMethod;
 			DebugFocusPlaneComponent->bSelectable = false;
 
-			DebugFocusPlaneComponent->RelativeScale3D = FVector(10000.f, 10000.f, 1.f);
-			DebugFocusPlaneComponent->RelativeRotation = FRotator(90.f, 0.f, 0.f);
+			DebugFocusPlaneComponent->SetRelativeScale3D_Direct(FVector(10000.f, 10000.f, 1.f));
+			DebugFocusPlaneComponent->SetRelativeRotation_Direct(FRotator(90.f, 0.f, 0.f));
 
 			DebugFocusPlaneComponent->RegisterComponentWithWorld(GetWorld());
 

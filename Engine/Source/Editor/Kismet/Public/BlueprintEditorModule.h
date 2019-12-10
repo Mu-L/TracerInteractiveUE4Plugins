@@ -68,7 +68,7 @@ public:
 	virtual void SummonFindAndReplaceUI() = 0;
 
 	/** Tries to open the specified graph and bring it's document to the front (note: this can return NULL) */
-	virtual TSharedPtr<class SGraphEditor> OpenGraphAndBringToFront(class UEdGraph* Graph) = 0;
+	virtual TSharedPtr<class SGraphEditor> OpenGraphAndBringToFront(class UEdGraph* Graph, bool bSetFocus = true) = 0;
 
 	virtual void RefreshEditors(ERefreshBlueprintEditorReason::Type Reason = ERefreshBlueprintEditorReason::UnknownReason) = 0;
 
@@ -117,7 +117,7 @@ public:
 	 *
 	 * Note: This function should not be called directly, use one of the following instead:
 	 *	- FKismetEditorUtilities::BringKismetToFocusAttentionOnObject
-	 *  - FAssetEditorManager::Get().OpenEditorForAsset
+	 *  - GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset
 	 *
 	 * @param	Mode					Mode that this editor should operate in
 	 * @param	InitToolkitHost			When Mode is WorldCentric, this is the level editor instance to spawn this editor within

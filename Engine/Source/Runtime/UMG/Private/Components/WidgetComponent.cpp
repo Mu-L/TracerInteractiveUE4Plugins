@@ -297,7 +297,7 @@ public:
 	{
 		bWillEverBeLit = false;
 
-		MaterialRelevance = MaterialInstance->GetRelevance(GetScene().GetFeatureLevel());
+		MaterialRelevance = MaterialInstance->GetRelevance_Concurrent(GetScene().GetFeatureLevel());
 	}
 
 	// FPrimitiveSceneProxy interface.
@@ -604,7 +604,7 @@ UWidgetComponent::UWidgetComponent( const FObjectInitializer& PCIP )
 	PrimaryComponentTick.bCanEverTick = true;
 	bTickInEditor = true;
 
-	RelativeRotation = FRotator::ZeroRotator;
+	SetRelativeRotation(FRotator::ZeroRotator);
 
 	BodyInstance.SetCollisionProfileName(FName(TEXT("UI")));
 
@@ -652,9 +652,12 @@ void UWidgetComponent::Serialize(FArchive& Ar)
 
 void UWidgetComponent::BeginPlay()
 {
+	InitWidget();
 	Super::BeginPlay();
 
-	InitWidget();
+	CurrentDrawSize = DrawSize;
+	UpdateBodySetup(true);
+	RecreatePhysicsState();
 }
 
 void UWidgetComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -1016,13 +1019,16 @@ void UWidgetComponent::RegisterWindow()
 		{
 			if (UWorld* LocalWorld = GetWorld())
 			{
-				UGameInstance* GameInstance = LocalWorld->GetGameInstance();
-				check(GameInstance);
-
-				UGameViewportClient* GameViewportClient = GameInstance->GetGameViewportClient();
-				if (GameViewportClient)
+				if (LocalWorld->IsGameWorld())
 				{
-					SlateWindow->AssignParentWidget(GameViewportClient->GetGameViewportWidget());
+					UGameInstance* GameInstance = LocalWorld->GetGameInstance();
+					check(GameInstance);
+
+					UGameViewportClient* GameViewportClient = GameInstance->GetGameViewportClient();
+					if (GameViewportClient)
+					{
+						SlateWindow->AssignParentWidget(GameViewportClient->GetGameViewportWidget());
+					}
 				}
 			}
 		}
@@ -1083,7 +1089,7 @@ void UWidgetComponent::TickComponent(float DeltaTime, enum ELevelTick TickType, 
 				ULocalPlayer* TargetPlayer = GetOwnerPlayer();
 				APlayerController* PlayerController = TargetPlayer ? TargetPlayer->PlayerController : nullptr;
 
-				if ( TargetPlayer && PlayerController && IsVisible() && !(GetOwner()->bHidden))
+				if ( TargetPlayer && PlayerController && IsVisible() && !(GetOwner()->IsHidden()))
 				{
 					if ( !bAddedToScreen )
 					{
@@ -1280,7 +1286,7 @@ void UWidgetComponent::ApplyComponentInstanceData(FWidgetComponentInstanceData* 
 	// Note: ApplyComponentInstanceData is called while the component is registered so the rendering thread is already using this component
 	// That means all component state that is modified here must be mirrored on the scene proxy, which will be recreated to receive the changes later due to MarkRenderStateDirty.
 
-	if (GetWidgetClass() != WidgetClass)
+	if (GetWidgetClass() != WidgetInstanceData->WidgetClass)
 	{
 		return;
 	}
@@ -1845,7 +1851,7 @@ TArray<FWidgetAndPointer> UWidgetComponent::GetHitWidgetPath(FVector2D WidgetSpa
 	TArray<FWidgetAndPointer> ArrangedWidgets;
 	if ( SlateWindow.IsValid() )
 	{
-		ArrangedWidgets = SlateWindow->GetHittestGrid()->GetBubblePath( LocalHitLocation, CursorRadius, bIgnoreEnabledStatus );
+		ArrangedWidgets = SlateWindow->GetHittestGrid().GetBubblePath( LocalHitLocation, CursorRadius, bIgnoreEnabledStatus );
 
 		for( FWidgetAndPointer& ArrangedWidget : ArrangedWidgets )
 		{

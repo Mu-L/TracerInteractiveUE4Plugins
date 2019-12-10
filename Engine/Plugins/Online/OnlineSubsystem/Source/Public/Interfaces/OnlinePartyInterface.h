@@ -108,6 +108,12 @@ public:
 	FOnlinePartyData() = default;
 	virtual ~FOnlinePartyData() = default;
 
+	FOnlinePartyData(const FOnlinePartyData&) = default;
+	FOnlinePartyData& operator=(const FOnlinePartyData&) = default;
+
+	FOnlinePartyData(FOnlinePartyData&&) = default;
+	FOnlinePartyData& operator=(FOnlinePartyData&&) = default;
+
 	/**
 	 * Equality operator
 	 *
@@ -602,7 +608,7 @@ public:
 	TSharedPtr<const FUniqueNetId> LeaderId;
 	/** The current state of the party */
 	EPartyState State;
-	/** The current state of the party */
+	/** The previous state of the party */
 	EPartyState PreviousState;
 	/** id of chat room associated with the party */
 	FChatRoomId RoomId;
@@ -675,6 +681,13 @@ enum class EPartySystemState : uint8
  * @param Result Result of the operation
  */
 DECLARE_DELEGATE_TwoParams(FOnRestorePartiesComplete, const FUniqueNetId& /*LocalUserId*/, const FOnlineError& /*Result*/);
+/**
+ * Restore invites async task completed callback
+ *
+ * @param LocalUserId id of user that initiated the request
+ * @param Result Result of the operation
+ */
+DECLARE_DELEGATE_TwoParams(FOnRestoreInvitesComplete, const FUniqueNetId& /*LocalUserId*/, const FOnlineError& /*Result*/);
 /**
  * Cleanup parties async task completed callback
  *
@@ -766,7 +779,7 @@ DECLARE_DELEGATE_ThreeParams(FOnRejectPartyInvitationComplete, const FUniqueNetI
  * @param MemberId - id of member being kicked
  * @param Result - string with error info if any
  */
-DECLARE_DELEGATE_FourParams(FOnKickPartyMemberComplete, const FUniqueNetId& /*LocalUserId*/, const FOnlinePartyId& /*PartyId*/, const FUniqueNetId& /*LocalUserId*/, const EKickMemberCompletionResult /*Result*/);
+DECLARE_DELEGATE_FourParams(FOnKickPartyMemberComplete, const FUniqueNetId& /*LocalUserId*/, const FOnlinePartyId& /*PartyId*/, const FUniqueNetId& /*MemberId*/, const EKickMemberCompletionResult /*Result*/);
 /**
  * Promoting a member of a party async task completed callback
  *
@@ -775,7 +788,7 @@ DECLARE_DELEGATE_FourParams(FOnKickPartyMemberComplete, const FUniqueNetId& /*Lo
  * @param MemberId - id of member being promoted to leader
  * @param Result - string with error info if any
  */
-DECLARE_DELEGATE_FourParams(FOnPromotePartyMemberComplete, const FUniqueNetId& /*LocalUserId*/, const FOnlinePartyId& /*PartyId*/, const FUniqueNetId& /*LocalUserId*/, const EPromoteMemberCompletionResult /*Result*/);
+DECLARE_DELEGATE_FourParams(FOnPromotePartyMemberComplete, const FUniqueNetId& /*LocalUserId*/, const FOnlinePartyId& /*PartyId*/, const FUniqueNetId& /*MemberId*/, const EPromoteMemberCompletionResult /*Result*/);
 
 
 
@@ -1073,6 +1086,14 @@ public:
 	 * @param CompletionDelegate the delegate to trigger on completion
 	 */
 	virtual void RestoreParties(const FUniqueNetId& LocalUserId, const FOnRestorePartiesComplete& CompletionDelegate) = 0;
+
+	/**
+	 * Restore party invites. Intended to be called once during login to restore state from other running instances.
+	 *
+	 * @param LocalUserId the user to restore the pings for
+	 * @param CompletionDelegate the delegate to trigger on completion
+	 */
+	virtual void RestoreInvites(const FUniqueNetId& LocalUserId, const FOnRestoreInvitesComplete& CompletionDelegate) = 0;
 	
 	/**
 	 * Cleanup party state. This will cleanup the local party state and attempt to cleanup party memberships on an external service if possible.  Intended to be called for development purposes.
@@ -1162,6 +1183,19 @@ public:
 	 * @return true if task was started
 	 */
 	virtual bool LeaveParty(const FUniqueNetId& LocalUserId, const FOnlinePartyId& PartyId, const FOnLeavePartyComplete& Delegate = FOnLeavePartyComplete()) = 0;
+
+	/**
+	 * Leave an existing party
+	 * All existing party members notified of member leaving (see FOnPartyMemberLeft)
+	 *
+	 * @param LocalUserId - user making the request
+	 * @param PartyId - id of an existing party
+	 * @param bSynchronizeLeave - Whether we synchronize the leave with remote server/clients or only do a local cleanup
+	 * @param Delegate - called on completion
+	 *
+	 * @return true if task was started
+	 */
+	virtual bool LeaveParty(const FUniqueNetId& LocalUserId, const FOnlinePartyId& PartyId, bool bSynchronizeLeave, const FOnLeavePartyComplete& Delegate = FOnLeavePartyComplete()) = 0;
 
 	/**
 	* Approve a request to join a party
@@ -1871,6 +1905,7 @@ enum class ESendPartyInvitationCompletionResult : int8
 	AlreadyInParty,
 	PartyFull,
 	NoPermission,
+	RateLimited,
 	UnknownInternalFailure = 0,
 	Succeeded = 1
 };

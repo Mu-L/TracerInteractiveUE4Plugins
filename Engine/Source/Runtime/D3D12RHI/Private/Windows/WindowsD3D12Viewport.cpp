@@ -219,13 +219,34 @@ void FD3D12Viewport::Init()
 #if !PLATFORM_HOLOLENS
 	// Tell the window to redraw when they can.
 	// @todo: For Slate viewports, it doesn't make sense to post WM_PAINT messages (we swallow those.)
-	::PostMessage(WindowHandle, WM_PAINT, 0, 0);
+	::PostMessageW(WindowHandle, WM_PAINT, 0, 0);
 #endif
 	// : END HoloLens support
 }
 
 void FD3D12Viewport::ConditionalResetSwapChain(bool bIgnoreFocus)
 {
+	if (!bIsValid)
+	{
+		// Check if the viewport's window is focused before resetting the swap chain's fullscreen state.
+		HWND FocusWindow = ::GetFocus();
+		const bool bIsFocused = FocusWindow == WindowHandle;
+		const bool bIsIconic = !!::IsIconic(WindowHandle);
+		if (bIgnoreFocus || (bIsFocused && !bIsIconic))
+		{
+			FlushRenderingCommands();
+
+			HRESULT Result = SwapChain1->SetFullscreenState(bIsFullscreen, nullptr);
+			if (SUCCEEDED(Result))
+			{
+				bIsValid = true;
+			}
+			else if (Result != DXGI_ERROR_NOT_CURRENTLY_AVAILABLE && Result != DXGI_STATUS_MODE_CHANGE_IN_PROGRESS)
+			{
+				UE_LOG(LogD3D12RHI, Error, TEXT("IDXGISwapChain::SetFullscreenState returned %08x, unknown error status."), Result);
+			}
+		}
+	}
 }
 
 void FD3D12Viewport::ResizeInternal()
@@ -261,7 +282,7 @@ void FD3D12Viewport::ResizeInternal()
 			FD3D12Device* Device = Adapter->GetDevice(GPUIndex);
 
 			CommandQueues.Add(Device->GetD3DCommandQueue());
-			NodeMasks.Add((uint32)Device->GetGPUMask());
+			NodeMasks.Add(Device->GetGPUMask().GetNative());
 		}
 
 		if (SwapChain1)

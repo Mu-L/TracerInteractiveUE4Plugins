@@ -6,7 +6,9 @@
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "SubmixEffects/AudioMixerSubmixEffectDynamicsProcessor.h"
 #include "Sound/SoundEffectSource.h"
-#include "Sound/SampleBuffer.h"
+#include "SampleBuffer.h"
+#include "Sound/SoundCue.h"
+#include "Sound/SoundSubmixSend.h"
 #include "DSP/SpectrumAnalyzer.h"
 #include "AudioMixerBlueprintLibrary.generated.h"
 
@@ -57,6 +59,22 @@ enum class EFFTWindowType : uint8
 	// Mainlobe width of -3 dB and sidelobe attenuation of ~-60db. Tricky for COLA.
 	Blackman
 };
+
+UENUM(BlueprintType)
+enum class EAudioSpectrumType : uint8
+{
+	// Spectrum frequency values are equal to magnitude of frequency.
+	MagnitudeSpectrum,
+
+	// Spectrum frequency values are equal to magnitude squared.
+	PowerSpectrum
+};
+
+/** 
+* Called when a load request for a sound has completed.
+*/
+DECLARE_DYNAMIC_DELEGATE_TwoParams(FOnSoundLoadComplete, const class USoundWave*, LoadedSoundWave, const bool, WasCancelled);
+
 
 UCLASS(meta=(ScriptName="AudioMixerLibrary"))
 class AUDIOMIXER_API UAudioMixerBlueprintLibrary : public UBlueprintFunctionLibrary
@@ -125,6 +143,17 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Audio|Effects", meta = (WorldContext = "WorldContextObject"))
 	static int32 GetNumberOfEntriesInSourceEffectChain(const UObject* WorldContextObject, USoundEffectSourcePresetChain* PresetChain);
 
+	/** Begin loading a sound into the cache so that it can be played immediately. */
+	UFUNCTION(BlueprintCallable, Category = "Sound")
+	static void PrimeSoundForPlayback(USoundWave* SoundWave, const FOnSoundLoadComplete OnLoadCompletion);
+
+	/** Begin loading any sounds referenced by a sound cue into the cache so that it can be played immediately. */
+	UFUNCTION(BlueprintCallable, Category = "Sound")
+	static void PrimeSoundCueForPlayback(USoundCue* SoundCue);
+
+	/** Trim memory used by the audio cache. Returns the number of megabytes freed. */
+	UFUNCTION(BlueprintCallable, Category = "Sound")
+	static float TrimAudioCache(float InMegabytesToFree);
 
 private:
 	static void PopulateSpectrumAnalyzerSettings(EFFTSize FFTSize, EFFTPeakInterpolationMethod InterpolationMethod, EFFTWindowType WindowType, float HopSize, Audio::FSpectrumAnalyzerSettings &OutSettings);

@@ -15,13 +15,14 @@ void FVirtualTextureProducer::Release(FVirtualTextureSystem* System, const FVirt
 		System->ForceUnlockAllTiles(HandleToSelf, this);
 	}
 
-	for (uint32 LayerIndex = 0u; LayerIndex < Description.NumLayers; ++LayerIndex)
+	for (uint32 LayerIndex = 0u; LayerIndex < Description.NumPhysicalGroups; ++LayerIndex)
 	{
-		FVirtualTexturePhysicalSpace* Space = PhysicalSpace[LayerIndex];
+		FVirtualTexturePhysicalSpace* Space = PhysicalGroups[LayerIndex].PhysicalSpace;
 		Space->GetPagePool().EvictPages(System, HandleToSelf);
-		PhysicalSpace[LayerIndex].SafeRelease();
+		PhysicalGroups[LayerIndex].PhysicalSpace.SafeRelease();
 	}
 
+	PhysicalGroups.Reset();
 	delete VirtualTexture;
 	VirtualTexture = nullptr;
 	Description = FVTProducerDescription();
@@ -48,6 +49,8 @@ FVirtualTextureProducerHandle FVirtualTextureProducerCollection::RegisterProduce
 	check(ProducerWidth > 0u);
 	check(ProducerHeight > 0u);
 	check(InDesc.MaxLevel <= FMath::CeilLogTwo(FMath::Max(ProducerWidth, ProducerHeight)));
+	check(InDesc.NumTextureLayers <= VIRTUALTEXTURE_SPACE_MAXLAYERS);
+	check(InDesc.NumPhysicalGroups <= InDesc.NumTextureLayers);
 	check(InProducer);
 
 	const uint32 Index = AcquireEntry();
@@ -56,16 +59,25 @@ FVirtualTextureProducerHandle FVirtualTextureProducerCollection::RegisterProduce
 	Entry.Producer.VirtualTexture = InProducer;
 	Entry.DestroyedCallbacksIndex = AcquireCallback();
 
-	check(InDesc.NumLayers <= VIRTUALTEXTURE_SPACE_MAXLAYERS);
-	for (uint32 LayerIndex = 0u; LayerIndex < InDesc.NumLayers; ++LayerIndex)
+	FVTPhysicalSpaceDescription PhysicalSpaceDesc;
+	PhysicalSpaceDesc.Dimensions = InDesc.Dimensions;
+	PhysicalSpaceDesc.TileSize = InDesc.TileSize + InDesc.TileBorderSize * 2u;
+	PhysicalSpaceDesc.bContinuousUpdate = InDesc.bContinuousUpdate;
+
+	Entry.Producer.PhysicalGroups.SetNum(InDesc.NumPhysicalGroups);
+	for (uint32 PhysicalGroupIndex = 0u; PhysicalGroupIndex < InDesc.NumPhysicalGroups; ++PhysicalGroupIndex)
 	{
-		FVTPhysicalSpaceDescription PhysicalSpaceDesc;
-		PhysicalSpaceDesc.Dimensions = InDesc.Dimensions;
-		PhysicalSpaceDesc.TileSize = InDesc.TileSize + InDesc.TileBorderSize * 2u;
-		PhysicalSpaceDesc.Format = InDesc.LayerFormat[LayerIndex];
-		PhysicalSpaceDesc.bContinuousUpdate = InDesc.bContinuousUpdate;
-		PhysicalSpaceDesc.bCreateRenderTarget = InDesc.bCreateRenderTarget;
-		Entry.Producer.PhysicalSpace[LayerIndex] = System->AcquirePhysicalSpace(PhysicalSpaceDesc);
+		PhysicalSpaceDesc.NumLayers = 0;
+		for (uint32 LayerIndex = 0u; LayerIndex < InDesc.NumTextureLayers; ++LayerIndex)
+		{
+			if (InDesc.PhysicalGroupIndex[LayerIndex] == PhysicalGroupIndex)
+			{
+				PhysicalSpaceDesc.Format[PhysicalSpaceDesc.NumLayers] = InDesc.LayerFormat[LayerIndex];
+				PhysicalSpaceDesc.NumLayers++;
+			}
+		}
+		check(PhysicalSpaceDesc.NumLayers > 0);
+		Entry.Producer.PhysicalGroups[PhysicalGroupIndex].PhysicalSpace = System->AcquirePhysicalSpace(PhysicalSpaceDesc);
 	}
 
 	const FVirtualTextureProducerHandle Handle(Index, Entry.Magic);
@@ -175,7 +187,7 @@ uint32 FVirtualTextureProducerCollection::RemoveAllCallbacks(const void* Baton)
 			Callback.OwnerHandle = FVirtualTextureProducerHandle();
 
 			// If callback is already pending, we can't move it back to free list, or we risk corrupting the pending list while it's being iterated
-			// Setting DestroyedFunction tol nullptr here will ensure callback is no longer invoked, and it will be moved to free list later when it's removed from pending list
+			// Setting DestroyedFunction to nullptr here will ensure callback is no longer invoked, and it will be moved to free list later when it's removed from pending list
 			if (!Callback.bPending)
 			{
 				Callback.PackedFlags = 0u;

@@ -19,9 +19,12 @@ namespace EMeshPass
 	{
 		DepthPass,
 		BasePass,
+		SkyPass,
+		SingleLayerWaterPass,
 		CSMShadowDepth,
 		Distortion,
 		Velocity,
+		TranslucentVelocity,
 		TranslucencyStandard,
 		TranslucencyAfterDOF,
 		TranslucencyAll, /** Drawing all translucency, regardless of separate or standard.  Used when drawing translucency outside of the main renderer, eg FRendererModule::DrawTile. */
@@ -50,9 +53,12 @@ inline const TCHAR* GetMeshPassName(EMeshPass::Type MeshPass)
 	{
 	case EMeshPass::DepthPass: return TEXT("DepthPass");
 	case EMeshPass::BasePass: return TEXT("BasePass");
+	case EMeshPass::SkyPass: return TEXT("SkyPass");
+	case EMeshPass::SingleLayerWaterPass: return TEXT("SingleLayerWaterPass");
 	case EMeshPass::CSMShadowDepth: return TEXT("CSMShadowDepth");
 	case EMeshPass::Distortion: return TEXT("Distortion");
 	case EMeshPass::Velocity: return TEXT("Velocity");
+	case EMeshPass::TranslucentVelocity: return TEXT("TranslucentVelocity");
 	case EMeshPass::TranslucencyStandard: return TEXT("TranslucencyStandard");
 	case EMeshPass::TranslucencyAfterDOF: return TEXT("TranslucencyAfterDOF");
 	case EMeshPass::TranslucencyAll: return TEXT("TranslucencyAll");
@@ -282,6 +288,7 @@ struct FMeshDrawCommandDebugData
 	const FMaterialRenderProxy* MaterialRenderProxy;
 	FMeshMaterialShader* VertexShader;
 	FMeshMaterialShader* PixelShader;
+	const FVertexFactory* VertexFactory;
 	FName ResourceName;
 #endif
 };
@@ -335,6 +342,7 @@ public:
 	void SetOnCommandList(FRHICommandList& RHICmdList, FBoundShaderStateInput Shaders, class FShaderBindingState* StateCacheShaderBindings) const;
 
 	void SetOnCommandListForCompute(FRHICommandList& RHICmdList, FRHIComputeShader* Shader) const;
+	void SetOnCommandListForCompute(FRHIAsyncComputeCommandList& RHICmdList, FRHIComputeShader* Shader) const;
 
 #if RHI_RAYTRACING
 	void SetRayTracingShaderBindingsForHitGroup(FRHICommandList& RHICmdList, FRHIRayTracingScene* Scene, uint32 InstanceIndex, uint32 SegmentIndex, FRayTracingPipelineState* Pipeline, uint32 HitGroupIndex, uint32 ShaderSlot) const;
@@ -386,7 +394,7 @@ private:
 
 		Size = InSize;
 
-		if (InSize > ARRAY_COUNT(InlineStorage))
+		if (InSize > UE_ARRAY_COUNT(InlineStorage))
 		{
 			HeapData = new uint8[InSize];
 		}
@@ -404,28 +412,28 @@ private:
 
 	uint8* GetData()
 	{
-		return Size <= ARRAY_COUNT(InlineStorage) ? &InlineStorage[0] : HeapData;
+		return Size <= UE_ARRAY_COUNT(InlineStorage) ? &InlineStorage[0] : HeapData;
 	}
 
 	const uint8* GetData() const
 	{
-		return Size <= ARRAY_COUNT(InlineStorage) ? &InlineStorage[0] : HeapData;
+		return Size <= UE_ARRAY_COUNT(InlineStorage) ? &InlineStorage[0] : HeapData;
 	}
 
 	RENDERER_API void CopyFrom(const FMeshDrawShaderBindings& Other);
 
 	RENDERER_API void Release();
 
-	template<class RHIShaderType>
+	template<class RHICmdListType, class RHIShaderType>
 	static void SetShaderBindings(
-		FRHICommandList& RHICmdList,
+		RHICmdListType& RHICmdList,
 		RHIShaderType Shader,
 		const class FReadOnlyMeshDrawSingleShaderBindings& RESTRICT SingleShaderBindings,
 		FShaderBindingState& RESTRICT ShaderBindingState);
 
-	template<class RHIShaderType>
+	template<class RHICmdListType, class RHIShaderType>
 	static void SetShaderBindings(
-		FRHICommandList& RHICmdList,
+		RHICmdListType& RHICmdList,
 		RHIShaderType Shader,
 		const class FReadOnlyMeshDrawSingleShaderBindings& RESTRICT SingleShaderBindings);
 };
@@ -574,9 +582,9 @@ public:
 		return Other.CachedPipelineId.GetId();
 	}
 #if MESH_DRAW_COMMAND_DEBUG_DATA
-	RENDERER_API void SetDebugData(const FPrimitiveSceneProxy* PrimitiveSceneProxy, const FMaterial* Material, const FMaterialRenderProxy* MaterialRenderProxy, const FMeshProcessorShaders& UntypedShaders);
+	RENDERER_API void SetDebugData(const FPrimitiveSceneProxy* PrimitiveSceneProxy, const FMaterial* Material, const FMaterialRenderProxy* MaterialRenderProxy, const FMeshProcessorShaders& UntypedShaders, const FVertexFactory* VertexFactory);
 #else
-	void SetDebugData(const FPrimitiveSceneProxy* PrimitiveSceneProxy, const FMaterial* Material, const FMaterialRenderProxy* MaterialRenderProxy, const FMeshProcessorShaders& UntypedShaders){}
+	void SetDebugData(const FPrimitiveSceneProxy* PrimitiveSceneProxy, const FMaterial* Material, const FMaterialRenderProxy* MaterialRenderProxy, const FMeshProcessorShaders& UntypedShaders, const FVertexFactory* VertexFactory){}
 #endif
 
 	SIZE_T GetAllocatedSize() const
@@ -1118,7 +1126,7 @@ public:
 		EMeshPassFeatures MeshPassFeatures,
 		const ShaderElementDataType& ShaderElementData);
 
-private:
+protected:
 	RENDERER_API void GetDrawCommandPrimitiveId(
 		const FPrimitiveSceneInfo* RESTRICT PrimitiveSceneInfo,
 		const FMeshBatchElement& BatchElement,

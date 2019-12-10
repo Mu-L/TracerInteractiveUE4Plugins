@@ -19,6 +19,40 @@ public:
 		: UserId(InUserId.ToSharedRef()), AvatarInfoPairs(MoveTemp(InAvatarInfoPairs))
 	{ }
 
+	FAvatarInfo(const FAvatarInfo& AvatarInfo)
+		: UserId(AvatarInfo.UserId), AvatarInfoPairs(AvatarInfo.AvatarInfoPairs)
+	{ }
+
+	bool Equals(const FAvatarInfo& Other) const
+	{
+		if (UserId.Get() != Other.UserId.Get())
+		{
+			return false;
+		}
+		if (AvatarInfoPairs.Num() != Other.AvatarInfoPairs.Num())
+		{
+			return false;
+		}
+
+		for (const TPair<FString, FString>& Pair : AvatarInfoPairs)
+		{
+			if (const FString* OtherValue = Other.AvatarInfoPairs.Find(Pair.Key))
+			{
+				if (!Pair.Value.Equals(*OtherValue))
+				{
+					return false;
+				}
+			}
+			else
+			{
+				return false;
+			}
+			
+		}
+
+		return true;
+	}
+
 	TSharedRef<const FUniqueNetId> UserId;
 	TMap<FString, FString> AvatarInfoPairs;
 };

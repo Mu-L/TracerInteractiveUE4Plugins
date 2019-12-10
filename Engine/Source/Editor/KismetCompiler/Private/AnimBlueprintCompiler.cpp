@@ -44,15 +44,17 @@
 #include "K2Node_AnimGetter.h"
 #include "AnimGraphNode_StateMachine.h"
 #include "Animation/AnimNode_CustomProperty.h"
-#include "Animation/AnimNode_SubInstance.h"
-#include "AnimGraphNode_SubInstance.h"
+#include "Animation/AnimNode_LinkedAnimGraph.h"
+#include "AnimGraphNode_LinkedAnimGraph.h"
 #include "AnimGraphNode_Slot.h"
 #include "AnimationEditorUtils.h"
+#include "AnimationGraph.h"
 
 #include "AnimBlueprintPostCompileValidation.h" 
-#include "AnimGraphNode_SubInput.h"
+#include "AnimGraphNode_LinkedInputPose.h"
 #include "K2Node_FunctionEntry.h"
 #include "K2Node_FunctionResult.h"
+#include "AnimGraphNode_LinkedAnimLayer.h"
 
 #define LOCTEXT_NAMESPACE "AnimBlueprintCompiler"
 
@@ -71,7 +73,7 @@ bool FAnimBlueprintCompilerContext::FEffectiveConstantRecord::Apply(UObject* Obj
 	uint8* StructPtr = nullptr;
 	uint8* PropertyPtr = nullptr;
 	
-	if(NodeVariableProperty->Struct->IsChildOf(FAnimNode_SubInstance::StaticStruct()))
+	if(NodeVariableProperty->Struct->IsChildOf(FAnimNode_LinkedAnimGraph::StaticStruct()))
 	{
 		PropertyPtr = ConstantProperty->ContainerPtrToValuePtr<uint8>(Object);
 	}
@@ -192,7 +194,7 @@ void FAnimBlueprintCompilerContext::CreateClassVariablesFromBlueprint()
 {
 	FKismetCompilerContext::CreateClassVariablesFromBlueprint();
 
-	if(bGenerateSubInstanceVariables)
+	if(bGenerateLinkedAnimGraphVariables)
 	{	
 		if(!bIsDerivedAnimBlueprint)
 		{
@@ -207,18 +209,18 @@ void FAnimBlueprintCompilerContext::CreateClassVariablesFromBlueprint()
 						ProcessCustomPropertyNode(CustomPropNode);
 					}
 
-					TArray<UAnimGraphNode_SubInstanceBase*> SubInstanceNodes;
-					InGraph->GetNodesOfClass(SubInstanceNodes);
-					for(UAnimGraphNode_SubInstanceBase* SubInstance : SubInstanceNodes)
+					TArray<UAnimGraphNode_LinkedAnimGraphBase*> LinkedAnimGraphNodes;
+					InGraph->GetNodesOfClass(LinkedAnimGraphNodes);
+					for(UAnimGraphNode_LinkedAnimGraphBase* LinkedAnimGraphNode : LinkedAnimGraphNodes)
 					{
-						ProcessSubInstance(SubInstance, false);
+						ProcessLinkedAnimGraph(LinkedAnimGraphNode, false);
 					}
 
-					TArray<UAnimGraphNode_SubInput*> SubInputNodes;
-					InGraph->GetNodesOfClass(SubInputNodes);
-					for(UAnimGraphNode_SubInput* SubInput : SubInputNodes)
+					TArray<UAnimGraphNode_LinkedInputPose*> LinkedInputPoseNodes;
+					InGraph->GetNodesOfClass(LinkedInputPoseNodes);
+					for(UAnimGraphNode_LinkedInputPose* LinkedInputPoseNode : LinkedInputPoseNodes)
 					{
-						ProcessSubInput(SubInput);
+						ProcessLinkedInputPose(LinkedInputPoseNode);
 					}
 				};
 
@@ -266,7 +268,7 @@ UK2Node_CallFunction* FAnimBlueprintCompilerContext::SpawnCallAnimInstanceFuncti
 	return FunctionCall;
 }
 
-void FAnimBlueprintCompilerContext::CreateEvaluationHandlerStruct(UAnimGraphNode_Base* VisualAnimNode, FEvaluationHandlerRecord& Record)
+void FAnimBlueprintCompilerContext::CreateEvaluationHandler(UAnimGraphNode_Base* VisualAnimNode, FEvaluationHandlerRecord& Record)
 {
 	// Shouldn't create a handler if there is nothing to work with
 	check(Record.ServicedProperties.Num() > 0);
@@ -285,7 +287,7 @@ void FAnimBlueprintCompilerContext::CreateEvaluationHandlerStruct(UAnimGraphNode
 	// check function name isnt already used (data exists that can contain duplicate GUIDs) and apply a numeric extension until it is unique
 	int32 ExtensionIndex = 0;
 	FName* ExistingName = HandlerFunctionNames.Find(Record.HandlerFunctionName);
-	while(ExistingName != nullptr)
+	while (ExistingName != nullptr)
 	{
 		FunctionName = FString::Printf(TEXT("%s_%s_%s_%s_%d"), *AnimGraphDefaultSchema->DefaultEvaluationHandlerName.ToString(), *VisualAnimNode->GetOuter()->GetName(), *VisualAnimNode->GetClass()->GetName(), *VisualAnimNode->NodeGuid.ToString(), ExtensionIndex);
 		Record.HandlerFunctionName = FName(*FunctionName);
@@ -294,7 +296,7 @@ void FAnimBlueprintCompilerContext::CreateEvaluationHandlerStruct(UAnimGraphNode
 	}
 
 	HandlerFunctionNames.Add(Record.HandlerFunctionName);
-	
+
 	// Add a custom event in the graph
 	UK2Node_CustomEvent* EntryNode = SpawnIntermediateEventNode<UK2Node_CustomEvent>(VisualAnimNode, nullptr, ConsolidatedEventGraph);
 	EntryNode->bInternalEvent = true;
@@ -303,186 +305,158 @@ void FAnimBlueprintCompilerContext::CreateEvaluationHandlerStruct(UAnimGraphNode
 
 	// The ExecChain is the current exec output pin in the linear chain
 	UEdGraphPin* ExecChain = Schema->FindExecutionPin(*EntryNode, EGPD_Output);
-
-	// Create a struct member write node to store the parameters into the animation node
-	UK2Node_StructMemberSet* AssignmentNode = SpawnIntermediateNode<UK2Node_StructMemberSet>(VisualAnimNode, ConsolidatedEventGraph);
-	AssignmentNode->VariableReference.SetSelfMember(Record.NodeVariableProperty->GetFName());
-	AssignmentNode->StructType = Record.NodeVariableProperty->Struct;
-	AssignmentNode->AllocateDefaultPins();
-
-	// Wire up the variable node execution wires
-	UEdGraphPin* ExecVariablesIn = Schema->FindExecutionPin(*AssignmentNode, EGPD_Input);
-	ExecChain->MakeLinkTo(ExecVariablesIn);
-	ExecChain = Schema->FindExecutionPin(*AssignmentNode, EGPD_Output);
-
-	// Run thru each property
-	TSet<FName> PropertiesBeingSet;
-
-	for (auto TargetPinIt = AssignmentNode->Pins.CreateIterator(); TargetPinIt; ++TargetPinIt)
+	if (Record.bServicesInstanceProperties)
 	{
-		UEdGraphPin* TargetPin = *TargetPinIt;
-		FName PropertyName(TargetPin->PinName);
-
-		// Does it get serviced by this handler?
-		if (FAnimNodeSinglePropertyHandler* SourceInfo = Record.ServicedProperties.Find(PropertyName))
+		// Need to create a variable set call for each serviced property in the handler
+		for (TPair<FName, FAnimNodeSinglePropertyHandler>& PropHandlerPair : Record.ServicedProperties)
 		{
-			if (TargetPin->PinType.IsArray())
+			FAnimNodeSinglePropertyHandler& PropHandler = PropHandlerPair.Value;
+			FName PropertyName = PropHandlerPair.Key;
+
+			// Should be true, we only want to deal with instance targets in here
+			if (PropHandler.bInstanceIsTarget)
 			{
-				// Grab the array that we need to set members for
-				UK2Node_StructMemberGet* FetchArrayNode = SpawnIntermediateNode<UK2Node_StructMemberGet>(VisualAnimNode, ConsolidatedEventGraph);
-				FetchArrayNode->VariableReference.SetSelfMember(Record.NodeVariableProperty->GetFName());
-				FetchArrayNode->StructType = Record.NodeVariableProperty->Struct;
-				FetchArrayNode->AllocatePinsForSingleMemberGet(PropertyName);
-
-				UEdGraphPin* ArrayVariableNode = FetchArrayNode->FindPin(PropertyName);
-
-				if (SourceInfo->CopyRecords.Num() > 0)
+				for (FPropertyCopyRecord& CopyRecord : PropHandler.CopyRecords)
 				{
-					// Set each element in the array
-					for (FPropertyCopyRecord& CopyRecord : SourceInfo->CopyRecords)
+					// New set node for the property
+					UK2Node_VariableSet* VarAssignNode = SpawnIntermediateNode<UK2Node_VariableSet>(VisualAnimNode, ConsolidatedEventGraph);
+					VarAssignNode->VariableReference.SetSelfMember(CopyRecord.DestProperty->GetFName());
+					VarAssignNode->AllocateDefaultPins();
+
+					// Wire up the exec line, and update the end of the chain
+					UEdGraphPin* ExecVariablesIn = Schema->FindExecutionPin(*VarAssignNode, EGPD_Input);
+					ExecChain->MakeLinkTo(ExecVariablesIn);
+					ExecChain = Schema->FindExecutionPin(*VarAssignNode, EGPD_Output);
+
+					// Find the property pin on the set node and configure
+					for (UEdGraphPin* TargetPin : VarAssignNode->Pins)
 					{
-						int32 ArrayIndex = CopyRecord.DestArrayIndex;
-						UEdGraphPin* DestPin = CopyRecord.DestPin;
+						if (TargetPin->PinType.IsContainer())
+						{
+							// Currently unsupported
+							continue;
+						}
 
-						// Create an array element set node
-						UK2Node_CallArrayFunction* ArrayNode = SpawnIntermediateNode<UK2Node_CallArrayFunction>(VisualAnimNode, ConsolidatedEventGraph);
-						ArrayNode->FunctionReference.SetExternalMember(GET_FUNCTION_NAME_CHECKED(UKismetArrayLibrary, Array_Set), UKismetArrayLibrary::StaticClass());
-						ArrayNode->AllocateDefaultPins();
+						FName PinPropertyName(TargetPin->PinName);
 
-						// Connect the execution chain
-						ExecChain->MakeLinkTo(ArrayNode->GetExecPin());
-						ExecChain = ArrayNode->GetThenPin();
+						if (PinPropertyName == PropertyName)
+						{
+							// This is us, wire up the variable
+							UEdGraphPin* DestPin = CopyRecord.DestPin;
 
-						// Connect the input array
-						UEdGraphPin* TargetArrayPin = ArrayNode->FindPinChecked(TEXT("TargetArray"));
-						TargetArrayPin->MakeLinkTo(ArrayVariableNode);
-						ArrayNode->PinConnectionListChanged(TargetArrayPin);
+							// Copy the data (link up to the source nodes)
+							TargetPin->CopyPersistentDataFromOldPin(*DestPin);
+							MessageLog.NotifyIntermediatePinCreation(TargetPin, DestPin);
 
-						// Set the array index
-						UEdGraphPin* TargetIndexPin = ArrayNode->FindPinChecked(TEXT("Index"));
-						TargetIndexPin->DefaultValue = FString::FromInt(ArrayIndex);
+							// Old pin needs to not be connected now - break all its links
+							DestPin->BreakAllPinLinks();
 
-						// Wire up the data input
-						UEdGraphPin* TargetItemPin = ArrayNode->FindPinChecked(TEXT("Item"));
-						TargetItemPin->CopyPersistentDataFromOldPin(*DestPin);
-						MessageLog.NotifyIntermediatePinCreation(TargetItemPin, DestPin);
+							break;
+						}
+					}
+
+					//VarAssignNode->ReconstructNode();
+				}
+			}
+		}
+	}
+
+	if (Record.bServicesNodeProperties)
+	{
+		// Create a struct member write node to store the parameters into the animation node
+		UK2Node_StructMemberSet* AssignmentNode = SpawnIntermediateNode<UK2Node_StructMemberSet>(VisualAnimNode, ConsolidatedEventGraph);
+		AssignmentNode->VariableReference.SetSelfMember(Record.NodeVariableProperty->GetFName());
+		AssignmentNode->StructType = Record.NodeVariableProperty->Struct;
+		AssignmentNode->AllocateDefaultPins();
+
+		// Wire up the variable node execution wires
+		UEdGraphPin* ExecVariablesIn = Schema->FindExecutionPin(*AssignmentNode, EGPD_Input);
+		ExecChain->MakeLinkTo(ExecVariablesIn);
+		ExecChain = Schema->FindExecutionPin(*AssignmentNode, EGPD_Output);
+
+		// Run thru each property
+		TSet<FName> PropertiesBeingSet;
+
+		for (auto TargetPinIt = AssignmentNode->Pins.CreateIterator(); TargetPinIt; ++TargetPinIt)
+		{
+			UEdGraphPin* TargetPin = *TargetPinIt;
+			FName PropertyName(TargetPin->PinName);
+
+			// Does it get serviced by this handler?
+			if (FAnimNodeSinglePropertyHandler* SourceInfo = Record.ServicedProperties.Find(PropertyName))
+			{
+				if (TargetPin->PinType.IsArray())
+				{
+					// Grab the array that we need to set members for
+					UK2Node_StructMemberGet* FetchArrayNode = SpawnIntermediateNode<UK2Node_StructMemberGet>(VisualAnimNode, ConsolidatedEventGraph);
+					FetchArrayNode->VariableReference.SetSelfMember(Record.NodeVariableProperty->GetFName());
+					FetchArrayNode->StructType = Record.NodeVariableProperty->Struct;
+					FetchArrayNode->AllocatePinsForSingleMemberGet(PropertyName);
+
+					UEdGraphPin* ArrayVariableNode = FetchArrayNode->FindPin(PropertyName);
+
+					if (SourceInfo->CopyRecords.Num() > 0)
+					{
+						// Set each element in the array
+						for (FPropertyCopyRecord& CopyRecord : SourceInfo->CopyRecords)
+						{
+							int32 ArrayIndex = CopyRecord.DestArrayIndex;
+							UEdGraphPin* DestPin = CopyRecord.DestPin;
+
+							// Create an array element set node
+							UK2Node_CallArrayFunction* ArrayNode = SpawnIntermediateNode<UK2Node_CallArrayFunction>(VisualAnimNode, ConsolidatedEventGraph);
+							ArrayNode->FunctionReference.SetExternalMember(GET_FUNCTION_NAME_CHECKED(UKismetArrayLibrary, Array_Set), UKismetArrayLibrary::StaticClass());
+							ArrayNode->AllocateDefaultPins();
+
+							// Connect the execution chain
+							ExecChain->MakeLinkTo(ArrayNode->GetExecPin());
+							ExecChain = ArrayNode->GetThenPin();
+
+							// Connect the input array
+							UEdGraphPin* TargetArrayPin = ArrayNode->FindPinChecked(TEXT("TargetArray"));
+							TargetArrayPin->MakeLinkTo(ArrayVariableNode);
+							ArrayNode->PinConnectionListChanged(TargetArrayPin);
+
+							// Set the array index
+							UEdGraphPin* TargetIndexPin = ArrayNode->FindPinChecked(TEXT("Index"));
+							TargetIndexPin->DefaultValue = FString::FromInt(ArrayIndex);
+
+							// Wire up the data input
+							UEdGraphPin* TargetItemPin = ArrayNode->FindPinChecked(TEXT("Item"));
+							TargetItemPin->CopyPersistentDataFromOldPin(*DestPin);
+							MessageLog.NotifyIntermediatePinCreation(TargetItemPin, DestPin);
+							DestPin->BreakAllPinLinks();
+						}
+					}
+				}
+				else
+				{
+					check(!TargetPin->PinType.IsContainer());
+					// Single property
+					if (SourceInfo->CopyRecords.Num() > 0 && SourceInfo->CopyRecords[0].DestPin != nullptr)
+					{
+						UEdGraphPin* DestPin = SourceInfo->CopyRecords[0].DestPin;
+
+						PropertiesBeingSet.Add(DestPin->PinName);
+						TargetPin->CopyPersistentDataFromOldPin(*DestPin);
+						MessageLog.NotifyIntermediatePinCreation(TargetPin, DestPin);
 						DestPin->BreakAllPinLinks();
 					}
 				}
 			}
-			else
-			{
-				check(!TargetPin->PinType.IsContainer())
-				// Single property
-				if (SourceInfo->CopyRecords.Num() > 0 && SourceInfo->CopyRecords[0].DestPin != nullptr)
-				{
-					UEdGraphPin* DestPin = SourceInfo->CopyRecords[0].DestPin;
-
-					PropertiesBeingSet.Add(DestPin->PinName);
-					TargetPin->CopyPersistentDataFromOldPin(*DestPin);
-					MessageLog.NotifyIntermediatePinCreation(TargetPin, DestPin);
-					DestPin->BreakAllPinLinks();
-				}
-			}
 		}
-	}
 
-	// Remove any unused pins from the assignment node to avoid smashing constant values
-	for (int32 PinIndex = 0; PinIndex < AssignmentNode->ShowPinForProperties.Num(); ++PinIndex)
-	{
-		FOptionalPinFromProperty& TestProperty = AssignmentNode->ShowPinForProperties[PinIndex];
-		TestProperty.bShowPin = PropertiesBeingSet.Contains(TestProperty.PropertyName);
-	}
-	AssignmentNode->ReconstructNode();
-}
-
-void FAnimBlueprintCompilerContext::CreateEvaluationHandlerInstance(UAnimGraphNode_Base* VisualAnimNode, FEvaluationHandlerRecord& Record)
-{
-	// Shouldn't create a handler if there is nothing to work with
-	check(Record.ServicedProperties.Num() > 0);
-	check(Record.NodeVariableProperty != nullptr);
-	check(Record.bServicesInstanceProperties);
-	
-	const UAnimationGraphSchema* AnimGraphDefaultSchema = GetDefault<UAnimationGraphSchema>();
-
-	// Use the node GUID for a stable name across compiles
-	FString FunctionName = FString::Printf(TEXT("%s_%s_%s_%s"), *AnimGraphDefaultSchema->DefaultEvaluationHandlerName.ToString(), *VisualAnimNode->GetOuter()->GetName(), *VisualAnimNode->GetClass()->GetName(), *VisualAnimNode->NodeGuid.ToString());
-	Record.HandlerFunctionName = FName(*FunctionName);
-
-	// check function name isnt already used (data exists that can contain duplicate GUIDs) and apply a numeric extension until it is unique
-	int32 ExtensionIndex = 0;
-	FName* ExistingName = HandlerFunctionNames.Find(Record.HandlerFunctionName);
-	while(ExistingName != nullptr)
-	{
-		FunctionName = FString::Printf(TEXT("%s_%s_%s_%s_%d"), *AnimGraphDefaultSchema->DefaultEvaluationHandlerName.ToString(), *VisualAnimNode->GetOuter()->GetName(), *VisualAnimNode->GetClass()->GetName(), *VisualAnimNode->NodeGuid.ToString(), ExtensionIndex);
-		Record.HandlerFunctionName = FName(*FunctionName);
-		ExistingName = HandlerFunctionNames.Find(Record.HandlerFunctionName);
-		ExtensionIndex++;
-	}
-
-	HandlerFunctionNames.Add(Record.HandlerFunctionName);
-
-	// Add a custom event in the graph
-	UK2Node_CustomEvent* EntryNode = SpawnIntermediateNode<UK2Node_CustomEvent>(VisualAnimNode, ConsolidatedEventGraph);
-	EntryNode->bInternalEvent = true;
-	EntryNode->CustomFunctionName = Record.HandlerFunctionName;
-	EntryNode->AllocateDefaultPins();
-
-	// The ExecChain is the current exec output pin in the linear chain
-	UEdGraphPin* ExecChain = Schema->FindExecutionPin(*EntryNode, EGPD_Output);
-
-	// Need to create a variable set call for each serviced property in the handler
-	for(TPair<FName, FAnimNodeSinglePropertyHandler>& PropHandlerPair : Record.ServicedProperties)
-	{
-		FAnimNodeSinglePropertyHandler& PropHandler = PropHandlerPair.Value;
-		FName PropertyName = PropHandlerPair.Key;
-
-		// Should be true, we only want to deal with instance targets in here
-		check(PropHandler.bInstanceIsTarget);
-
-		for(FPropertyCopyRecord& CopyRecord : PropHandler.CopyRecords)
+		// Remove any unused pins from the assignment node to avoid smashing constant values
+		for (int32 PinIndex = 0; PinIndex < AssignmentNode->ShowPinForProperties.Num(); ++PinIndex)
 		{
-			// New set node for the property
-			UK2Node_VariableSet* VarAssignNode = SpawnIntermediateNode<UK2Node_VariableSet>(VisualAnimNode, ConsolidatedEventGraph);
-			VarAssignNode->VariableReference.SetSelfMember(CopyRecord.DestProperty->GetFName());
-			VarAssignNode->AllocateDefaultPins();
-
-			// Wire up the exec line, and update the end of the chain
-			UEdGraphPin* ExecVariablesIn = Schema->FindExecutionPin(*VarAssignNode, EGPD_Input);
-			ExecChain->MakeLinkTo(ExecVariablesIn);
-			ExecChain = Schema->FindExecutionPin(*VarAssignNode, EGPD_Output);
-
-			// Find the property pin on the set node and configure
-			for(UEdGraphPin* TargetPin : VarAssignNode->Pins)
-			{
-				if(TargetPin->PinType.IsContainer())
-				{
-					// Currently unsupported
-					continue;
-				}
-
-				FName PinPropertyName(TargetPin->PinName);
-
-				if(PinPropertyName == PropertyName)
-				{
-					// This is us, wire up the variable
-					UEdGraphPin* DestPin = CopyRecord.DestPin;
-
-					// Copy the data (link up to the source nodes)
-					TargetPin->CopyPersistentDataFromOldPin(*DestPin);
-					MessageLog.NotifyIntermediatePinCreation(TargetPin, DestPin);
-
-					// Old pin needs to not be connected now - break all its links
-					DestPin->BreakAllPinLinks();
-
-					break;
-				}
-			}
-
-			//VarAssignNode->ReconstructNode();
+			FOptionalPinFromProperty& TestProperty = AssignmentNode->ShowPinForProperties[PinIndex];
+			TestProperty.bShowPin = PropertiesBeingSet.Contains(TestProperty.PropertyName);
 		}
+
+		AssignmentNode->ReconstructNode();
 	}
 }
+
 
 void FAnimBlueprintCompilerContext::ProcessAnimationNode(UAnimGraphNode_Base* VisualAnimNode)
 {
@@ -538,8 +512,10 @@ void FAnimBlueprintCompilerContext::ProcessAnimationNode(UAnimGraphNode_Base* Vi
 	SourceNodeToProcessedNodeMap.Add(TrueSourceObject, VisualAnimNode);
 
 	// Register the slightly more permanent debug information
-	NewAnimBlueprintClass->GetAnimBlueprintDebugData().NodePropertyToIndexMap.Add(TrueSourceObject, AllocatedIndex);
-	NewAnimBlueprintClass->GetAnimBlueprintDebugData().NodeGuidToIndexMap.Add(TrueSourceObject->NodeGuid, AllocatedIndex);
+	FAnimBlueprintDebugData& NewAnimBlueprintDebugData = NewAnimBlueprintClass->GetAnimBlueprintDebugData();
+	NewAnimBlueprintDebugData.NodePropertyToIndexMap.Add(TrueSourceObject, AllocatedIndex);
+	NewAnimBlueprintDebugData.NodeGuidToIndexMap.Add(TrueSourceObject->NodeGuid, AllocatedIndex);
+	NewAnimBlueprintDebugData.NodePropertyIndexToNodeMap.Add(AllocatedIndex, TrueSourceObject);
 	NewAnimBlueprintClass->GetDebugData().RegisterClassPropertyAssociation(TrueSourceObject, NewProperty);
 
 	// Node-specific compilation that requires compiler state info
@@ -553,19 +529,64 @@ void FAnimBlueprintCompilerContext::ProcessAnimationNode(UAnimGraphNode_Base* Vi
 		// Handle a save/use cached pose linkage
 		ProcessUseCachedPose(UseCachedPose);
 	}
-	else if(UAnimGraphNode_SubInstanceBase* SubInstanceNode = Cast<UAnimGraphNode_SubInstanceBase>(VisualAnimNode))
+	else if(UAnimGraphNode_LinkedAnimGraphBase* LinkedAnimGraphNode = Cast<UAnimGraphNode_LinkedAnimGraphBase>(VisualAnimNode))
 	{
-		ProcessSubInstance(SubInstanceNode, true);
+		ProcessLinkedAnimGraph(LinkedAnimGraphNode, true);
 	}
-	else if (UAnimGraphNode_SubInput* SubInputNode = Cast<UAnimGraphNode_SubInput>(VisualAnimNode))
+	else if (UAnimGraphNode_LinkedInputPose* LinkedInputPoseNode = Cast<UAnimGraphNode_LinkedInputPose>(VisualAnimNode))
 	{
-		// Process sub-input nodes (input)
-		ProcessSubInput(SubInputNode);
+		// Process linked input pose nodes (input)
+		ProcessLinkedInputPose(LinkedInputPoseNode);
 	}
 	else if(UAnimGraphNode_Root* RootNode = Cast<UAnimGraphNode_Root>(VisualAnimNode))
 	{
 		// Process root nodes
 		ProcessRoot(RootNode);
+	}
+	else if (UAnimGraphNode_AssetPlayerBase* AssetPlayerBase = Cast<UAnimGraphNode_AssetPlayerBase>(VisualAnimNode))
+	{			
+		// Process Asset Player nodes to, if necessary cache off their node index for retrieval at runtime (used for evaluating Automatic Rule Transitions when using Layer nodes)
+		auto ProcessGraph = [this, GUID = AssetPlayerBase->NodeGuid](UEdGraph* Graph)
+		{
+			// Make sure we do not process the default AnimGraph
+			static const FName DefaultAnimGraphName("AnimGraph");
+			if (Graph->GetFName() != DefaultAnimGraphName)
+			{
+				FString GraphName = Graph->GetName();
+				// Also make sure we do not process any empty stub graphs
+				if (!GraphName.Contains(ANIM_FUNC_DECORATOR))
+				{
+					if (Graph->Nodes.ContainsByPredicate([GUID](UEdGraphNode* Node) { return Node->NodeGuid == GUID; }))
+					{
+						if (int32* IndexPtr = NewAnimBlueprintClass->AnimBlueprintDebugData.NodeGuidToIndexMap.Find(GUID))
+						{
+							FGraphAssetPlayerInformation& Info = NewAnimBlueprintClass->GraphAssetPlayerInformation.FindOrAdd(FName(*GraphName));
+							Info.PlayerNodeIndices.AddUnique(*IndexPtr);
+						}
+					}
+				}
+			}
+		};
+
+		// Check for any definition of a layer graph
+		for (UEdGraph* Graph : Blueprint->FunctionGraphs)
+		{
+			ProcessGraph(Graph);
+		}
+
+		// Check for any implemented AnimLayer interface graphs
+		for (FBPInterfaceDescription& InterfaceDesc : Blueprint->ImplementedInterfaces)
+		{
+			// Only process Anim Layer interfaces
+			if (InterfaceDesc.Interface->IsChildOf<UAnimLayerInterface>())
+			{
+				for (UEdGraph* Graph : InterfaceDesc.Graphs)
+				{
+					ProcessGraph(Graph);
+				}
+			}
+		}
+				
 	}
 
 	// should we do this earlier? @Tom should we split this to create anim instance vars vs linking to sub anim instance node?
@@ -596,23 +617,23 @@ void FAnimBlueprintCompilerContext::ProcessAnimationNode(UAnimGraphNode_Base* Vi
 		else
 		{
 			// The property source for our data, either the struct property for an anim node, or the
-			// owning anim instance if using a sub instance node.
+			// owning anim instance if using a linked instance node.
 			UProperty* SourcePinProperty = nullptr;
 			int32 SourceArrayIndex = INDEX_NONE;
+			bool bInstancePropertyExists = false;
 
-			// We have special handling below if we're targeting a subinstance instead of our own instance properties
+			// We have special handling below if we're targeting a linked instance instead of our own instance properties
 			UAnimGraphNode_CustomProperty* CustomPropertyNode = Cast<UAnimGraphNode_CustomProperty>(VisualAnimNode);
 
+			VisualAnimNode->GetPinAssociatedProperty(NodeType, SourcePin, /*out*/ SourcePinProperty, /*out*/ SourceArrayIndex);
+
 			// Does this pin have an associated evaluation handler?
-			if(CustomPropertyNode)
+			if(!SourcePinProperty && CustomPropertyNode)
 			{
 				// Custom property nodes use instance properties not node properties as they aren't UObjects
 				// and we can't store non-native properties there
 				CustomPropertyNode->GetInstancePinProperty(NewAnimBlueprintClass, SourcePin, SourcePinProperty);
-			}
-			else
-			{
-				VisualAnimNode->GetPinAssociatedProperty(NodeType, SourcePin, /*out*/ SourcePinProperty, /*out*/ SourceArrayIndex);
+				bInstancePropertyExists = true;
 			}
 			
 			if (SourcePinProperty != NULL)
@@ -641,16 +662,18 @@ void FAnimBlueprintCompilerContext::ProcessAnimationNode(UAnimGraphNode_Base* Vi
 					ensure(EvalHandler.NodeVariableProperty == nullptr || EvalHandler.NodeVariableProperty == NewProperty);
 					EvalHandler.NodeVariableProperty = NewProperty;
 					EvalHandler.RegisterPin(SourcePin, SourcePinProperty, SourceArrayIndex);
+					// if it's not instance property, ensure we mark it
+					EvalHandler.bServicesNodeProperties = EvalHandler.bServicesNodeProperties | !bInstancePropertyExists;
 
-					if(CustomPropertyNode)
+					if (CustomPropertyNode)
 					{
-						EvalHandler.bServicesInstanceProperties = true;
+						EvalHandler.bServicesInstanceProperties = EvalHandler.bServicesInstanceProperties | bInstancePropertyExists;
 
 						FAnimNodeSinglePropertyHandler* SinglePropHandler = EvalHandler.ServicedProperties.Find(SourcePinProperty->GetFName());
 						check(SinglePropHandler); // Should have been added in RegisterPin
 
 						// Flag that the target property is actually on the instance class and not the node
-						SinglePropHandler->bInstanceIsTarget = true;
+						SinglePropHandler->bInstanceIsTarget = bInstancePropertyExists;
 					}
 
 					bConsumed = true;
@@ -694,15 +717,7 @@ void FAnimBlueprintCompilerContext::ProcessAnimationNode(UAnimGraphNode_Base* Vi
 			NewAnimBlueprintClass->EvaluateGraphExposedInputs.AddDefaulted(StructEvalHandlers.Num());
 			Record.EvaluationHandlerIdx = NewAnimBlueprintClass->EvaluateGraphExposedInputs.Num() - 1;
 
-			// add instance to class:
-			if(Record.bServicesInstanceProperties)
-			{
-				CreateEvaluationHandlerInstance(VisualAnimNode, Record);
-			}
-			else
-			{
-				CreateEvaluationHandlerStruct(VisualAnimNode, Record);
-			}
+			CreateEvaluationHandler(VisualAnimNode, Record);
 
 			ValidEvaluationHandlerList.Add(Record);
 		}
@@ -723,12 +738,6 @@ void FAnimBlueprintCompilerContext::ProcessRoot(UAnimGraphNode_Root* Root)
 void FAnimBlueprintCompilerContext::ProcessUseCachedPose(UAnimGraphNode_UseCachedPose* UseCachedPose)
 {
 	bool bSuccessful = false;
-
-	// if compiling only skeleton, we don't have to worry about linking save node
-	if (CompileOptions.CompileType == EKismetCompileType::SkeletonOnly)
-	{
-		return;
-	}
 
 	// Link to the saved cached pose
 	if(UseCachedPose->SaveCachedPoseNode.IsValid())
@@ -771,6 +780,16 @@ void FAnimBlueprintCompilerContext::ProcessCustomPropertyNode(UAnimGraphNode_Cus
 	{
 		if (!Pin->bOrphanedPin && !AnimGraphSchema->IsPosePin(Pin->PinType))
 		{
+			// avoid to add properties which already exist on the custom node.
+			// for example the ControlRig_CustomNode has a pin called "alpha" which is not custom.
+			if (UStructProperty* NodeProperty = Cast<UStructProperty>(CustomPropNode->GetClass()->FindPropertyByName(TEXT("Node"))))
+			{
+				if(NodeProperty->Struct->FindPropertyByName(Pin->GetFName()))
+				{
+					continue;
+				}
+			}
+
 			// Add prefix to avoid collisions
 			FString PrefixedName = CustomPropNode->GetPinTargetVariableName(Pin);
 
@@ -781,7 +800,7 @@ void FAnimBlueprintCompilerContext::ProcessCustomPropertyNode(UAnimGraphNode_Cus
 				FKismetCompilerUtilities::LinkAddedProperty(NewAnimBlueprintClass, NewProperty);
 
 				// Add mappings to the node
-				if (!bGenerateSubInstanceVariables)
+				if (!bGenerateLinkedAnimGraphVariables)
 				{
 					UClass* InstClass = CustomPropNode->GetTargetSkeletonClass();
 					if (UProperty* FoundProperty = FindField<UProperty>(InstClass, Pin->PinName))
@@ -794,21 +813,21 @@ void FAnimBlueprintCompilerContext::ProcessCustomPropertyNode(UAnimGraphNode_Cus
 	}
 }
 
-void FAnimBlueprintCompilerContext::ProcessSubInstance(UAnimGraphNode_SubInstanceBase* SubInstance, bool bCheckForCycles)
+void FAnimBlueprintCompilerContext::ProcessLinkedAnimGraph(UAnimGraphNode_LinkedAnimGraphBase* LinkedAnimGraph, bool bCheckForCycles)
 {
-	if(!SubInstance)
+	if(!LinkedAnimGraph)
 	{
 		return;
 	}
 
-	FAnimNode_SubInstance& RuntimeNode = *SubInstance->GetSubInstanceNode();
+	FAnimNode_LinkedAnimGraph& RuntimeNode = *LinkedAnimGraph->GetLinkedAnimGraphNode();
 
-	if(!bGenerateSubInstanceVariables)
+	if(!bGenerateLinkedAnimGraphVariables)
 	{
 		RuntimeNode.InputPoses.Empty();
 		RuntimeNode.InputPoseNames.Empty();
 	}
-	for(UEdGraphPin* Pin : SubInstance->Pins)
+	for(UEdGraphPin* Pin : LinkedAnimGraph->Pins)
 	{
 		if(!Pin->bOrphanedPin)
 		{
@@ -816,7 +835,7 @@ void FAnimBlueprintCompilerContext::ProcessSubInstance(UAnimGraphNode_SubInstanc
 			{
 				if(Pin->Direction == EGPD_Input)
 				{
-					if(!bGenerateSubInstanceVariables)
+					if(!bGenerateLinkedAnimGraphVariables)
 					{
 						RuntimeNode.InputPoses.AddDefaulted();
 						RuntimeNode.InputPoseNames.Add(Pin->GetFName());
@@ -833,7 +852,7 @@ void FAnimBlueprintCompilerContext::ProcessSubInstance(UAnimGraphNode_SubInstanc
 		NameToCountMap SlotNameToCountMap;
 		NameToCountMap StateMachineNameToCountMap;
 
-		GetDuplicatedSlotAndStateNames(SubInstance, StateMachineNameToCountMap, SlotNameToCountMap);
+		GetDuplicatedSlotAndStateNames(LinkedAnimGraph, StateMachineNameToCountMap, SlotNameToCountMap);
 
 
 		for(TPair<FName, int32>& Pair : SlotNameToCountMap)
@@ -841,7 +860,7 @@ void FAnimBlueprintCompilerContext::ProcessSubInstance(UAnimGraphNode_SubInstanc
 			if(Pair.Value > 1)
 			{
 				// Duplicated slot node
-				FString CompilerMessage = FString::Printf(TEXT("Slot name \"%s\" found across multiple instances. Slots are not visible outside of instances so duplicates or subinstances may not perform as expected."), *Pair.Key.ToString());
+				FString CompilerMessage = FString::Printf(TEXT("Slot name \"%s\" found across multiple instances. Slots are not visible outside of instances so duplicates or linked instances may not perform as expected."), *Pair.Key.ToString());
 				MessageLog.Warning(*CompilerMessage);
 			}
 		}
@@ -851,22 +870,22 @@ void FAnimBlueprintCompilerContext::ProcessSubInstance(UAnimGraphNode_SubInstanc
 			if(Pair.Value > 1)
 			{
 				// Duplicated slot node
-				FString CompilerMessage = FString::Printf(TEXT("State machine \"%s\" found across multiple instances. States are not visible outside of instances so duplicates or subinstances may not perform as expected."), *Pair.Key.ToString());
+				FString CompilerMessage = FString::Printf(TEXT("State machine \"%s\" found across multiple instances. States are not visible outside of instances so duplicates or linked instances may not perform as expected."), *Pair.Key.ToString());
 				MessageLog.Warning(*CompilerMessage);
 			}
 		}
 	}
 }
 
-void FAnimBlueprintCompilerContext::GetDuplicatedSlotAndStateNames(UAnimGraphNode_SubInstanceBase* InSubInstance, NameToCountMap& OutStateMachineNameToCountMap, NameToCountMap& OutSlotNameToCountMap)
+void FAnimBlueprintCompilerContext::GetDuplicatedSlotAndStateNames(UAnimGraphNode_LinkedAnimGraphBase* InLinkedAnimGraph, NameToCountMap& OutStateMachineNameToCountMap, NameToCountMap& OutSlotNameToCountMap)
 {
-	if(!InSubInstance)
+	if(!InLinkedAnimGraph)
 	{
 		// Nothing to inspect
 		return;
 	}
 
-	if(UClass* InstanceClass = InSubInstance->GetTargetClass())
+	if(UClass* InstanceClass = InLinkedAnimGraph->GetTargetClass())
 	{
 		UBlueprint* ClassBP = UBlueprint::GetBlueprintFromClass(InstanceClass);
 
@@ -877,11 +896,11 @@ void FAnimBlueprintCompilerContext::GetDuplicatedSlotAndStateNames(UAnimGraphNod
 		{
 			TArray<UAnimGraphNode_StateMachine*> StateMachineNodes;
 			TArray<UAnimGraphNode_Slot*> SlotNodes;
-			TArray<UAnimGraphNode_SubInstance*> SubInstanceNodes;
+			TArray<UAnimGraphNode_LinkedAnimGraph*> LinkedAnimGraphNodes;
 
 			Graph->GetNodesOfClass(StateMachineNodes);
 			Graph->GetNodesOfClass(SlotNodes);
-			Graph->GetNodesOfClass(SubInstanceNodes);
+			Graph->GetNodesOfClass(LinkedAnimGraphNodes);
 
 			for(UAnimGraphNode_StateMachine* StateMachineNode : StateMachineNodes)
 			{
@@ -896,9 +915,9 @@ void FAnimBlueprintCompilerContext::GetDuplicatedSlotAndStateNames(UAnimGraphNod
 				Count++;
 			}
 
-			for(UAnimGraphNode_SubInstance* SubInstanceNode : SubInstanceNodes)
+			for(UAnimGraphNode_LinkedAnimGraph* LinkedAnimGraphNode : LinkedAnimGraphNodes)
 			{
-				GetDuplicatedSlotAndStateNames(SubInstanceNode, OutStateMachineNameToCountMap, OutSlotNameToCountMap);
+				GetDuplicatedSlotAndStateNames(LinkedAnimGraphNode, OutStateMachineNameToCountMap, OutSlotNameToCountMap);
 			}
 		}
 	}
@@ -961,8 +980,8 @@ void FAnimBlueprintCompilerContext::PruneIsolatedAnimationNodes(const TArray<UAn
 	{
 		UAnimGraphNode_Base* Node = GraphNodes[NodeIndex];
 
-		// We cant prune sub-inputs as even if they are not linked to the root, they are needed for the dynamic link phase at runtime
-		if (!Visitor.VisitedNodes.Contains(Node) && !IsNodePure(Node) && !Node->IsA<UAnimGraphNode_SubInput>())
+		// We cant prune linked input poses as even if they are not linked to the root, they are needed for the dynamic link phase at runtime
+		if (!Visitor.VisitedNodes.Contains(Node) && !IsNodePure(Node) && !Node->IsA<UAnimGraphNode_LinkedInputPose>())
 		{
 			Node->BreakAllNodeLinks();
 			GraphNodes.RemoveAtSwap(NodeIndex);
@@ -1267,11 +1286,8 @@ void FAnimBlueprintCompilerContext::ProcessAllAnimationNodes()
 		MessageLog.Error(*LOCTEXT("ExpectedAFunctionEntry_Error", "Expected at least one animation root, but did not find any").ToString());
 	}
 
-	if(CompileOptions.CompileType != EKismetCompileType::SkeletonOnly)
-	{
-		// Build cached pose map
-		BuildCachedPoseNodeUpdateOrder();
-	}
+	// Build cached pose map
+	BuildCachedPoseNodeUpdateOrder();
 }
 
 int32 FAnimBlueprintCompilerContext::ExpandGraphAndProcessNodes(UEdGraph* SourceGraph, UAnimGraphNode_Base* SourceRootNode, UAnimStateTransitionNode* TransitionNode, TArray<UEdGraphNode*>* ClonedNodes)
@@ -1552,6 +1568,8 @@ void FAnimBlueprintCompilerContext::ProcessStateMachine(UAnimGraphNode_StateMach
 				// Process the inner graph of this state
 				if (UAnimGraphNode_StateResult* AnimGraphResultNode = CastChecked<UAnimationStateGraph>(StateNode->BoundGraph)->GetResultNode())
 				{
+					ValidateGraphIsWellFormed(StateNode->BoundGraph);
+
 					BakedState.StateRootNodeIndex = ExpandGraphAndProcessNodes(StateNode->BoundGraph, AnimGraphResultNode);
 
 					// See if the state consists of a single sequence player node, and remember the index if so
@@ -1615,25 +1633,34 @@ void FAnimBlueprintCompilerContext::ProcessStateMachine(UAnimGraphNode_StateMach
 
 		FBakedAnimationState& BakedState = Oven.GetMachine().States[StateIndex];
 
-		// Add indices to all player nodes
+		// Add indices to all player and layer nodes
 		TArray<UEdGraph*> GraphsToCheck;
-		TArray<UAnimGraphNode_AssetPlayerBase*> AssetPlayerNodes;
 		GraphsToCheck.Add(StateNode->GetBoundGraph());
 		StateNode->GetBoundGraph()->GetAllChildrenGraphs(GraphsToCheck);
 
-		for(UEdGraph* ChildGraph : GraphsToCheck)
+		TArray<UAnimGraphNode_LinkedAnimLayer*> LinkedAnimLayerNodes;
+		TArray<UAnimGraphNode_AssetPlayerBase*> AssetPlayerNodes;
+		for (UEdGraph* ChildGraph : GraphsToCheck)
 		{
 			ChildGraph->GetNodesOfClass(AssetPlayerNodes);
+			ChildGraph->GetNodesOfClass(LinkedAnimLayerNodes);
 		}
 
-		for(UAnimGraphNode_AssetPlayerBase* Node : AssetPlayerNodes)
+		for (UAnimGraphNode_AssetPlayerBase* Node : AssetPlayerNodes)
 		{
-			if(int32* IndexPtr = NewAnimBlueprintClass->AnimBlueprintDebugData.NodeGuidToIndexMap.Find(Node->NodeGuid))
+			if (int32* IndexPtr = NewAnimBlueprintClass->AnimBlueprintDebugData.NodeGuidToIndexMap.Find(Node->NodeGuid))
 			{
 				BakedState.PlayerNodeIndices.Add(*IndexPtr);
 			}
 		}
 
+		for (UAnimGraphNode_LinkedAnimLayer* Node : LinkedAnimLayerNodes)
+		{
+			if (int32* IndexPtr = NewAnimBlueprintClass->AnimBlueprintDebugData.NodeGuidToIndexMap.Find(Node->NodeGuid))
+			{
+				BakedState.LayerNodeIndices.Add(*IndexPtr);
+			}
+		}
 		// Handle all the transitions out of this node
 		TArray<class UAnimStateTransitionNode*> TransitionList;
 		StateNode->GetTransitionList(/*out*/ TransitionList, /*bWantSortedList=*/ true);
@@ -1796,12 +1823,12 @@ void FAnimBlueprintCompilerContext::CopyTermDefaultsToDefaultObject(UObject* Def
 					NewRoot.Name = Cast<UAnimGraphNode_Root>(MessageLog.FindSourceObject(RootNode))->GetGraph()->GetFName();
 					TargetProperty->CopyCompleteValue(DestinationPtr, &NewRoot);
 				}
-				else if(UAnimGraphNode_SubInput* SubInputNode = ExactCast<UAnimGraphNode_SubInput>(VisualAnimNode))
+				else if(UAnimGraphNode_LinkedInputPose* LinkedInputPoseNode = ExactCast<UAnimGraphNode_LinkedInputPose>(VisualAnimNode))
 				{
-					// patch graph name into sub input nodes
-					FAnimNode_SubInput NewSubInput = *reinterpret_cast<FAnimNode_SubInput*>(SourcePtr);
-					NewSubInput.Graph = Cast<UAnimGraphNode_SubInput>(MessageLog.FindSourceObject(SubInputNode))->GetGraph()->GetFName();
-					TargetProperty->CopyCompleteValue(DestinationPtr, &NewSubInput);
+					// patch graph name into linked input pose nodes
+					FAnimNode_LinkedInputPose NewLinkedInputPose = *reinterpret_cast<FAnimNode_LinkedInputPose*>(SourcePtr);
+					NewLinkedInputPose.Graph = Cast<UAnimGraphNode_LinkedInputPose>(MessageLog.FindSourceObject(LinkedInputPoseNode))->GetGraph()->GetFName();
+					TargetProperty->CopyCompleteValue(DestinationPtr, &NewLinkedInputPose);
 				}
 				else
 				{
@@ -1824,7 +1851,7 @@ void FAnimBlueprintCompilerContext::CopyTermDefaultsToDefaultObject(UObject* Def
 		
 			// @TODO this is quick solution for crash - if there were previous errors and some nodes were not added, they could still end here -
 			// this check avoids that and since there are already errors, compilation won't be successful.
-			// but I'd prefer stoping compilation earlier to avoid getting here in first place
+			// but I'd prefer stopping compilation earlier to avoid getting here in first place
 			if (LinkIndexMap.Contains(LinkingNode) && LinkIndexMap.Contains(LinkedNode))
 			{
 				const int32 SourceNodeIndex = LinkIndexMap.FindChecked(LinkingNode);
@@ -2117,38 +2144,38 @@ void FAnimBlueprintCompilerContext::ProcessOneFunctionGraph(UEdGraph* SourceGrap
 	}
 }
 
-void FAnimBlueprintCompilerContext::ProcessSubInput(UAnimGraphNode_SubInput* InSubInput)
+void FAnimBlueprintCompilerContext::ProcessLinkedInputPose(UAnimGraphNode_LinkedInputPose* InLinkedInputPose)
 {
-	InSubInput->IterateFunctionParameters([this, InSubInput](const FName& InName, FEdGraphPinType InPinType)
+	InLinkedInputPose->IterateFunctionParameters([this, InLinkedInputPose](const FName& InName, FEdGraphPinType InPinType)
 	{
 		if(!UAnimationGraphSchema::IsPosePin(InPinType))
 		{
-			// create properties for 'local' sub-input pins
-			UProperty* NewSubInputProperty = CreateVariable(InName, InPinType);
-			if(NewSubInputProperty)
+			// create properties for 'local' linked input pose pins
+			UProperty* NewLinkedInputPoseProperty = CreateVariable(InName, InPinType);
+			if(NewLinkedInputPoseProperty)
 			{
 				if(bIsFullCompile)
 				{
-					UEdGraphPin* Pin = InSubInput->FindPin(InName, EGPD_Output);
+					UEdGraphPin* Pin = InLinkedInputPose->FindPin(InName, EGPD_Output);
 					if(Pin)
 					{
 						// Create new node for property access
-						UK2Node_VariableGet* VariableGetNode = SpawnIntermediateNode<UK2Node_VariableGet>(InSubInput, InSubInput->GetGraph());
-						VariableGetNode->SetFromProperty(NewSubInputProperty, true);
+						UK2Node_VariableGet* VariableGetNode = SpawnIntermediateNode<UK2Node_VariableGet>(InLinkedInputPose, InLinkedInputPose->GetGraph());
+						VariableGetNode->SetFromProperty(NewLinkedInputPoseProperty, true, NewLinkedInputPoseProperty->GetOwnerClass());
 						VariableGetNode->AllocateDefaultPins();
 
 						// Add pin to generated variable association, used for pin watching
 						UEdGraphPin* TrueSourcePin = MessageLog.FindSourcePin(Pin);
 						if (TrueSourcePin)
 						{
-							NewClass->GetDebugData().RegisterClassPropertyAssociation(TrueSourcePin, NewSubInputProperty);
+							NewClass->GetDebugData().RegisterClassPropertyAssociation(TrueSourcePin, NewLinkedInputPoseProperty);
 						}
 
 						// link up to new node - note that this is not a FindPinChecked because if an interface changes without the
 						// implementing class being loaded, then its graphs will not be conformed until AFTER the skeleton class
 						// has been compiled, so the variable cannot be created. This also doesnt matter, as there wont be anything connected
 						// to the pin yet anyways.
-						UEdGraphPin* VariablePin = VariableGetNode->FindPin(NewSubInputProperty->GetFName());
+						UEdGraphPin* VariablePin = VariableGetNode->FindPin(NewLinkedInputPoseProperty->GetFName());
 						if(VariablePin)
 						{
 							TArray<UEdGraphPin*> Links = Pin->LinkedTo;
@@ -2222,9 +2249,11 @@ void FAnimBlueprintCompilerContext::CleanAndSanitizeClass(UBlueprintGeneratedCla
 	NewAnimBlueprintClass->AnimBlueprintFunctions.Empty();
 	NewAnimBlueprintClass->OrderedSavedPoseIndicesMap.Empty();
 	NewAnimBlueprintClass->AnimNodeProperties.Empty();
-	NewAnimBlueprintClass->SubInstanceNodeProperties.Empty();
-	NewAnimBlueprintClass->LayerNodeProperties.Empty();
+	NewAnimBlueprintClass->LinkedAnimGraphNodeProperties.Empty();
+	NewAnimBlueprintClass->LinkedAnimLayerNodeProperties.Empty();
 	NewAnimBlueprintClass->EvaluateGraphExposedInputs.Empty();
+	NewAnimBlueprintClass->GraphAssetPlayerInformation.Empty();
+	NewAnimBlueprintClass->GraphBlendOptions.Empty();
 
 	// Copy over runtime data from the blueprint to the class
 	NewAnimBlueprintClass->TargetSkeleton = AnimBlueprint->TargetSkeleton;
@@ -2255,6 +2284,34 @@ void FAnimBlueprintCompilerContext::FinishCompilingClass(UClass* Class)
 	{
 		AnimBlueprintGeneratedClass->SyncGroupNames.Add(GroupInfo.Name);
 	}
+
+	// Add graph blend options to class if blend values were actually customized
+	auto AddBlendOptions = [AnimBlueprintGeneratedClass](UEdGraph* Graph)
+	{
+		UAnimationGraph* AnimGraph = Cast<UAnimationGraph>(Graph);
+		if (AnimGraph && (AnimGraph->BlendOptions.BlendInTime >= 0.0f || AnimGraph->BlendOptions.BlendOutTime >= 0.0f))
+		{
+			AnimBlueprintGeneratedClass->GraphBlendOptions.Add(AnimGraph->GetFName(), AnimGraph->BlendOptions);
+		}
+	};
+
+
+	for (UEdGraph* Graph : Blueprint->FunctionGraphs)
+	{
+		AddBlendOptions(Graph);
+	}
+
+	for (FBPInterfaceDescription& InterfaceDesc : Blueprint->ImplementedInterfaces)
+	{
+		if (InterfaceDesc.Interface->IsChildOf<UAnimLayerInterface>())
+		{
+			for (UEdGraph* Graph : InterfaceDesc.Graphs)
+			{
+				AddBlendOptions(Graph);
+			}
+		}
+	}
+
 	Super::FinishCompilingClass(Class);
 }
 
@@ -3174,12 +3231,12 @@ void FAnimBlueprintCompilerContext::CreateAnimGraphStubFunctions()
 				}
 			}
 
-			// Find the root and sub-input nodes
+			// Find the root and linked input pose nodes
 			TArray<UAnimGraphNode_Root*> Roots;
 			GraphToUseforSignature->GetNodesOfClass(Roots);
 
-			TArray<UAnimGraphNode_SubInput*> SubInputs;
-			GraphToUseforSignature->GetNodesOfClass(SubInputs);
+			TArray<UAnimGraphNode_LinkedInputPose*> LinkedInputPoseNodes;
+			GraphToUseforSignature->GetNodesOfClass(LinkedInputPoseNodes);
 
 			if(Roots.Num() > 0)
 			{
@@ -3197,17 +3254,17 @@ void FAnimBlueprintCompilerContext::CreateAnimGraphStubFunctions()
 				}
 
 				// Verify no duplicate inputs
-				for(UAnimGraphNode_SubInput* SubInput0 : SubInputs)
+				for(UAnimGraphNode_LinkedInputPose* LinkedInputPoseNode0 : LinkedInputPoseNodes)
 				{
-					for(UAnimGraphNode_SubInput* SubInput1 : SubInputs)	
+					for(UAnimGraphNode_LinkedInputPose* LinkedInputPoseNode1 : LinkedInputPoseNodes)
 					{
-						if(SubInput0 != SubInput1)
+						if(LinkedInputPoseNode0 != LinkedInputPoseNode1)
 						{
-							if(SubInput0->Node.Name == SubInput1->Node.Name)
+							if(LinkedInputPoseNode0->Node.Name == LinkedInputPoseNode1->Node.Name)
 							{
 								MessageLog.Error(
 									*LOCTEXT("DuplicateInputNode_Error", "Found duplicate input node @@ in graph @@").ToString(),
-									SubInput1,
+									LinkedInputPoseNode1,
 									InGraph
 								);
 							}
@@ -3229,24 +3286,24 @@ void FAnimBlueprintCompilerContext::CreateAnimGraphStubFunctions()
 				EntryNode->CustomGeneratedFunctionName = GraphToUseforSignature->GetFName();	// Note that the function generated from this temporary graph is undecorated
 				EntryNode->MetaData.Category = RootNode->Node.Group == NAME_None ? FText::GetEmpty() : FText::FromName(RootNode->Node.Group);
 
-				// Add sub-inputs as parameters
-				for(UAnimGraphNode_SubInput* SubInput : SubInputs)
+				// Add linked input poses as parameters
+				for(UAnimGraphNode_LinkedInputPose* LinkedInputPoseNode : LinkedInputPoseNodes)
 				{
-					// Add user defined pins for each sub-input pose
+					// Add user defined pins for each linked input pose
 					TSharedPtr<FUserPinInfo> PosePinInfo = MakeShared<FUserPinInfo>();
 					PosePinInfo->PinType = UAnimationGraphSchema::MakeLocalSpacePosePin();
-					PosePinInfo->PinName = SubInput->Node.Name;
+					PosePinInfo->PinName = LinkedInputPoseNode->Node.Name;
 					PosePinInfo->DesiredPinDirection = EGPD_Output;
 					EntryNode->UserDefinedPins.Add(PosePinInfo);
 
-					// Add user defined pins for each sub-input parameter
-					for(UEdGraphPin* SubInputPin : SubInput->Pins)
+					// Add user defined pins for each linked input pose parameter
+					for(UEdGraphPin* LinkedInputPoseNodePin : LinkedInputPoseNode->Pins)
 					{
-						if(!SubInputPin->bOrphanedPin && SubInputPin->Direction == EGPD_Output && !UAnimationGraphSchema::IsPosePin(SubInputPin->PinType))
+						if(!LinkedInputPoseNodePin->bOrphanedPin && LinkedInputPoseNodePin->Direction == EGPD_Output && !UAnimationGraphSchema::IsPosePin(LinkedInputPoseNodePin->PinType))
 						{
 							TSharedPtr<FUserPinInfo> ParameterPinInfo = MakeShared<FUserPinInfo>();
-							ParameterPinInfo->PinType = SubInputPin->PinType;
-							ParameterPinInfo->PinName = SubInputPin->PinName;
+							ParameterPinInfo->PinType = LinkedInputPoseNodePin->PinType;
+							ParameterPinInfo->PinName = LinkedInputPoseNodePin->PinName;
 							ParameterPinInfo->DesiredPinDirection = EGPD_Output;
 							EntryNode->UserDefinedPins.Add(ParameterPinInfo);
 						}

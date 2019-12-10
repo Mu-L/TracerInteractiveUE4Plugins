@@ -7,7 +7,6 @@
 #include "Engine/SkeletalMesh.h"
 #include "Components/SkinnedMeshComponent.h"
 #include "UObject/UObjectHash.h"
-#include "Templates/ScopedPointer.h"
 #include "ComponentReregisterContext.h"
 #include "Templates/UniquePtr.h"
 #include "Rendering/SkeletalMeshModel.h"
@@ -129,7 +128,7 @@ public:
 		return ( OutBonesToReplace.Num() > 0 );
 	}
 
-	void FixUpSectionBoneMaps( FSkelMeshSection & Section, const TMap<FBoneIndexType, FBoneIndexType> &BonesToRepair ) override
+	void FixUpSectionBoneMaps( FSkelMeshSection & Section, const TMap<FBoneIndexType, FBoneIndexType> &BonesToRepair, TMap<FName, FImportedSkinWeightProfileData>& SkinWeightProfiles) override
 	{
 		// now you have list of bones, remove them from vertex influences
 		{
@@ -214,39 +213,55 @@ public:
 
 			if ( BoneMapRemapTable.Num() > 0 )
 			{
+				int32 BaseVertexIndex = Section.BaseVertexIndex;
 				// fix up soft verts
 				for (int32 VertIndex=0; VertIndex < Section.SoftVertices.Num(); ++VertIndex)
 				{
 					FSoftSkinVertex & Vert = Section.SoftVertices[VertIndex];
-					bool ShouldRenormalize = false;
 
-					for(int32 InfluenceIndex = 0;InfluenceIndex < MAX_TOTAL_INFLUENCES;InfluenceIndex++)
+					auto RemapBoneInfluenceVertexIndex = [&BoneMapRemapTable](uint8 InfluenceBones[MAX_TOTAL_INFLUENCES], uint8 InfluenceWeights[MAX_TOTAL_INFLUENCES])
 					{
-						uint8 *RemappedBone = BoneMapRemapTable.Find(Vert.InfluenceBones[InfluenceIndex]);
-						if (RemappedBone)
-						{
-							Vert.InfluenceBones[InfluenceIndex] = *RemappedBone;
-							ShouldRenormalize = true;
-						}
-					}
+						bool ShouldRenormalize = false;
 
-					if (ShouldRenormalize)
-					{
-						// should see if same bone exists
-						for(int32 InfluenceIndex = 0;InfluenceIndex < MAX_TOTAL_INFLUENCES;InfluenceIndex++)
+						for (int32 InfluenceIndex = 0; InfluenceIndex < MAX_TOTAL_INFLUENCES; InfluenceIndex++)
 						{
-							for(int32 InfluenceIndex2 = InfluenceIndex+1;InfluenceIndex2 < MAX_TOTAL_INFLUENCES;InfluenceIndex2++)
+							uint8 *RemappedBone = BoneMapRemapTable.Find(InfluenceBones[InfluenceIndex]);
+							if (RemappedBone)
 							{
-								// cannot be 0 because we don't allow removing root
-								if (Vert.InfluenceBones[InfluenceIndex] != 0 && Vert.InfluenceBones[InfluenceIndex] == Vert.InfluenceBones[InfluenceIndex2])
+								InfluenceBones[InfluenceIndex] = *RemappedBone;
+								ShouldRenormalize = true;
+							}
+						}
+
+						if (ShouldRenormalize)
+						{
+							// should see if same bone exists
+							for (int32 InfluenceIndex = 0; InfluenceIndex < MAX_TOTAL_INFLUENCES; InfluenceIndex++)
+							{
+								for (int32 InfluenceIndex2 = InfluenceIndex + 1; InfluenceIndex2 < MAX_TOTAL_INFLUENCES; InfluenceIndex2++)
 								{
-									Vert.InfluenceWeights[InfluenceIndex] += Vert.InfluenceWeights[InfluenceIndex2];
-									// reset
-									Vert.InfluenceBones[InfluenceIndex2] = 0;
-									Vert.InfluenceWeights[InfluenceIndex2] = 0;
+									// cannot be 0 because we don't allow removing root
+									if (InfluenceBones[InfluenceIndex] != 0 && InfluenceBones[InfluenceIndex] == InfluenceBones[InfluenceIndex2])
+									{
+										InfluenceWeights[InfluenceIndex] += InfluenceWeights[InfluenceIndex2];
+										// reset
+										InfluenceBones[InfluenceIndex2] = 0;
+										InfluenceWeights[InfluenceIndex2] = 0;
+									}
 								}
 							}
 						}
+					};
+
+					RemapBoneInfluenceVertexIndex(Vert.InfluenceBones, Vert.InfluenceWeights);
+
+					int32 RealVertexIndex = BaseVertexIndex + VertIndex;
+					//Remap the alternate weights
+					for (auto Kvp : SkinWeightProfiles)
+					{
+						FImportedSkinWeightProfileData& SkinWeightProfile = SkinWeightProfiles.FindChecked(Kvp.Key);
+						check(SkinWeightProfile.SkinWeights.IsValidIndex(RealVertexIndex));
+						RemapBoneInfluenceVertexIndex(SkinWeightProfile.SkinWeights[RealVertexIndex].InfluenceBones, SkinWeightProfile.SkinWeights[RealVertexIndex].InfluenceWeights);
 					}
 				}
 			}
@@ -343,7 +358,7 @@ public:
 		}
 	}
 
-	bool ReduceBoneCounts(USkeletalMesh* SkeletalMesh, int32 DesiredLOD, const TArray<FName>* BoneNamesToRemove) override
+	bool ReduceBoneCounts(USkeletalMesh* SkeletalMesh, int32 DesiredLOD, const TArray<FName>* BoneNamesToRemove, bool bCallPostEditChange /*= true*/) override
 	{
 		check (SkeletalMesh);
 		USkeleton* Skeleton = SkeletalMesh->Skeleton;
@@ -356,7 +371,6 @@ public:
 		// Always restore all previously removed bones if not contained by BonesToRemove
 		SkeletalMesh->CalculateRequiredBones(SkeletalMesh->GetImportedModel()->LODModels[DesiredLOD], SkeletalMesh->RefSkeleton, &BonesToRemove);
 		
-		TComponentReregisterContext<USkinnedMeshComponent> ReregisterContext;
 		SkeletalMesh->ReleaseResources();
 		SkeletalMesh->ReleaseResourcesFence.Wait();
 
@@ -371,18 +385,8 @@ public:
 		{
 			NewModel = new FSkeletalMeshLODModel();
 			LODModels[DesiredLOD] = NewModel;
-			if (SkeletalMeshResource->OriginalReductionSourceMeshData.IsValidIndex(DesiredLOD))
-			{
-				SkeletalMeshResource->OriginalReductionSourceMeshData[DesiredLOD]->EmptyBulkData();
-				SkeletalMeshResource->OriginalReductionSourceMeshData.RemoveAt(DesiredLOD);
-			}
 
-			// Bulk data arrays need to be locked before a copy can be made.
-			SrcModel->RawPointIndices.Lock(LOCK_READ_ONLY);
-			SrcModel->LegacyRawPointIndices.Lock(LOCK_READ_ONLY);
-			*NewModel = *SrcModel;
-			SrcModel->RawPointIndices.Unlock();
-			SrcModel->LegacyRawPointIndices.Unlock();
+			FSkeletalMeshLODModel::CopyStructure(NewModel, SrcModel);
 
 			TArray<FBoneIndexType> BoneIndices;
 			TArray<FMatrix> RemovedBoneMatrices;
@@ -443,7 +447,7 @@ public:
 						Vertex.TangentZ.W = WComponent;
 					}
 				}
-				FixUpSectionBoneMaps(Section, BonesToRemove);
+				FixUpSectionBoneMaps(Section, BonesToRemove, NewModel->SkinWeightProfiles);
 			});
 
 			// fix up RequiredBones/ActiveBoneIndices
@@ -468,10 +472,17 @@ public:
 		NewModel->ActiveBoneIndices.Sort();
 		NewModel->RequiredBones.Sort();
 
-		SkeletalMesh->PostEditChange();
-		SkeletalMesh->InitResources();
+		if (bCallPostEditChange)
+		{
+			SkeletalMesh->PostEditChange();
+		}
 		SkeletalMesh->MarkPackageDirty();
 		
+		//Reregister skinned mesh component if we call post edit change
+		if (bCallPostEditChange)
+		{
+			TComponentReregisterContext<USkinnedMeshComponent> ReregisterContext;
+		}
 		return true;
 	}
 };

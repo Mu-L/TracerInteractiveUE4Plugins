@@ -21,10 +21,10 @@
 #include "Kismet2/CompilerResultsLog.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Kismet2/BlueprintEditorUtils.h"
-#include "Layers/ILayers.h"
+#include "Layers/LayersSubsystem.h"
 #include "Editor.h"
 #include "Serialization/ArchiveHasReferences.h"
-#include "Toolkits/AssetEditorManager.h"
+
 #include "UObject/UObjectHash.h"
 #include "UObject/UObjectIterator.h"
 #include "Serialization/FindObjectReferencers.h"
@@ -32,8 +32,9 @@
 #include "BlueprintEditor.h"
 #include "Engine/Selection.h"
 #include "BlueprintEditorSettings.h"
-
-extern COREUOBJECT_API bool GBlueprintUseCompilationManager;
+#include "Engine/NetDriver.h"
+#include "Engine/ActorChannel.h"
+#include "Subsystems/AssetEditorSubsystem.h"
 
 DECLARE_CYCLE_STAT(TEXT("Replace Instances"), EKismetReinstancerStats_ReplaceInstancesOfClass, STATGROUP_KismetReinstancer );
 DECLARE_CYCLE_STAT(TEXT("Find Referencers"), EKismetReinstancerStats_FindReferencers, STATGROUP_KismetReinstancer );
@@ -81,6 +82,17 @@ struct FReplaceReferenceHelper
 		if(SourceObjects.Num() == 0 && ObjectsToReplace.Num() == 0 )
 		{
 			return;
+		}
+
+		// Remember what values were in UActorChannel::Actor so we can restore them later (this should only affect reinstancing during PIE)
+		// We need the old actor channel to tear down cleanly without affecting the new actor
+		TMap<UActorChannel*, AActor*> ActorChannelActorRestorationMap;
+		for (UActorChannel* ActorChannel : TObjectRange<UActorChannel>())
+		{
+			if (OldToNewInstanceMap.Contains(ActorChannel->Actor))
+			{
+				ActorChannelActorRestorationMap.Add(ActorChannel, ActorChannel->Actor);
+			}
 		}
 
 		// Find everything that references these objects
@@ -142,6 +154,12 @@ struct FReplaceReferenceHelper
 					ReferenceReplace ReplaceAr(Obj, OldToNewInstanceMap, ReinstancedObjectsWeakReferenceMap);
 				}
 			}
+		}
+	
+		// Restore the old UActorChannel::Actor values (undoing what the replace references archiver did above to them)
+		for (const auto& KVP : ActorChannelActorRestorationMap)
+		{
+			KVP.Key->Actor = KVP.Value;
 		}
 	}
 };
@@ -221,8 +239,6 @@ FReplaceInstancesOfClassParameters::FReplaceInstancesOfClassParameters(UClass* I
 // FBlueprintCompileReinstancer
 
 TSet<TWeakObjectPtr<UBlueprint>> FBlueprintCompileReinstancer::DependentBlueprintsToRefresh = TSet<TWeakObjectPtr<UBlueprint>>();
-TSet<TWeakObjectPtr<UBlueprint>> FBlueprintCompileReinstancer::DependentBlueprintsToRecompile = TSet<TWeakObjectPtr<UBlueprint>>();
-TSet<TWeakObjectPtr<UBlueprint>> FBlueprintCompileReinstancer::DependentBlueprintsToByteRecompile = TSet<TWeakObjectPtr<UBlueprint>>();
 TSet<TWeakObjectPtr<UBlueprint>> FBlueprintCompileReinstancer::CompiledBlueprintsToSave = TSet<TWeakObjectPtr<UBlueprint>>();
 
 UClass* FBlueprintCompileReinstancer::HotReloadedOldClass = nullptr;
@@ -506,6 +522,13 @@ public:
 					Actor->ReregisterAllComponents();
 					Actor->RerunConstructionScripts();
 
+					// The reinstancing case doesn't ever explicitly call Actor->FinishSpawning, we've handled the construction script
+					// portion above but still need the PostActorConstruction() case so BeginPlay gets routed correctly while in a BegunPlay world
+					if (World->HasBegunPlay())
+					{
+						Actor->PostActorConstruction();
+					}
+
 					if (SelectedObjecs.Contains(Obj) && GEditor)
 					{
 						GEditor->SelectActor(Actor, /*bInSelected =*/true, /*bNotify =*/true, false, true);
@@ -682,17 +705,6 @@ void FBlueprintCompileReinstancer::ListDependentBlueprintsToRefresh(const TArray
 
 void FBlueprintCompileReinstancer::EnlistDependentBlueprintToRecompile(UBlueprint* BP, bool bBytecodeOnly)
 {
-	if (IsValid(BP))
-	{
-		if (bBytecodeOnly)
-		{
-			DependentBlueprintsToByteRecompile.Add(BP);
-		}
-		else
-		{
-			DependentBlueprintsToRecompile.Add(BP);
-		}
-	}
 }
 
 void FBlueprintCompileReinstancer::BlueprintWasRecompiled(UBlueprint* BP, bool bBytecodeOnly)
@@ -700,11 +712,6 @@ void FBlueprintCompileReinstancer::BlueprintWasRecompiled(UBlueprint* BP, bool b
 	if (IsValid(BP))
 	{
 		DependentBlueprintsToRefresh.Remove(BP);
-		DependentBlueprintsToByteRecompile.Remove(BP);
-		if (!bBytecodeOnly)
-		{
-			DependentBlueprintsToRecompile.Remove(BP);
-		}
 	}
 }
 
@@ -751,159 +758,6 @@ void FBlueprintCompileReinstancer::ReinstanceObjects(bool bForceAlwaysReinstance
 				// Mark it as the source reinstancer, no other reinstancer can get here until this Blueprint finishes compiling
 				bIsRootReinstancer = true;
 
-				TSet<TWeakObjectPtr<UBlueprint>> CompiledBlueprints;
-				// Blueprints will enqueue dirty and erroring dependents, in case those states would be 
-				// fixed up by having this dependency compiled first. However, this can result in an 
-				// infinite loop where two Blueprints with errors (unrelated to each other) keep 
-				// perpetually queuing the other. 
-				//
-				// To guard against this, we track the recompiled dependents (in order) and break the 
-				// cycle when we see that we've already compiled a dependent after its dependency
-				TArray<UBlueprint*> OrderedRecompiledDependents;
-
-				TSet<TWeakObjectPtr<UBlueprint>> RecompilationQueue = DependentBlueprintsToRecompile;
-				// empty the public facing queue so we can discern between old and new elements (added 
-				// as the result of subsequent recompiles) 
-				DependentBlueprintsToRecompile.Empty();
-
-				while (RecompilationQueue.Num())
-				{
-					auto Iter = RecompilationQueue.CreateIterator();
-					TWeakObjectPtr<UBlueprint> BPPtr = *Iter;
-					Iter.RemoveCurrent();
-					if (UBlueprint* BP = BPPtr.Get())
-					{
-						if (IsReinstancingSkeleton())
-						{
-							const bool bForceRegeneration = true;
-							FKismetEditorUtilities::GenerateBlueprintSkeleton(BP, bForceRegeneration);
-						}
-						else
-						{
-							// it's unsafe to GC in the middle of reinstancing because there may be other reinstancers still alive with references to 
-							// otherwise unreferenced classes:
-							// Full compiles first recompile all skeleton classes, so they are up-to-date
-							FKismetEditorUtilities::CompileBlueprint(BP, EBlueprintCompileOptions::SkipGarbageCollection | EBlueprintCompileOptions::SkeletonUpToDate);
-							CompiledBlueprints.Add(BP);
-						}
-
-						OrderedRecompiledDependents.Add(BP);
-
-						// if this BP compiled with an error, then I don't see any reason why we 
-						// should attempt to recompile its dependencies; if a subsequent recompile 
-						// would fix this up, then it'll get re-injected into the queue when that happens
-						if (BP->Status != EBlueprintStatus::BS_Error)
-						{
-							for (TWeakObjectPtr<UBlueprint>& DependentPtr : DependentBlueprintsToRecompile)
-							{
-								if (!DependentPtr.IsValid())
-								{
-									continue;
-								}
-								UBlueprint* NewDependent = DependentPtr.Get();
-
-								int32 DependentIndex = OrderedRecompiledDependents.FindLast(NewDependent);
-								if (DependentIndex != INDEX_NONE)
-								{
-									// even though we just pushed BP into the list and know that it
-									// exists as the last entry, we want to see if it was compiled 
-									// earlier (once before 'NewDependent'); so we use Find() to search 
-									// out the first entry
-									int32 RecompilingBpIndex = OrderedRecompiledDependents.Find(BP);
-									if (RecompilingBpIndex != INDEX_NONE && RecompilingBpIndex < DependentIndex)
-									{
-										// we've already recompiled this Blueprint once before (here in 
-										// this loop), already after its dependency has been compiled too;
-										// so, to avoid a potential infinite loop we cannot keep trying 
-										// to compile this
-										//
-										// NOTE: this may result in some a compiler error that would have 
-										//       been resolved in another subsequent compile (for example: 
-										//       B depends on A, A is compiled, A has an error, B compiles 
-										//       with an error as a result, C compiles and enqueues A as a 
-										//       dependent, A is recompiled without error now, B is not 
-										//       enqueued again because its already recompiled after A)
-										// 
-										// the true fix is to restructure the compiler so that these sort 
-										// of scenarios don't happen - until then, this is a fair trade 
-										// off... fallback to a byte code compile instead
-										DependentBlueprintsToByteRecompile.Add(DependentPtr);
-										continue;
-									}
-								}
-								RecompilationQueue.Add(DependentPtr);
-							}
-						}
-						DependentBlueprintsToRecompile.Empty();
-					}
-				}
-
-				TArray<UBlueprint*> OrderedBytecodeRecompile;
-
-				while (DependentBlueprintsToByteRecompile.Num())
-				{
-					auto Iter = DependentBlueprintsToByteRecompile.CreateIterator();
-					if (UBlueprint* BP = Iter->Get())
-					{
-						OrderedBytecodeRecompile.Add(BP);
-					}
-					Iter.RemoveCurrent();
-				}
-
-				// Make sure we compile classes that are deeper in the class hierarchy later
-				// than ones that are higher:
-				OrderedBytecodeRecompile.Sort(
-					[](const UBlueprint& LHS, const UBlueprint& RHS)
-				{
-					int32 LHS_Depth = 0;
-					int32 RHS_Depth = 0;
-
-					UStruct* Iter = LHS.ParentClass;
-					while (Iter)
-					{
-						LHS_Depth += 1;
-						Iter = Iter->GetSuperStruct();
-					}
-
-					Iter = RHS.ParentClass;
-					while (Iter)
-					{
-						RHS_Depth += 1;
-						Iter = Iter->GetSuperStruct();
-					}
-
-					// use name as tie breaker, just so we're stable
-					// across editor sessions:
-					return LHS_Depth != RHS_Depth ? (LHS_Depth < RHS_Depth) : LHS.GetName() < RHS.GetName();
-				}
-				);
-
-				DependentBlueprintsToByteRecompile.Empty();
-
-				for (int I = 0; I != OrderedBytecodeRecompile.Num(); ++I)
-				{
-					UBlueprint* BP = OrderedBytecodeRecompile[I];
-					FKismetEditorUtilities::RecompileBlueprintBytecode(BP, EBlueprintBytecodeRecompileOptions::BatchCompile);
-					ensure(0 == DependentBlueprintsToRecompile.Num());
-					CompiledBlueprints.Add(BP);
-
-					// We won't re-instance (and thus won't finalize) objects of this type, but we still need to know if the current
-					// Actor selection in the level editor includes instances of this type, and force a refresh on the selection if so.
-					// Note: If this is a Component BP instead of an Actor BP, the refresh is handled by IWCE's OnCompiled() BP delegate.
-					if (GEditor && BP->ParentClass && BP->ParentClass->IsChildOf<AActor>())
-					{
-						for (FSelectionIterator It(GEditor->GetSelectedActorIterator()); It; ++It)
-						{
-							AActor* ActorInstance = CastChecked<AActor>(*It);
-							if (ActorInstance->IsA(BP->GeneratedClass))
-							{
-								GEditor->SelectActor(ActorInstance, /*bInSelected =*/true, /*bNotify =*/true, false, true);
-							}
-						}
-					}
-				}
-
-
 				if (!IsReinstancingSkeleton())
 				{
 					TGuardValue<bool> ReinstancingGuard(GIsReinstancing, true);
@@ -928,11 +782,6 @@ void FBlueprintCompileReinstancer::ReinstanceObjects(bool bForceAlwaysReinstance
 						{
 							Finalizer->Finalize();
 						}
-					}
-
-					for (TWeakObjectPtr<UBlueprint>& CompiledBP : CompiledBlueprints)
-					{
-						CompiledBP->BroadcastCompiled();
 					}
 
 					{
@@ -1007,6 +856,24 @@ void FBlueprintCompileReinstancer::UpdateBytecodeReferences()
 				UFunction* CurrentFunction = *FuncIter;
 				FArchiveReplaceObjectRef<UObject> ReplaceAr(CurrentFunction, FieldMappings, /*bNullPrivateRefs=*/ false, /*bIgnoreOuterRef=*/ true, /*bIgnoreArchetypeRef=*/ true);
 				bBPWasChanged |= (0 != ReplaceAr.GetCount());
+			}
+
+			// Update any refs in called functions array, as the bytecode was just similarly updated:
+			if(UBlueprintGeneratedClass* AsBPGC = Cast<UBlueprintGeneratedClass>(BPClass))
+			{
+				for(int32 Idx = 0; Idx < AsBPGC->CalledFunctions.Num(); ++Idx)
+				{
+					UObject** Val = FieldMappings.Find(AsBPGC->CalledFunctions[Idx]);
+					if(Val && *Val)
+					{
+						// This ::Cast should always succeed, but I'm uncomfortable making 
+						// rigid assumptions about the FieldMappings array:
+						if(UFunction* NewFn = Cast<UFunction>(*Val))
+						{
+							AsBPGC->CalledFunctions[Idx] = NewFn;
+						}
+					}
+				}
 			}
 
 			FArchiveReplaceObjectRef<UObject> ReplaceInBPAr(*DependentBP, FieldMappings, false, true, true);
@@ -1190,7 +1057,11 @@ private:
 
 void FActorReplacementHelper::Finalize(const TMap<UObject*, UObject*>& OldToNewInstanceMap, TSet<UObject*>* ObjectsThatShouldUseOldStuff, const TArray<UObject*>& ObjectsToReplace, const TMap<FSoftObjectPath, UObject*>& ReinstancedObjectsWeakReferenceMap)
 {
-	
+	if (NewActor->IsPendingKill())
+	{
+		return;
+	}
+
 	// because this is an editor context it's important to use this execution guard
 	FEditorScriptExecutionGuard ScriptGuard;
 
@@ -1216,6 +1087,16 @@ void FActorReplacementHelper::Finalize(const TMap<UObject*, UObject*>& OldToNewI
 		FComponentInstanceDataCache DummyComponentData;
 		NewActor->ExecuteConstruction(TargetWorldTransform, nullptr, &DummyComponentData);
 	}	
+
+	// The reinstancing case doesn't ever explicitly call Actor->FinishSpawning, we've handled the construction script
+	// portion above but still need the PostActorConstruction() case so BeginPlay gets routed correctly while in a BegunPlay world
+	if (UWorld* World = NewActor->GetWorld())
+	{
+		if (World->HasBegunPlay())
+		{
+			NewActor->PostActorConstruction();
+		}
+	}
 
 	// make sure that the actor is properly hidden if it's in a hidden sublevel:
 	bool bIsInHiddenLevel = false;
@@ -1253,9 +1134,13 @@ void FActorReplacementHelper::Finalize(const TMap<UObject*, UObject*>& OldToNewI
 
 	// Destroy actor and clear references.
 	NewActor->Modify();
-	if (GEditor && GEditor->Layers.IsValid())
+	if (GEditor)
 	{
-		GEditor->Layers->InitializeNewActorLayers(NewActor);
+		ULayersSubsystem* Layers = GEditor->GetEditorSubsystem<ULayersSubsystem>();
+		if (Layers)
+		{
+			Layers->InitializeNewActorLayers(NewActor);
+		}
 	}
 }
 
@@ -1648,12 +1533,12 @@ static void ReplaceObjectHelper(UObject*& OldObject, UClass* OldClass, UObject*&
 			for (UObject* OldArchetypeObject : OldArchetypeObjects)
 			{
 				OldToNewNameMap.Add(OldArchetypeObject, OldName);
-				OldArchetypeObject->Rename(*OldArchetypeName, OldArchetypeObject->GetOuter(), REN_DoNotDirty | REN_DontCreateRedirectors | (GBlueprintUseCompilationManager ? REN_ForceNoResetLoaders : 0));
+				OldArchetypeObject->Rename(*OldArchetypeName, OldArchetypeObject->GetOuter(), REN_DoNotDirty | REN_DontCreateRedirectors | REN_ForceNoResetLoaders);
 			}
 		}
 		else
 		{
-			OldObject->Rename(nullptr, OldObject->GetOuter(), REN_DoNotDirty | REN_DontCreateRedirectors | (GBlueprintUseCompilationManager ? REN_ForceNoResetLoaders : 0));
+			OldObject->Rename(nullptr, OldObject->GetOuter(), REN_DoNotDirty | REN_DontCreateRedirectors | REN_ForceNoResetLoaders);
 		}
 	}
 						
@@ -1745,7 +1630,7 @@ static void ReplaceObjectHelper(UObject*& OldObject, UClass* OldClass, UObject*&
 	}
 }
 
-static void ReplaceActorHelper(UObject* OldObject, UClass* OldClass, UObject*& NewUObject, UClass* NewClass, TMap<UObject*, UObject*>& OldToNewInstanceMap, TMap<UClass*, UClass*>& InOldToNewClassMap, AActor* OldActor, TMap<FSoftObjectPath, UObject*>& ReinstancedObjectsWeakReferenceMap, TMap<UObject*, FActorAttachmentData>& ActorAttachmentData, TArray<FActorReplacementHelper>& ReplacementActors, bool bPreserveRootComponent, bool& bSelectionChanged)
+static void ReplaceActorHelper(AActor* OldActor, UClass* OldClass, UObject*& NewUObject, UClass* NewClass, TMap<UObject*, UObject*>& OldToNewInstanceMap, TMap<UClass*, UClass*>& InOldToNewClassMap, TMap<FSoftObjectPath, UObject*>& ReinstancedObjectsWeakReferenceMap, TMap<UObject*, FActorAttachmentData>& ActorAttachmentData, TArray<FActorReplacementHelper>& ReplacementActors, bool bPreserveRootComponent, bool& bSelectionChanged)
 {
 	FVector  Location = FVector::ZeroVector;
 	FRotator Rotation = FRotator::ZeroRotator;
@@ -1793,7 +1678,7 @@ static void ReplaceActorHelper(UObject* OldObject, UClass* OldClass, UObject*& N
 	}
 #endif
 
-	OldActor->UObject::Rename(nullptr, OldObject->GetOuter(), REN_DoNotDirty | REN_DontCreateRedirectors | (GBlueprintUseCompilationManager ? REN_ForceNoResetLoaders : 0));
+	OldActor->UObject::Rename(nullptr, OldActor->GetOuter(), REN_DoNotDirty | REN_DontCreateRedirectors | REN_ForceNoResetLoaders);
 
 	AActor* NewActor = nullptr;
 	{
@@ -1814,11 +1699,11 @@ static void ReplaceActorHelper(UObject* OldObject, UClass* OldClass, UObject*& N
 	// running the NewActor's construction-script is saved for that 
 	// second pass (because the construction-script may reference 
 	// another instance that hasn't been replaced yet).
-	FActorAttachmentData& CurrentAttachmentData = ActorAttachmentData.FindChecked(OldObject);
+	FActorAttachmentData& CurrentAttachmentData = ActorAttachmentData.FindChecked(OldActor);
 	ReplacementActors.Add(FActorReplacementHelper(NewActor, OldActor, MoveTemp(CurrentAttachmentData)));
-	ActorAttachmentData.Remove(OldObject);
+	ActorAttachmentData.Remove(OldActor);
 
-	ReinstancedObjectsWeakReferenceMap.Add(OldObject, NewUObject);
+	ReinstancedObjectsWeakReferenceMap.Add(OldActor, NewUObject);
 
 	OldActor->DestroyConstructedComponents(); // don't want to serialize components from the old actor
 												// Unregister native components so we don't copy any sub-components they generate for themselves (like UCameraComponent does)
@@ -1848,12 +1733,15 @@ static void ReplaceActorHelper(UObject* OldObject, UClass* OldClass, UObject*& N
 		}
 		bSelectionChanged = true;
 	}
-	if (GEditor && GEditor->Layers.IsValid())
+	if (GEditor)
 	{
-		GEditor->Layers->DisassociateActorFromLayers(OldActor);
+		ULayersSubsystem* Layers = GEditor->GetEditorSubsystem<ULayersSubsystem>();
+		if (Layers)
+		{
+			Layers->DisassociateActorFromLayers(OldActor);
+		}
 	}
 
-	World->EditorDestroyActor(OldActor, /*bShouldModifyLevel =*/true);
 	OldToNewInstanceMap.Add(OldActor, NewActor);
 }
 
@@ -1997,6 +1885,16 @@ void FBlueprintCompileReinstancer::ReplaceInstancesOfClass_Inner(TMap<UClass*, U
 			}
 		}
 
+
+		FDelegateHandle OnLevelActorDeletedHandle = GEngine ? GEngine->OnLevelActorDeleted().AddLambda([&OldToNewInstanceMap](AActor* DestroyedActor)
+			{
+				if (UObject** ReplacementObject = OldToNewInstanceMap.Find(DestroyedActor))
+				{
+					AActor* ReplacementActor = CastChecked<AActor>(*ReplacementObject);
+					ReplacementActor->GetWorld()->EditorDestroyActor(ReplacementActor, /*bShouldModifyLevel =*/true);
+				}
+			}) : FDelegateHandle();
+
 		// WARNING: for (TPair<UClass*, UClass*> OldToNewClass : InOldToNewClassMap) duplicated above 
 		// this loop only handles actors - which need to be reconstructed *after* their owned components 
 		// have been reinstanced:
@@ -2048,9 +1946,9 @@ void FBlueprintCompileReinstancer::ReplaceInstancesOfClass_Inner(TMap<UClass*, U
 					if (OldActor != nullptr)
 					{
 						UObject* NewUObject = nullptr;
-						if(OldActor->GetLevel())
+						if (OldActor->GetLevel())
 						{
-							ReplaceActorHelper(OldObject, OldClass, NewUObject, NewClass, OldToNewInstanceMap, InOldToNewClassMap, OldActor, ReinstancedObjectsWeakReferenceMap, ActorAttachmentData, ReplacementActors, bPreserveRootComponent, bSelectionChanged);
+							ReplaceActorHelper(OldActor, OldClass, NewUObject, NewClass, OldToNewInstanceMap, InOldToNewClassMap, ReinstancedObjectsWeakReferenceMap, ActorAttachmentData, ReplacementActors, bPreserveRootComponent, bSelectionChanged);
 						}
 						else
 						{
@@ -2065,6 +1963,21 @@ void FBlueprintCompileReinstancer::ReplaceInstancesOfClass_Inner(TMap<UClass*, U
 							UE_LOG(LogBlueprint, Log, TEXT("Converted instance '%s' to '%s'"), *GetPathNameSafe(OldObject), *GetPathNameSafe(NewUObject));
 						}
 					}
+				}
+			}
+		}
+		if (GEngine)
+		{
+			GEngine->OnLevelActorDeleted().Remove(OnLevelActorDeletedHandle);
+		}
+
+		for (TPair<UObject*, UObject*> ReinstancedPair : OldToNewInstanceMap)
+		{
+			if (AActor* OldActor = Cast<AActor>(ReinstancedPair.Key))
+			{
+				if (UWorld* World = OldActor->GetWorld())
+				{
+					World->EditorDestroyActor(OldActor, /*bShouldModifyLevel =*/true);
 				}
 			}
 		}
@@ -2196,7 +2109,7 @@ void FBlueprintCompileReinstancer::ReplaceInstancesOfClass_Inner(TMap<UClass*, U
 		// Refresh any editors for objects that we've updated components for
 		for (UObject* BlueprintAsset : PotentialEditorsForRefreshing)
 		{
-			FBlueprintEditor* BlueprintEditor = static_cast<FBlueprintEditor*>(FAssetEditorManager::Get().FindEditorForAsset(BlueprintAsset, /*bFocusIfOpen =*/false));
+			FBlueprintEditor* BlueprintEditor = static_cast<FBlueprintEditor*>(GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->FindEditorForAsset(BlueprintAsset, /*bFocusIfOpen =*/false));
 			if (BlueprintEditor)
 			{
 				BlueprintEditor->RefreshEditors();

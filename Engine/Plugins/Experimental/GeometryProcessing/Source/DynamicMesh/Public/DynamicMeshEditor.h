@@ -5,10 +5,8 @@
 #pragma once
 
 #include "DynamicMesh3.h"
+#include "DynamicMeshAttributeSet.h"
 #include "EdgeLoop.h"
-
-
-
 
 /**
  * FMeshIndexMappings stores a set of integer IndexMaps for a mesh
@@ -138,9 +136,33 @@ public:
 	 * @param Loop1 first loop of sequential vertices
 	 * @param Loop2 second loop of sequential vertices
 	 * @param ResultOut lists of newly created triangles/vertices/etc
-	 * @return true if operation suceeded. If a failure occurs, any added triangles are removed via RemoveTriangles
+	 * @return true if operation succeeded. If a failure occurs, any added triangles are removed via RemoveTriangles
 	 */
 	bool StitchVertexLoopsMinimal(const TArray<int>& VertexLoop1, const TArray<int>& VertexLoop2, FDynamicMeshEditResult& ResultOut);
+
+
+
+	/**
+	 * Stitch together two loops of vertices where vertices are only sparsely corresponded
+	 * @param VertexIDs1 first array of sequential vertices
+	 * @param MatchedIndices1 indices into the VertexIDs1 array of vertices that have a corresponding match in the VertexIDs2 array; Must be ordered
+	 * @param VertexIDs2 second array of sequential vertices
+	 * @param MatchedIndices2 indices into the VertexIDs2 array of vertices that have a corresponding match in the VertexIDs1 array; Must be ordered
+	 * @param ResultOut lists of newly created triangles/vertices/etc
+	 * @return true if operation succeeded.  If a failure occurs, any added triangles are removed via RemoveTriangles
+	 */
+	bool StitchSparselyCorrespondedVertexLoops(const TArray<int>& VertexIDs1, const TArray<int>& MatchedIndices1, const TArray<int>& VertexIDs2, const TArray<int>& MatchedIndices2, FDynamicMeshEditResult& ResultOut);
+
+
+	/**
+	 * Fill hole with a triangle fan given an existing (unconnected) center vertex and
+	 * an ordered loop of boundary vertices on the hole border.
+	 * @param CenterVertex Index of floating vertex in the center of the hole
+	 * @param VertexLoop Indices of vertices on the boundary of the hole, in order
+	 * @param ResultOut lists of newly created triangles
+	 * @return true if operation succeeded.  If a failure occurs, any added triangles are removed via RemoveTriangles.
+	 */
+	bool AddTriangleFan_OrderedVertexLoop(int CenterVertex, const TArray<int>& VertexLoop, int GroupID, FDynamicMeshEditResult& ResultOut);
 
 
 	/**
@@ -178,6 +200,15 @@ public:
 	 * @return true if all removes succeeded
 	 */
 	bool RemoveTriangles(const TArray<int>& Triangles, bool bRemoveIsolatedVerts);
+
+	/**
+	 * Remove a list of triangles from the mesh, and optionally any vertices that are now orphaned
+	 * @param Triangles the triangles to remove
+	 * @param bRemoveIsolatedVerts if true, remove vertices that end up with no triangles
+	 * @param OnRemoveTriFunc called for each triangle to be removed
+	 * @return true if all removes succeeded
+	 */
+	bool RemoveTriangles(const TArray<int>& Triangles, bool bRemoveIsolatedVerts, TFunctionRef<void(int)> OnRemoveTriFunc);
 
 
 	//////////////////////////////////////////////////////////////////////////
@@ -230,15 +261,36 @@ public:
 
 
 	/**
-	 * Project the two triangles of the quad onto a plane defined by the normal and use that to create/set new shared per-triangle UVs.
+	 * Project the two triangles of the quad onto a plane defined by the ProjectionFrame and use that to create/set new shared per-triangle UVs.
 	 * UVs are translated so that their bbox min-corner is at origin, and scaled by given scale factor
 	 * @param QuadTris pair of triangle IDs. If second ID is invalid, it is ignored
 	 * @param ProjectFrame vertices are projected into XY axes of this frame
-	 * @param UVScaleFactor UVs are scaled
+	 * @param UVScaleFactor UVs are scaled by this uniform scale factor
+	 * @param UVTranslation UVs are translated after scaling
 	 * @param UVLayerIndex which UV layer to operate on (must exist)
 	 */
-	void SetQuadUVsFromProjection(const FIndex2i& QuadTris, const FFrame3f& ProjectFrame, float UVScaleFactor = 1.0f, int UVLayerIndex = 0);
+	void SetQuadUVsFromProjection(const FIndex2i& QuadTris, const FFrame3d& ProjectionFrame, float UVScaleFactor = 1.0f, const FVector2f& UVTranslation = FVector2f::Zero(), int UVLayerIndex = 0);
 
+	/**
+	* Project triangles onto a plane defined by the ProjectionFrame and use that to create/set new shared per-triangle UVs.
+	* UVs are translated so that their bbox min-corner is at origin, and scaled by given scale factor
+	* @param Triangles TArray of triangle IDs
+	* @param ProjectFrame vertices are projected into XY axes of this frame
+	* @param UVScaleFactor UVs are scaled by this uniform scale factor
+	* @param UVTranslation UVs are translated after scaling
+	* @param UVLayerIndex which UV layer to operate on (must exist)
+	*/
+	void SetTriangleUVsFromProjection(const TArray<int>& Triangles, const FFrame3d& ProjectionFrame, float UVScaleFactor = 1.0f, const FVector2f& UVTranslation = FVector2f::Zero(), int UVLayerIndex = 0);
+
+
+	/**
+	 * Rescale UVs for the whole mesh, for the given UV attribute layer
+	 * @param UVScale Scale factor to multiply into UVs.  If in world space, this is in centimeters relative to the average UV scale
+	 * @param bWorldSpace If true, UVs are rescaled relative to an absolute world scale.
+	 * @param UVLayerIndex which UV layer to operate on (must exist)
+	 * @param ToWorld Optionally transform vertices for world space scaling
+	 */
+	void RescaleAttributeUVs(float UVScale = 1.0f, bool bWorldSpace = false, int UVLayerIndex = 0, TOptional<FTransform3d> ToWorld = TOptional<FTransform3d>());
 
 
 	//////////////////////////////////////////////////////////////////////////
@@ -295,9 +347,65 @@ public:
 
 
 
-	void AppendMesh(const FDynamicMesh3* AppendMesh, FMeshIndexMappings& IndexMapsOut, FDynamicMeshEditResult& ResultOut,
+	/**
+	 * Append input mesh to our internal mesh
+	 * @param AppendMesh mesh to append
+	 * @param IndexMapsOut mesh element index mappings generated in this append operation
+	 * @param PositionTransform optional transformation function applied to mesh vertex positions
+	 * @param NormalTransform optional transformation function applied to mesh normals
+	 */
+	void AppendMesh(const FDynamicMesh3* AppendMesh, FMeshIndexMappings& IndexMapsOut, 
 		TFunction<FVector3d(int, const FVector3d&)> PositionTransform = nullptr,
-		TFunction<FVector3f(int, const FVector3f&)> NormalTransform = nullptr);
+		TFunction<FVector3d(int, const FVector3d&)> NormalTransform = nullptr);
+
+
+	/**
+	 * Append normals from one attribute overlay to another.
+	 * Assumes that AppendMesh has already been appended to Mesh.
+	 * Note that this function has no dependency on .Mesh, it could be static
+	 * @param AppendMesh mesh that owns FromNormals attribute overlay
+	 * @param FromNormals Normals overlay we want to append from (owned by AppendMesh)
+	 * @param ToNormals Normals overlay we want to append to (owned by Mesh)
+	 * @param VertexMap map from AppendMesh vertex IDs to vertex IDs applicable to ToNormals (ie of .Mesh)
+	 * @param TriangleMap map from AppendMesh triangle IDs to triangle IDs applicable to ToNormals (ie of .Mesh)
+	 * @param NormalTransform optional transformation function applied to mesh normals
+	 * @param NormalMapOut Mapping from element IDs of FromNormals to new element IDs in ToNormals
+	 */
+	void AppendNormals(const FDynamicMesh3* AppendMesh,
+		const FDynamicMeshNormalOverlay* FromNormals, FDynamicMeshNormalOverlay* ToNormals,
+		const FIndexMapi& VertexMap, const FIndexMapi& TriangleMap,
+		TFunction<FVector3d(int, const FVector3d&)> NormalTransform,
+		FIndexMapi& NormalMapOut);
+
+
+	/**
+	 * Append UVs from one attribute overlay to another.
+	 * Assumes that AppendMesh has already been appended to Mesh.
+	 * Note that this function has no dependency on .Mesh, it could be static
+	 * @param AppendMesh mesh that owns FromUVs attribute overlay
+	 * @param FromUVs UV overlay we want to append from (owned by AppendMesh)
+	 * @param ToUVs UV overlay we want to append to (owned by Mesh)
+	 * @param VertexMap map from AppendMesh vertex IDs to vertex IDs applicable to ToUVs (ie of .Mesh)
+	 * @param TriangleMap map from AppendMesh triangle IDs to triangle IDs applicable to ToUVs (ie of .Mesh)
+	 * @param UVMapOut Mapping from element IDs of FromUVs to new element IDs in ToUVs
+	 */
+	void AppendUVs(const FDynamicMesh3* AppendMesh,
+		const FDynamicMeshUVOverlay* FromUVs, FDynamicMeshUVOverlay* ToUVs,
+		const FIndexMapi& VertexMap, const FIndexMapi& TriangleMap,
+		FIndexMapi& UVMapOut);
+
+
+
+
+	/**
+	 * Append triangles of an existing mesh. This duplicates the current groups and also any attributes existing on the triangles.
+	 * @param SourceMesh the mesh to copy from
+	 * @param SourceTriangles the triangles to copy
+	 * @param IndexMaps returned mappings from old to new triangles/vertices/etc (you may initialize to optimize memory usage, etc)
+	 * @param ResultOut lists of newly created triangles/vertices/etc
+	 */
+	void AppendTriangles(const FDynamicMesh3* SourceMesh, const TArray<int>& SourceTriangles, FMeshIndexMappings& IndexMaps, FDynamicMeshEditResult& ResultOut);
+
 
 };
 

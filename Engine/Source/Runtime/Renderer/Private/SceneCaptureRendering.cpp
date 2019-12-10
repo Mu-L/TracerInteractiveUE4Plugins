@@ -42,6 +42,7 @@
 #include "RendererModule.h"
 #include "Rendering/MotionVectorSimulation.h"
 #include "SceneViewExtension.h"
+#include "GenerateMips.h"
 
 const TCHAR* GShaderSourceModeDefineName[] =
 {
@@ -75,7 +76,7 @@ public:
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) 
 	{ 
-		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM4);
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
 	}
 
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
@@ -320,7 +321,10 @@ static void UpdateSceneCaptureContentDeferred_RenderThread(
 	FRenderTarget* RenderTarget, 
 	FTexture* RenderTargetTexture, 
 	const FString& EventName, 
-	const FResolveParams& ResolveParams)
+	const FResolveParams& ResolveParams,
+	bool bGenerateMips,
+	const FGenerateMipsParams& GenerateMipsParams
+	)
 {
 	FMemMark MemStackMark(FMemStack::Get());
 
@@ -350,6 +354,11 @@ static void UpdateSceneCaptureContentDeferred_RenderThread(
 		{
 			SCOPED_DRAW_EVENT(RHICmdList, RenderScene);
 			SceneRenderer->Render(RHICmdList);
+		}
+
+		if (bGenerateMips)
+		{
+			FGenerateMips::Execute(RHICmdList, RenderTarget->GetRenderTargetTexture(), GenerateMipsParams);
 		}
 
 		// Note: When the ViewFamily.SceneCaptureSource requires scene textures (i.e. SceneCaptureSource != SCS_FinalColorLDR), the copy to RenderTarget 
@@ -415,7 +424,9 @@ static void UpdateSceneCaptureContent_RenderThread(
 	FRenderTarget* RenderTarget,
 	FTexture* RenderTargetTexture,
 	const FString& EventName,
-	const FResolveParams& ResolveParams)
+	const FResolveParams& ResolveParams,
+	bool bGenerateMips,
+	const FGenerateMipsParams& GenerateMipsParams)
 {
 	FMaterialRenderProxy::UpdateDeferredCachedUniformExpressions();
 
@@ -429,7 +440,9 @@ static void UpdateSceneCaptureContent_RenderThread(
 				RenderTarget,
 				RenderTargetTexture,
 				EventName,
-				ResolveParams);
+				ResolveParams,
+				bGenerateMips,
+				GenerateMipsParams);
 			break;
 		}
 		case EShadingPath::Deferred:
@@ -440,13 +453,17 @@ static void UpdateSceneCaptureContent_RenderThread(
 				RenderTarget,
 				RenderTargetTexture,
 				EventName,
-				ResolveParams);
+				ResolveParams,
+				bGenerateMips,
+				GenerateMipsParams);
 			break;
 		}
 		default:
 			checkNoEntry();
 			break;
-		}
+	}
+	// Unbind everything in case FX has to read.
+	UnbindRenderTargets(RHICmdList);
 }
 
 void BuildProjectionMatrix(FIntPoint RenderTargetSize, ECameraProjectionMode::Type ProjectionType, float FOV, float InOrthoWidth, float InNearClippingPlane, FMatrix& ProjectionMatrix)
@@ -547,6 +564,8 @@ void SetupViewVamilyForSceneCapture(
 		View->bIsSceneCapture = true;
 		// Note: this has to be set before EndFinalPostprocessSettings
 		View->bIsPlanarReflection = bIsPlanarReflection;
+        // Needs to be reconfigured now that bIsPlanarReflection has changed.
+		View->SetupAntiAliasingMethod();
 
 		check(SceneCaptureComponent);
 		for (auto It = SceneCaptureComponent->HiddenComponents.CreateConstIterator(); It; ++It)
@@ -682,7 +701,7 @@ void FScene::UpdateSceneCaptureContents(USceneCaptureComponent2D* CaptureCompone
 {
 	check(CaptureComponent);
 
-	if (CaptureComponent->TextureTarget)
+	if (UTextureRenderTarget2D* TextureRenderTarget = CaptureComponent->TextureTarget)
 	{
 		FTransform Transform = CaptureComponent->GetComponentToWorld();
 		FVector ViewLocation = Transform.GetTranslation();
@@ -699,7 +718,7 @@ void FScene::UpdateSceneCaptureContents(USceneCaptureComponent2D* CaptureCompone
 			FPlane(0, 1, 0, 0),
 			FPlane(0, 0, 0, 1));
 		const float FOV = CaptureComponent->FOVAngle * (float)PI / 360.0f;
-		FIntPoint CaptureSize(CaptureComponent->TextureTarget->GetSurfaceWidth(), CaptureComponent->TextureTarget->GetSurfaceHeight());
+		FIntPoint CaptureSize(TextureRenderTarget->GetSurfaceWidth(), TextureRenderTarget->GetSurfaceHeight());
 
 		FMatrix ProjectionMatrix;
 		if (CaptureComponent->bUseCustomProjectionMatrix)
@@ -718,7 +737,7 @@ void FScene::UpdateSceneCaptureContents(USceneCaptureComponent2D* CaptureCompone
 		FSceneRenderer* SceneRenderer = CreateSceneRendererForSceneCapture(
 			this, 
 			CaptureComponent, 
-			CaptureComponent->TextureTarget->GameThread_GetRenderTargetResource(), 
+			TextureRenderTarget->GameThread_GetRenderTargetResource(), 
 			CaptureSize, 
 			ViewRotationMatrix, 
 			ViewLocation, 
@@ -791,7 +810,7 @@ void FScene::UpdateSceneCaptureContents(USceneCaptureComponent2D* CaptureCompone
 		// Reset scene capture's camera cut.
 		CaptureComponent->bCameraCutThisFrame = false;
 
-		FTextureRenderTargetResource* TextureRenderTarget = CaptureComponent->TextureTarget->GameThread_GetRenderTargetResource();
+		FTextureRenderTargetResource* TextureRenderTargetResource = TextureRenderTarget->GameThread_GetRenderTargetResource();
 
 		FString EventName;
 		if (!CaptureComponent->ProfilingEventName.IsEmpty())
@@ -803,10 +822,15 @@ void FScene::UpdateSceneCaptureContents(USceneCaptureComponent2D* CaptureCompone
 			CaptureComponent->GetOwner()->GetFName().ToString(EventName);
 		}
 
+		const bool bGenerateMips = TextureRenderTarget->bAutoGenerateMips;
+		FGenerateMipsParams GenerateMipsParams{TextureRenderTarget->MipsSamplerFilter == TF_Nearest ? SF_Point : (TextureRenderTarget->MipsSamplerFilter == TF_Trilinear ? SF_Trilinear : SF_Bilinear),
+			TextureRenderTarget->MipsAddressU == TA_Wrap ? AM_Wrap : (TextureRenderTarget->MipsAddressU == TA_Mirror ? AM_Mirror : AM_Clamp),
+			TextureRenderTarget->MipsAddressV == TA_Wrap ? AM_Wrap : (TextureRenderTarget->MipsAddressV == TA_Mirror ? AM_Mirror : AM_Clamp)};
+
 		ENQUEUE_RENDER_COMMAND(CaptureCommand)(
-			[SceneRenderer, TextureRenderTarget, EventName](FRHICommandListImmediate& RHICmdList)
+			[SceneRenderer, TextureRenderTargetResource, EventName, bGenerateMips, GenerateMipsParams](FRHICommandListImmediate& RHICmdList)
 			{
-				UpdateSceneCaptureContent_RenderThread(RHICmdList, SceneRenderer, TextureRenderTarget, TextureRenderTarget, EventName, FResolveParams());
+				UpdateSceneCaptureContent_RenderThread(RHICmdList, SceneRenderer, TextureRenderTargetResource, TextureRenderTargetResource, EventName, FResolveParams(), bGenerateMips, GenerateMipsParams);
 			}
 		);
 	}
@@ -927,7 +951,7 @@ void FScene::UpdateSceneCaptureContents(USceneCaptureComponentCube* CaptureCompo
 				ENQUEUE_RENDER_COMMAND(CaptureCommand)(
 					[SceneRenderer, TextureRenderTarget, EventName, TargetFace](FRHICommandListImmediate& RHICmdList)
 				{
-					UpdateSceneCaptureContent_RenderThread(RHICmdList, SceneRenderer, TextureRenderTarget, TextureRenderTarget, EventName, FResolveParams(FResolveRect(), TargetFace));
+					UpdateSceneCaptureContent_RenderThread(RHICmdList, SceneRenderer, TextureRenderTarget, TextureRenderTarget, EventName, FResolveParams(FResolveRect(), TargetFace), false, FGenerateMipsParams());
 				}
 				);
 			}

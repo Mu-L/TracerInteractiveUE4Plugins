@@ -170,9 +170,8 @@ int FDynamicMesh3::AppendTriangle(const FIndex3i& tv, int gid)
 		check(false);
 		return InvalidID;
 	}
-	if (tv[0] == tv[1] || tv[0] == tv[2] || tv[1] == tv[2])
+	if (!ensure(tv[0] != tv[1] && tv[0] != tv[2] && tv[1] != tv[2]))
 	{
-		check(false);
 		return InvalidID;
 	}
 
@@ -699,7 +698,7 @@ EMeshResult FDynamicMesh3::RemoveTriangle(int tID, bool bRemoveIsolatedVertices,
 
 	if (HasAttributes())
 	{
-		Attributes()->OnRemoveTriangle(tID, bRemoveIsolatedVertices);
+		Attributes()->OnRemoveTriangle(tID);
 	}
 
 	UpdateTimeStamp(true, true);
@@ -902,7 +901,8 @@ EMeshResult FDynamicMesh3::SplitEdge(int eab, FEdgeSplitInfo& SplitInfo, double 
 		int t2 = AddTriangleInternal(f, b, c, InvalidID, InvalidID, InvalidID);
 		if (HasTriangleGroups())
 		{
-			TriangleGroups->InsertAt((*TriangleGroups)[t0], t2);
+			int group0 = (*TriangleGroups)[t0];
+			TriangleGroups->InsertAt(group0, t2);
 		}
 
 		// rewrite edge bc, create edge af
@@ -983,8 +983,10 @@ EMeshResult FDynamicMesh3::SplitEdge(int eab, FEdgeSplitInfo& SplitInfo, double 
 		int t3 = AddTriangleInternal(f, d, b, InvalidID, InvalidID, InvalidID);
 		if (HasTriangleGroups()) 
 		{
-			TriangleGroups->InsertAt((*TriangleGroups)[t0], t2);
-			TriangleGroups->InsertAt((*TriangleGroups)[t1], t3);
+			int group0 = (*TriangleGroups)[t0];
+			TriangleGroups->InsertAt(group0, t2);
+			int group1 = (*TriangleGroups)[t1];
+			TriangleGroups->InsertAt(group1, t3);
 		}
 
 		// update the edges we found above, to point to triangles
@@ -1175,6 +1177,7 @@ EMeshResult FDynamicMesh3::FlipEdge(int vA, int vB, FEdgeFlipInfo& FlipInfo)
 
 EMeshResult FDynamicMesh3::CollapseEdge(int vKeep, int vRemove, double collapse_t, FEdgeCollapseInfo& CollapseInfo)
 {
+	checkSlow(!HasAttributes() || !Attributes()->IsSeamVertex(vRemove, false));
 	CollapseInfo = FEdgeCollapseInfo();
 
 	if (IsVertex(vKeep) == false || IsVertex(vRemove) == false)
@@ -1543,8 +1546,8 @@ EMeshResult FDynamicMesh3::MergeEdges(int eKeep, int eDiscard, FMergeEdgesInfo& 
 	// alternative that detects normal flip of triangle tcd. This is a more 
 	// robust geometric test, but fails if tri is degenerate...also more expensive
 	//FVector3d otherv = GetVertex(tcd_otherv);
-	//FVector3d Ncd = TMathUtil.FastNormalDirection(GetVertex(c), GetVertex(d), otherv);
-	//FVector3d Nab = TMathUtil.FastNormalDirection(GetVertex(a), GetVertex(b), otherv);
+	//FVector3d Ncd = VectorUtil::NormalDirection(GetVertex(c), GetVertex(d), otherv);
+	//FVector3d Nab = VectorUtil::NormalDirection(GetVertex(a), GetVertex(b), otherv);
 	//if (Ncd.Dot(Nab) < 0)
 	//return EMeshResult::Failed_SameOrientation;
 

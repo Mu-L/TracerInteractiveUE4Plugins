@@ -242,6 +242,12 @@ namespace SaveGameReplay
 
 		static void RunCommand(const TArray<FString>& Params, const TFunction<void(const TSharedPtr<INetworkReplayStreamer>&, const FString&, const int32)> CommandToRun)
 		{
+			if (IsRunningDedicatedServer())
+			{
+				UE_LOG(LogSaveGameReplay, Warning, TEXT("FSaveGameMoveFileHelper commands are client only."));
+				return;
+			}
+
 			const TCHAR* StreamerOverride = nullptr;
 			if (Params.Num() == 1)
 			{
@@ -407,7 +413,9 @@ namespace SaveGameReplay
 
 		static void OnEnumerateStreamsComplete(const FEnumerateStreamsResult& Result, const TSharedPtr<FMoveContext> Context)
 		{
-			UE_LOG(LogSaveGameReplay, Log, TEXT("FSaveGameReplayMoveFileHelper::OnEnumerateStreamsComplete: Success=%s NumFiles=%d"), *(Result.WasSuccessful() ? GTrue : GFalse).ToString(), Result.FoundStreams.Num());
+			const FCoreTexts& CoreTexts = FCoreTexts::Get();
+
+			UE_LOG(LogSaveGameReplay, Log, TEXT("FSaveGameReplayMoveFileHelper::OnEnumerateStreamsComplete: Success=%s NumFiles=%d"), *(Result.WasSuccessful() ? CoreTexts.True : CoreTexts.False).ToString(), Result.FoundStreams.Num());
 
 			if (Result.WasSuccessful())
 			{

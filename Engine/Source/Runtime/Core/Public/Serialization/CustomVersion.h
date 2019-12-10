@@ -94,7 +94,7 @@ class CORE_API FCustomVersionRegistration;
  */
 class CORE_API FCustomVersionContainer
 {
-	friend class FCustomVersionRegistration;
+	friend struct FStaticCustomVersionRegistry;
 
 public:
 	/** Gets available custom versions in this container. */
@@ -137,6 +137,7 @@ public:
 	 *
 	 * @return The registered version container.
 	 */
+	UE_DEPRECATED(4.24, "Use one of the thread-safe FCurrentCustomVersions methods instead")
 	static const FCustomVersionContainer& GetRegistered();
 
 	/**
@@ -154,11 +155,37 @@ public:
 
 private:
 
-	/** Private implementation getter */
-	static FCustomVersionContainer& GetInstance();
-
 	/** Array containing custom versions. */
 	FCustomVersionArray Versions;
+
+};
+
+enum class ECustomVersionDifference { Missing, Newer, Older };
+
+struct FCustomVersionDifference
+{
+	ECustomVersionDifference Type;
+	const FCustomVersion* Version;
+};
+
+/** Provides access to code-defined custom versions registered via FCustomVersionRegistration. */
+class CORE_API FCurrentCustomVersions
+{
+public:
+	/** Get a copy of all versions that has been statically registered so far in the module loading process. */
+	static FCustomVersionContainer GetAll();
+
+	/** Get a copy of a single statically registered version if it exists. */
+	static TOptional<FCustomVersion> Get(const FGuid& Guid);
+
+	/** Compare a number of versions to current ones and return potential differences. */
+	static TArray<FCustomVersionDifference> Compare(const FCustomVersionArray& CompareVersions);
+
+private:
+	friend class FCustomVersionRegistration;
+
+	static void Register(const FGuid& Key, int32 Version, const TCHAR* FriendlyName);
+	static void Unregister(const FGuid& Key);
 };
 
 
@@ -170,11 +197,19 @@ private:
 class FCustomVersionRegistration : FNoncopyable
 {
 public:
+	/** @param InFriendlyName must be a string literal */
+	template<int N>
+	FCustomVersionRegistration(FGuid InKey, int32 Version, const TCHAR(&InFriendlyName)[N])
+	: Key(InKey)
+	{
+		FCurrentCustomVersions::Register(InKey, Version, InFriendlyName);
+	}
 
-	FCustomVersionRegistration(FGuid InKey, int32 Version, FName InFriendlyName);
-	~FCustomVersionRegistration();
+	~FCustomVersionRegistration()
+	{
+		FCurrentCustomVersions::Unregister(Key);
+	}
 
 private:
-
 	FGuid Key;
 };

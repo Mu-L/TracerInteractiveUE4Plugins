@@ -57,6 +57,12 @@ ENGINE_API TAutoConsoleVariable<FString> CVarHLODDistanceOverride(
 	TEXT("'r.HLOD.DistanceOverride 5000, 10000, 20000' would result in HLOD levels 0, 1 and 2 transitioning at 5000, 1000 and 20000 respectively."),
 	ECVF_Scalability);
 
+static TAutoConsoleVariable<int32> CVarHLODForceDisableCastDynamicShadow(
+	TEXT("r.HLOD.ForceDisableCastDynamicShadow"),
+	0,
+	TEXT("If non-zero, will set bCastDynamicShadow to false for all LODActors, regardless of the shadowing setting of their subactors."),
+	ECVF_ReadOnly);
+
 ENGINE_API TArray<float> ALODActor::HLODDistances;
 
 #if !(UE_BUILD_SHIPPING)
@@ -174,7 +180,7 @@ ALODActor::ALODActor(const FObjectInitializer& ObjectInitializer)
 	, LODDrawDistance(5000)
 	, bHasActorTriedToRegisterComponents(false)
 {
-	bCanBeDamaged = false;
+	SetCanBeDamaged(false);
 
 	PrimaryActorTick.bCanEverTick = true;
 	PrimaryActorTick.bStartWithTickEnabled = false;
@@ -221,7 +227,7 @@ void ALODActor::SetupComponent(UStaticMeshComponent* Component)
 	Component->bAllowCullDistanceVolume = false;
 	Component->bNeverDistanceCull = true;
 
-	Component->MinDrawDistance = LODDrawDistance;
+	Component->MinDrawDistance = GetLODDrawDistanceWithOverride();
 }
 
 FString ALODActor::GetDetailedInfoInternal() const
@@ -233,8 +239,13 @@ void ALODActor::PostLoad()
 {
 	Super::PostLoad();
 	SetComponentsMinDrawDistance(LODDrawDistance, false);
-	StaticMeshComponent->bCastDynamicShadow = false;	
 	UpdateRegistrationToMatchMaximumLODLevel();
+
+	// Force disabled dynamic shadow casting if requested from CVar
+	if (CVarHLODForceDisableCastDynamicShadow.GetValueOnAnyThread() != 0)
+	{
+		StaticMeshComponent->bCastDynamicShadow = false;
+	}
 
 #if WITH_EDITOR
 	if (bRequiresLODScreenSizeConversion)
@@ -270,29 +281,23 @@ void ALODActor::PostLoad()
 
 #if !WITH_EDITOR
 	// Invalid runtime LOD actor with null static mesh is invalid, look for a possible way to patch this up
-	if (GetStaticMeshComponent()->GetStaticMesh() == nullptr)
+	if (GetStaticMeshComponent() && GetStaticMeshComponent()->GetStaticMesh() == nullptr && GetStaticMeshComponent()->GetLODParentPrimitive())
 	{
-		if (GetStaticMeshComponent() && GetStaticMeshComponent()->GetLODParentPrimitive())
+ 		if (ALODActor* ParentLODActor = Cast<ALODActor>(GetStaticMeshComponent()->GetLODParentPrimitive()->GetOwner()))
 		{
- 			if (ALODActor* ParentLODActor = Cast<ALODActor>(GetStaticMeshComponent()->GetLODParentPrimitive()->GetOwner()))
+			// Make the parent HLOD
+			ParentLODActor->SubActors.Remove(this);
+			ParentLODActor->SubActors.Append(SubActors);
+			for (AActor* Actor : SubActors)
 			{
-				if ( ParentLODActor->GetStaticMeshComponent()->GetStaticMesh() != nullptr )
-				{				
-					// Make the parent HLOD 			
-					ParentLODActor->SubActors.Remove(this);
-					ParentLODActor->SubActors.Append(SubActors);			
-					for (AActor* Actor : SubActors)
-					{
-						if (Actor)
-						{
-							Actor->SetLODParent(ParentLODActor->GetStaticMeshComponent(), ParentLODActor->GetDrawDistance());
-						}
-					}
-  
-					SubActors.Empty();
-					bHasPatchedUpParent = true;
+				if (Actor)
+				{
+					Actor->SetLODParent(ParentLODActor->GetStaticMeshComponent(), ParentLODActor->GetDrawDistance());
 				}
 			}
+  
+			SubActors.Empty();
+			bHasPatchedUpParent = true;
 		}
 	}
 #endif // !WITH_EDITOR
@@ -319,6 +324,13 @@ void ALODActor::SetComponentsMinDrawDistance(float InMinDrawDistance, bool bInMa
 			Component.Value->MarkRenderStateDirty();
 		}
 	}
+}
+
+/** Returns an array of distances that are used to override individual LOD actors min draw distances. */
+const TArray<float>& ALODActor::GetHLODDistanceOverride()
+{
+	ParseOverrideDistancesCVar();
+	return HLODDistances;
 }
 
 void ALODActor::UpdateOverrideTransitionDistance()
@@ -364,6 +376,34 @@ void ALODActor::ParseOverrideDistancesCVar()
 	}	
 }
 
+float ALODActor::GetLODDrawDistanceWithOverride() const
+{
+	const int32 NumDistances = ALODActor::HLODDistances.Num();
+	const int32 DistanceIndex = [&]()
+	{
+		if(CachedNumHLODLevels <= NumDistances)
+		{
+			return (LODLevel + (NumDistances - CachedNumHLODLevels)) - 1;
+		}
+		else
+		{
+			// We've reached the end of the array, change nothing
+			return (int32)INDEX_NONE;
+		}
+	}();
+
+	const float HLODDistanceOverride = (!ALODActor::HLODDistances.IsValidIndex(DistanceIndex)) ? 0.0f : ALODActor::HLODDistances[DistanceIndex];
+	// Determine desired HLOD state
+	float MinDrawDistance = LODDrawDistance;
+	const bool bIsOverridingHLODDistance = HLODDistanceOverride != 0.0f;
+	if(bIsOverridingHLODDistance)
+	{
+		MinDrawDistance = HLODDistanceOverride;
+	}
+
+	return MinDrawDistance;
+}
+
 void ALODActor::Tick(float DeltaSeconds)
 {
 	AActor::Tick(DeltaSeconds);
@@ -371,29 +411,8 @@ void ALODActor::Tick(float DeltaSeconds)
 	{		
 		if (ResetDrawDistanceTime > CVarHLODDitherPauseTime.GetValueOnAnyThread())
 		{
-			const int32 NumDistances = ALODActor::HLODDistances.Num();
-			const int32 DistanceIndex = [&]()
-	        {
-		        if (CachedNumHLODLevels <= NumDistances)
-		        {
-			    	return (LODLevel + (NumDistances - CachedNumHLODLevels)) - 1;
-		        }
-		        else
-		        {
-			        // We've reached the end of the array, change nothing
-			        return (int32)INDEX_NONE;
-		        }
-	        }();
-
-
-			const float HLODDistanceOverride = (!ALODActor::HLODDistances.IsValidIndex(DistanceIndex)) ? 0.0f : ALODActor::HLODDistances[DistanceIndex];
 			// Determine desired HLOD state
-			float MinDrawDistance = LODDrawDistance;
-			const bool bIsOverridingHLODDistance = HLODDistanceOverride != 0.0f;
-			if (bIsOverridingHLODDistance)
-			{
-				MinDrawDistance = HLODDistanceOverride;
-			}
+			float MinDrawDistance = GetLODDrawDistanceWithOverride();
 
 			SetComponentsMinDrawDistance(MinDrawDistance, true);
 			bNeedsDrawDistanceReset = false;
@@ -405,6 +424,24 @@ void ALODActor::Tick(float DeltaSeconds)
 			const float CurrentTimeDilation = FMath::Max(GetActorTimeDilation(), SMALL_NUMBER);
 			ResetDrawDistanceTime += DeltaSeconds / CurrentTimeDilation;
         }
+	}
+}
+
+void ALODActor::SetLODParent(UPrimitiveComponent* InLODParent, float InParentDrawDistance, bool bApplyToImposters)
+{
+	if (bApplyToImposters)
+	{
+		AActor::SetLODParent(InLODParent, InParentDrawDistance);
+	}
+	else
+	{
+		if(InLODParent)
+		{
+			InLODParent->MinDrawDistance = InParentDrawDistance;
+			InLODParent->MarkRenderStateDirty();
+		}
+
+		StaticMeshComponent->SetLODParentPrimitive(InLODParent);
 	}
 }
 
@@ -515,7 +552,7 @@ void ALODActor::UnregisterMeshComponents()
 void ALODActor::SetDrawDistance(float InDistance)
 {
 	LODDrawDistance = InDistance;
-	SetComponentsMinDrawDistance(LODDrawDistance, false);
+	SetComponentsMinDrawDistance(GetLODDrawDistanceWithOverride(), false);
 }
 
 #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
@@ -538,13 +575,13 @@ const bool ALODActor::IsBuilt(bool bInForce/*=false*/) const
 		}
 
 		// No proxy mesh
-		if (Proxy == nullptr)
+		if (StaticMeshComponent->GetStaticMesh() && Proxy == nullptr)
 		{
 			return false;
 		}
 
 		// Mismatched key
-		if (!Proxy->ContainsDataForActor(this))
+		if (Proxy != nullptr && !Proxy->ContainsDataForActor(this))
 		{
 			return false;
 		}
@@ -743,7 +780,7 @@ void ALODActor::AddSubActor(AActor* InActor)
 	SubActors.Add(InActor);
 
 	UStaticMeshComponent* LODComponent = GetOrCreateLODComponentForActor(InActor);
-	InActor->SetLODParent(LODComponent, LODDrawDistance);
+	InActor->SetLODParent(LODComponent, GetLODDrawDistanceWithOverride());
 
 	// Adding number of triangles
 	if (!InActor->IsA<ALODActor>())
@@ -827,11 +864,14 @@ void ALODActor::DetermineShadowingFlags()
 
 	for (const TPair<const UMaterialInterface*, UInstancedStaticMeshComponent*>& Component : ImpostersStaticMeshComponents)
 	{
-		Component.Value->CastShadow = false;
-		Component.Value->bCastStaticShadow = false;
-		Component.Value->bCastDynamicShadow = false;
-		Component.Value->bCastFarShadow = false;
-		Component.Value->MarkRenderStateDirty();
+		if (Component.Value)
+		{
+			Component.Value->CastShadow = false;
+			Component.Value->bCastStaticShadow = false;
+			Component.Value->bCastDynamicShadow = false;
+			Component.Value->bCastFarShadow = false;
+			Component.Value->MarkRenderStateDirty();
+		}
 	}
 
 	for (AActor* Actor : SubActors)
@@ -855,41 +895,19 @@ void ALODActor::DetermineShadowingFlags()
 
 const bool ALODActor::HasValidSubActors() const
 {
-#if WITH_EDITOR
-	FHierarchicalLODUtilitiesModule& Module = FModuleManager::LoadModuleChecked<FHierarchicalLODUtilitiesModule>("HierarchicalLODUtilities");
-	IHierarchicalLODUtilities* Utilities = Module.GetUtilities();
-#endif
+	TArray<UStaticMeshComponent*> Components;
+	UHLODProxy::ExtractStaticMeshComponentsFromLODActor(this, Components);
 
-	int32 NumMeshes = 0;
-
-	// Make sure there is at least one mesh in the subactors
-	for (AActor* SubActor : SubActors)
+	UStaticMeshComponent** ValidComponent = Components.FindByPredicate([&](const UStaticMeshComponent* Component)
 	{
-		if (SubActor)
-		{
-			for (UActorComponent* Comp : SubActor->GetComponents())
-			{
-				if (UStaticMeshComponent* Component = Cast<UStaticMeshComponent>(Comp))
-				{
 #if WITH_EDITOR
-					if (!Component->bHiddenInGame && Component->ShouldGenerateAutoLOD(LODLevel - 1))
-					{
-						++NumMeshes;
-					}
+		return !Component->bHiddenInGame && Component->GetStaticMesh() != nullptr && Component->ShouldGenerateAutoLOD(LODLevel - 1);
 #else
-					++NumMeshes;
+		return true;
 #endif
-				}
-			}
+	});
 
-			if (NumMeshes > 0)
-			{
-				break;
-			}
-		}
-	}
-
-	return NumMeshes > 0;
+	return ValidComponent != nullptr;
 }
 
 const bool ALODActor::HasAnySubActors() const
@@ -974,6 +992,7 @@ void ALODActor::SetupImposters(UMaterialInterface* InMaterial, UStaticMesh* InSt
 
 	UInstancedStaticMeshComponent* Component = GetOrCreateLODComponentForMaterial(InMaterial);
 	Component->SetStaticMesh(InStaticMesh);
+	Component->ClearInstances();
 	
 	for (const FTransform& Transform : InTransforms)
 	{
@@ -1034,7 +1053,7 @@ bool IsImposter(const UStaticMeshComponent* InComponent)
 {
 	check(InComponent);
 
-	if (!InComponent->bUseMaxLODAsImposter)
+	if (!InComponent->bUseMaxLODAsImposter || !InComponent->bBatchImpostersAsInstances)
 	{
 		return false;
 	}
@@ -1058,14 +1077,7 @@ bool IsImposter(const UStaticMeshComponent* InComponent)
 		return false;
 	}
 
-	// Currently, the bUseMaxLODAsImposter flag serves multiple purposes. Until this is sorted out,
-	// only take into accounts quads & octagons meshes.
-	const int32 NumWedges = StaticMeshLOD.IndexBuffer.GetNumIndices();
-	const int32 NumVertexPositions = StaticMeshLOD.VertexBuffers.PositionVertexBuffer.GetNumVertices();
-	const int32 NumFaces = NumWedges / 3;
-
-	return (NumFaces == 2 && NumVertexPositions == 4) ||
-		   (NumFaces == 8 && NumVertexPositions == 9);
+	return true;
 }
 
 UMaterialInterface* ALODActor::GetImposterMaterial(const UStaticMeshComponent* InComponent) const

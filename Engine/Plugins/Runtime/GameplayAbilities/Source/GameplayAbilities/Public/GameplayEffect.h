@@ -351,6 +351,17 @@ struct TStructOpsTypeTraits<FGameplayEffectModifierMagnitude> : public TStructOp
 	};
 };
 
+/** Enumeration representing the types of scoped modifier aggregator usages available */
+UENUM()
+enum class EGameplayEffectScopedModifierAggregatorType : uint8
+{
+	/** Aggregator is backed by an attribute capture */
+	CapturedAttributeBacked,
+
+	/** Aggregator is entirely transient (acting as a "temporary variable") and must be identified via gameplay tag */
+	Transient
+};
+
 /** 
  * Struct representing modifier info used exclusively for "scoped" executions that happen instantaneously. These are
  * folded into a calculation only for the extent of the calculation and never permanently added to an aggregator.
@@ -362,11 +373,20 @@ struct FGameplayEffectExecutionScopedModifierInfo
 
 	// Constructors
 	FGameplayEffectExecutionScopedModifierInfo()
-		: ModifierOp(EGameplayModOp::Additive)
+		: AggregatorType(EGameplayEffectScopedModifierAggregatorType::CapturedAttributeBacked)
+		, ModifierOp(EGameplayModOp::Additive)
 	{}
 
 	FGameplayEffectExecutionScopedModifierInfo(const FGameplayEffectAttributeCaptureDefinition& InCaptureDef)
 		: CapturedAttribute(InCaptureDef)
+		, AggregatorType(EGameplayEffectScopedModifierAggregatorType::CapturedAttributeBacked)
+		, ModifierOp(EGameplayModOp::Additive)
+	{
+	}
+
+	FGameplayEffectExecutionScopedModifierInfo(const FGameplayTag& InTransientAggregatorIdentifier)
+		: TransientAggregatorIdentifier(InTransientAggregatorIdentifier)
+		, AggregatorType(EGameplayEffectScopedModifierAggregatorType::Transient)
 		, ModifierOp(EGameplayModOp::Additive)
 	{
 	}
@@ -374,6 +394,14 @@ struct FGameplayEffectExecutionScopedModifierInfo
 	/** Backing attribute that the scoped modifier is for */
 	UPROPERTY(VisibleDefaultsOnly, Category=Execution)
 	FGameplayEffectAttributeCaptureDefinition CapturedAttribute;
+
+	/** Identifier for aggregator if acting as a transient "temporary variable" aggregator */
+	UPROPERTY(VisibleDefaultsOnly, Category=Execution)
+	FGameplayTag TransientAggregatorIdentifier;
+
+	/** Type of aggregator backing the scoped mod */
+	UPROPERTY(VisibleDefaultsOnly, Category=Execution)
+	EGameplayEffectScopedModifierAggregatorType AggregatorType;
 
 	/** Modifier operation to perform */
 	UPROPERTY(EditDefaultsOnly, Category=Execution)
@@ -1241,6 +1269,9 @@ struct GAMEPLAYABILITIES_API FActiveGameplayEffect : public FFastArraySerializer
 	}
 
 	void CheckOngoingTagRequirements(const FGameplayTagContainer& OwnerTags, struct FActiveGameplayEffectsContainer& OwningContainer, bool bInvokeGameplayCueEvents = false);
+	
+	/** Method to check if this effect should remove because the owner tags pass the RemovalTagRequirements requirement check */
+	bool CheckRemovalTagRequirements(const FGameplayTagContainer& OwnerTags, struct FActiveGameplayEffectsContainer& OwningContainer) const;
 
 	void PrintAll() const;
 
@@ -1627,6 +1658,9 @@ struct GAMEPLAYABILITIES_API FActiveGameplayEffectsContainer : public FFastArray
 
 	int32 RemoveActiveEffects(const FGameplayEffectQuery& Query, int32 StacksToRemove);
 
+	/** Method called during effect application to process if any active effects should be removed from this effects application */
+	void AttemptRemoveActiveEffectsOnEffectApplication(const FGameplayEffectSpec &InSpec, const FActiveGameplayEffectHandle& InHandle);
+
 	/**
 	 * Get the count of the effects matching the specified query (including stack count)
 	 * 
@@ -1991,6 +2025,10 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = Tags, meta=(Categories="ApplicationTagRequirementsCategory"))
 	FGameplayTagRequirements ApplicationTagRequirements;
 
+	/** Tag requirements that if met will remove this effect. Also prevents effect application. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = Tags, meta=(Categories="ApplicationTagRequirementsCategory"))
+	FGameplayTagRequirements RemovalTagRequirements;
+
 	/** GameplayEffects that *have* tags in this container will be cleared upon effect application. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = Tags, meta=(Categories="RemoveTagRequirementsCategory"))
 	FInheritedTagContainer RemoveGameplayEffectsWithTags;
@@ -2004,7 +2042,14 @@ public:
 	FGameplayEffectQuery GrantedApplicationImmunityQuery;
 
 	/** Cached !GrantedApplicationImmunityQuery.IsEmpty(). Set on PostLoad. */
-	bool HasGrantedApplicationImmunityQuery;
+	bool HasGrantedApplicationImmunityQuery = false;
+
+	/** On Application of an effect, any active effects with this this query that matches against the added effect will be removed. Queries are more powerful but slightly slower than RemoveGameplayEffectsWithTags. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = Tags, meta = (DisplayAfter = "RemovalTagRequirements"))
+	FGameplayEffectQuery RemoveGameplayEffectQuery;
+
+	/** Cached !RemoveGameplayEffectsQuery.IsEmpty(). Set on PostLoad. */
+	bool HasRemoveGameplayEffectsQuery = false;
 
 	// ----------------------------------------------------------------------
 	//	Stacking

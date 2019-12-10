@@ -3,8 +3,9 @@
 #include "Units/Animation/RigUnit_AnimEvalRichCurve.h"
 #include "Units/RigUnitContext.h"
 
-void FRigUnit_AnimEvalRichCurve::Execute(const FRigUnitContext& Context)
+FRigUnit_AnimEvalRichCurve_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	if (FMath::IsNearlyEqual(SourceMinimum, SourceMaximum))
 	{
 		UE_CONTROLRIG_RIGUNIT_REPORT_WARNING(TEXT("The source minimum and maximum are the same."));

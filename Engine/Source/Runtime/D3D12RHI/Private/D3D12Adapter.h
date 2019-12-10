@@ -37,12 +37,6 @@ This structure allows a single RHI to control several different hardware setups.
 
 class FD3D12DynamicRHI;
 
-/// @cond DOXYGEN_WARNINGS
-
-template<> __declspec(thread) void* FD3D12ThreadLocalObject<FD3D12FastConstantAllocator>::ThisThreadObject = nullptr;
-
-/// @endcond
-
 struct FD3D12AdapterDesc
 {
 	FD3D12AdapterDesc()
@@ -181,11 +175,13 @@ public:
 
 	// Resource Creation
 	HRESULT CreateCommittedResource(const D3D12_RESOURCE_DESC& Desc,
+		FRHIGPUMask CreationNode,
 		const D3D12_HEAP_PROPERTIES& HeapProps,
 		const D3D12_RESOURCE_STATES& InitialUsage,
 		const D3D12_CLEAR_VALUE* ClearValue,
 		FD3D12Resource** ppOutResource,
-		const TCHAR* Name);
+		const TCHAR* Name,
+		bool bVerifyHResult = true);
 
 	HRESULT CreatePlacedResource(const D3D12_RESOURCE_DESC& Desc,
 		FD3D12Heap* BackingHeap,
@@ -193,7 +189,8 @@ public:
 		const D3D12_RESOURCE_STATES& InitialUsage,
 		const D3D12_CLEAR_VALUE* ClearValue,
 		FD3D12Resource** ppOutResource,
-		const TCHAR* Name);
+		const TCHAR* Name,
+		bool bVerifyHResult = true);
 
 	HRESULT CreateBuffer(D3D12_HEAP_TYPE HeapType,
 		FRHIGPUMask CreationNode,
@@ -213,6 +210,7 @@ public:
 		D3D12_RESOURCE_FLAGS Flags = D3D12_RESOURCE_FLAG_NONE);
 
 	HRESULT CreateBuffer(const D3D12_HEAP_PROPERTIES& HeapProps,
+		FRHIGPUMask CreationNode,
 		D3D12_RESOURCE_STATES InitialState,
 		uint64 HeapSize,
 		FD3D12Resource** ppOutResource,
@@ -223,11 +221,7 @@ public:
 	BufferType* CreateRHIBuffer(FRHICommandListImmediate* RHICmdList,
 		const D3D12_RESOURCE_DESC& Desc,
 		uint32 Alignment, uint32 Stride, uint32 Size, uint32 InUsage,
-		FRHIResourceCreateInfo& CreateInfo,
-		FRHIGPUMask GPUMask = FRHIGPUMask::All());
-
-	// Queue up a command to signal the frame fence on the command list. This should only be called from the rendering thread.
-	void SignalFrameFence_RenderThread(FRHICommandListImmediate& RHICmdList);
+		FRHIResourceCreateInfo& CreateInfo);
 
 	template<typename ObjectType, typename CreationCoreFunction>
 	inline ObjectType* CreateLinkedObject(FRHIGPUMask GPUMask, const CreationCoreFunction& pfnCreationCore)
@@ -362,9 +356,9 @@ protected:
 
 	FD3DGPUProfiler GPUProfilingData;
 
+#if WITH_MGPU
 	TMap<FName, FD3D12TemporalEffect> TemporalEffectMap;
-
-	FD3D12ThreadLocalObject<FD3D12FastConstantAllocator> TransientUniformBufferAllocator;
+#endif
 
 	// Each of these devices represents a physical GPU 'Node'
 	FD3D12Device* Devices[MAX_NUM_GPUS];

@@ -258,8 +258,8 @@ protected:
 		void Save( FTransaction* Owner );
 		void Load( FTransaction* Owner );
 		void Finalize( FTransaction* Owner, TSharedPtr<ITransactionObjectAnnotation>& OutFinalizedObjectAnnotation );
-		void Snapshot( FTransaction* Owner );
-		static void Diff( const FTransaction* Owner, const FSerializedObject& OldSerializedObect, const FSerializedObject& NewSerializedObject, FTransactionObjectDeltaChange& OutDeltaChange );
+		void Snapshot( FTransaction* Owner, TArrayView<const UProperty*> Properties );
+		static void Diff( const FTransaction* Owner, const FSerializedObject& OldSerializedObect, const FSerializedObject& NewSerializedObject, FTransactionObjectDeltaChange& OutDeltaChange, const bool bFullDiff = true );
 
 		/** Used by GC to collect referenced objects. */
 		void AddReferencedObjects( FReferenceCollector& Collector );
@@ -269,6 +269,9 @@ protected:
 
 		/** @return true if the record has a delta change or a custom change */
 		bool HasChanges() const;
+
+		/** @return true if the record has a custom change and the change has expired */
+		bool HasExpired() const;
 
 		/** Transfers data from an array. */
 		class FReader : public FArchiveUObject
@@ -351,9 +354,11 @@ protected:
 		public:
 			FWriter(
 				FSerializedObject& InSerializedObject,
-				bool bWantBinarySerialization
+				bool bWantBinarySerialization,
+				TArrayView<const UProperty*> InPropertiesToSerialize = TArrayView<const UProperty*>()
 				)
 				: SerializedObject(InSerializedObject)
+				, PropertiesToSerialize(InPropertiesToSerialize)
 				, Offset(0)
 			{
 				for(int32 ObjIndex = 0; ObjIndex < SerializedObject.ReferencedObjects.Num(); ++ObjIndex)
@@ -376,6 +381,12 @@ protected:
 			{
 				checkSlow(Offset<=SerializedObject.Data.Num());
 				Offset = InPos; 
+			}
+
+			virtual bool ShouldSkipProperty(const UProperty* InProperty) const override
+			{
+				return (PropertiesToSerialize.Num() > 0 && !PropertiesToSerialize.Contains(InProperty))
+					|| FArchiveUObject::ShouldSkipProperty(InProperty);
 			}
 
 		private:
@@ -480,6 +491,7 @@ protected:
 				return (FArchive&)*this << ObjectIndex;
 			}
 			FSerializedObject& SerializedObject;
+			TArrayView<const UProperty*> PropertiesToSerialize;
 			TMap<UObject*, int32> ObjectMap;
 			TMap<FName, int32> NameMap;
 			FCachedPropertyKey CachedSerializedTaggedPropertyKey;
@@ -489,7 +501,7 @@ protected:
 
 	// Transaction variables.
 	/** List of object records in this transaction */
-	TArray<FObjectRecord>	Records;
+	TIndirectArray<FObjectRecord>	Records;
 	
 	/** Unique identifier for this transaction, used to track it during its lifetime */
 	FGuid		Id;
@@ -566,7 +578,7 @@ public:
 	virtual void SaveArray( UObject* Object, FScriptArray* Array, int32 Index, int32 Count, int32 Oper, int32 ElementSize, STRUCT_DC DefaultConstructor, STRUCT_AR Serializer, STRUCT_DTOR Destructor ) override;
 	virtual void StoreUndo( UObject* Object, TUniquePtr<FChange> UndoChange ) override;
 	virtual void SetPrimaryObject(UObject* InObject) override;
-	virtual void SnapshotObject( UObject* InObject ) override;
+	virtual void SnapshotObject( UObject* InObject, TArrayView<const UProperty*> Properties ) override;
 
 	/** BeginOperation should be called when a transaction or undo/redo starts */
 	virtual void BeginOperation() override;
@@ -597,6 +609,9 @@ public:
 
 	/** @return True if this record contains a reference to a pie object */
 	virtual bool ContainsPieObjects() const override;
+
+	/** @return true if the transaction contains custom changes and all the changes have expired */
+	virtual bool HasExpired() const;
 
 
 	/** Returns a unique string to serve as a type ID for the FTranscationBase-derived type. */

@@ -67,6 +67,10 @@ CONSTEXPR inline EUpdateTransformFlags operator ~(EUpdateTransformFlags Value)
 /** Converts legacy bool into the SkipPhysicsUpdate bitflag */
 FORCEINLINE EUpdateTransformFlags SkipPhysicsToEnum(bool bSkipPhysics){ return bSkipPhysics ? EUpdateTransformFlags::SkipPhysicsUpdate : EUpdateTransformFlags::None; }
 
+class FSceneInterface;
+extern ENGINE_API void UpdateAllPrimitiveSceneInfosForSingleComponent(UActorComponent* InComponent, TSet<FSceneInterface*>* InScenesToUpdateAllPrimitiveSceneInfosForBatching = nullptr);
+extern ENGINE_API void UpdateAllPrimitiveSceneInfosForScenes(TSet<FSceneInterface*> ScenesToUpdateAllPrimitiveSceneInfos);
+
 class UActorComponent;
 
 DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_TwoParams(FActorComponentActivatedSignature, UActorComponent, OnComponentActivated, UActorComponent*, Component, bool, bReset);
@@ -129,6 +133,7 @@ protected:
 	uint8 bPhysicsStateCreated:1;
 
 	/** Is this component currently replicating? Should the network code consider it for replication? Owning Actor must be replicating first! */
+	UE_DEPRECATED(4.24, "This member will be made private. Please use GetIsReplicated, SetIsReplicated, or SetIsReplicatedByDefault for constructors.")
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Replicated, Category=ComponentReplication,meta=(DisplayName = "Component Replicates"))
 	uint8 bReplicates:1;
 
@@ -185,6 +190,7 @@ public:
 	uint8 bAutoActivate:1;
 
 	/** Whether the component is currently active. */
+	UE_DEPRECATED(4.24, "This member will be made private. Please use IsActive or SetActive.")
 	UPROPERTY(transient, ReplicatedUsing=OnRep_IsActive)
 	uint8 bIsActive:1;
 
@@ -203,10 +209,6 @@ protected:
 public:
 	/** If true, we call the virtual InitializeComponent */
 	uint8 bWantsInitializeComponent:1;
-
-	/** If true, we call the virtual BeginPlay */
-	UE_DEPRECATED(4.14, "bWantsBeginPlay was inconsistently enforced and is now unused. BeginPlay will now always be called for Actor Components.")
-	uint8 bWantsBeginPlay:1;
 
 	/** If true, the component will be excluded from non-editor builds */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Cooking)
@@ -353,12 +355,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Components|Activation", meta=(UnsafeDuringActorConstruction="true"))
 	virtual void ToggleActive();
 
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
 	/**
 	 * Returns whether the component is active or not
 	 * @return - The active state of the component.
 	 */
 	UFUNCTION(BlueprintCallable, Category="Components|Activation", meta=(UnsafeDuringActorConstruction="true"))
-	virtual bool IsActive() const { return bIsActive; }
+	bool IsActive() const { return bIsActive; }
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
 
 	/**
 	 * Sets whether the component should be auto activate or not. Only safe during construction scripts.
@@ -387,11 +391,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Components")
 	void SetIsReplicated(bool ShouldReplicate);
 
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
 	/** Returns whether replication is enabled or not. */
 	FORCEINLINE bool GetIsReplicated() const
 	{
 		return bReplicates;
 	}
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
 
 	/** Allows a component to replicate other subobject on the actor  */
 	virtual bool ReplicateSubobjects(class UActorChannel *Channel, class FOutBunch *Bunch, FReplicationFlags *RepFlags);
@@ -796,6 +802,7 @@ public:
 	virtual void Serialize(FArchive& Ar) override;
 #if WITH_EDITOR
 	virtual bool Modify( bool bAlwaysMarkDirty = true ) override;
+	virtual bool CanEditChange(const UProperty* InProperty) const override;
 	virtual void PreEditChange(UProperty* PropertyThatWillChange) override;
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 	virtual void PostEditChangeChainProperty( FPropertyChangedChainEvent& PropertyChangedEvent ) override;
@@ -919,6 +926,50 @@ private:
 	friend class FComponentReregisterContextBase;
 	friend class FComponentRecreateRenderStateContext;
 	friend struct FActorComponentTickFunction;
+
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
+	//~ Begin Methods for Replicated Members.
+protected:
+
+	/**
+	 * Sets the value of bReplicates without causing other side effects to this instance.
+	 * This should only be called during component construction.
+	 *
+	 * This method exists only to allow code to directly modify bReplicates to maintain existing
+	 * behavior.
+	 */
+	void SetIsReplicatedByDefault(const bool bNewReplicates);
+
+	/**
+	 * Gets the property name for bReplicates.
+	 *
+	 * This exists so subclasses don't need to have direct access to the bReplicates property so it
+	 * can be made private later.
+	 */
+	static const FName GetReplicatesPropertyName()
+	{
+		return GET_MEMBER_NAME_CHECKED(UActorComponent, bReplicates);
+	}
+
+public:
+
+	/**
+	 * Sets the value of bIsActive without causing other side effects to this instance.
+	 *
+	 * Activate, Deactivate, and SetActive are preferred in most cases because they respect virtual behavior.
+	 */
+	void SetActiveFlag(const bool bNewIsActive);
+
+	//~ End Methods for Replicated Members.
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
+
+protected:
+
+	/** Convenience method for testing whether or not our owner is still being constructed / initialized. */
+	bool OwnerNeedsInitialization() const;
+
+	/** Convenience method for testing whether or not we are still be constructed / initialized. */
+	bool NeedsInitialization() const;
 };
 
 //////////////////////////////////////////////////////////////////////////

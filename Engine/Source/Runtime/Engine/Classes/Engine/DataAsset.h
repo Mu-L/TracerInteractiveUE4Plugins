@@ -13,13 +13,13 @@
  * Base class for a simple asset containing data. The editor will list this in the content browser if you inherit from this class
  */
 UCLASS(abstract, MinimalAPI)
-class UDataAsset : public UObject
+class ENGINE_VTABLE UDataAsset : public UObject
 {
 	GENERATED_UCLASS_BODY()
 public:
 	// UObject interface
 #if WITH_EDITORONLY_DATA
-	ENGINE_API virtual void Serialize(FStructuredArchive::FRecord Record) override;
+	ENGINE_API virtual void Serialize(FStructuredArchiveRecord Record) override;
 #endif
 
 private:

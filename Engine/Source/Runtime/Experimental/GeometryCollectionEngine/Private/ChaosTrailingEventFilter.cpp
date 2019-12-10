@@ -1,12 +1,11 @@
 // Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+
 #include "ChaosTrailingEventFilter.h"
 
-
-void FChaosTrailingEventFilter::FilterEvents(const FTransform& ChaosComponentTransform, const TArray<Chaos::TTrailingData<float, 3>>& RawTrailingDataArray)
+void FChaosTrailingEventFilter::FilterEvents(const FTransform& ChaosComponentTransform, const Chaos::FTrailingDataArray& RawTrailingDataArray)
 {
 	FilteredDataArray.Reset();
 
-#if INCLUDE_CHAOS
 	{
 		check(TrailingEventRequestSettings);
 
@@ -45,7 +44,9 @@ void FChaosTrailingEventFilter::FilterEvents(const FTransform& ChaosComponentTra
 			NewData.Velocity = TrailingData.Velocity;
 			NewData.AngularVelocity = TrailingData.AngularVelocity;
 			NewData.Mass = TrailingData.Mass;
-			NewData.ParticleIndex = TrailingData.ParticleIndex;
+#if TODO_MAKE_A_BLUEPRINT_WAY_TO_ACCESS_PARTICLES
+			NewData.ParticleIndex = TrailingData.Particle;
+#endif
 
 			FilteredDataArray.Add(NewData);
 
@@ -57,7 +58,6 @@ void FChaosTrailingEventFilter::FilterEvents(const FTransform& ChaosComponentTra
 
 		SortEvents(FilteredDataArray, TrailingEventRequestSettings->SortMethod, ChaosComponentTransform);
 	}
-#endif
 }
 
 void FChaosTrailingEventFilter::SortEvents(TArray<FChaosTrailingEventData>& InOutTrailingEvents, EChaosTrailingSortMethod SortMethod, const FTransform& InTransform)
@@ -114,5 +114,3 @@ void FChaosTrailingEventFilter::SortEvents(TArray<FChaosTrailingEventData>& InOu
 		break;
 	}
 }
-
-

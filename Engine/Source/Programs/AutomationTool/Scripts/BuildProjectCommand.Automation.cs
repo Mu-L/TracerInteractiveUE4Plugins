@@ -37,8 +37,6 @@ public enum ProjectBuildTargets
 /// </remarks>
 public partial class Project : CommandUtils
 {
-	#region Build Command
-
 	/// <summary>
 	/// PlatformSupportsCrashReporter
 	/// </summary>
@@ -89,6 +87,7 @@ public partial class Project : CommandUtils
 				if (Params.EditorTargets.Contains("UnrealHeaderTool") == false)
 				{
 					Agenda.AddTargets(new string[] { "UnrealHeaderTool" }, EditorPlatform, EditorConfiguration);
+					Agenda.AddTargets(new string[] { "UnrealHeaderTool" }, EditorPlatform, EditorConfiguration, Params.CodeBasedUprojectPath);
 				}
 				if (Params.EditorTargets.Contains("ShaderCompileWorker") == false)
 				{
@@ -231,6 +230,4 @@ public partial class Project : CommandUtils
 
 		LogInformation("********** BUILD COMMAND COMPLETED **********");
 	}
-
-	#endregion
 }

@@ -8,41 +8,46 @@
 
 #include "AudioMixerPlatformXAudio2.h"
 #include "AudioMixer.h"
-#include "AudioMixerDevice.h"
 #include "HAL/PlatformAffinity.h"
 
 #ifndef WITH_XMA2
 #define WITH_XMA2 0
 #endif
 
+#if WITH_ENGINE
 #if WITH_XMA2
 #include "XMAAudioInfo.h"
 #endif  //#if WITH_XMA2
 #include "OpusAudioInfo.h"
 #include "VorbisAudioInfo.h"
 #include "ADPCMAudioInfo.h"
+#include "AudioPluginUtilities.h"
+#endif //WITH_ENGINE
 
 #include "CoreGlobals.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/MessageDialog.h"
-#include "AudioCompressionSettingsUtils.h"
+#include "Misc/ScopeLock.h"
+#include "HAL/Event.h"
+#include "CoreMinimal.h"
+#include "Logging/LogMacros.h"
 
 // Macro to check result code for XAudio2 failure, get the string version, log, and goto a cleanup
-#define XAUDIO2_CLEANUP_ON_FAIL(Result)						\
-	if (FAILED(Result))										\
-	{														\
-		const TCHAR* ErrorString = GetErrorString(Result);	\
-		AUDIO_PLATFORM_ERROR(ErrorString);					\
-		goto Cleanup;										\
+#define XAUDIO2_CLEANUP_ON_FAIL(Result)																\
+	if (FAILED(Result))																				\
+	{																								\
+		FString ErrorString = FString::Printf(TEXT("0x%X: %s"), Result, GetErrorString(Result));	\
+		AUDIO_PLATFORM_ERROR(*ErrorString);															\
+		goto Cleanup;																				\
 	}
 
 // Macro to check result for XAudio2 failure, get string version, log, and return false
-#define XAUDIO2_RETURN_ON_FAIL(Result)						\
-	if (FAILED(Result))										\
-	{														\
-		const TCHAR* ErrorString = GetErrorString(Result);	\
-		AUDIO_PLATFORM_ERROR(ErrorString);					\
-		return false;										\
+#define XAUDIO2_RETURN_ON_FAIL(Result)																\
+	if (FAILED(Result))																				\
+	{																								\
+		FString ErrorString = FString::Printf(TEXT("0x%X: %s"), Result, GetErrorString(Result));	\
+		AUDIO_PLATFORM_ERROR(*ErrorString);															\
+		return false;																				\
 	}
 
 
@@ -115,7 +120,7 @@ namespace Audio
 			case E_INVALIDARG:								return TEXT("E_INVALIDARG");
 			case E_OUTOFMEMORY:								return TEXT("E_OUTOFMEMORY");
 #endif
-			default:										return TEXT("UKNOWN");
+			default:										return TEXT("UNKNOWN");
 		}
 	}
 
@@ -222,8 +227,10 @@ namespace Audio
 		//Initialize our XMA2 decoder context
 		FXMAAudioInfo::Initialize();
 #endif //#if WITH_XMA2
+#if WITH_ENGINE
 		// Load ogg and vorbis dlls if they haven't been loaded yet
 		LoadVorbisLibraries();
+#endif // WITH_ENGINE
 
 		bIsInitialized = true;
 
@@ -247,7 +254,7 @@ namespace Audio
 #if PLATFORM_WINDOWS || PLATFORM_HOLOLENS
 
 #if PLATFORM_64BITS && !PLATFORM_HOLOLENS
-		if (XAudio2Dll != nullptr && GIsRequestingExit)
+		if (XAudio2Dll != nullptr && IsEngineExitRequested())
 		{
 			if (!FreeLibrary(XAudio2Dll))
 			{
@@ -930,6 +937,7 @@ namespace Audio
 		static FName NAME_XMA(TEXT("XMA"));
 		static FName NAME_ADPCM(TEXT("ADPCM"));
 
+#if WITH_ENGINE
 		if (InSoundWave->IsStreaming())
 		{
 			if (InSoundWave->IsSeekableStreaming())
@@ -942,11 +950,11 @@ namespace Audio
 			{
 				return NAME_XMA;
 			}
-#endif
+#endif // WITH_XMA2 && USE_XMA2_FOR_STREAMING
 
 #if USE_VORBIS_FOR_STREAMING
 			return NAME_OGG;
-#endif
+#endif // USE_VORBIS_FOR_STREAMING
 		}
 
 #if WITH_XMA2
@@ -954,8 +962,8 @@ namespace Audio
 		{
 			return NAME_XMA;
 		}
-#endif //#if WITH_XMA2
-
+#endif // WITH_XMA2
+#endif // WITH_ENGINE
 		return NAME_OGG;
 	}
 
@@ -966,6 +974,7 @@ namespace Audio
 
 	ICompressedAudioInfo* FMixerPlatformXAudio2::CreateCompressedAudioInfo(USoundWave* InSoundWave)
 	{
+#if WITH_ENGINE
 		check(InSoundWave);
 
 		if (InSoundWave->IsStreaming())
@@ -989,7 +998,7 @@ namespace Audio
 			return new FVorbisAudioInfo();
 #else
 			return new FOpusAudioInfo();
-#endif
+#endif // USE_VORBIS_FOR_STREAMING
 		}
 
 		static const FName NAME_OGG(TEXT("OGG"));
@@ -1004,8 +1013,8 @@ namespace Audio
 		{
 			return new FXMAAudioInfo();
 		}
-#endif
-
+#endif // WITH_XMA2
+#endif // WITH_ENGINE
 		return nullptr;
 	}
 
@@ -1017,7 +1026,11 @@ namespace Audio
 
 	FAudioPlatformSettings FMixerPlatformXAudio2::GetPlatformSettings() const
 	{
-		return FAudioPlatformSettings::GetPlatformSettings(TEXT("/Script/WindowsTargetPlatform.WindowsTargetSettings"));
+#if WITH_ENGINE
+		return FAudioPlatformSettings::GetPlatformSettings(FPlatformProperties::GetRuntimeSettingsClassName());
+#else
+		return FAudioPlatformSettings();
+#endif // WITH_ENGINE
 	}
 
 	void FMixerPlatformXAudio2::OnHardwareUpdate()

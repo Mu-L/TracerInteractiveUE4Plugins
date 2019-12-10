@@ -163,7 +163,7 @@ public:
 	// returns a suitable ULandscapeSplinesComponent to place streaming meshes into, given a location
 	// falls back to "this" if it can't find another suitable, so never returns nullptr
 	// @param bCreate whether to create a component if a suitable actor is found but it has no splines component yet
-	ULandscapeSplinesComponent* GetStreamingSplinesComponentByLocation(const FVector& LocalLocation, bool bCreate = true);
+	LANDSCAPE_API ULandscapeSplinesComponent* GetStreamingSplinesComponentByLocation(const FVector& LocalLocation, bool bCreate = true);
 
 	// returns the matching ULandscapeSplinesComponent for a given level, *can return null*
 	// @param bCreate whether to create a component if a suitable actor is found but it has no splines component yet
@@ -179,7 +179,12 @@ public:
 	virtual void RemoveAllForeignMeshComponents(ULandscapeSplineSegment* Owner);
 	virtual void AddForeignMeshComponent(ULandscapeSplineControlPoint* Owner, UControlPointMeshComponent* Component);
 	virtual void RemoveForeignMeshComponent(ULandscapeSplineControlPoint* Owner, UControlPointMeshComponent* Component);
-	virtual void DestroyOrphanedForeignMeshComponents(UWorld* OwnerWorld);
+	virtual void DestroyOrphanedForeignSplineMeshComponents(UWorld* OwnerWorld);
+	virtual void DestroyOrphanedForeignControlPointMeshComponents(UWorld* OwnerWorld);
+
+	void DestroyUnreferencedForeignMeshComponents();
+	void ForEachUnreferencedForeignMeshComponent(TFunctionRef<bool(ULandscapeSplineSegment*, USplineMeshComponent*, ULandscapeSplineControlPoint*, UControlPointMeshComponent*)> Func);
+	
 	virtual UControlPointMeshComponent*   GetForeignMeshComponent(ULandscapeSplineControlPoint* Owner);
 	virtual TArray<USplineMeshComponent*> GetForeignMeshComponents(ULandscapeSplineSegment* Owner);
 
@@ -188,6 +193,8 @@ public:
 	void AutoFixMeshComponentErrors(UWorld* OtherWorld);
 
 	bool IsUsingEditorMesh(const USplineMeshComponent* SplineMeshComponent) const;
+
+	bool IsUsingLayerInfo(const ULandscapeLayerInfoObject* LayerInfo) const;
 #endif
 
 	//~ Begin UObject Interface
@@ -221,6 +228,6 @@ public:
 	friend class ULandscapeSplineSegment;
 #if WITH_EDITOR
 	// TODO - move this out of ULandscapeInfo
-	friend bool ULandscapeInfo::ApplySplinesInternal(bool bOnlySelected, ALandscapeProxy* Landscape, TSet<ULandscapeComponent*>* OutModifiedComponents);
+	friend bool ULandscapeInfo::ApplySplinesInternal(bool bOnlySelected, ALandscapeProxy* Landscape, TSet<ULandscapeComponent*>* OutModifiedComponents, bool bMarkPackageDirty);
 #endif
 };

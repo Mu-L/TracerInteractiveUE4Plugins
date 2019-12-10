@@ -147,6 +147,8 @@ struct MOVIESCENE_API TMovieSceneSavedTokens
 	 */
 	void Reset();
 
+	void SetPayload(PayloadType&& InPayload) { Payload = MoveTemp(InPayload); }
+
 private:
 
 	/** Array defining how whether (and how) particular entities have evaluated */
@@ -276,6 +278,17 @@ public:
 	 * Any global pre-animated state tokens (that reset the animation when saving a map, for instance) will remain.
 	 */
 	MOVIESCENE_API void DiscardEntityTokens();
+
+	/**
+	 * Discard any tokens that relate to the requested object (ie sections or tracks) without restoring the values.
+	 * Any global pre-animated state tokens for this object will be removed.
+	 */
+	MOVIESCENE_API void DiscardAndRemoveEntityTokensForObject(UObject& Object);
+
+	/**
+	 * Called when objects have been replaced so that pre animated state can swap out to the new objects
+	 */
+	MOVIESCENE_API void OnObjectsReplaced(const TMap<UObject*, UObject*>& ReplacementMap);
 
 public:
 

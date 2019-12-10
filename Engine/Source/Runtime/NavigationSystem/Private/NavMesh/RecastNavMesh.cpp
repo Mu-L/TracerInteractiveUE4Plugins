@@ -213,6 +213,58 @@ namespace FNavMeshConfig
 	}
 }
 
+FRecastNavMeshGenerationProperties::FRecastNavMeshGenerationProperties()
+{
+	TilePoolSize = 1024;
+	TileSizeUU = 1000.f;
+	CellSize = 19;
+	CellHeight = 10;
+	AgentRadius = 34.f;
+	AgentHeight = 144.f;
+	AgentMaxSlope = 44.f;
+	AgentMaxStepHeight = 35.f;
+	MinRegionArea = 0.f;
+	MergeRegionSize = 400.f;
+	MaxSimplificationError = 1.3f;	// from RecastDemo
+	TileNumberHardLimit = 1 << 20;
+	RegionPartitioning = ERecastPartitioning::Watershed;
+	LayerPartitioning = ERecastPartitioning::Watershed;
+	RegionChunkSplits = 2;
+	LayerChunkSplits = 2;
+	bSortNavigationAreasByCost = false;
+	bPerformVoxelFiltering = true;
+	bMarkLowHeightAreas = false;
+	bFilterLowSpanSequences = false;
+	bFilterLowSpanFromTileCache = false;
+	bFixedTilePoolSize = false;
+}
+
+FRecastNavMeshGenerationProperties::FRecastNavMeshGenerationProperties(const ARecastNavMesh& RecastNavMesh)
+{
+	TilePoolSize = RecastNavMesh.TilePoolSize;
+	TileSizeUU = RecastNavMesh.TileSizeUU;
+	CellSize = RecastNavMesh.CellSize;
+	CellHeight = RecastNavMesh.CellHeight;
+	AgentRadius = RecastNavMesh.AgentRadius;
+	AgentHeight = RecastNavMesh.AgentHeight;
+	AgentMaxSlope = RecastNavMesh.AgentMaxSlope;
+	AgentMaxStepHeight = RecastNavMesh.AgentMaxStepHeight;
+	MinRegionArea = RecastNavMesh.MinRegionArea;
+	MergeRegionSize = RecastNavMesh.MergeRegionSize;
+	MaxSimplificationError = RecastNavMesh.MaxSimplificationError;
+	TileNumberHardLimit = RecastNavMesh.TileNumberHardLimit;
+	RegionPartitioning = RecastNavMesh.RegionPartitioning;
+	LayerPartitioning = RecastNavMesh.LayerPartitioning;
+	RegionChunkSplits = RecastNavMesh.RegionChunkSplits;
+	LayerChunkSplits = RecastNavMesh.LayerChunkSplits;
+	bSortNavigationAreasByCost = RecastNavMesh.bSortNavigationAreasByCost;
+	bPerformVoxelFiltering = RecastNavMesh.bPerformVoxelFiltering;
+	bMarkLowHeightAreas = RecastNavMesh.bMarkLowHeightAreas;
+	bFilterLowSpanSequences = RecastNavMesh.bFilterLowSpanSequences;
+	bFilterLowSpanFromTileCache = RecastNavMesh.bFilterLowSpanFromTileCache;
+	bFixedTilePoolSize = RecastNavMesh.bFixedTilePoolSize;
+}
+
 ARecastNavMesh::FNavPolyFlags ARecastNavMesh::NavLinkFlag = ARecastNavMesh::FNavPolyFlags(0);
 
 ARecastNavMesh::ARecastNavMesh(const FObjectInitializer& ObjectInitializer)
@@ -293,37 +345,6 @@ void ARecastNavMesh::DestroyRecastPImpl()
 	}
 }
 
-ARecastNavMesh* ARecastNavMesh::SpawnInstance(UNavigationSystem* NavSys, const FNavDataConfig* AgentProps)
-{
-	FActorSpawnParameters SpawnInfo;
-	SpawnInfo.OverrideLevel = NavSys->GetWorld()->PersistentLevel;
-	ARecastNavMesh* Instance = NavSys->GetWorld()->SpawnActor<ARecastNavMesh>( SpawnInfo );
-
-	if (Instance != NULL && AgentProps != NULL)
-	{
-		Instance->SetConfig(*AgentProps);
-		if (AgentProps->Name != NAME_None)
-		{
-			FString StrName = FString::Printf(TEXT("%s-%s"), *(Instance->GetFName().GetPlainNameString()), *(AgentProps->Name.ToString()));
-			// temporary solution to make sure we don't try to change name while there's already
-			// an object with this name
-			UObject* ExistingObject = StaticFindObject(/*Class=*/ NULL, Instance->GetOuter(), *StrName, true);
-			if (ExistingObject != NULL)
-			{
-				ExistingObject->Rename(NULL, NULL, REN_DontCreateRedirectors | REN_ForceGlobalUnique | REN_DoNotDirty | REN_NonTransactional);
-			}
-
-			// Set descriptive name
-			Instance->Rename(*StrName);
-#if WITH_EDITOR
-			Instance->SetActorLabel(StrName);
-#endif // WITH_EDITOR
-		}
-	}
-
-	return Instance;
-}
-
 UPrimitiveComponent* ARecastNavMesh::ConstructRenderingComponent() 
 {
 	return NewObject<UNavMeshRenderingComponent>(this, TEXT("NavRenderingComp"), RF_Transient);
@@ -333,7 +354,7 @@ void ARecastNavMesh::UpdateNavMeshDrawing()
 {
 #if !UE_BUILD_SHIPPING
 	UNavMeshRenderingComponent* NavMeshRenderComp = Cast<UNavMeshRenderingComponent>(RenderingComp);
-	if (NavMeshRenderComp != nullptr && NavMeshRenderComp->bVisible && (NavMeshRenderComp->IsForcingUpdate() || UNavMeshRenderingComponent::IsNavigationShowFlagSet(GetWorld())))
+	if (NavMeshRenderComp != nullptr && NavMeshRenderComp->GetVisibleFlag() && (NavMeshRenderComp->IsForcingUpdate() || UNavMeshRenderingComponent::IsNavigationShowFlagSet(GetWorld())))
 	{
 		RenderingComp->MarkRenderStateDirty();
 	}
@@ -467,6 +488,10 @@ void ARecastNavMesh::RecreateDefaultFilter()
 	FRecastQueryFilter* DetourFilter = static_cast<FRecastQueryFilter*>(DefaultQueryFilter->GetImplementation());
 	DetourFilter->SetIsVirtual(bUseVirtualFilters);
 	DetourFilter->setHeuristicScale(HeuristicScale);
+	// clearing out the 'navlink flag' from included flags since it would make 
+	// dtQueryFilter::passInlineFilter pass navlinks of area classes with
+	// AreaFlags == 0 (like NavArea_Null), which should mean 'unwalkable'
+	DetourFilter->setIncludeFlags(DetourFilter->getIncludeFlags() & (~ARecastNavMesh::GetNavLinkFlag()));
 
 	for (int32 Idx = 0; Idx < SupportedAreas.Num(); Idx++)
 	{
@@ -707,7 +732,7 @@ void ARecastNavMesh::Serialize( FArchive& Ar )
 void ARecastNavMesh::SetConfig(const FNavDataConfig& Src) 
 { 
 	NavDataConfig = Src; 
-	AgentMaxHeight = AgentHeight = Src.AgentHeight;
+	AgentHeight = Src.AgentHeight;
 	AgentRadius = Src.AgentRadius;
 
 	if (Src.HasStepHeightOverride())
@@ -1071,6 +1096,24 @@ bool ARecastNavMesh::ProjectPoint(const FVector& Point, FNavLocation& OutLocatio
 		bSuccess = RecastNavMeshImpl->ProjectPointToNavMesh(Point, OutLocation, Extent, GetRightFilterRef(Filter), QueryOwner);
 	}
 
+	return bSuccess;
+}
+
+bool ARecastNavMesh::IsNodeRefValid(NavNodeRef NodeRef) const
+{
+	if (NodeRef == INVALID_NAVNODEREF)
+	{
+		return false;
+	}
+	const dtNavMesh* NavMesh = RecastNavMeshImpl ? RecastNavMeshImpl->GetRecastMesh() : nullptr;
+	if (!NavMesh)
+	{
+		return false;
+	}
+	dtPoly const* Poly = 0;
+	dtMeshTile const* Tile = 0;
+	const dtStatus Status = NavMesh->getTileAndPolyByRef(NodeRef, &Tile, &Poly);
+	const bool bSuccess = dtStatusSucceed(Status);
 	return bSuccess;
 }
 
@@ -1551,6 +1594,7 @@ bool ARecastNavMesh::GetPolyFlags(NavNodeRef PolyID, FNavMeshNodeFlags& Flags) c
 			const UClass* AreaClass = GetAreaClass(Flags.Area);
 			const UNavArea* DefArea = AreaClass ? ((UClass*)AreaClass)->GetDefaultObject<UNavArea>() : NULL;
 			Flags.AreaFlags = DefArea ? DefArea->GetAreaFlags() : 0;
+			// @todo what is this literal?
 			Flags.PathFlags = (PolyFlags & GetNavLinkFlag()) ? 4 : 0;
 		}
 	}
@@ -2396,6 +2440,7 @@ void ARecastNavMesh::ConditionalConstructGenerator()
 		if (Generator)
 		{
 			NavDataGenerator = MakeShareable(Generator);
+			Generator->Init();
 		}
 
 		UNavigationSystemV1* NavSys = FNavigationSystem::GetCurrent<UNavigationSystemV1>(World);
@@ -2404,6 +2449,32 @@ void ARecastNavMesh::ConditionalConstructGenerator()
 			RestrictBuildingToActiveTiles(NavSys->IsActiveTilesGenerationEnabled());
 		}
 	}
+}
+
+void ARecastNavMesh::UpdateGenerationProperties(const FRecastNavMeshGenerationProperties& GenerationProps)
+{
+	TilePoolSize = GenerationProps.TilePoolSize;
+	TileSizeUU = GenerationProps.TileSizeUU;
+	CellSize = GenerationProps.CellSize;
+	CellHeight = GenerationProps.CellHeight;
+	AgentRadius = GenerationProps.AgentRadius;
+	AgentHeight = GenerationProps.AgentHeight;
+	AgentMaxSlope = GenerationProps.AgentMaxSlope;
+	AgentMaxStepHeight = GenerationProps.AgentMaxStepHeight;
+	MinRegionArea = GenerationProps.MinRegionArea;
+	MergeRegionSize = GenerationProps.MergeRegionSize;
+	MaxSimplificationError = GenerationProps.MaxSimplificationError;
+	TileNumberHardLimit = GenerationProps.TileNumberHardLimit;
+	RegionPartitioning = GenerationProps.RegionPartitioning;
+	LayerPartitioning = GenerationProps.LayerPartitioning;
+	RegionChunkSplits = GenerationProps.RegionChunkSplits;
+	LayerChunkSplits = GenerationProps.LayerChunkSplits;
+	bSortNavigationAreasByCost = GenerationProps.bSortNavigationAreasByCost;
+	bPerformVoxelFiltering = GenerationProps.bPerformVoxelFiltering;
+	bMarkLowHeightAreas = GenerationProps.bMarkLowHeightAreas;
+	bFilterLowSpanSequences = GenerationProps.bFilterLowSpanSequences;
+	bFilterLowSpanFromTileCache = GenerationProps.bFilterLowSpanFromTileCache;
+	bFixedTilePoolSize = GenerationProps.bFixedTilePoolSize;
 }
 
 bool ARecastNavMesh::IsVoxelCacheEnabled()

@@ -66,12 +66,6 @@ public:
 		return new FRHIGeometryShader(); 
 	}
 
-
-	virtual FGeometryShaderRHIRef RHICreateGeometryShaderWithStreamOutput(const TArray<uint8>& Code, const FStreamOutElementList& ElementList, uint32 NumStrides, const uint32* Strides, int32 RasterizedStream) final override
-	{ 
-		return new FRHIGeometryShader(); 
-	}
-
 	virtual FComputeShaderRHIRef RHICreateComputeShader(const TArray<uint8>& Code) final override
 	{ 
 		return new FRHIComputeShader(); 
@@ -132,11 +126,11 @@ public:
 		return new FRHIIndexBuffer(Stride,Size,InUsage); 
 	}
 
-	virtual void* RHILockIndexBuffer(FRHIIndexBuffer* IndexBuffer, uint32 Offset, uint32 Size, EResourceLockMode LockMode) final override
+	virtual void* LockIndexBuffer_BottomOfPipe(FRHICommandListImmediate& RHICmdList, FRHIIndexBuffer* IndexBuffer, uint32 Offset, uint32 Size, EResourceLockMode LockMode) final override
 	{ 
 		return GetStaticBuffer(); 
 	}
-	virtual void RHIUnlockIndexBuffer(FRHIIndexBuffer* IndexBuffer) final override
+	virtual void UnlockIndexBuffer_BottomOfPipe(FRHICommandListImmediate& RHICmdList, FRHIIndexBuffer* IndexBuffer) final override
 	{
 
 	}
@@ -155,11 +149,12 @@ public:
 		return new FRHIVertexBuffer(Size,InUsage); 
 	}
 
-	virtual void* RHILockVertexBuffer(FRHIVertexBuffer* VertexBuffer, uint32 Offset, uint32 SizeRHI, EResourceLockMode LockMode) final override
+	virtual void* LockVertexBuffer_BottomOfPipe(FRHICommandListImmediate& RHICmdList, FRHIVertexBuffer* VertexBuffer, uint32 Offset, uint32 SizeRHI, EResourceLockMode LockMode) final override
 	{ 
 		return GetStaticBuffer(); 
 	}
-	virtual void RHIUnlockVertexBuffer(FRHIVertexBuffer* VertexBuffer) final override
+
+	virtual void UnlockVertexBuffer_BottomOfPipe(FRHICommandListImmediate& RHICmdList, FRHIVertexBuffer* VertexBuffer) final override
 	{
 
 	}
@@ -184,11 +179,11 @@ public:
 		return new FRHIStructuredBuffer(Stride,Size,InUsage); 
 	}
 
-	virtual void* RHILockStructuredBuffer(FRHIStructuredBuffer* StructuredBuffer, uint32 Offset, uint32 SizeRHI, EResourceLockMode LockMode) final override
+	virtual void* LockStructuredBuffer_BottomOfPipe(FRHICommandListImmediate& RHICmdList, FRHIStructuredBuffer* StructuredBuffer, uint32 Offset, uint32 SizeRHI, EResourceLockMode LockMode) final override
 	{ 
 		return GetStaticBuffer(); 
 	}
-	virtual void RHIUnlockStructuredBuffer(FRHIStructuredBuffer* StructuredBuffer) final override
+	virtual void UnlockStructuredBuffer_BottomOfPipe(FRHICommandListImmediate& RHICmdList, FRHIStructuredBuffer* StructuredBuffer) final override
 	{
 
 	}
@@ -237,20 +232,20 @@ public:
 
 	}
 
-	virtual uint64 RHICalcTexture2DPlatformSize(uint32 SizeX, uint32 SizeY, uint8 Format, uint32 NumMips, uint32 NumSamples, uint32 Flags, uint32& OutAlign) final override
+	virtual uint64 RHICalcTexture2DPlatformSize(uint32 SizeX, uint32 SizeY, uint8 Format, uint32 NumMips, uint32 NumSamples, uint32 Flags, const FRHIResourceCreateInfo& CreateInfo, uint32& OutAlign) final override
 	{ 
 		OutAlign = 0; 
 		return 0; 
 	}
 
 
-	virtual uint64 RHICalcTexture3DPlatformSize(uint32 SizeX, uint32 SizeY, uint32 SizeZ, uint8 Format, uint32 NumMips, uint32 Flags, uint32& OutAlign) final override
+	virtual uint64 RHICalcTexture3DPlatformSize(uint32 SizeX, uint32 SizeY, uint32 SizeZ, uint8 Format, uint32 NumMips, uint32 Flags, const FRHIResourceCreateInfo& CreateInfo, uint32& OutAlign) final override
 	{ 
 		OutAlign = 0; 
 		return 0; 
 	}
 
-	virtual uint64 RHICalcTextureCubePlatformSize(uint32 Size, uint8 Format, uint32 NumMips, uint32 Flags, uint32& OutAlign) final override
+	virtual uint64 RHICalcTextureCubePlatformSize(uint32 Size, uint8 Format, uint32 NumMips, uint32 Flags, const FRHIResourceCreateInfo& CreateInfo, uint32& OutAlign) final override
 	{ 
 		OutAlign = 0; 
 		return 0; 
@@ -394,13 +389,13 @@ public:
 	}
 
 
-	virtual void RHIMapStagingSurface(FRHITexture* Texture,void*& OutData,int32& OutWidth,int32& OutHeight) final override
+	virtual void RHIMapStagingSurface(FRHITexture* Texture, FRHIGPUFence* Fence, void*& OutData, int32& OutWidth, int32& OutHeight, uint32 GPUIndex) final override
 	{
 
 	}
 
 
-	virtual void RHIUnmapStagingSurface(FRHITexture* Texture) final override
+	virtual void RHIUnmapStagingSurface(FRHITexture* Texture, uint32 GPUIndex) final override
 	{
 
 	}
@@ -509,6 +504,16 @@ public:
 	{
 
 	}
+
+	virtual EColorSpaceAndEOTF RHIGetColorSpace(FRHIViewport* Viewport ) final override
+	{
+		return EColorSpaceAndEOTF::EColorSpace_Rec709;
+	}
+
+	virtual void RHICheckViewportHDRStatus(FRHIViewport* Viewport) final override
+	{
+	}
+
 	virtual void RHITick(float DeltaTime) final override
 	{
 
@@ -518,10 +523,6 @@ public:
 	{
 	}
 
-	virtual void RHISetStreamOutTargets(uint32 NumTargets, FRHIVertexBuffer* const* VertexBuffers,const uint32* Offsets) final override
-	{
-
-	}
 	virtual void RHISetRasterizerState(FRHIRasterizerState* NewState) final override
 	{
 
@@ -791,6 +792,10 @@ public:
 	virtual void* RHIGetNativeDevice() final override
 	{ 
 		return 0; 
+	}
+	virtual void* RHIGetNativeInstance() final override
+	{
+		return 0;
 	}
 	virtual void RHIPushEvent(const TCHAR* Name, FColor Color) final override
 	{

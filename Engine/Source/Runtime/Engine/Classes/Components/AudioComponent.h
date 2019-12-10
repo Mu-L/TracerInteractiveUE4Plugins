@@ -17,6 +17,28 @@ class USoundBase;
 class USoundClass;
 class USoundConcurrency;
 
+// Enum describing the audio component play state
+UENUM(BlueprintType)
+enum class EAudioComponentPlayState : uint8
+{
+	// If the sound is playing (i.e. not fading in, not fading out, not paused)
+	Playing,
+
+	// If the sound is not playing
+	Stopped, 
+
+	// If the sound is playing but paused
+	Paused,
+
+	// If the sound is playing and fading in
+	FadingIn,
+
+	// If the sound is playing and fading out
+	FadingOut,
+
+	Count UMETA(Hidden)
+};
+
 
 /** called when we finish playing audio, either because it played to completion or because a Stop() call turned it off early */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE( FOnAudioFinished );
@@ -53,6 +75,28 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnAudioMultiEnvelopeValue, const
 
 /** shadow delegate declaration for above */
 DECLARE_MULTICAST_DELEGATE_FourParams(FOnAudioMultiEnvelopeValueNative, const class UAudioComponent*, const float, const float, const int32);
+
+
+
+/** Type of fade to use when adjusting the audio component's volume. */
+UENUM(BlueprintType)
+enum class EAudioFaderCurve : uint8
+{
+	// Linear Fade
+	Linear,
+
+	// Logarithmic Fade
+	Logarithmic,
+
+	// S-Curve, Sinusoidal Fade
+	SCurve UMETA(DisplayName = "Sin (S-Curve)"),
+
+	// Equal Power, Sinusoidal Fade
+	Sin UMETA(DisplayName = "Sin (Equal Power)"),
+
+	Count UMETA(Hidden)
+};
+
 
 /**
  *	Struct used for storing one per-instance named parameter for this AudioComponent.
@@ -190,6 +234,9 @@ class ENGINE_API UAudioComponent : public USceneComponent
 	/** Whether or not this audio component has been paused */
 	uint8 bIsPaused:1;
 
+	/** Whether or not fade out was triggered. */
+	uint8 bIsFadingOut:1;
+
 	/**
 	* True if we should automatically attach to AutoAttachParent when Played, and detach from our parent when playback is completed.
 	* This overrides any current attachment that may be present at the time of activation (deferring initial attachment until activation, if AutoAttachParent is null).
@@ -249,6 +296,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Sound, meta = (ClampMin = "0.0", UIMin = "0.0", EditCondition = "bOverrideSubtitlePriority"))
 	float SubtitlePriority;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Sound)
+	USoundEffectSourcePresetChain* SourceEffectChain;
+
 #if WITH_EDITORONLY_DATA
 	UPROPERTY()
 	float VolumeWeightedPriorityScale_DEPRECATED;
@@ -286,6 +336,12 @@ public:
 
 	/** while playing, this component will check for occlusion from its closest listener every this many seconds */
 	float OcclusionCheckInterval;
+
+	/** What time the audio component was told to play. Used to compute audio component state. */
+	float TimeAudioComponentPlayed;
+
+	/** How much time the audio component was told to fade in. */
+	float FadeInTimeDuration;
 
 	/**
 	 * Options for how we handle our location when we attach to the AutoAttachParent, if bAutoManageAttachment is true.
@@ -359,7 +415,7 @@ public:
 	 * @param FadeVolumeLevel the percentage of the AudioComponents's calculated volume to fade to
 	 */
 	UFUNCTION(BlueprintCallable, Category="Audio|Components|Audio")
-	virtual void FadeIn(float FadeInDuration, float FadeVolumeLevel = 1.f, float StartTime = 0.f);
+	virtual void FadeIn(float FadeInDuration, float FadeVolumeLevel = 1.0f, float StartTime = 0.0f, const EAudioFaderCurve FadeCurve = EAudioFaderCurve::Linear);
 
 	/**
 	 * This is used in place of "stop" when it is desired to fade the volume of the sound before stopping.
@@ -372,7 +428,7 @@ public:
 	 * @param FadeVolumeLevel the percentage of the AudioComponents's calculated volume in which to fade to
 	 */
 	UFUNCTION(BlueprintCallable, Category="Audio|Components|Audio")
-	virtual	void FadeOut(float FadeOutDuration, float FadeVolumeLevel);
+	virtual	void FadeOut(float FadeOutDuration, float FadeVolumeLevel, const EAudioFaderCurve FadeCurve = EAudioFaderCurve::Linear);
 
 	/** Start a sound playing on an audio component */
 	UFUNCTION(BlueprintCallable, Category="Audio|Components|Audio")
@@ -390,13 +446,17 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Audio|Components|Audio")
 	void SetPaused(bool bPause);
 
-	/** Returns true if this component is currently playing a SoundCue. */
+	/** Returns if the sound playing any audio. Doesn't indicate the play state. Use GetPlayState() to get the actual play state. */
 	UFUNCTION(BlueprintCallable, Category="Audio|Components|Audio")
 	virtual bool IsPlaying() const;
 
+	/** Returns the enumerated play states of the audio component. */
+	UFUNCTION(BlueprintCallable, Category = "Audio|Components|Audio")
+	EAudioComponentPlayState GetPlayState() const;
+
 	/** This will allow one to adjust the volume of an AudioComponent on the fly */
 	UFUNCTION(BlueprintCallable, Category="Audio|Components|Audio")
-	void AdjustVolume(float AdjustVolumeDuration, float AdjustVolumeLevel);
+	void AdjustVolume(float AdjustVolumeDuration, float AdjustVolumeLevel, const EAudioFaderCurve FadeCurve = EAudioFaderCurve::Linear);
 
 	/**  Set a float instance parameter for use in sound cues played by this audio component */
 	UFUNCTION(BlueprintCallable, Category="Audio|Components|Audio")
@@ -520,6 +580,7 @@ public:
 	virtual void Activate(bool bReset=false) override;
 	virtual void Deactivate() override;
 	virtual void OnUpdateTransform(EUpdateTransformFlags UpdateTransformFlags, ETeleportType Teleport = ETeleportType::None) override;
+	virtual FBoxSphereBounds CalcBounds(const FTransform& LocalToWorld) const override;
 	//~ End USceneComponent Interface
 
 	//~ Begin ActorComponent Interface.
@@ -529,7 +590,7 @@ public:
 	virtual bool IsReadyForOwnerToAutoDestroy() const override;
 	//~ End ActorComponent Interface.
 
-	void AdjustVolumeInternal(float AdjustVolumeDuration, float AdjustVolumeLevel, bool bIsFadeOut);
+	void AdjustVolumeInternal(float AdjustVolumeDuration, float AdjustVolumeLevel, bool bIsFadeOut, EAudioFaderCurve FadeCurve);
 
 	/** Returns a pointer to the attenuation settings to be used (if any) for this audio component dependent on the SoundAttenuation asset or overrides set. */
 	const FSoundAttenuationSettings* GetAttenuationSettingsToApply() const;
@@ -553,6 +614,7 @@ public:
 	// Will be set if the audio component is using baked FFT or envelope following data so as to be able to feed that data to BP based on playback time
 	void SetPlaybackTimes(const TMap<uint32, float>& InSoundWavePlaybackTimes);
 
+	void SetSourceEffectChain(USoundEffectSourcePresetChain* InSourceEffectChain);
 public:
 
 	/**
@@ -609,11 +671,11 @@ private:
 	TMap<uint32, FSoundWavePlaybackTimeData> SoundWavePlaybackTimes;
 
 	/** Restore relative transform from auto attachment and optionally detach from parent (regardless of whether it was an auto attachment). */
-	void CancelAutoAttachment(bool bDetachFromParent);
+	void CancelAutoAttachment(bool bDetachFromParent, const UWorld* MyWorld);
 
 protected:
 	/** Utility function called by Play and FadeIn to start a sound playing. */
-	void PlayInternal(const float StartTime = 0.f, const float FadeInDuration = 0.f, const float FadeVolumeLevel = 1.f);
+	void PlayInternal(const float StartTime = 0.0f, const float FadeInDuration = 0.0f, const float FadeVolumeLevel = 1.0f, const EAudioFaderCurve FadeCurve = EAudioFaderCurve::Linear);
 
 #if WITH_EDITORONLY_DATA
 	/** Utility function that updates which texture is displayed on the sprite dependent on the properties of the Audio Component. */
@@ -626,6 +688,3 @@ protected:
 	static TMap<uint64, UAudioComponent*> AudioIDToComponentMap;
 	static FCriticalSection AudioIDToComponentMapLock;
 };
-
-
-

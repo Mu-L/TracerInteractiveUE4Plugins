@@ -14,11 +14,12 @@ public class KismetCompiler : ModuleRules
                 "InputCore",
 				"UnrealEd",
 				"MovieScene",
-				"MovieSceneTools",
+				//"MovieSceneTools",
 				"BlueprintGraph",
 				"AnimGraph",
                 "MessageLog",
 				"Kismet",
+				"ScriptDisassembler",
 			}
 			);
 	}

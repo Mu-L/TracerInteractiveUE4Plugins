@@ -22,6 +22,8 @@ INT32_MAIN_INT32_ARGC_TCHAR_ARGV()
 	ServerLoopInitArgs.SessionFlags = EConcertSyncSessionFlags::Default_DisasterRecoverySession;
 	ServerLoopInitArgs.ServiceRole = TEXT("DisasterRecovery");
 	ServerLoopInitArgs.ServiceFriendlyName = TEXT("Disaster Recovery Service");
+	ServerLoopInitArgs.ServiceAutoArchiveSessionFilter.bIncludeIgnoredActivities = true;
+	ServerLoopInitArgs.bShowConsole = false;
 
 	ServerLoopInitArgs.GetServerConfigFunc = [&EditorProcessId]() -> const UConcertServerConfig*
 	{
@@ -38,8 +40,8 @@ INT32_MAIN_INT32_ARGC_TCHAR_ARGV()
 
 		UConcertServerConfig* ServerConfig = IConcertSyncServerModule::Get().ParseServerSettings(FCommandLine::Get());
 		ServerConfig->bAutoArchiveOnReboot = true; // If server crashed, was killed, etc, ensure the recovery session is archived (expected by recovery flow).
-		ServerConfig->NumSessionsToKeep = 10;
 		ServerConfig->EndpointSettings.RemoteEndpointTimeoutSeconds = 0;
+		ServerConfig->bMountDefaultSessionRepository = false; // Let the client mount its own repository to support concurrent service and avoid them to acces the same non-sharable database files.
 		return ServerConfig;
 	};
 
@@ -48,7 +50,7 @@ INT32_MAIN_INT32_ARGC_TCHAR_ARGV()
 		if (!FPlatformProcess::IsApplicationRunning(EditorProcessId))
 		{
 			UE_LOG(LogSyncServer, Warning, TEXT("Editor process %d lost! Requesting exit."), EditorProcessId);
-			GIsRequestingExit = true;
+			FPlatformMisc::RequestExit(false);
 		}
 		return true;
 	});

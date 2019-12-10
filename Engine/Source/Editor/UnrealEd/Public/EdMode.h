@@ -9,6 +9,7 @@
 #include "EditorComponents.h"
 #include "EngineGlobals.h"
 #include "EditorModeRegistry.h"
+#include "Tools/UEdMode.h"
 
 class FCanvas;
 class FEditorModeTools;
@@ -29,20 +30,6 @@ struct FViewportClick;
 class FModeTool;
 class FEditorViewportClient;
 struct FViewportClick;
-
-/** Outcomes when determining whether it's possible to perform an action on the edit modes*/
-namespace EEditAction
-{
-	enum Type
-	{
-		/** Can't process this action */
-		Skip		= 0,
-		/** Can process this action */
-		Process,
-		/** Stop evaluating other modes (early out) */
-		Halt,
-	};
-};
 
 /**
  * Base class for all editor modes.
@@ -195,6 +182,12 @@ public:
 	virtual bool UsesTransformWidget(FWidget::EWidgetMode CheckMode) const;
 
 	virtual void PostUndo() {}
+
+	/** 
+	 * Check to see if this EdMode wants to disallow AutoSave
+	 * @return true if AutoSave can be applied right now
+	 */
+	virtual bool CanAutoSave() const { return true; }
 
 	/**
 	 * Lets each mode/tool handle box selection in its own way.

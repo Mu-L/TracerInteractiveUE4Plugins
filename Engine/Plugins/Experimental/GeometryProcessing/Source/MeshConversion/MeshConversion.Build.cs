@@ -12,6 +12,7 @@ public class MeshConversion : ModuleRules
 			new string[] {
                 "Core",
                 "MeshDescription",
+				"StaticMeshDescription",
 				"GeometricObjects",
 				"DynamicMesh"
             }
@@ -20,8 +21,7 @@ public class MeshConversion : ModuleRules
         PrivateDependencyModuleNames.AddRange(
             new string[]
             {
-                "CoreUObject",
-                "Engine"
+                "CoreUObject"
 			}
 		);
     }

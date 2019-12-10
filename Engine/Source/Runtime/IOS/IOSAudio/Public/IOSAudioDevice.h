@@ -85,6 +85,7 @@ public:
 	 */
 	virtual bool ReadCompressedData( uint8* Destination, int32 NumFramesToDecode, bool bLooping ) override;
 	
+	bool ReleaseCurrentChunk();
 	
 	int32  RenderCallbackBufferSize;
 	int32  SampleRate;
@@ -179,6 +180,8 @@ private:
 	static OSStatus IOSAudioRenderCallback(void *InRefCon, AudioUnitRenderActionFlags *IOActionFlags,
 	                                       const AudioTimeStamp *InTimeStamp, UInt32 InBusNumber,
 	                                       UInt32 InNumberFrames, AudioBufferList *IOData);
+
+	void CleanupAudioBuffer();
 
 	friend class FIOSAudioDevice;
 };

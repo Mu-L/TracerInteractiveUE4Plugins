@@ -226,11 +226,17 @@ public:
 	/** Toggle the visibility of the transform box. */
 	TSharedPtr< FUICommandInfo > ToggleShowTransformBox;
 
-	/** Sets the tree search widget as the focused widget in Slate for easy typing. */
-	TSharedPtr< FUICommandInfo > QuickTreeSearch;
-
 	/** Toggle the visibility of the stretch box. */
 	TSharedPtr< FUICommandInfo > ToggleShowStretchBox;
+
+	/** Opens the director blueprint for a sequence. */
+	TSharedPtr< FUICommandInfo > OpenDirectorBlueprint;
+
+	/** Opens the tagged binding manager. */
+	TSharedPtr< FUICommandInfo > OpenTaggedBindingManager;
+	
+	/** Sets the tree search widget as the focused widget in Slate for easy typing. */
+	TSharedPtr< FUICommandInfo > QuickTreeSearch;
 
 	/** Bake transform. */
 	TSharedPtr< FUICommandInfo > BakeTransform;
@@ -327,9 +333,6 @@ public:
 
 	/** Restores all animated state for the current sequence. */
 	TSharedPtr< FUICommandInfo > RestoreAnimatedState;
-
-	/** Discard all changes to the current movie scene. */
-	TSharedPtr< FUICommandInfo > DiscardChanges;
 
 	/** Attempts to fix broken actor references. */
 	TSharedPtr< FUICommandInfo > FixActorReferences;

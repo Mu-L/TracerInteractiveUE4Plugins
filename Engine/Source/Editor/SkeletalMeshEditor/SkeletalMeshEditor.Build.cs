@@ -22,7 +22,6 @@ public class SkeletalMeshEditor : ModuleRules
 				"SlateCore",
                 "EditorStyle",
                 "UnrealEd",
-                
                 "SkeletonEditor",
                 "Kismet",
                 "KismetWidgets",
@@ -32,9 +31,10 @@ public class SkeletalMeshEditor : ModuleRules
                 "DesktopPlatform",
                 "PropertyEditor",
                 "RHI",
-                "ClothingSystemRuntime",
+                "ClothingSystemRuntimeCommon",
                 "ClothingSystemEditorInterface",
-				"ClothingSystemRuntimeInterface"
+				"ClothingSystemRuntimeInterface",
+				"SkeletalMeshUtilitiesCommon",
             }
 		);
 

@@ -72,6 +72,9 @@ public:
 			case ELauncherAction::AppInstaller:
 				LauncherOptions.LauncherRelativeUrl += TEXT("?action=installer");
 				break;
+			case ELauncherAction::AppVerifyInstallation:
+				LauncherOptions.LauncherRelativeUrl += TEXT("?action=verify");
+				break;
 			};
 
 			// If our payload starts with the correct encoded character, then append the string
@@ -101,7 +104,7 @@ private:
 		FString EncodedExePath;
 
 		static const TCHAR* Delims[] = { TEXT("/") };
-		static const int32 NumDelims = ARRAY_COUNT(Delims);
+		static const int32 NumDelims = UE_ARRAY_COUNT(Delims);
 
 		// Get the path to the executable, and encode it ('cos spaces, colons, etc break things)
 		FString ExePath = FPlatformProcess::BaseDir();

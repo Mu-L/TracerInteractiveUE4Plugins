@@ -427,7 +427,7 @@ static FORCEINLINE int32 GetObjectOuterHash(FName ObjName,PTRINT Outer)
 	return GetTypeHash(ObjName) + (Outer >> 6);
 }
 
-UObject* StaticFindObjectFastExplicitThreadSafe(FUObjectHashTables& ThreadHash, UClass* ObjectClass, FName ObjectName, const FString& ObjectPathName, bool bExactClass, EObjectFlags ExcludeFlags/*=0*/)
+UObject* StaticFindObjectFastExplicitThreadSafe(FUObjectHashTables& ThreadHash, const UClass* ObjectClass, FName ObjectName, const FString& ObjectPathName, bool bExactClass, EObjectFlags ExcludeFlags/*=0*/)
 {
 	const EInternalObjectFlags ExclusiveInternalFlags = EInternalObjectFlags::Unreachable;
 
@@ -477,7 +477,7 @@ UObject* StaticFindObjectFastExplicitThreadSafe(FUObjectHashTables& ThreadHash, 
  * @param	ExclusiveFlags	Ignores objects that contain any of the specified exclusive flags
  * @return	Returns a pointer to the found object or nullptr if none could be found
  */
-UObject* StaticFindObjectFastExplicit( UClass* ObjectClass, FName ObjectName, const FString& ObjectPathName, bool bExactClass, EObjectFlags ExcludeFlags/*=0*/ )
+UObject* StaticFindObjectFastExplicit( const UClass* ObjectClass, FName ObjectName, const FString& ObjectPathName, bool bExactClass, EObjectFlags ExcludeFlags/*=0*/ )
 {
 	checkSlow(FPackageName::IsShortPackageName(ObjectName)); //@Package name transition, we aren't checking the name here because we know this is only used for texture
 
@@ -525,7 +525,7 @@ static FName ExtractInnerAndOuterFromPath(FName ObjectPath, FName& OutOuter)
 	}
 }
 
-UObject* StaticFindObjectFastInternalThreadSafe(FUObjectHashTables& ThreadHash, UClass* ObjectClass, UObject* ObjectPackage, FName ObjectName, bool bExactClass, bool bAnyPackage, EObjectFlags ExcludeFlags, EInternalObjectFlags ExclusiveInternalFlags)
+UObject* StaticFindObjectFastInternalThreadSafe(FUObjectHashTables& ThreadHash, const UClass* ObjectClass, const UObject* ObjectPackage, FName ObjectName, bool bExactClass, bool bAnyPackage, EObjectFlags ExcludeFlags, EInternalObjectFlags ExclusiveInternalFlags)
 {
 	ExclusiveInternalFlags |= EInternalObjectFlags::Unreachable;
 
@@ -624,7 +624,7 @@ UObject* StaticFindObjectFastInternalThreadSafe(FUObjectHashTables& ThreadHash, 
 	return Result;
 }
 
-UObject* StaticFindObjectFastInternal(UClass* ObjectClass, UObject* ObjectPackage, FName ObjectName, bool bExactClass, bool bAnyPackage, EObjectFlags ExcludeFlags, EInternalObjectFlags ExclusiveInternalFlags)
+UObject* StaticFindObjectFastInternal(const UClass* ObjectClass, const UObject* ObjectPackage, FName ObjectName, bool bExactClass, bool bAnyPackage, EObjectFlags ExcludeFlags, EInternalObjectFlags ExclusiveInternalFlags)
 {
 	INC_DWORD_STAT(STAT_FindObjectFast);
 
@@ -836,7 +836,7 @@ void ForEachObjectWithOuter(const class UObjectBase* Outer, TFunctionRef<void(UO
 	}
 }
 
-UObjectBase* FindObjectWithOuter(class UObjectBase* Outer, class UClass* ClassToLookFor, FName NameToLookFor)
+UObjectBase* FindObjectWithOuter(const class UObjectBase* Outer, const class UClass* ClassToLookFor, FName NameToLookFor)
 {
 	UObject* Result = nullptr;
 	check( Outer );
@@ -849,7 +849,7 @@ UObjectBase* FindObjectWithOuter(class UObjectBase* Outer, class UClass* ClassTo
 
 	if( NameToLookFor != NAME_None )
 	{
-		Result = StaticFindObjectFastInternal(ClassToLookFor, static_cast<UObject*>(Outer), NameToLookFor, false, false, RF_NoFlags, ExclusionInternalFlags);
+		Result = StaticFindObjectFastInternal(ClassToLookFor, static_cast<const UObject*>(Outer), NameToLookFor, false, false, RF_NoFlags, ExclusionInternalFlags);
 	}
 	else
 	{
@@ -878,21 +878,20 @@ UObjectBase* FindObjectWithOuter(class UObjectBase* Outer, class UClass* ClassTo
 }
 
 /** Helper function that returns all the children of the specified class recursively */
-template<typename ArrayAllocator>
-static void RecursivelyPopulateDerivedClasses(FUObjectHashTables& ThreadHash, UClass* ParentClass, TArray<UClass*, ArrayAllocator>& OutAllDerivedClass)
+template<typename ClassType, typename ArrayAllocator>
+static void RecursivelyPopulateDerivedClasses(FUObjectHashTables& ThreadHash, const UClass* ParentClass, TArray<ClassType, ArrayAllocator>& OutAllDerivedClass)
 {
 	// Start search with the parent class at virtual index Num-1, then continue searching from index Num as things are added
 	int32 SearchIndex = OutAllDerivedClass.Num() - 1;
-	UClass* SearchClass = ParentClass;
+	const UClass* SearchClass = ParentClass;
 
 	while (1)
 	{
 		TSet<UClass*>* ChildSet = ThreadHash.ClassToChildListMap.Find(SearchClass);
 		if (ChildSet)
 		{
-			for (auto ChildIt = ChildSet->CreateConstIterator(); ChildIt; ++ChildIt)
+			for (UClass* ChildClass : *ChildSet)
 			{
-				UClass* ChildClass = *ChildIt;
 				OutAllDerivedClass.Add(ChildClass);
 			}
 		}
@@ -911,7 +910,7 @@ static void RecursivelyPopulateDerivedClasses(FUObjectHashTables& ThreadHash, UC
 	}
 }
 
-void GetObjectsOfClass(UClass* ClassToLookFor, TArray<UObject *>& Results, bool bIncludeDerivedClasses, EObjectFlags ExclusionFlags, EInternalObjectFlags ExclusionInternalFlags)
+void GetObjectsOfClass(const UClass* ClassToLookFor, TArray<UObject *>& Results, bool bIncludeDerivedClasses, EObjectFlags ExclusionFlags, EInternalObjectFlags ExclusionInternalFlags)
 {
 	SCOPE_CYCLE_COUNTER(STAT_Hash_GetObjectsOfClass);
 
@@ -925,7 +924,7 @@ void GetObjectsOfClass(UClass* ClassToLookFor, TArray<UObject *>& Results, bool 
 	check(Results.Num() <= GUObjectArray.GetObjectArrayNum()); // otherwise we have a cycle in the outer chain, which should not be possible
 }
 
-void ForEachObjectOfClass(UClass* ClassToLookFor, TFunctionRef<void(UObject*)> Operation, bool bIncludeDerivedClasses, EObjectFlags ExclusionFlags, EInternalObjectFlags ExclusionInternalFlags)
+void ForEachObjectOfClass(const UClass* ClassToLookFor, TFunctionRef<void(UObject*)> Operation, bool bIncludeDerivedClasses, EObjectFlags ExclusionFlags, EInternalObjectFlags ExclusionInternalFlags)
 {
 	// We don't want to return any objects that are currently being background loaded unless we're using the object iterator during async loading.
 	ExclusionInternalFlags |= EInternalObjectFlags::Unreachable;
@@ -935,7 +934,7 @@ void ForEachObjectOfClass(UClass* ClassToLookFor, TFunctionRef<void(UObject*)> O
 	}
 
 	// Most classes searched for have around 10 subclasses, some have hundreds
-	TArray<UClass*, TInlineAllocator<16>> ClassesToSearch;
+	TArray<const UClass*, TInlineAllocator<16>> ClassesToSearch;
 	ClassesToSearch.Add(ClassToLookFor);
 
 	FUObjectHashTables& ThreadHash = FUObjectHashTables::Get();
@@ -946,7 +945,7 @@ void ForEachObjectOfClass(UClass* ClassToLookFor, TFunctionRef<void(UObject*)> O
 		RecursivelyPopulateDerivedClasses(ThreadHash, ClassToLookFor, ClassesToSearch);
 	}
 
-	for (UClass* SearchClass : ClassesToSearch)
+	for (const UClass* SearchClass : ClassesToSearch)
 	{
 		FHashBucket* List = ThreadHash.ClassToObjectListMap.Find(SearchClass);
 		if (List)
@@ -963,7 +962,7 @@ void ForEachObjectOfClass(UClass* ClassToLookFor, TFunctionRef<void(UObject*)> O
 	}
 }
 
-void GetDerivedClasses(UClass* ClassToLookFor, TArray<UClass *>& Results, bool bRecursive)
+void GetDerivedClasses(const UClass* ClassToLookFor, TArray<UClass*>& Results, bool bRecursive)
 {
 	auto& ThreadHash = FUObjectHashTables::Get();
 	FHashTableLock HashLock(ThreadHash);
@@ -982,9 +981,9 @@ void GetDerivedClasses(UClass* ClassToLookFor, TArray<UClass *>& Results, bool b
 	}
 }
 
-bool ClassHasInstancesAsyncLoading(UClass* ClassToLookFor)
+bool ClassHasInstancesAsyncLoading(const UClass* ClassToLookFor)
 {
-	TArray<UClass*> ClassesToSearch;
+	TArray<const UClass*> ClassesToSearch;
 	ClassesToSearch.Add(ClassToLookFor);
 
 	auto& ThreadHash = FUObjectHashTables::Get();
@@ -992,7 +991,7 @@ bool ClassHasInstancesAsyncLoading(UClass* ClassToLookFor)
 
 	RecursivelyPopulateDerivedClasses(ThreadHash, ClassToLookFor, ClassesToSearch);
 
-	for (UClass* SearchClass : ClassesToSearch)
+	for (const UClass* SearchClass : ClassesToSearch)
 	{
 		FHashBucket* List = ThreadHash.ClassToObjectListMap.Find(SearchClass);
 		if (List)

@@ -3,11 +3,12 @@
 
 #include "CoreMinimal.h"
 
+#include "AudioDefines.h"
 #include "Features/IModularFeature.h"
 #include "IAmbisonicsMixer.h"
+#include "Math/Interval.h"
 #include "Modules/ModuleInterface.h"
 #include "Modules/ModuleManager.h"
-#include "Sound/SoundSubmix.h"
 #include "UObject/ObjectMacros.h"
 
 #if !UE_BUILD_SHIPPING
@@ -17,24 +18,10 @@
 
 #include "IAudioExtensionPlugin.generated.h"
 
-
+// Forward Declarations
 class FAudioDevice;
+class USoundSubmix;
 
-enum class EAudioPlatform : uint8
-{
-	Windows,
-	Mac,
-	Linux,
-	IOS,
-	Android,
-	XboxOne,
-	Playstation4,
-	Switch,
-	HTML5,
-	Lumin,
-	HoloLens,
-	Unknown
-};
 
 /**
 * Enumeration of audio plugin types
@@ -199,7 +186,7 @@ public:
 	* @param Platform an enumerated platform (i.e. Windows, Playstation4, etc.)
 	* @return true if this plugin supports use on Platform, false otherwise.
 	*/
-	virtual bool SupportsPlatform(EAudioPlatform Platform) = 0;
+	virtual bool SupportsPlatform(const FString& PlatformName) = 0;
 
 	/*
 	* Returns whether this plugin sends audio to an external renderer.
@@ -472,11 +459,45 @@ public:
 	TArray<USoundModulationPluginSourceSettingsBase*> Settings;
 };
 
+/** Interface to sound that is modulateable, allowing for certain specific 
+  * behaviors to be controlled on the sound level by the modulation system.
+  */
+class ENGINE_API ISoundModulatable
+{
+public:
+	virtual ~ISoundModulatable() = default;
+
+	/**
+	 * Returns the modulation settings of the sound
+	 */
+	virtual USoundModulationPluginSourceSettingsBase* FindModulationSettings() const = 0;
+
+	/**
+	 * Gets the object definition id of the given playing sound's instance
+	 */
+	virtual uint32 GetObjectId() const = 0;
+
+	/**
+	 * Returns number of actively instances of sound playing (including virtualized instances)
+	 */
+	virtual int32 GetPlayCount() const = 0;
+
+	/**
+	 * Returns whether or not sound is an editor preview sound
+	 */
+	virtual bool IsPreviewSound() const = 0;
+
+	/**
+	 * Stops sound.
+	 */
+	virtual void Stop() = 0;
+};
+
 /************************************************************************/
 /* IAudioModulationFactory                                              */
 /*                                                                      */
 /************************************************************************/
-class IAudioModulationFactory : public IAudioPluginFactory, public IModularFeature
+class IAudioModulationFactory : public IModularFeature
 {
 public:
 	/** Virtual destructor */
@@ -491,13 +512,7 @@ public:
 		return AudioExtFeatureName;
 	}
 
-	/* Begin IAudioPluginWithMetadata implementation */
-	virtual FString GetDisplayName() override
-	{
-		static FString DisplayName = FString(TEXT("Generic Audio Modulation Plugin"));
-		return DisplayName;
-	}
-	/* End IAudioPluginWithMetadata implementation */
+	virtual const FName& GetDisplayName() const = 0;
 
 	virtual TAudioModulationPtr CreateNewModulationPlugin(FAudioDevice* OwningDevice) = 0;
 
@@ -511,21 +526,136 @@ public:
 };
 
 
-struct FSoundModulationControls
+/*
+ * Modulatable controls found on each sound instance
+ * processed by the modulation plugin enabled
+ */
+struct ENGINE_API FSoundModulationControls
 {
 	float Volume;
 	float Pitch;
 	float Lowpass;
 	float Highpass;
 
+	TMap<FName, float> Controls;
+
 	FSoundModulationControls()
 		: Volume(1.0f)
 		, Pitch(1.0f)
-		, Lowpass(20000.0f)
-		, Highpass(20.0f)
+		, Lowpass(MAX_FILTER_FREQUENCY)
+		, Highpass(MIN_FILTER_FREQUENCY)
 	{
 	}
 };
+
+/** Parameter allowing modulation control override for systems opting in to the Modulation System. */
+USTRUCT(BlueprintType)
+struct ENGINE_API FSoundModulationParameter
+{
+	GENERATED_BODY()
+
+public:
+	/** Name of modulation control to drive parameter. Uses value last cached if control is or becomes invalid. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Modulation)
+	FName Control;
+
+	/** Default modulation parameter value. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Modulation)
+	float Value;
+
+private:
+	float ValueMin;
+	float ValueMax;
+
+public:
+	FSoundModulationParameter()
+		: Control(NAME_None)
+		, Value(0.0f)
+		, ValueMin(0.0f)
+		, ValueMax(1.0f)
+	{
+	}
+
+	FSoundModulationParameter(float InValue, float InValueMin = TNumericLimits<float>::Min(), float InValueMax = TNumericLimits<float>::Max())
+		: Control(NAME_None)
+		, ValueMin(InValueMin)
+		, ValueMax(InValueMax)
+	{
+		Value = FMath::Clamp(InValue, ValueMin, ValueMax);
+	}
+
+	FORCEINLINE operator float() const
+	{
+		return Value;
+	}
+
+	FORCEINLINE FSoundModulationParameter& operator= (const FSoundModulationParameter& InParam)
+	{
+		Control = InParam.Control;
+		ValueMin = InParam.ValueMin;
+		ValueMax = InParam.ValueMax;
+		Value = FMath::Clamp(InParam.Value, ValueMin, ValueMax);
+
+		return *this;
+	}
+
+	FORCEINLINE FSoundModulationParameter& operator= (float InValue)
+	{
+		Value = FMath::Clamp(InValue, ValueMin, ValueMax);
+		return *this;
+	}
+
+	FORCEINLINE float operator* (float InValue)
+	{
+		return InValue * Value;
+	}
+
+	FORCEINLINE float operator/ (float InValue)
+	{
+		return InValue / Value;
+	}
+
+	FORCEINLINE float GetValue() const
+	{
+		return Value;
+	}
+
+	FORCEINLINE float GetMinValue() const
+	{
+		return ValueMin;
+	}
+
+	FORCEINLINE float GetMaxValue() const
+	{
+		return ValueMax;
+	}
+
+	FORCEINLINE void SetBounds(float InValueMin, float InValueMax)
+	{
+		ValueMin = InValueMin;
+		ValueMax = InValueMax;
+
+		Value = FMath::Clamp(Value, InValueMin, InValueMax);
+	}
+
+	/* Returns true if updated by control, false if not */
+	bool SetValue(const FSoundModulationControls& InModControls)
+	{
+		if (Control != NAME_None)
+		{
+			if (const float* ControlValue = InModControls.Controls.Find(Control))
+			{
+				Value = FMath::Clamp(*ControlValue, ValueMin, ValueMax);
+				return true;
+			}
+		}
+
+		Value = FMath::Clamp(Value, ValueMin, ValueMax);
+		return false;
+	}
+};
+
+using FSoundModulationControlIndex = uint32;
 
 class IAudioModulation
 {
@@ -533,18 +663,27 @@ public:
 	/** Virtual destructor */
 	virtual ~IAudioModulation() { }
 
-	/** Initialize the modulation plugin with the same rate and number of sources. */
+	/** Calculates initial volume to determine if sound is audible using base settings data */
+	virtual float CalculateInitialVolume(const USoundModulationPluginSourceSettingsBase& InSettingsBase) { return 1.0f; }
+
+	/** Initialize the modulation plugin with the same rate and number of sources */
 	virtual void Initialize(const FAudioPluginInitializationParams& InitializationParams) { }
 
-	/** Called when a source is assigned to a voice. */
-	virtual void OnInitSource(const uint32 SourceId, const FName& AudioComponentUserId, const uint32 NumChannels, USoundModulationPluginSourceSettingsBase* Settings) { }
+	/** Called when a USoundBase type begins playing a sound */
+	virtual void OnInitSound(ISoundModulatable& Sound, const USoundModulationPluginSourceSettingsBase& Settings) { }
 
-	/** Called when a source is done playing and is released. */
+	/** Called when a source is assigned to a voice */
+	virtual void OnInitSource(const uint32 SourceId, const FName& AudioComponentUserId, const uint32 NumChannels, const USoundModulationPluginSourceSettingsBase& Settings) { }
+
+	/** Called when a source is done playing and is released */
 	virtual void OnReleaseSource(const uint32 SourceId) { }
+
+	/** Called when a USoundBase type stops playing any sounds */
+	virtual void OnReleaseSound(ISoundModulatable& Sound) { }
 
 #if !UE_BUILD_SHIPPING
 	/** Request to post help from active plugin (non-shipping builds only) */
-	virtual bool OnPostHelp(FCommonViewportClient* ViewportClient, const TCHAR* Stream) { return false;  };
+	virtual bool OnPostHelp(FCommonViewportClient* ViewportClient, const TCHAR* Stream) { return false; };
 
 	/** Render stats pertaining to modulation (non-shipping builds only) */
 	virtual int32 OnRenderStat(FViewport* Viewport, FCanvas* Canvas, int32 X, int32 Y, const UFont& Font, const FVector* ViewLocation, const FRotator* ViewRotation) { return Y; }
@@ -556,8 +695,8 @@ public:
 	/** Processes audio with the given input and output data structs.*/
 	virtual void ProcessAudio(const FAudioPluginSourceInputData& InputData, FAudioPluginSourceOutputData& OutputData) { }
 
-	/** Processes modulated sound controls */
-	virtual void ProcessControls(const uint32 SourceId, FSoundModulationControls& Controls) { }
+	/** Processes modulated sound controls, returning whether or not controls were modified and an update is pending. */
+	virtual bool ProcessControls(const uint32 SourceId, FSoundModulationControls& Controls) { return false; }
 
 	/** Processes all modulators */
 	virtual void ProcessModulators(const float Elapsed) { }
@@ -635,7 +774,7 @@ public:
 	/** Called when a source is done playing and is released. */
 	virtual void OnReleaseSource(const uint32 SourceId) = 0;
 
-	virtual class FSoundEffectSubmix* GetEffectSubmix(class USoundSubmix* Submix) = 0;
+	virtual class FSoundEffectSubmix* GetEffectSubmix(USoundSubmix* Submix) = 0;
 
 	/** Processes audio with the given input and output data structs.*/
 	virtual void ProcessSourceAudio(const FAudioPluginSourceInputData& InputData, FAudioPluginSourceOutputData& OutputData)
@@ -673,6 +812,11 @@ public:
 
 	// This is overridable for any actions a plugin manager may need to do on the game thread.
 	virtual void OnTick(UWorld* InWorld, const int32 ViewportIndex, const FTransform& ListenerTransform, const float InDeltaSeconds)
+	{
+	}
+
+	// This is overridable for any actions a plugin manager may need to do on a level change.
+	virtual void OnWorldChanged(FAudioDevice* AudioDevice, UWorld* InWorld)
 	{
 	}
 

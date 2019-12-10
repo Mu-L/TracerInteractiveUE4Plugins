@@ -41,6 +41,8 @@
 #include "DebugViewModeHelpers.h"
 #include "MaterialStatsCommon.h"
 #include "Materials/MaterialInstance.h"
+#include "VirtualTexturingEditorModule.h"
+#include "Components/RuntimeVirtualTextureComponent.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogEditorBuildUtils, Log, All);
 
@@ -60,6 +62,7 @@ const FName FBuildOptions::BuildAllSubmit(TEXT("BuildAllSubmit"));
 const FName FBuildOptions::BuildAllOnlySelectedPaths(TEXT("BuildAllOnlySelectedPaths"));
 const FName FBuildOptions::BuildHierarchicalLOD(TEXT("BuildHierarchicalLOD"));
 const FName FBuildOptions::BuildTextureStreaming(TEXT("BuildTextureStreaming"));
+const FName FBuildOptions::BuildVirtualTexture(TEXT("BuildVirtualTexture"));
 
 bool FEditorBuildUtils::bBuildingNavigationFromUserRequest = false;
 TMap<FName, FEditorBuildUtils::FCustomBuildType> FEditorBuildUtils::CustomBuildTypes;
@@ -296,6 +299,10 @@ bool FEditorBuildUtils::EditorBuild( UWorld* InWorld, FName Id, const bool bAllo
 	else if (Id == FBuildOptions::BuildTextureStreaming)
 	{
 		BuildType = SBuildProgressWidget::BUILDTYPE_TextureStreaming;
+	}
+	else if (Id == FBuildOptions::BuildVirtualTexture)
+	{
+		BuildType = SBuildProgressWidget::BUILDTYPE_VirtualTexture;
 	}
 	else
 	{
@@ -720,12 +727,13 @@ bool FEditorBuildUtils::PrepForAutomatedBuild( const FEditorAutomatedBuildSettin
 	if ( bBuildSuccessful )
 	{
 		bool bVisibilityToggled = false;
-		if ( !FLevelUtils::IsLevelVisible( GWorld->PersistentLevel ) )
+		UWorld* World = GWorld;
+		if ( !FLevelUtils::IsLevelVisible( World->PersistentLevel ) )
 		{
-			EditorLevelUtils::SetLevelVisibility( GWorld->PersistentLevel, true, false );
+			EditorLevelUtils::SetLevelVisibility( World->PersistentLevel, true, false );
 			bVisibilityToggled = true;
 		}
-		for (ULevelStreaming* CurStreamingLevel : GWorld->GetStreamingLevels())
+		for (ULevelStreaming* CurStreamingLevel : World->GetStreamingLevels())
 		{
 			if ( CurStreamingLevel && !FLevelUtils::IsStreamingLevelVisibleInEditor( CurStreamingLevel ) )
 			{
@@ -735,7 +743,7 @@ bool FEditorBuildUtils::PrepForAutomatedBuild( const FEditorAutomatedBuildSettin
 		}
 		if ( bVisibilityToggled )
 		{
-			GWorld->FlushLevelStreaming();
+			World->FlushLevelStreaming();
 		}
 	}
 
@@ -999,6 +1007,11 @@ void FBuildAllHandler::ProcessBuild(const TWeakPtr<SBuildProgressWidget>& BuildP
 		{
 			BuildProgressWidget.Pin()->SetBuildType(SBuildProgressWidget::BUILDTYPE_TextureStreaming);
 			FEditorBuildUtils::EditorBuildTextureStreaming(CurrentWorld);
+		}
+		else if (StepId == FBuildOptions::BuildVirtualTexture)
+		{
+			BuildProgressWidget.Pin()->SetBuildType(SBuildProgressWidget::BUILDTYPE_VirtualTexture);
+			FEditorBuildUtils::EditorBuildVirtualTexture(CurrentWorld);
 		}
 		else if (StepId == FBuildOptions::BuildAIPaths)
 		{
@@ -1346,6 +1359,53 @@ bool FEditorBuildUtils::EditorBuildMaterialTextureStreamingData(UPackage* Packag
 	return bAnyPackagesDirtied;
 }
 
+bool FEditorBuildUtils::EditorBuildVirtualTexture(UWorld* InWorld)
+{
+	if (InWorld == nullptr)
+	{
+		return true;
+	}
+
+	IVirtualTexturingEditorModule* Module = FModuleManager::Get().GetModulePtr<IVirtualTexturingEditorModule>("VirtualTexturingEditor");
+	if (Module == nullptr)
+	{
+		return false;
+	}
+
+	CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+
+	TArray<URuntimeVirtualTextureComponent*> Components;
+	for (TObjectIterator<URuntimeVirtualTextureComponent> It; It; ++It)
+	{
+		if (Module->HasStreamedMips(*It))
+		{
+			Components.Add(*It);
+		}
+	}
+
+	if (Components.Num() == 0)
+	{
+		return true;
+	}
+
+	FScopedSlowTask BuildTask(Components.Num(), LOCTEXT("VirtualTextureBuild", "Building Virtual Textures"));
+	BuildTask.MakeDialog(true);
+
+	for (URuntimeVirtualTextureComponent* Component : Components)
+	{
+		BuildTask.EnterProgressFrame();
+
+		if (BuildTask.ShouldCancel() || !Module->BuildStreamedMips(Component))
+		{
+			return false;
+		}
+	}
+
+	CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+
+	return true;
+}
+
 /** classed used to compile shaders for a specific (mobile) platform and copy the number of instruction to the editor-emulated (mobile) platform */
 class FMaterialOfflineCompilation : public FMaterialResource
 {
@@ -1393,9 +1453,7 @@ bool FEditorBuildUtils::CompileShadersComplexityViewMode(EMaterialQualityLevel::
 		TSharedPtr<FMaterialOfflineCompilation> SpecialResource = MakeShareable(new FMaterialOfflineCompilation());
 		SpecialResource->SetMaterial(MaterialInterface->GetMaterial(), QualityLevel, true, FeatureLevel, Cast<UMaterialInstance>(MaterialInterface));
 
-		FMaterialShaderMapId ResourceId;
-		SpecialResource->GetShaderMapId(ShaderPlatform, ResourceId);
-		SpecialResource->CacheShaders(ResourceId, ShaderPlatform);
+		SpecialResource->CacheShaders(ShaderPlatform);
 
 		OfflineShaderResources.Add(SpecialResource);
 	}

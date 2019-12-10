@@ -22,17 +22,23 @@ UClass* FLevelSequenceActorSpawner::GetSupportedTemplateType() const
 	return AActor::StaticClass();
 }
 
-ULevelStreaming* GetLevelStreaming(FString SafeLevelName, UWorld& World)
+ULevelStreaming* GetLevelStreaming(const FName& DesiredLevelName, const TArray<ULevelStreaming*>& StreamingLevels)
 {
-	if (FPackageName::IsShortPackageName(SafeLevelName))
+	if (DesiredLevelName == NAME_None)
 	{
-		// Make sure MyMap1 and Map1 names do not resolve to a same streaming level
-		SafeLevelName = TEXT("/") + SafeLevelName;
+		return nullptr;
 	}
 
-	for (ULevelStreaming* LevelStreaming : World.GetStreamingLevels())
+	FString SafeLevelNameString = DesiredLevelName.ToString();
+	if (FPackageName::IsShortPackageName(SafeLevelNameString))
 	{
-		if (LevelStreaming && LevelStreaming->GetWorldAssetPackageName().EndsWith(SafeLevelName, ESearchCase::IgnoreCase))
+		// Make sure MyMap1 and Map1 names do not resolve to a same streaming level
+		SafeLevelNameString.InsertAt('/', 0);
+	}
+
+	for (ULevelStreaming* LevelStreaming : StreamingLevels)
+	{
+		if (LevelStreaming && LevelStreaming->GetWorldAssetPackageName().EndsWith(SafeLevelNameString, ESearchCase::IgnoreCase))
 		{
 			return LevelStreaming;
 		}
@@ -61,14 +67,18 @@ UObject* FLevelSequenceActorSpawner::SpawnObject(FMovieSceneSpawnable& Spawnable
 		WorldContext = GWorld;
 	}
 
-	ULevelStreaming* LevelStreaming = GetLevelStreaming(Spawnable.GetLevelName().ToString(), *WorldContext);
-	if (LevelStreaming && LevelStreaming->GetWorldAsset().IsValid())
+	FName DesiredLevelName = Spawnable.GetLevelName();
+	if (DesiredLevelName != NAME_None)
 	{
-		WorldContext = LevelStreaming->GetWorldAsset().Get();
-	}
-	else if (Spawnable.GetLevelName() != NAME_None)
-	{
-		UE_LOG(LogMovieScene, Warning, TEXT("Can't find sublevel '%s' to spawn '%s' into"), *Spawnable.GetLevelName().ToString(), *Spawnable.GetName());
+		ULevelStreaming* LevelStreaming = GetLevelStreaming(DesiredLevelName, WorldContext->GetStreamingLevels());
+		if (LevelStreaming && LevelStreaming->GetWorldAsset().IsValid())
+		{
+			WorldContext = LevelStreaming->GetWorldAsset().Get();
+		}
+		else
+		{
+			UE_LOG(LogMovieScene, Warning, TEXT("Can't find sublevel '%s' to spawn '%s' into"), *DesiredLevelName.ToString(), *Spawnable.GetName());
+		}
 	}
 
 	// Construct the object with the same name that we will set later on the actor to avoid renaming it inside SetActorLabel
@@ -100,8 +110,8 @@ UObject* FLevelSequenceActorSpawner::SpawnObject(FMovieSceneSpawnable& Spawnable
 
 	if (USceneComponent* RootComponent = ObjectTemplate->GetRootComponent())
 	{
-		SpawnTransform.SetTranslation(RootComponent->RelativeLocation);
-		SpawnTransform.SetRotation(RootComponent->RelativeRotation.Quaternion());
+		SpawnTransform.SetTranslation(RootComponent->GetRelativeLocation());
+		SpawnTransform.SetRotation(RootComponent->GetRelativeRotation().Quaternion());
 	}
 	else
 	{
@@ -110,10 +120,12 @@ UObject* FLevelSequenceActorSpawner::SpawnObject(FMovieSceneSpawnable& Spawnable
 
 	{
 		// Disable all particle components so that they don't auto fire as soon as the actor is spawned. The particles should be triggered through the particle track.
-		TArray<UActorComponent*> ParticleComponents = ObjectTemplate->GetComponentsByClass(UParticleSystemComponent::StaticClass());
-		for (int32 ComponentIdx = 0; ComponentIdx < ParticleComponents.Num(); ++ComponentIdx)
+		for (UActorComponent* Component : ObjectTemplate->GetComponents())
 		{
-			ParticleComponents[ComponentIdx]->bAutoActivate = false;
+			if (UParticleSystemComponent* ParticleComponent = Cast<UParticleSystemComponent>(Component))
+			{
+				Component->bAutoActivate = false;
+			}
 		}
 	}
 

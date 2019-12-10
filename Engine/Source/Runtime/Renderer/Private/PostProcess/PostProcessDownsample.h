@@ -1,49 +1,104 @@
 // Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
 
-/*=============================================================================
-	PostProcessDownsample.h: Post processing down sample implementation.
-=============================================================================*/
-
 #pragma once
 
-#include "CoreMinimal.h"
-#include "RendererInterface.h"
 #include "PostProcess/RenderingCompositionGraph.h"
+#include "ScreenPass.h"
 
-// derives from TRenderingCompositePassBase<InputCount, OutputCount>
-// ePId_Input0: Color input
-// ePId_Input1: optional depth input (then quality is ignores and it uses the a 4 sample unfiltered samples method)
-class FRCPassPostProcessDownsample : public TRenderingCompositePassBase<2, 1>
+class FEyeAdaptationParameters;
+
+enum class EDownsampleFlags : uint8
+{
+	None = 0,
+
+	// Forces the downsample pass to run on the raster pipeline, regardless of view settings.
+	ForceRaster = 0x1
+};
+ENUM_CLASS_FLAGS(EDownsampleFlags);
+
+enum class EDownsampleQuality : uint8
+{
+	// Single filtered sample (2x2 tap).
+	Low,
+
+	// Four filtered samples (4x4 tap).
+	High,
+
+	MAX
+};
+
+// Returns the global downsample quality specified by the r.Downsample.Quality CVar.
+EDownsampleQuality GetDownsampleQuality();
+
+// The set of inputs needed to add a downsample pass to RDG.
+struct FDownsamplePassInputs
+{
+	FDownsamplePassInputs() = default;
+
+	// Friendly name of the pass. Used for logging and profiling.
+	const TCHAR* Name = nullptr;
+
+	// Input scene color RDG texture / view rect. Must not be null.
+	FScreenPassTexture SceneColor;
+
+	// The downsample method to use.
+	EDownsampleQuality Quality = EDownsampleQuality::Low;
+
+	// Flags to control how the downsample pass is run.
+	EDownsampleFlags Flags = EDownsampleFlags::None;
+
+	// The format to use for the output texture (if unknown, the input format is used).
+	EPixelFormat FormatOverride = PF_Unknown;
+};
+
+FScreenPassTexture AddDownsamplePass(FRDGBuilder& GraphBuilder, const FViewInfo& View, const FDownsamplePassInputs& Inputs);
+
+class FSceneDownsampleChain
 {
 public:
-	// constructor
-	// @param InDebugName we store the pointer so don't release this string
-	// @param Quality only used if ePId_Input1 is not set, 0:one filtered sample, 1:four filtered samples
-	FRCPassPostProcessDownsample(EPixelFormat InOverrideFormat = PF_Unknown,
-			uint32 InQuality = 1,
-			bool bInIsComputePass = false, 
-			const TCHAR *InDebugName = TEXT("Downsample"));
+	// The number of total stages in the chain. 1/64 reduction.
+	static const uint32 StageCount = 6;
 
-	// interface FRenderingCompositePass ---------
+	FSceneDownsampleChain() = default;
 
-	virtual void Process(FRenderingCompositePassContext& Context) override;
-	virtual void Release() override { delete this; }
-	virtual FPooledRenderTargetDesc ComputeOutputDesc(EPassOutputId InPassOutputId) const override;
+	void Init(
+		FRDGBuilder& GraphBuilder,
+		const FViewInfo& View,
+		const FEyeAdaptationParameters& EyeAdaptationParameters,
+		FScreenPassTexture HalfResolutionSceneColor,
+		EDownsampleQuality DownsampleQuality,
+		bool bLogLumaInAlpha);
 
-	virtual FRHIComputeFence* GetComputePassEndFence() const override { return AsyncEndFence; }
+	bool IsInitialized() const
+	{
+		return bInitialized;
+	}
+
+	FScreenPassTexture GetTexture(uint32 StageIndex) const
+	{
+		return Textures[StageIndex];
+	}
+
+	FScreenPassTexture GetFirstTexture() const
+	{
+		return Textures[0];
+	}
+
+	FScreenPassTexture GetLastTexture() const
+	{
+		return Textures[StageCount - 1];
+	}
 
 private:
-	template <uint32 Method, uint32 ManuallyClampUV>
-	void SetShader(const FRenderingCompositePassContext& Context, const FPooledRenderTargetDesc* InputDesc, const FIntPoint& SrcSize, const FIntRect& SrcRect);
-
-	template <uint32 Method, typename TRHICmdList>
-	void DispatchCS(TRHICmdList& RHICmdList, FRenderingCompositePassContext& Context, const FIntPoint& SrcSize, const FIntRect& DestRect, FRHIUnorderedAccessView* DestUAV);
-
-	FComputeFenceRHIRef AsyncEndFence;
-
-	EPixelFormat OverrideFormat;
-	// explained in constructor
-	uint32 Quality;
-	// must be a valid pointer
-	const TCHAR* DebugName;
+	TStaticArray<FScreenPassTexture, StageCount> Textures;
+	bool bInitialized = false;
 };
+
+FRenderingCompositeOutputRef AddDownsamplePass(
+	FRenderingCompositionGraph& Graph,
+	const TCHAR *Name,
+	FRenderingCompositeOutputRef Input,
+	uint32 SceneColorDownsampleFactor,
+	EDownsampleQuality Quality = EDownsampleQuality::Low,
+	EDownsampleFlags Flags = EDownsampleFlags::None,
+	EPixelFormat FormatOverride = PF_Unknown);

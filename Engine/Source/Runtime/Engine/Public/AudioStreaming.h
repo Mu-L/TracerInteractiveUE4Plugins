@@ -14,11 +14,12 @@ AudioStreaming.h: Definitions of classes used for audio streaming.
 #include "ContentStreaming.h"
 #include "Async/AsyncWork.h"
 #include "Async/AsyncFileHandle.h"
+#include "HAL/ThreadSafeBool.h"
 
 class FSoundSource;
 class USoundWave;
 class ICompressedAudioInfo;
-struct FAudioStreamingManager;
+struct FLegacyAudioStreamingManager;
 struct FWaveInstance;
 
 /** Lists possible states used by Thread-safe counter. */
@@ -46,7 +47,8 @@ public:
 		const FString& InDerivedDataKey,
 		void* InDestChunkData,
 		int32 InChunkSize,
-		FThreadSafeCounter* InThreadSafeCounter
+		FThreadSafeCounter* InThreadSafeCounter,
+		TFunction<void(bool)> InOnLoadComplete
 		);
 	
 	/**
@@ -78,6 +80,8 @@ private:
 	bool bRequestFailed;
 	/** Thread-safe counter to decrement when data has been copied. */
 	FThreadSafeCounter* ThreadSafeCounter;
+	/** This function is called when the load is completed */
+	TFunction<void(bool)> OnLoadCompleted;
 };
 
 /** Async task to stream chunks from the derived data cache. */
@@ -98,8 +102,7 @@ struct FWaveRequest
 struct FLoadedAudioChunk
 {
 	uint8*	Data;
-	class IAsyncReadRequest* IORequest;
-	int32	MemorySize; 
+	struct FBulkDataIORequest* IORequest;
 	int32	DataSize;
 	int32	AudioDataSize;
 	uint32	Index;
@@ -107,7 +110,6 @@ struct FLoadedAudioChunk
 	FLoadedAudioChunk()
 		: Data(nullptr)
 		, IORequest(nullptr)
-		, MemorySize(0)
 		, DataSize(0)
 		, AudioDataSize(0)
 		, Index(0)
@@ -117,6 +119,7 @@ struct FLoadedAudioChunk
 	~FLoadedAudioChunk()
 	{
 		checkf(Data == nullptr, TEXT("Audio chunk Data ptr not null (%p), DataSize: %d"), Data, DataSize);
+		checkf(IORequest == nullptr, TEXT("Audio chunk IORequest ptr not null (%p)"), IORequest );
 	}
 };
 
@@ -136,7 +139,7 @@ struct FStreamingWaveData final
 	 *
 	 * @param SoundWave	The SoundWave we are managing
 	 */
-	bool Initialize(USoundWave* SoundWave, FAudioStreamingManager* InStreamingManager);
+	bool Initialize(USoundWave* SoundWave, FLegacyAudioStreamingManager* InStreamingManager);
 
 	/**
 	 * Updates the streaming status of the sound wave and performs finalization when appropriate. The function returns
@@ -204,8 +207,6 @@ public:
 	/* Contains pointers to Chunks of audio data that have been streamed in */
 	TArray<FLoadedAudioChunk> LoadedChunks;
 
-	class IAsyncReadFileHandle* IORequestHandle;
-
 	/** Indices of chunks that are currently loaded */
 	TArray<uint32>	LoadedChunkIndices;
 
@@ -218,7 +219,7 @@ public:
 #endif // #if WITH_EDITORONLY_DATA
 
 	/** Ptr to owning audio streaming manager. */
-	FAudioStreamingManager* AudioStreamingManager;
+	FLegacyAudioStreamingManager* AudioStreamingManager;
 };
 
 /** Struct used to store results of an async file load. */
@@ -240,16 +241,15 @@ struct FASyncAudioChunkLoadResult
 	{}
 };
 
-
 /**
 * Streaming manager dealing with audio.
 */
-struct FAudioStreamingManager : public IAudioStreamingManager
+struct FLegacyAudioStreamingManager : public IAudioStreamingManager
 {
 	/** Constructor, initializing all members */
-	FAudioStreamingManager();
+	FLegacyAudioStreamingManager();
 
-	virtual ~FAudioStreamingManager();
+	virtual ~FLegacyAudioStreamingManager();
 
 	// IStreamingManager interface
 	virtual void UpdateResourceStreaming( float DeltaTime, bool bProcessEverything=false ) override;
@@ -273,7 +273,10 @@ struct FAudioStreamingManager : public IAudioStreamingManager
 	virtual void AddStreamingSoundSource(FSoundSource* SoundSource) override;
 	virtual void RemoveStreamingSoundSource(FSoundSource* SoundSource) override;
 	virtual bool IsManagedStreamingSoundSource(const FSoundSource* SoundSource) const override;
-	virtual const uint8* GetLoadedChunk(const USoundWave* SoundWave, uint32 ChunkIndex, uint32* OutChunkSize = NULL) const override;
+	virtual bool RequestChunk(USoundWave* SoundWave, uint32 ChunkIndex, TFunction<void(EAudioChunkLoadResult)> OnLoadCompleted, ENamedThreads::Type ThreadToCallOnLoadCompletedOn) override;
+	virtual FAudioChunkHandle GetLoadedChunk(const USoundWave* SoundWave, uint32 ChunkIndex, bool bBlockForLoad = false) const override;
+	virtual uint64 TrimMemory(uint64 NumBytesToFree) override;
+	virtual int32 RenderStatAudioStreaming(UWorld* World, FViewport* Viewport, FCanvas* Canvas, int32 X, int32 Y, const FVector* ViewLocation, const FRotator* ViewRotation) override;
 	// End IAudioStreamingManager interface
 
 	/** Called when an async callback is made on an async loading audio chunk request. */
@@ -283,6 +286,10 @@ struct FAudioStreamingManager : public IAudioStreamingManager
 	void ProcessPendingAsyncFileResults();
 
 protected:
+
+	/** Unused by the legacy audio streaming manager. */
+	virtual void AddReferenceToChunk(const FAudioChunkHandle& InHandle) override {};
+	virtual void RemoveReferenceToChunk(const FAudioChunkHandle& InHandle) override {};
 
 	/**
 	 * Gets Wave request associated with a specific wave

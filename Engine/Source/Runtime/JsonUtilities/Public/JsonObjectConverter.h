@@ -21,6 +21,9 @@ public:
 	/** Parse an FText from a json object (assumed to be of the form where keys are culture codes and values are strings) */
 	static bool GetTextFromObject(const TSharedRef<FJsonObject>& Obj, FText& TextOut);
 
+	/** Convert a Json value to text (takes some hints from the value name) */
+	static bool GetTextFromField(const FString& FieldName, const TSharedPtr<FJsonValue>& FieldValue, FText& TextOut);
+
 public: // UStruct -> JSON
 
 	/**
@@ -47,7 +50,7 @@ public: // UStruct -> JSON
 	template<typename InStructType>
 	static TSharedPtr<FJsonObject> UStructToJsonObject(const InStructType& InStruct, int64 CheckFlags = 0, int64 SkipFlags = 0, const CustomExportCallback* ExportCb = nullptr)
 	{
-		TSharedRef<FJsonObject> JsonObject = MakeShareable(new FJsonObject());
+		TSharedRef<FJsonObject> JsonObject = MakeShared<FJsonObject>();
 		if (UStructToJsonObject(InStructType::StaticStruct(), &InStruct, JsonObject, CheckFlags, SkipFlags, ExportCb))
 		{
 			return JsonObject;

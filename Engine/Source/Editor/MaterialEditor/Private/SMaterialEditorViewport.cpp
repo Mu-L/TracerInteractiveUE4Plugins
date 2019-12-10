@@ -30,6 +30,7 @@
 #include "AssetViewerSettings.h"
 #include "Engine/PostProcessVolume.h"
 #include "Widgets/Input/SCheckBox.h"
+#include "MaterialEditorSettings.h"
 
 #define LOCTEXT_NAMESPACE "MaterialEditor"
 
@@ -394,7 +395,7 @@ bool SMaterialEditor3DPreviewViewport::SetPreviewAsset(UObject* InAsset)
 	// Add the new component to the scene
 	if (PreviewMeshComponent != nullptr)
 	{
-		if (GEditor->PreviewFeatureLevel <= ERHIFeatureLevel::ES3_1)
+		if (GEditor->PreviewPlatform.GetEffectivePreviewFeatureLevel() <= ERHIFeatureLevel::ES3_1)
 		{
 			PreviewMeshComponent->SetMobility(EComponentMobility::Static);
 		}
@@ -427,7 +428,7 @@ void SMaterialEditor3DPreviewViewport::SetPreviewMaterial(UMaterialInterface* In
 	PreviewMaterial = InMaterialInterface;
 
 	// Spawn post processing volume actor if the material has post processing as domain.
-	if (PreviewMaterial->GetMaterial()->IsPostProcessMaterial())
+	if (PreviewMaterial && PreviewMaterial->GetMaterial()->IsPostProcessMaterial())
 	{
 		if (PostProcessVolumeActor == nullptr)
 		{
@@ -456,7 +457,12 @@ void SMaterialEditor3DPreviewViewport::SetPreviewMaterial(UMaterialInterface* In
 		if (PreviewMeshComponent != nullptr)
 		{
 			PreviewMeshComponent->OverrideMaterials.Empty();
-			PreviewMeshComponent->OverrideMaterials.Add(PreviewMaterial);
+
+			if (PreviewMaterial)
+			{
+				PreviewMeshComponent->OverrideMaterials.Add(PreviewMaterial);
+			}
+
 			PreviewMeshComponent->MarkRenderStateDirty();
 		}
 		
@@ -807,7 +813,7 @@ private:
 
 void SMaterialEditorUIPreviewZoomer::Construct( const FArguments& InArgs, UMaterialInterface* InPreviewMaterial )
 {
-	PreviewBrush = MakeShareable( new FSlateMaterialBrush( *InPreviewMaterial, FVector2D(250,250) ) );
+	PreviewBrush = MakeShareable( new FSlateMaterialBrush( *InPreviewMaterial, GetDefault<UMaterialEditorSettings>()->GetPreviewViewportStartingSize() ) );
 
 	ChildSlot
 	[
@@ -987,7 +993,7 @@ void SMaterialEditorUIPreviewViewport::Construct( const FArguments& InArgs, UMat
 		]
 	];
 
-	PreviewSize = FIntPoint(250,250);
+	PreviewSize = GetDefault<UMaterialEditorSettings>()->GetPreviewViewportStartingSize();
 	PreviewZoomer->SetPreviewSize( FVector2D(PreviewSize) );
 }
 

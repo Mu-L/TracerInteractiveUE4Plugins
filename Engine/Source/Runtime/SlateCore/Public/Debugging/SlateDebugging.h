@@ -22,6 +22,7 @@ class FSlateRect;
 class FWeakWidgetPath;
 class FWidgetPath;
 class FNavigationReply;
+class FSlateInvalidationRoot;
 
 UENUM()
 enum class ESlateDebuggingInputEvent : uint8
@@ -86,6 +87,10 @@ enum class ESlateDebuggingFocusEvent : uint8
 	FocusReceived
 };
 
+
+#if WITH_SLATE_DEBUGGING
+
+
 struct SLATECORE_API FSlateDebuggingFocusEventArgs
 {
 public:
@@ -148,17 +153,15 @@ public:
 		bool InCaptured,
 		uint32 InUserIndex,
 		uint32 InPointerIndex,
-		const TSharedPtr<SWidget>& InCapturingWidget
+		const TSharedPtr<const SWidget>& InCapturingWidget
 	);
 
 	bool Captured;
 	uint32 UserIndex;
 	uint32 PointerIndex;
-	const TSharedPtr<SWidget>& CaptureWidget;
+	const TSharedPtr<const SWidget>& CaptureWidget;
 };
 
-
-#if WITH_SLATE_DEBUGGING
 
 /**
  * 
@@ -232,18 +235,27 @@ public:
 	DECLARE_MULTICAST_DELEGATE_OneParam(FWidgetMouseCaptureEvent, const FSlateDebuggingMouseCaptureEventArgs& /*EventArgs*/);
 	static FWidgetMouseCaptureEvent MouseCaptureEvent;
 
-	static void BroadcastMouseCapture(uint32 UserIndex, uint32 PointerIndex, const TSharedPtr<SWidget>& InCapturingWidget);
-	static void BroadcastMouseCaptureLost(uint32 UserIndex, uint32 PointerIndex, const TSharedPtr<SWidget>& InWidgetLostCapture);
+	static void BroadcastMouseCapture(uint32 UserIndex, uint32 PointerIndex, TSharedPtr<const SWidget> InCapturingWidget);
+	static void BroadcastMouseCaptureLost(uint32 UserIndex, uint32 PointerIndex, TSharedPtr<const SWidget> InWidgetLostCapture);
 
 public:
 	/**  */
 	DECLARE_MULTICAST_DELEGATE_TwoParams(FUICommandRun, const FName& /*CommandName*/, const FText& /*CommandLabel*/);
 	static FUICommandRun CommandRun;
 
+	static void WidgetInvalidated(FSlateInvalidationRoot& InvalidationRoot, const class FWidgetProxy& WidgetProxy, const FLinearColor* CustomInvalidationColor = nullptr);
+
+	static void DrawInvalidationRoot(const SWidget& RootWidget, int32 LayerId, FSlateWindowElementList& OutDrawElements);
+
+	static void DrawInvalidatedWidgets(const FSlateInvalidationRoot& Root, const FPaintArgs& PaintArgs, FSlateWindowElementList& OutDrawElements);
+
+	static void ClearInvalidatedWidgets(const FSlateInvalidationRoot& Root);
 private:
 
 	// This class is only for namespace use
 	FSlateDebugging() {}
+
+	static TArray<struct FInvalidatedWidgetDrawer> InvalidatedWidgetDrawers;
 };
 
 #endif

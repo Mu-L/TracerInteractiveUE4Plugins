@@ -41,6 +41,7 @@ struct ExistingSkelMeshData
 	TArray<USkeletalMeshSocket*>			ExistingSockets;
 	TArray<FReductionBaseSkeletalMeshBulkData*> ExistingOriginalReductionSourceMeshData;
 	TIndirectArray<FSkeletalMeshLODModel>	ExistingLODModels;
+	FSkeletalMeshLODInfo					ExistingBaseLODInfo;
 	TArray<FSkeletalMeshLODInfo>			ExistingLODInfo;
 	FReferenceSkeleton						ExistingRefSkeleton;
 	TArray<FSkeletalMaterial>				ExistingMaterials;
@@ -83,8 +84,13 @@ struct ExistingSkelMeshData
 	FSkeletalMeshSamplingInfo				ExistingSamplingInfo;
 	FPerPlatformInt							MinLOD;
 	FPerPlatformBool						DisableBelowMinLodStripping;
+	FPerPlatformBool						bSupportLODStreaming;
+	FPerPlatformInt							MaxNumStreamedLODs;
+	FPerPlatformInt							MaxNumOptionalLODs;
 
 	TMap<UAssetUserData*, bool>				ExistingAssetUserData;
+
+	USkeletalMesh::FOnMeshChanged			ExistingOnMeshChanged;
 };
 
 /** 

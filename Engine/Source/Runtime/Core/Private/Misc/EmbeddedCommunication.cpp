@@ -11,6 +11,10 @@
 #include "HAL/ThreadManager.h"
 #include "Misc/Parse.h"
 #include "Misc/CommandLine.h"
+#include "CoreGlobals.h"
+#include "Misc/ConfigCacheIni.h"
+#include "Misc/OutputDeviceRedirector.h"
+#include "Misc/FeedbackContext.h"
 
 TMap<FName, FEmbeddedDelegates::FEmbeddedCommunicationParamsDelegate> FEmbeddedDelegates::NativeToEmbeddedDelegateMap;
 TMap<FName, FEmbeddedDelegates::FEmbeddedCommunicationParamsDelegate> FEmbeddedDelegates::EmbeddedToNativeDelegateMap;
@@ -43,7 +47,7 @@ void* FEmbeddedDelegates::GetNamedObject(const FString& Name)
 #if BUILD_EMBEDDED_APP
 
 static FEvent* GSleepEvent = nullptr;
-static TAtomic<bool> GTickAnotherFrame;
+static TAtomic<int32> GTickWithoutSleepCount(0);
 static FCriticalSection GEmbeddedLock;
 //static TArray<TFunction<void()>> GEmbeddedQueues[5];
 static TQueue<TFunction<void()>> GEmbeddedQueues[5];
@@ -71,7 +75,7 @@ void FEmbeddedCommunication::Init()
 #if BUILD_EMBEDDED_APP
  	FScopeLock Lock(&GEmbeddedLock);
  	GSleepEvent = FPlatformProcess::GetSynchEventFromPool(false);
-	GTickAnotherFrame = false;
+	GTickWithoutSleepCount = 0;
 
 	FTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateStatic(&FEmbeddedCommunication::TickGameThread));
 #endif
@@ -204,15 +208,17 @@ void FEmbeddedCommunication::AllowSleep(FName Requester)
 }
 
 #if BUILD_EMBEDDED_APP
-static FName NativeLogCategory("Native");
-#endif
+
+DEFINE_LOG_CATEGORY_STATIC(LogBridge, Log, All);
+
+#endif // BUILD_EMBEDDED_APP
 
 void FEmbeddedCommunication::UELogError(const TCHAR* String)
 {
 #if BUILD_EMBEDDED_APP
-	if (GWarn)
+	if (GWarn && UE_LOG_ACTIVE(LogBridge, Error))
 	{
-		GWarn->Log(NativeLogCategory, ELogVerbosity::Error, String);
+		GWarn->Log("LogBridge", ELogVerbosity::Error, String);
 	}
 #endif
 }
@@ -220,9 +226,9 @@ void FEmbeddedCommunication::UELogError(const TCHAR* String)
 void FEmbeddedCommunication::UELogWarning(const TCHAR* String)
 {
 #if BUILD_EMBEDDED_APP
-	if (GWarn)
+	if (GWarn && UE_LOG_ACTIVE(LogBridge, Warning))
 	{
-		GWarn->Log(NativeLogCategory, ELogVerbosity::Warning, String);
+		GWarn->Log("LogBridge", ELogVerbosity::Warning, String);
 	}
 #endif
 }
@@ -230,9 +236,9 @@ void FEmbeddedCommunication::UELogWarning(const TCHAR* String)
 void FEmbeddedCommunication::UELogLog(const TCHAR* String)
 {
 #if BUILD_EMBEDDED_APP
-	if (GLog)
+	if (GLog && UE_LOG_ACTIVE(LogBridge, Log))
 	{
-		GLog->Log(NativeLogCategory, ELogVerbosity::Log, String);
+		GLog->Log("LogBridge", ELogVerbosity::Log, String);
 	}
 #endif
 }
@@ -240,9 +246,9 @@ void FEmbeddedCommunication::UELogLog(const TCHAR* String)
 void FEmbeddedCommunication::UELogVerbose(const TCHAR* String)
 {
 #if BUILD_EMBEDDED_APP
-	if (GLog)
+	if (GLog && UE_LOG_ACTIVE(LogBridge, Verbose))
 	{
-		GLog->Log(NativeLogCategory, ELogVerbosity::Verbose, String);
+		GLog->Log("LogBridge", ELogVerbosity::Verbose, String);
 	}
 #endif
 }
@@ -272,7 +278,7 @@ bool FEmbeddedCommunication::IsAwakeForRendering()
 void FEmbeddedCommunication::RunOnGameThread(int Priority, TFunction<void()> Lambda)
 {
 #if BUILD_EMBEDDED_APP
-	check(Priority < ARRAY_COUNT(GEmbeddedQueues));
+	check(Priority < UE_ARRAY_COUNT(GEmbeddedQueues));
 
 	{
 		FScopeLock Lock(&GEmbeddedLock);
@@ -290,8 +296,10 @@ void FEmbeddedCommunication::RunOnGameThread(int Priority, TFunction<void()> Lam
 void FEmbeddedCommunication::WakeGameThread()
 {
 #if BUILD_EMBEDDED_APP
-	// If the game thread is already running, this will make it loop again.
-	GTickAnotherFrame = true;
+	// Allow 2 ticks without a sleep
+	// Our sleep happens in the core ticker's tick, and that order gets reversed every tick,
+	// so the caller isn't guaranteed to get a tick before our next sleep
+	GTickWithoutSleepCount = 2;
 	// wake up the game thread!
 	if (GSleepEvent)
 	{
@@ -303,37 +311,59 @@ void FEmbeddedCommunication::WakeGameThread()
 bool FEmbeddedCommunication::TickGameThread(float DeltaTime)
 {
 #if BUILD_EMBEDDED_APP
-
-	TFunction<void()> LambdaToCall;
-	bool bFoundFunction = false;
+	bool bEnableTickMultipleFunctors = false;
+	GConfig->GetBool(TEXT("EmbeddedCommunication"), TEXT("bEnableTickMultipleFunctors"), bEnableTickMultipleFunctors, GEngineIni);
+	double TickMaxTimeSeconds = 0.1;
+	if (bEnableTickMultipleFunctors)
 	{
-		FScopeLock Lock(&GEmbeddedLock);
+		GConfig->GetDouble(TEXT("EmbeddedCommunication"), TEXT("TickMaxTimeSeconds"), TickMaxTimeSeconds, GEngineIni);
+	}
 
-		for (int Queue = 0; Queue < ARRAY_COUNT(GEmbeddedQueues); Queue++)
+	double TimeSliceEnd = FPlatformTime::Seconds() + TickMaxTimeSeconds;
+	bool bLambdaWasCalled = false;
+	do
+	{
+		TFunction<void()> LambdaToCall;
 		{
-			if (GEmbeddedQueues[Queue].Dequeue(LambdaToCall))
+			FScopeLock Lock(&GEmbeddedLock);
+
+			for (int Queue = 0; Queue < UE_ARRAY_COUNT(GEmbeddedQueues); Queue++)
 			{
-				break;
+				if (GEmbeddedQueues[Queue].Dequeue(LambdaToCall))
+				{
+					break;
+				}
 			}
 		}
-	}
 
-	// call the function if we found one
-	if (LambdaToCall)
-	{
-		LambdaToCall();
+		if (LambdaToCall)
+		{
+			LambdaToCall();
+			bLambdaWasCalled = true;
+		}
+		else
+		{
+			break;
+		}
 	}
+	while (bEnableTickMultipleFunctors
+		&& FPlatformTime::Seconds() < TimeSliceEnd);
+
 	// sleep if nothing is going on
-	else if (GRenderingWakeMap.Num() == 0
+	if (!bLambdaWasCalled
+		&& GRenderingWakeMap.Num() == 0
 		&& GTickWakeMap.Num() == 0
-		&& !GTickAnotherFrame) // Don't sleep if we have been asked to tick another frame
+		&& GTickWithoutSleepCount <= 0)
  	{
- 		// wake up every 5 seconds even if nothing to do
+		// wake up every 5 seconds even if nothing to do
 		UE_LOG(LogInit, VeryVerbose, TEXT("FEmbeddedCommunication Sleeping GameThread..."));
- 		bool bWasTriggered = GSleepEvent->Wait(5000);
+		bool bWasTriggered = GSleepEvent->Wait(5000);
 		UE_LOG(LogInit, VeryVerbose, TEXT("FEmbeddedCommunication Woke up. Reason=[%s]"), bWasTriggered ? TEXT("Triggered") : TEXT("TimedOut"));
  	}
-	GTickAnotherFrame = false;
+	if (GTickWithoutSleepCount > 0)
+	{
+		--GTickWithoutSleepCount;
+	}
 #endif
 
 	return true;
@@ -343,6 +373,8 @@ bool FEmbeddedCommunication::TickGameThread(float DeltaTime)
 FString FEmbeddedCommunication::GetDebugInfo()
 {
 #if BUILD_EMBEDDED_APP
+	FScopeLock Lock(&GEmbeddedLock);
+
 	FString Str = "";
 	for (auto It : GRenderingWakeMap)
 	{

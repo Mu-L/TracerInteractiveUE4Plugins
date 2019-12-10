@@ -31,8 +31,8 @@ void FOutputDeviceAnsiError::Serialize( const TCHAR* Msg, ELogVerbosity::Type Ve
 		// First appError.
 		GIsCriticalError = 1;
 		UE_LOG(LogHAL, Error, TEXT("appError called: %s"), Msg );
-		FCString::Strncpy( GErrorHist, Msg, ARRAY_COUNT(GErrorHist) );
-		FCString::Strncat( GErrorHist, TEXT("\r\n\r\n"), ARRAY_COUNT(GErrorHist) );
+		FCString::Strncpy( GErrorHist, Msg, UE_ARRAY_COUNT(GErrorHist) );
+		FCString::Strncat( GErrorHist, TEXT("\r\n\r\n"), UE_ARRAY_COUNT(GErrorHist) );
 		ErrorPos = FCString::Strlen(GErrorHist);
 	}
 	else
@@ -76,13 +76,13 @@ void FOutputDeviceAnsiError::HandleError()
 	GIsRunning			= 0;
 	GIsCriticalError	= 1;
 	GLogConsole			= NULL;
-	GErrorHist[ARRAY_COUNT(GErrorHist)-1]=0;
+	GErrorHist[UE_ARRAY_COUNT(GErrorHist)-1]=0;
 
 	if (GLog)
 	{
 		// print to log and flush it
 		UE_LOG( LogHAL, Log, TEXT( "=== Critical error: ===" ) LINE_TERMINATOR LINE_TERMINATOR TEXT( "%s" ) LINE_TERMINATOR, GErrorExceptionDescription );
-		UE_LOG(LogHAL, Log, GErrorHist);
+		UE_LOG(LogHAL, Log, TEXT("%s"), GErrorHist);
 
 		GLog->Flush();
 	}

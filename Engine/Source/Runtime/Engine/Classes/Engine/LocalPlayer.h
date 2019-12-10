@@ -23,7 +23,7 @@
 #include "LocalPlayer.generated.h"
 
 
-#define INVALID_CONTROLLERID 255
+#define INVALID_CONTROLLERID (-1)
 
 class AActor;
 class FSceneView;
@@ -170,7 +170,7 @@ class ENGINE_API ULocalPlayer : public UPlayer
 public:
 
 	/** DO NOT USE. This constructor is for internal usage only for hot-reload purposes. */
-	ULocalPlayer(FVTableHelper& Helper) : Super(Helper), SubsystemCollection(this), SlateOperations(FReply::Unhandled()) {}
+	ULocalPlayer(FVTableHelper& Helper) : Super(Helper), SlateOperations(FReply::Unhandled()) {}
 
 	/** The FUniqueNetId which this player is associated with. */
 	FUniqueNetIdRepl CachedUniqueNetId;
@@ -204,8 +204,7 @@ public:
 	FOnControllerIdChanged& OnControllerIdChanged() const { return OnControllerIdChangedEvent; }
 
 private:
-	FSceneViewStateReference ViewState;
-	TArray<FSceneViewStateReference> StereoViewStates;
+	TArray<FSceneViewStateReference> ViewStates;
 
 	/** The controller ID which this player accepts input from. */
 	UPROPERTY()
@@ -480,6 +479,11 @@ public:
 	 * @return	true if this player is not using splitscreen, or is the first player in the split-screen layout.
 	 */
 	bool IsPrimaryPlayer() const;
+	 
+	/**
+	 * Clear cached view state.  Suitable for calling when cleaning up the world but the view state has some references objects (usually mids) owned by the world (thus preventing GC) 
+	 */
+	void CleanupViewState();
 
 	/** Locked view state needs access to GetViewPoint. */
 	friend class FLockedViewState;

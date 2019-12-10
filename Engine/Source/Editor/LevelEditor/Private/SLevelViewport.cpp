@@ -45,7 +45,7 @@
 #include "SLevelEditor.h"
 #include "AssetSelection.h"
 #include "Kismet2/DebuggerCommands.h"
-#include "Layers/ILayers.h"
+#include "Layers/LayersSubsystem.h"
 #include "DragAndDrop/ClassDragDropOp.h"
 #include "DragAndDrop/AssetDragDropOp.h"
 #include "DragAndDrop/ExportTextDragDropOp.h"
@@ -391,18 +391,8 @@ TSharedRef<SWidget> SLevelViewport::GenerateLevelMenu() const
 	FWorldBrowserModule& WorldBrowserModule = FModuleManager::LoadModuleChecked<FWorldBrowserModule>("WorldBrowser");
 	// Get all menu extenders for this context menu from the level editor module
 	FLevelEditorModule& LevelEditorModule = FModuleManager::GetModuleChecked<FLevelEditorModule>(TEXT("LevelEditor"));
-	TArray<FLevelEditorModule::FLevelEditorMenuExtender> MenuExtenderDelegates = LevelEditorModule.GetAllLevelEditorLevelMenuExtenders();
-	TArray<TSharedPtr<FExtender>> Extenders;
-
-	TSharedPtr<FUICommandList> InCommandList = GetCommandList();
-	for (int32 i = 0; i < MenuExtenderDelegates.Num(); ++i)
-	{
-		if (MenuExtenderDelegates[i].IsBound())
-		{
-			Extenders.Add(MenuExtenderDelegates[i].Execute(InCommandList.ToSharedRef()));
-		}
-	}
-	TSharedPtr<FExtender> MenuExtender = FExtender::Combine(Extenders);
+	TSharedRef<FUICommandList> InCommandList = GetCommandList().ToSharedRef();
+	TSharedPtr<FExtender> MenuExtender = LevelEditorModule.AssembleExtenders(InCommandList, LevelEditorModule.GetAllLevelEditorLevelMenuExtenders());
 
 	// Create the menu
 	const bool bShouldCloseWindowAfterMenuSelection = true;
@@ -1737,7 +1727,7 @@ EVisibility SLevelViewport::GetCloseImmersiveButtonVisibility() const
 EVisibility SLevelViewport::GetTransformToolbarVisibility() const
 {
 	FLevelEditorModule& LevelEditorModule = FModuleManager::GetModuleChecked<FLevelEditorModule>( LevelEditorName );
-	TSharedPtr<ILevelViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
+	TSharedPtr<IAssetViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
 
 	// Am I the ActiveLevelViewport? 
 	if( ActiveLevelViewport.Get() == this )
@@ -1967,7 +1957,8 @@ bool SLevelViewport::IsVolumeVisible( int32 VolumeID ) const
 
 /** Called when a user selects show or hide all from the layers visibility menu. **/
 void SLevelViewport::OnToggleAllLayers( bool bVisible )
-{	
+{
+	ULayersSubsystem* Layers = GEditor->GetEditorSubsystem<ULayersSubsystem>();
 	if (bVisible)
 	{
 		// clear all hidden layers
@@ -1977,12 +1968,12 @@ void SLevelViewport::OnToggleAllLayers( bool bVisible )
 	{
 		// hide them all
 		TArray<FName> AllLayerNames;
-		GEditor->Layers->AddAllLayerNamesTo(AllLayerNames);
+		Layers->AddAllLayerNamesTo(AllLayerNames);
 		LevelViewportClient->ViewHiddenLayers = AllLayerNames;
 	}
 
 	// update actor visibility for this view
-	GEditor->Layers->UpdatePerViewVisibility(LevelViewportClient.Get());
+	Layers->UpdatePerViewVisibility(LevelViewportClient.Get());
 
 	LevelViewportClient->Invalidate(); 
 }
@@ -2001,7 +1992,8 @@ void SLevelViewport::ToggleShowLayer( FName LayerName )
 	}
 
 	// update actor visibility for this view
-	GEditor->Layers->UpdatePerViewVisibility(LevelViewportClient.Get(), LayerName);
+	ULayersSubsystem* Layers = GEditor->GetEditorSubsystem<ULayersSubsystem>();
+	Layers->UpdatePerViewVisibility(LevelViewportClient.Get(), LayerName);
 
 	LevelViewportClient->Invalidate(); 
 }
@@ -2154,7 +2146,8 @@ void SLevelViewport::OnUseDefaultShowFlags(bool bUseSavedDefaults)
 	{
 		LevelViewportClient->InitializeVisibilityFlags();
 		GUnrealEd->UpdateVolumeActorVisibility(nullptr, LevelViewportClient.Get());
-		GEditor->Layers->UpdatePerViewVisibility(LevelViewportClient.Get());
+		ULayersSubsystem* Layers = GEditor->GetEditorSubsystem<ULayersSubsystem>();
+		Layers->UpdatePerViewVisibility(LevelViewportClient.Get());
 	}
 
 	LevelViewportClient->Invalidate();
@@ -2811,11 +2804,23 @@ private:
 	/** Called when the pin preview button is clicked */
 	FReply OnTogglePinnedButtonClicked();
 
+	/** Swap between the pinned and unpinned icons for VR mode */
+	const FSlateBrush* GetVRPinButtonIconBrush() const;
+
 	/** Swap between the pinned and unpinned icons */
 	const FSlateBrush* GetPinButtonIconBrush() const;
 
 	/** @return the tooltip to display when hovering over the pin button */
 	FText GetPinButtonToolTipText() const;
+
+	/** Called when the detach button is clicked */
+	FReply OnToggleDetachButtonClicked();
+
+	/** Swap between the attached and detached icons */
+	const FSlateBrush* GetDetachButtonIconBrush() const;
+
+	/** @return the tooltip to display when hovering over the detach button */
+	FText GetDetachButtonToolTipText() const;
 	
 	/** Viewport widget for this actor preview */
 	TSharedPtr< SViewport > ViewportWidget;
@@ -2873,6 +2878,10 @@ void SActorPreview::Construct( const FArguments& InArgs )
 
 	// We usually don't want actor preview viewports to be interactive at all, but some custom actor previews may want to override this
 	EVisibility BorderVisibility = (InArgs._IsInteractive ? EVisibility::SelfHitTestInvisible : EVisibility::HitTestInvisible);
+	
+	//We draw certain buttons depending on whether we're in editor or VR mode
+	EVisibility VRVisibility = IVREditorModule::Get().IsVREditorModeActive() ? EVisibility::Visible : EVisibility::Hidden;
+	EVisibility EditorVisibility = IVREditorModule::Get().IsVREditorModeActive() ? EVisibility::Hidden : EVisibility::Visible;
 
 	this->ChildSlot
 	[
@@ -2936,27 +2945,86 @@ void SActorPreview::Construct( const FArguments& InArgs )
 			+SOverlay::Slot()
 			.HAlign(HAlign_Left)
 			.VAlign(VAlign_Bottom)
-			.Padding( 24.0f )
+			.Padding(24.0f)
 			[
 				// Create a button to pin/unpin this viewport
-				SNew( SButton )
+				SNew(SButton)
 					.ContentPadding(0)
-					.ForegroundColor( FSlateColor::UseForeground() )
-					.ButtonStyle( FEditorStyle::Get(), "ToggleButton" )
+					.ForegroundColor(FSlateColor::UseForeground())
+					.ButtonStyle(FEditorStyle::Get(), "ToggleButton")
 
 					.IsFocusable(false)
 					[
-						SNew( SImage )
-							.Visibility( EVisibility::Visible )	
-							.Image( this, &SActorPreview::GetPinButtonIconBrush )
+						SNew(SImage)
+							.Visibility(EVisibility::Visible)
+							.Image(this, &SActorPreview::GetPinButtonIconBrush)
 					]
 
 					// Bind the button's "on clicked" event to our object's method for this
-					.OnClicked( this, &SActorPreview::OnTogglePinnedButtonClicked )
-					.Visibility( EVisibility::Visible )
+					.OnClicked(this, &SActorPreview::OnTogglePinnedButtonClicked)
+					.Visibility(EditorVisibility)
 
 					// Pass along the block's tool-tip string
-					.ToolTipText( this, &SActorPreview::GetPinButtonToolTipText )
+					.ToolTipText(this, &SActorPreview::GetPinButtonToolTipText)
+			]
+			+SOverlay::Slot()
+			.HAlign(HAlign_Left)
+			.VAlign(VAlign_Bottom)
+			.Padding( 0 )
+			[
+				SNew(SBox)
+				.WidthOverride(45)
+				.HeightOverride(45)
+				[
+					// Create a button to pin/unpin this viewport
+					SNew( SButton )
+						.ContentPadding(0)
+						.ForegroundColor( FSlateColor::UseForeground() )
+						.ButtonStyle( FEditorStyle::Get(), "ToggleButton" )
+
+						.IsFocusable(false)
+						[
+							SNew( SImage )
+								.Visibility( EVisibility::Visible )	
+								.Image( this, &SActorPreview::GetVRPinButtonIconBrush )
+						]
+
+						// Bind the button's "on clicked" event to our object's method for this
+						.OnClicked( this, &SActorPreview::OnTogglePinnedButtonClicked )
+						.Visibility( VRVisibility )
+
+						// Pass along the block's tool-tip string
+						.ToolTipText( this, &SActorPreview::GetPinButtonToolTipText )
+				]
+			]
+			+ SOverlay::Slot()
+			.HAlign(HAlign_Right)
+			.VAlign(VAlign_Bottom)
+			.Padding(0)
+			[
+				SNew(SBox)
+				.WidthOverride(45)
+				.HeightOverride(45)
+				[
+					// Create a button to attach/detach this viewport
+					SNew(SButton)
+						.ContentPadding(0)
+						.ForegroundColor(FSlateColor::UseForeground())
+						.ButtonStyle(FEditorStyle::Get(), "ToggleButton")
+						.IsFocusable(false)
+						[
+							SNew(SImage)
+								.Visibility(EVisibility::Visible)
+								.Image(this, &SActorPreview::GetDetachButtonIconBrush)
+						]
+
+						// Bind the button's "on clicked" event to our object's method for this
+						.OnClicked(this, &SActorPreview::OnToggleDetachButtonClicked)
+						.Visibility(VRVisibility)
+
+						// Pass along the block's tool-tip string
+						.ToolTipText(this, &SActorPreview::GetDetachButtonToolTipText)
+				]
 			]
 		]
 	];
@@ -2996,6 +3064,28 @@ FReply SActorPreview::OnTogglePinnedButtonClicked()
 	return FReply::Handled();
 }
 
+const FSlateBrush * SActorPreview::GetVRPinButtonIconBrush() const
+{
+	const FSlateBrush* IconBrush = nullptr;
+
+	TSharedPtr<SLevelViewport> ParentViewportPtr = ParentViewport.Pin();
+
+	if (ParentViewportPtr.IsValid())
+	{
+		if (ParentViewportPtr->IsActorPreviewPinned(PreviewActorPtr))
+		{
+			IconBrush = FEditorStyle::GetBrush("VRViewportActorPreview.Pinned");
+		}
+		else
+		{
+			IconBrush = FEditorStyle::GetBrush("VRViewportActorPreview.Unpinned");
+		}
+
+	}
+
+	return IconBrush;
+}
+
 const FSlateBrush* SActorPreview::GetPinButtonIconBrush() const
 {
 	const FSlateBrush* IconBrush = nullptr;
@@ -3032,6 +3122,57 @@ FText SActorPreview::GetPinButtonToolTipText() const
 		}
 	}
 		
+	return CurrentToolTipText;
+}
+
+FReply SActorPreview::OnToggleDetachButtonClicked()
+{
+	TSharedPtr<SLevelViewport> ParentViewportPtr = ParentViewport.Pin();
+
+	if (ParentViewportPtr.IsValid())
+	{
+		ParentViewportPtr->ToggleActorPreviewIsPanelDetached(PreviewActorPtr);
+	}
+
+	return FReply::Handled();
+}
+
+const FSlateBrush* SActorPreview::GetDetachButtonIconBrush() const
+{
+	const FSlateBrush* IconBrush = nullptr;
+
+	TSharedPtr<SLevelViewport> ParentViewportPtr = ParentViewport.Pin();
+
+	if (ParentViewportPtr.IsValid())
+	{
+		if (ParentViewportPtr->IsActorPreviewDetached(PreviewActorPtr))
+		{
+			IconBrush = FEditorStyle::GetBrush("VRViewportActorPreview.Attached");
+		}
+		else
+		{
+			IconBrush = FEditorStyle::GetBrush("VRViewportActorPreview.Detached");
+		}
+
+	}
+
+	return IconBrush;
+}
+
+FText SActorPreview::GetDetachButtonToolTipText() const
+{
+	FText CurrentToolTipText = LOCTEXT("DetachPreviewActorTooltip", "Detach Preview from actor");
+
+	TSharedPtr<SLevelViewport> ParentViewportPtr = ParentViewport.Pin();
+
+	if (ParentViewportPtr.IsValid())
+	{
+		if (ParentViewportPtr->IsActorPreviewDetached(PreviewActorPtr))
+		{
+			CurrentToolTipText = LOCTEXT("AttachPreviewActorTooltip", "Attach Preview to actor");
+		}
+	}
+
 	return CurrentToolTipText;
 }
 
@@ -3342,6 +3483,10 @@ void SLevelViewport::PreviewActors( const TArray< AActor* >& InActorsToPreview, 
 				ActorPreviewLevelViewportClient->EngineShowFlags = FEngineShowFlags(ESFIM_Game);
 				ActorPreviewLevelViewportClient->EngineShowFlags.SetSelection(true);
 				ActorPreviewLevelViewportClient->LastEngineShowFlags = FEngineShowFlags(ESFIM_Editor);
+				if (!bPreviewInDesktopViewport)
+				{
+					ActorPreviewLevelViewportClient->EngineShowFlags.Tonemapper = false;
+				}
 
 				// We don't use view modes for preview viewports
 				ActorPreviewLevelViewportClient->SetViewMode(VMI_Unknown);
@@ -3471,6 +3616,30 @@ void SLevelViewport::ToggleActorPreviewIsPinned(TWeakObjectPtr<AActor> ActorToTo
 	}
 }
 
+void SLevelViewport::ToggleActorPreviewIsPanelDetached(TWeakObjectPtr<AActor> PreviewActor)
+{
+	if (PreviewActor.IsValid())
+	{
+		AActor* PreviewActorPtr = PreviewActor.Get();
+
+		for (FViewportActorPreview& ActorPreview : ActorPreviews)
+		{
+			if (ActorPreview.Actor.IsValid())
+			{
+				if (PreviewActorPtr == ActorPreview.Actor.Get())
+				{
+					ActorPreview.ToggleIsPanelDetached();
+					IVREditorModule& VREditorModule = IVREditorModule::Get();
+					//Disable current actor preview
+					VREditorModule.UpdateActorPreview(SNullWidget::NullWidget, ActorPreviews.Num() - 1, PreviewActor.Get(), !ActorPreview.bIsPanelDetached);
+					//Enable new current preview (the old one was detached or attached, the new one is the opposite
+					VREditorModule.UpdateActorPreview(ActorPreview.PreviewWidget.ToSharedRef(), ActorPreviews.Num() - 1, PreviewActor.Get(), ActorPreview.bIsPanelDetached);
+				}
+			}
+		}
+	}
+}
+
 
 
 bool SLevelViewport::IsActorPreviewPinned( TWeakObjectPtr<AActor> PreviewActor )
@@ -3486,6 +3655,27 @@ bool SLevelViewport::IsActorPreviewPinned( TWeakObjectPtr<AActor> PreviewActor )
 				if ( PreviewActorPtr == ActorPreview.Actor.Get() )
 				{
 					return ActorPreview.bIsPinned;
+				}
+			}
+		}
+	}
+
+	return false;
+}
+
+bool SLevelViewport::IsActorPreviewDetached(TWeakObjectPtr<AActor> PreviewActor)
+{
+	if (PreviewActor.IsValid())
+	{
+		AActor* PreviewActorPtr = PreviewActor.Get();
+
+		for (FViewportActorPreview& ActorPreview : ActorPreviews)
+		{
+			if (ActorPreview.Actor.IsValid())
+			{
+				if (PreviewActorPtr == ActorPreview.Actor.Get())
+				{
+					return ActorPreview.bIsPanelDetached;
 				}
 			}
 		}
@@ -3759,7 +3949,7 @@ FName SLevelViewport::GetViewportTypeWithinLayout() const
 	TSharedPtr<FLevelViewportLayout> LayoutPinned = ParentLayout.Pin();
 	if (LayoutPinned.IsValid() && !ConfigKey.IsNone())
 	{
-		TSharedPtr<IViewportLayoutEntity> Entity = LayoutPinned->GetViewports().FindRef(ConfigKey);
+		TSharedPtr<ILevelViewportLayoutEntity> Entity = StaticCastSharedPtr<ILevelViewportLayoutEntity>(LayoutPinned->GetViewports().FindRef(ConfigKey));
 		if (Entity.IsValid())
 		{
 			return Entity->GetType();
@@ -4128,7 +4318,10 @@ void SLevelViewport::SwapViewportsForSimulateInEditor()
 	ViewTransitionType = EViewTransition::StartingSimulate;
 	ViewTransitionAnim = FCurveSequence( 0.0f, 1.5f, ECurveEaseFunction::CubicOut );
 	bViewTransitionAnimPending = true;
-	GEditor->PlayEditorSound( TEXT( "/Engine/EditorSounds/GamePreview/PossessPlayer_Cue.PossessPlayer_Cue" ) );
+	if (GetDefault<ULevelEditorPlaySettings>()->EnablePIEEnterAndExitSounds)
+	{
+		GEditor->PlayEditorSound(TEXT("/Engine/EditorSounds/GamePreview/PossessPlayer_Cue.PossessPlayer_Cue"));
+	}
 }
 
 
@@ -4237,7 +4430,10 @@ void SLevelViewport::RemoveActorPreview( int32 PreviewIndex, AActor* Actor, cons
 	IVREditorModule& VREditorModule = IVREditorModule::Get();
 	if (!bRemoveFromDesktopViewport)
 	{
-		VREditorModule.UpdateActorPreview(SNullWidget::NullWidget, PreviewIndex, Actor);
+		if (ActorPreviews.IsValidIndex(PreviewIndex))
+		{
+			VREditorModule.UpdateActorPreview(SNullWidget::NullWidget, PreviewIndex, Actor, ActorPreviews[PreviewIndex].bIsPanelDetached);
+		}
 	}
 	else
 	{
@@ -4274,7 +4470,7 @@ bool SLevelViewport::CanProduceActionForCommand(const TSharedRef<const FUIComman
 {
 
 	FLevelEditorModule& LevelEditorModule = FModuleManager::GetModuleChecked<FLevelEditorModule>( LevelEditorName );
-	TSharedPtr<ILevelViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
+	TSharedPtr<IAssetViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
 	if ( ActiveLevelViewport.IsValid() )
 	{
 		return ActiveLevelViewport == SharedThis(this);

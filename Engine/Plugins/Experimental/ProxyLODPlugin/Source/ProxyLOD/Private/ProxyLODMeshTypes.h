@@ -11,9 +11,7 @@
 #endif
 
 #include "MeshMergeData.h"
-#include "MeshDescription.h"
-#include "MeshAttributes.h"
-#include "MeshAttributeArray.h"
+#include "StaticMeshAttributes.h"
 #include "MeshDescriptionOperations.h"
 
 #include "ProxyLODThreadedWrappers.h"
@@ -323,11 +321,7 @@ public:
 			VertexInstanceColors = MeshDescription->VertexInstanceAttributes().GetAttributesRef<FVector4>(MeshAttribute::VertexInstance::Color);
 			VertexInstanceUVs = MeshDescription->VertexInstanceAttributes().GetAttributesRef<FVector2D>(MeshAttribute::VertexInstance::TextureCoordinate);
 
-			TriangleCount = 0;
-			for (FPolygonID PolygonID : MeshDescription->Polygons().GetElementIDs())
-			{
-				TriangleCount += MeshDescription->GetPolygonTriangles(PolygonID).Num();
-			}
+			TriangleCount = MeshDescription->Triangles().Num();
 			FaceSmoothingMasks.AddZeroed(TriangleCount);
 			FMeshDescriptionOperations::ConvertHardEdgesToSmoothGroup(*MeshDescription, FaceSmoothingMasks);
 		}

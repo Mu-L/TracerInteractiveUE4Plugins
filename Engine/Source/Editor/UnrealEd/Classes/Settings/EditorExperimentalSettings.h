@@ -20,14 +20,18 @@ class UNREALED_API UEditorExperimentalSettings
 
 public:
 
+	/** Allows the editor to run on HDR monitors on Windows 10 */
+	UPROPERTY(EditAnywhere, config, Category = HDR, meta = (ConfigRestartRequired = true, DisplayName = "Enable Editor Support for HDR Monitors"))
+	bool bHDREditor;
+
+	/** The brightness of the slate UI on HDR monitors */
+	UPROPERTY(EditAnywhere, config, Category = HDR, meta = (ClampMin = "100.0", ClampMax = "300.0", UIMin = "100.0", UIMax = "300.0"))
+	float HDREditorNITLevel;
+
 	/** Allows usage of the procedural foliage system */
 	UPROPERTY(EditAnywhere, config, Category = Foliage, meta = (DisplayName = "Procedural Foliage"))
 	bool bProceduralFoliage;
 		
-	/** Allows usage of the procedural landscape system*/
-	UPROPERTY(EditAnywhere, config, Category = Landscape, meta = (DisplayName = "Landscape Layer System"))
-	bool bLandscapeLayerSystem;
-
 	/** Allows usage of the Localization Dashboard */
 	UPROPERTY(EditAnywhere, config, Category = Tools, meta = (DisplayName = "Localization Dashboard"))
 	bool bEnableLocalizationDashboard;
@@ -57,6 +61,17 @@ public:
 	/** Enables "Find and Replace All" tool in the MyBlueprint window for variables */
 	UPROPERTY(EditAnywhere, config, Category = Blueprints, meta = (DisplayName = "Find and Replace All References Tool"))
 	bool bEnableFindAndReplaceReferences;
+	
+protected:
+	/** Any blueprint deriving from one of these base classes will be allowed to recompile during Play-in-Editor */
+	UPROPERTY(EditAnywhere, config, Category = Blueprints, meta=(AllowAbstract))
+	TArray<TSoftClassPtr<UObject>> BaseClassesToAllowRecompilingDuringPlayInEditor;
+
+	UPROPERTY(Transient)
+	mutable TArray<UClass*> ResolvedBaseClassesToAllowRecompilingDuringPlayInEditor;
+
+public:
+	bool IsClassAllowedToRecompileDuringPIE(UClass* TestClass) const;
 
 	/** Should arrows indicating data/execution flow be drawn halfway along wires? */
 	UPROPERTY(/*EditAnywhere - deprecated (moved into UBlueprintEditorSettings), */config/*, Category=Blueprints, meta=(DisplayName="Draw midpoint arrows in Blueprints")*/)
@@ -138,8 +153,8 @@ public:
 protected:
 
 	// UObject overrides
-
-	virtual void PostEditChangeProperty( struct FPropertyChangedEvent& PropertyChangedEvent ) override;
+	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;
+	virtual void PostInitProperties() override;
 
 private:
 

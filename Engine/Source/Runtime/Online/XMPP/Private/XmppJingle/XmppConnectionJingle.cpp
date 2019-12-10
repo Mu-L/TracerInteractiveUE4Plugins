@@ -1,11 +1,13 @@
 // Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
 
 #include "XmppJingle/XmppConnectionJingle.h"
+#include "Containers/BackgroundableTicker.h"
 #include "HAL/Runnable.h"
 #include "HAL/RunnableThread.h"
 #include "HAL/ThreadSafeCounter.h"
 #include "Misc/ScopeLock.h"
 #include "Misc/Guid.h"
+#include "Misc/ConfigCacheIni.h"
 #include "Stats/Stats.h"
 #include "XmppJingle/XmppPresenceJingle.h"
 #include "XmppJingle/XmppMessagesJingle.h"
@@ -55,7 +57,9 @@ public:
 		, LoginState(EXmppLoginStatus::NotStarted)
 		, ServerPingTask(NULL)
 		, ServerPingRetries(0)
+		, ThreadMaxTickRateHz(100)
 	{
+		GConfig->GetInt(TEXT("XMPP"), TEXT("JingleConnectionThreadMaxTickRateHz"), ThreadMaxTickRateHz, GEngineIni);
 		Thread = FRunnableThread::Create(this, *FString::Printf(TEXT("XmppConnectionThread_%d"), ThreadInstanceIdx++), 64 * 1024, TPri_Normal);
 	}
 
@@ -116,8 +120,14 @@ public:
 
 	virtual uint32 Run() override
 	{
+		// Calculate the desired tick time.
+		const double DesiredTickSeconds = 1.0 / (double)ThreadMaxTickRateHz;
+
 		while (!ExitRequest.GetValue())
 		{
+			// Track the loop time to calculate required sleep.
+			const double TickStartSeconds = FPlatformTime::Seconds();
+
 			// initial startup and login requests
 			if (LoginState == EXmppLoginStatus::NotStarted ||
 				LoginRequest.GetValue())
@@ -166,13 +176,16 @@ public:
 				// allow xmpp pump to process
 				const int32 DefaultTimeoutMs = 100;
 				XmppThread->ProcessMessages(DefaultTimeoutMs);
-
-#if PLATFORM_PS4
-				const float DefaultTimeBetweenPollsSeconds = 0.005;
-				FPlatformProcess::Sleep(DefaultTimeBetweenPollsSeconds);
-#endif
 			}
-		}		
+
+			// If the loop is not exiting, sleep to control the desired tick rate.
+			if (!ExitRequest.GetValue())
+			{
+				const double TickSeconds = FPlatformTime::Seconds() - TickStartSeconds;
+				const double SleepTime = FMath::Max(0.0, DesiredTickSeconds - TickSeconds);
+				FPlatformProcess::Sleep(SleepTime);
+			}
+		}
 		return 0;
 	}
 
@@ -382,6 +395,9 @@ private:
 	/** Number of times ping task has been restarted before logging out */
 	int32 ServerPingRetries;
 
+	/** Maximum ticks per second used for the connection thread */
+	int32 ThreadMaxTickRateHz;
+
 	/** Index used to disambiguate thread instances for stats reasons */
 	static int32 ThreadInstanceIdx;
 };
@@ -389,7 +405,8 @@ private:
 int32 FXmppConnectionPumpThread::ThreadInstanceIdx = 0;
 
 FXmppConnectionJingle::FXmppConnectionJingle()
-	: LastLoginState(EXmppLoginStatus::NotStarted)
+	: FTickerObjectBase(0.0f, FBackgroundableTicker::GetCoreTicker())
+	, LastLoginState(EXmppLoginStatus::NotStarted)
 	, LoginState(EXmppLoginStatus::NotStarted)
 	, StatUpdateFreq(1.0)
 	, LastStatUpdateTime(0.0)

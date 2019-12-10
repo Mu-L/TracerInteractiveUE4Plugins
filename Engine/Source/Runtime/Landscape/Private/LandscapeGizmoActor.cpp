@@ -26,18 +26,6 @@
 #include "Components/BillboardComponent.h"
 #include "HAL/PlatformApplicationMisc.h"
 
-namespace
-{
-	enum PreviewType
-	{
-		Invalid = -1,
-		Both = 0,
-		Add = 1,
-		Sub = 2,
-	};
-}
-
-
 class FLandscapeGizmoMeshRenderProxy : public FMaterialRenderProxy
 {
 public:
@@ -121,6 +109,10 @@ public:
 			*OutValue = AlphaTexture;
 			return true;
 		}
+		return Parent->GetTextureValue(ParameterInfo, OutValue, Context);
+	}
+	virtual bool GetTextureValue(const FMaterialParameterInfo& ParameterInfo, const URuntimeVirtualTexture** OutValue, const FMaterialRenderContext& Context) const
+	{
 		return Parent->GetTextureValue(ParameterInfo, OutValue, Context);
 	}
 };
@@ -442,7 +434,7 @@ ALandscapeGizmoActor::ALandscapeGizmoActor(const FObjectInitializer& ObjectIniti
 		static FConstructorStatics ConstructorStatics;
 
 		SpriteComponent->Sprite = ConstructorStatics.DecalActorIconTexture.Get();
-		SpriteComponent->RelativeScale3D = FVector(0.5f, 0.5f, 0.5f);
+		SpriteComponent->SetRelativeScale3D(FVector(0.5f, 0.5f, 0.5f));
 		SpriteComponent->bHiddenInGame = true;
 		SpriteComponent->SpriteInfo.Category = ConstructorStatics.ID_Misc;
 		SpriteComponent->SpriteInfo.DisplayName = ConstructorStatics.NAME_Misc;
@@ -477,9 +469,9 @@ void ALandscapeGizmoActor::Duplicate(ALandscapeGizmoActor* Gizmo)
 	Gizmo->SetActorLocation( GetActorLocation(), false );
 	Gizmo->SetActorRotation( GetActorRotation() );
 
-	if( Gizmo->GetRootComponent() != NULL && GetRootComponent() != NULL )
+	if (Gizmo->GetRootComponent() != NULL && GetRootComponent() != NULL)
 	{
-		Gizmo->GetRootComponent()->SetRelativeScale3D( GetRootComponent()->RelativeScale3D );
+		Gizmo->GetRootComponent()->SetRelativeScale3D(GetRootComponent()->GetRelativeScale3D());
 	}
 
 	Gizmo->MinRelativeZ = MinRelativeZ;
@@ -674,20 +666,23 @@ void ALandscapeGizmoActiveActor::SetTargetLandscape(ULandscapeInfo* LandscapeInf
 		TargetLandscapeInfo = LandscapeInfo;
 	}
 
-	// if there's no copied data, try to move somewhere useful
-	if (TargetLandscapeInfo && TargetLandscapeInfo != PrevInfo && DataType == LGT_None)
+	if (TargetLandscapeInfo != PrevInfo)
 	{
-		MarginZ = TargetLandscapeInfo->DrawScale.Z * 3;
-		Width = Height = TargetLandscapeInfo->DrawScale.X * (TargetLandscapeInfo->ComponentSizeQuads+1);
+		// if there's no copied data, try to move somewhere useful
+		if (TargetLandscapeInfo && DataType == LGT_None)
+		{
+			MarginZ = TargetLandscapeInfo->DrawScale.Z * 3;
+			Width = Height = TargetLandscapeInfo->DrawScale.X * (TargetLandscapeInfo->ComponentSizeQuads + 1);
 
-		float NewLengthZ;
-		FVector NewLocation = TargetLandscapeInfo->GetLandscapeCenterPos(NewLengthZ);
-		SetLength(NewLengthZ);
-		SetActorLocation( NewLocation, false );
-		SetActorRotation(FRotator::ZeroRotator);
+			float NewLengthZ;
+			FVector NewLocation = TargetLandscapeInfo->GetLandscapeCenterPos(NewLengthZ);
+			SetLength(NewLengthZ);
+			SetActorLocation(NewLocation, false);
+			SetActorRotation(FRotator::ZeroRotator);
+		}
+
+		ReregisterAllComponents();
 	}
-
-	ReregisterAllComponents();
 }
 
 void ALandscapeGizmoActiveActor::ClearGizmoData()
@@ -718,9 +713,11 @@ void ALandscapeGizmoActiveActor::FitToSelection()
 		TargetLandscapeInfo->GetSelectedExtent(MinX, MinY, MaxX, MaxY);
 		if (MinX != MAX_int32)
 		{
+			const FVector LocalScale3D = GetRootComponent()->GetRelativeScale3D();
+
 			float ScaleXY = TargetLandscapeInfo->DrawScale.X;
-			Width = ScaleXY * (MaxX - MinX + 1) / (GetRootComponent()->RelativeScale3D.X);
-			Height = ScaleXY * (MaxY - MinY + 1) / (GetRootComponent()->RelativeScale3D.Y);
+			Width = ScaleXY * (MaxX - MinX + 1) / (LocalScale3D.X);
+			Height = ScaleXY * (MaxY - MinY + 1) / (LocalScale3D.Y);
 			float NewLengthZ;
 			FVector NewLocation = TargetLandscapeInfo->GetLandscapeCenterPos(NewLengthZ, MinX, MinY, MaxX, MaxY);
 			SetLength(NewLengthZ);

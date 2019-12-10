@@ -5,24 +5,25 @@
 =============================================================================*/
 
 #include "Audio.h"
-#include "Misc/Paths.h"
-#include "UObject/UObjectHash.h"
-#include "UObject/UObjectIterator.h"
-#include "Components/AudioComponent.h"
-#include "ContentStreaming.h"
-#include "DrawDebugHelpers.h"
+#include "ActiveSound.h"
+#include "AnalyticsEventAttribute.h"
 #include "Audio/AudioDebug.h"
 #include "AudioDevice.h"
+#include "AudioPluginUtilities.h"
 #include "AudioThread.h"
+#include "Components/AudioComponent.h"
+#include "Components/SynthComponent.h"
+#include "ContentStreaming.h"
+#include "DrawDebugHelpers.h"
+#include "EngineAnalytics.h"
+#include "Interfaces/IAnalyticsProvider.h"
+#include "Misc/Paths.h"
 #include "Sound/SoundBase.h"
 #include "Sound/SoundCue.h"
-#include "Sound/SoundWave.h"
-#include "ActiveSound.h"
 #include "Sound/SoundNodeWavePlayer.h"
-#include "EngineAnalytics.h"
-#include "AnalyticsEventAttribute.h"
-#include "Interfaces/IAnalyticsProvider.h"
-#include "AudioPluginUtilities.h"
+#include "Sound/SoundWave.h"
+#include "UObject/UObjectHash.h"
+#include "UObject/UObjectIterator.h"
 
 DEFINE_LOG_CATEGORY(LogAudio);
 
@@ -78,6 +79,22 @@ FAutoConsoleVariableRef CVarAllowAudioSpatializationCVar(
 	TEXT("0: Disable, >0: Enable"),
 	ECVF_Default);
 
+static int32 OcclusionFilterScaleEnabledCVar = 0;
+FAutoConsoleVariableRef CVarOcclusionFilterScaleEnabled(
+	TEXT("au.EnableOcclusionFilterScale"),
+	OcclusionFilterScaleEnabledCVar,
+	TEXT("Whether or not we scale occlusion by 0.25f to compensate for change in filter cutoff frequencies in audio mixer. \n")
+	TEXT("0: Not Enabled, 1: Enabled"),
+	ECVF_Default);
+
+static int32 BypassPlayWhenSilentCVar = 0;
+FAutoConsoleVariableRef CVarBypassPlayWhenSilent(
+	TEXT("au.BypassPlayWhenSilent"),
+	BypassPlayWhenSilentCVar,
+	TEXT("When set to 1, ignores the Play When Silent flag for non-procedural sources.\n")
+	TEXT("0: Honor the Play When Silent flag, 1: stop all silent non-procedural sources."),
+	ECVF_Default);
+
 static int32 AllowReverbForMultichannelSources = 1;
 FAutoConsoleVariableRef CvarAllowReverbForMultichannelSources(
 	TEXT("au.AllowReverbForMultichannelSources"),
@@ -92,13 +109,13 @@ bool IsAudioPluginEnabled(EAudioPlugin PluginType)
 	switch (PluginType)
 	{
 	case EAudioPlugin::SPATIALIZATION:
-		return AudioPluginUtilities::GetDesiredSpatializationPlugin(AudioPluginUtilities::CurrentPlatform) != nullptr;
+		return AudioPluginUtilities::GetDesiredSpatializationPlugin() != nullptr;
 	case EAudioPlugin::REVERB:
-		return AudioPluginUtilities::GetDesiredReverbPlugin(AudioPluginUtilities::CurrentPlatform) != nullptr;
+		return AudioPluginUtilities::GetDesiredReverbPlugin() != nullptr;
 	case EAudioPlugin::OCCLUSION:
-		return AudioPluginUtilities::GetDesiredOcclusionPlugin(AudioPluginUtilities::CurrentPlatform) != nullptr;
+		return AudioPluginUtilities::GetDesiredOcclusionPlugin() != nullptr;
 	case EAudioPlugin::MODULATION:
-		return AudioPluginUtilities::GetDesiredModulationPlugin(AudioPluginUtilities::CurrentPlatform) != nullptr;
+		return AudioPluginUtilities::GetDesiredModulationPlugin() != nullptr;
 	default:
 		return false;
 		break;
@@ -111,7 +128,7 @@ UClass* GetAudioPluginCustomSettingsClass(EAudioPlugin PluginType)
 	{
 		case EAudioPlugin::SPATIALIZATION:
 		{
-			if (IAudioSpatializationFactory* Factory = AudioPluginUtilities::GetDesiredSpatializationPlugin(AudioPluginUtilities::CurrentPlatform))
+			if (IAudioSpatializationFactory* Factory = AudioPluginUtilities::GetDesiredSpatializationPlugin())
 			{
 				return Factory->GetCustomSpatializationSettingsClass();
 			}
@@ -120,7 +137,7 @@ UClass* GetAudioPluginCustomSettingsClass(EAudioPlugin PluginType)
 
 		case EAudioPlugin::REVERB:
 		{
-			if (IAudioReverbFactory* Factory = AudioPluginUtilities::GetDesiredReverbPlugin(AudioPluginUtilities::CurrentPlatform))
+			if (IAudioReverbFactory* Factory = AudioPluginUtilities::GetDesiredReverbPlugin())
 			{
 				return Factory->GetCustomReverbSettingsClass();
 			}
@@ -129,7 +146,7 @@ UClass* GetAudioPluginCustomSettingsClass(EAudioPlugin PluginType)
 
 		case EAudioPlugin::OCCLUSION:
 		{
-			if (IAudioOcclusionFactory* Factory = AudioPluginUtilities::GetDesiredOcclusionPlugin(AudioPluginUtilities::CurrentPlatform))
+			if (IAudioOcclusionFactory* Factory = AudioPluginUtilities::GetDesiredOcclusionPlugin())
 			{
 				return Factory->GetCustomOcclusionSettingsClass();
 			}
@@ -138,7 +155,7 @@ UClass* GetAudioPluginCustomSettingsClass(EAudioPlugin PluginType)
 
 		case EAudioPlugin::MODULATION:
 		{
-			if (IAudioModulationFactory* Factory = AudioPluginUtilities::GetDesiredModulationPlugin(AudioPluginUtilities::CurrentPlatform))
+			if (IAudioModulationFactory* Factory = AudioPluginUtilities::GetDesiredModulationPlugin())
 			{
 				return Factory->GetCustomModulationSettingsClass();
 			}
@@ -379,11 +396,19 @@ void FSoundSource::SetFilterFrequency()
 
 		default:
 		{
+			// compensate for filter coefficient calculation error for occlusion
+			float OcclusionFilterScale = 1.0f;
+			if (AudioDevice->IsAudioMixerEnabled() && OcclusionFilterScaleEnabledCVar == 1 && !FMath::IsNearlyEqual(WaveInstance->OcclusionFilterFrequency, MAX_FILTER_FREQUENCY))
+			{
+				OcclusionFilterScale = 0.25f;
+			}
+
 			// Set the LPFFrequency to lowest provided value
-			LPFFrequency = FMath::Min(WaveInstance->OcclusionFilterFrequency, WaveInstance->LowPassFilterFrequency);
+			LPFFrequency = FMath::Min(WaveInstance->OcclusionFilterFrequency * OcclusionFilterScale, WaveInstance->LowPassFilterFrequency);
 			LPFFrequency = FMath::Min(LPFFrequency, WaveInstance->AmbientZoneFilterFrequency);
 			LPFFrequency = FMath::Min(LPFFrequency, WaveInstance->AttenuationLowpassFilterFrequency);
 			LPFFrequency = FMath::Min(LPFFrequency, WaveInstance->SoundModulationControls.Lowpass);
+			LPFFrequency = FMath::Min(LPFFrequency, WaveInstance->SoundClassFilterFrequency);
 		}
 		break;
 	}
@@ -447,73 +472,62 @@ float FSoundSource::GetDebugVolume(const float InVolume)
 {
 	float OutVolume = InVolume;
 
-#if !UE_BUILD_SHIPPING
+#if ENABLE_AUDIO_DEBUG
 
+	// Bail if we don't have a device manager.
+	if (!GEngine || !GEngine->GetAudioDeviceManager() || !WaveInstance || !DebugInfo.IsValid() )
+	{
+		return OutVolume;
+	}
+
+	// Solos/Mutes (dev only).
+	FAudioDebugger& Debugger = GEngine->GetAudioDeviceManager()->GetDebugger();	
+	FDebugInfo Info;
+				
+	// SoundWave Solo/Mutes.
 	if (OutVolume != 0.0f)
 	{
-		// Check for solo sound class debugging. Mute all sounds that don't substring match their sound class name to the debug solo'd sound class
-		const FString& DebugSoloSoundName = GEngine->GetAudioDeviceManager()->GetDebugSoloSoundWave();
-		if (DebugSoloSoundName != TEXT(""))
+		Debugger.QuerySoloMuteSoundWave(WaveInstance->GetName(), Info.bIsSoloed, Info.bIsMuted, Info.MuteSoloReason);
+		if (Info.bIsMuted)
 		{
-			bool bMute = true;
-			FString WaveInstanceName = WaveInstance->GetName();
-			if (WaveInstanceName.Contains(DebugSoloSoundName))
-			{
-				bMute = false;
-			}
-			if (bMute)
+			OutVolume = 0.0f;
+		}
+	}
+
+	// SoundCues mutes/solos											
+	if (OutVolume != 0.0f && WaveInstance->ActiveSound)
+	{						
+		if (USoundCue* SoundCue = Cast<USoundCue>(WaveInstance->ActiveSound->GetSound()))
+		{
+			Debugger.QuerySoloMuteSoundCue(SoundCue->GetName(), Info.bIsSoloed, Info.bIsMuted, Info.MuteSoloReason);
+			if (Info.bIsMuted)
 			{
 				OutVolume = 0.0f;
 			}
 		}
 	}
 
-	if (OutVolume != 0.0f)
+	// SoundClass mutes/solos.
+	if (OutVolume != 0.0f && WaveInstance->SoundClass)
 	{
-		// Check for solo sound class debugging. Mute all sounds that don't substring match their sound class name to the debug solo'd sound class
-		const FString& DebugSoloSoundCue = GEngine->GetAudioDeviceManager()->GetDebugSoloSoundCue();
-		if (DebugSoloSoundCue != TEXT(""))
+		FString SoundClassName;
+		WaveInstance->SoundClass->GetName(SoundClassName);
+		Debugger.QuerySoloMuteSoundClass(SoundClassName, Info.bIsSoloed, Info.bIsMuted, Info.MuteSoloReason);
+		if (Info.bIsMuted)
 		{
-			bool bMute = true;
-			USoundBase* Sound = WaveInstance->ActiveSound->GetSound();
-			if (Sound->IsA<USoundCue>())
-			{
-				FString SoundCueName = Sound->GetName();
-				if (SoundCueName.Contains(DebugSoloSoundCue))
-				{
-					bMute = false;
-				}
-			}
-
-			if (bMute)
-			{
-				OutVolume = 0.0f;
-			}
+			OutVolume = 0.0f;
 		}
 	}
 
-	if (OutVolume != 0.0f)
+	// Update State. 
+	FScopeLock Lock(&DebugInfo->CS);
 	{
-		const FString& DebugSoloSoundClassName = GEngine->GetAudioDeviceManager()->GetDebugSoloSoundClass();
-		if (DebugSoloSoundClassName != TEXT(""))
-		{
-			bool bMute = true;
-			if (WaveInstance->SoundClass)
-			{
-				FString SoundClassName;
-				WaveInstance->SoundClass->GetName(SoundClassName);
-				if (SoundClassName.Contains(DebugSoloSoundClassName))
-				{
-					bMute = false;
-				}
-			}
-			if (bMute)
-			{
-				OutVolume = 0.0f;
-			}
-		}
+		DebugInfo->bIsMuted = Info.bIsMuted;
+		DebugInfo->bIsSoloed = Info.bIsSoloed;
+		DebugInfo->MuteSoloReason = MoveTemp(Info.MuteSoloReason);
 	}
-#endif
+
+#endif //ENABLE_AUDIO_DEBUG
 
 	return OutVolume;
 }
@@ -587,6 +601,10 @@ void FSoundSource::InitCommon()
 	// Reset pause state
 	bIsPausedByGame = false;
 	bIsManuallyPaused = false;
+	
+#if ENABLE_AUDIO_DEBUG
+	DebugInfo = MakeShared<FDebugInfo, ESPMode::ThreadSafe>();
+#endif //ENABLE_AUDIO_DEBUG
 }
 
 void FSoundSource::UpdateCommon()
@@ -802,6 +820,7 @@ FWaveInstance::FWaveInstance(const UPTRINT InWaveInstanceHash, FActiveSound& InA
 	, ReverbPluginSettings(nullptr)
 	, OutputTarget(EAudioOutputTarget::Speaker)
 	, LowPassFilterFrequency(MAX_FILTER_FREQUENCY)
+	, SoundClassFilterFrequency(MAX_FILTER_FREQUENCY)
 	, OcclusionFilterFrequency(MAX_FILTER_FREQUENCY)
 	, AmbientZoneFilterFrequency(MAX_FILTER_FREQUENCY)
 	, AttenuationLowpassFilterFrequency(MAX_FILTER_FREQUENCY)
@@ -824,6 +843,57 @@ FWaveInstance::FWaveInstance(const UPTRINT InWaveInstanceHash, FActiveSound& InA
 	, UserIndex(0)
 {
 	TypeHash = ++TypeHashCounter;
+}
+
+bool FWaveInstance::IsPlaying() const
+{
+	check(ActiveSound);
+
+	if (!WaveData)
+	{
+		return false;
+	}
+
+	// TODO: move out of audio.  Subtitle system should be separate and just set VirtualizationMode to PlayWhenSilent
+	const bool bHasSubtitles = ActiveSound->bHandleSubtitles && (ActiveSound->bHasExternalSubtitles || WaveData->Subtitles.Num() > 0);
+	if (bHasSubtitles)
+	{
+		return true;
+	}
+
+	if (ActiveSound->IsPlayWhenSilent() && (!BypassPlayWhenSilentCVar || WaveData->bProcedural))
+	{
+		return true;
+	}
+
+	// Modulation volume check must be performed separately from non-modulation volume check if zeroed as this could cause
+	// sources to stop and not be able to be restarted. Because modulation controls are processed on the source level, this
+	// check enables the modulation plugin to determine voice eligibility without having to process all wave instances not
+	// currently sourcing control data.
+	float ModVolume = SoundModulationControls.Volume;
+	if (ModulationPluginSettings)
+	{
+		check(ActiveSound->AudioDevice);
+		FAudioDevice& AudioDevice = *ActiveSound->AudioDevice;
+		if (AudioDevice.IsModulationPluginEnabled())
+		{
+			check(AudioDevice.ModulationInterface);
+			ModVolume = AudioDevice.ModulationInterface->CalculateInitialVolume(*ModulationPluginSettings);
+		}
+	}
+	
+	const float WaveInstanceVolume = ModVolume * Volume * VolumeMultiplier * DistanceAttenuation * GetDynamicVolume();
+	if (WaveInstanceVolume > KINDA_SMALL_NUMBER)
+	{
+		return true;
+	}
+
+	if (ActiveSound->ComponentVolumeFader.IsFadingIn())
+	{
+		return true;
+	}
+
+	return false;
 }
 
 /**
@@ -882,6 +952,15 @@ FArchive& operator<<( FArchive& Ar, FWaveInstance* WaveInstance )
 void FWaveInstance::AddReferencedObjects( FReferenceCollector& Collector )
 {
 	Collector.AddReferencedObject( WaveData );
+
+	if (USynthSound* SynthSound = Cast<USynthSound>(WaveData))
+	{
+		if (USynthComponent* SynthComponent = SynthSound->GetOwningSynthComponent())
+		{
+			Collector.AddReferencedObject(SynthComponent);
+		}
+	}
+
 	Collector.AddReferencedObject( SoundClass );
 	NotifyBufferFinishedHooks.AddReferencedObjects( Collector );
 }
@@ -914,17 +993,23 @@ float FWaveInstance::GetDistanceAttenuation() const
 float FWaveInstance::GetDynamicVolume() const
 {
 	float OutVolume = 1.0f;
-	if (FAudioDeviceManager* DeviceManager = GEngine->GetAudioDeviceManager())
-	{
-		if (WaveData)
-		{
-			OutVolume *= DeviceManager->GetDynamicSoundVolume(ESoundType::Wave, WaveData->GetFName());
-		}
 
-		check(ActiveSound);
-		if (const USoundCue* Sound = Cast<USoundCue>(ActiveSound->GetSound()))
+	if (GEngine)
+	{
+		if (FAudioDeviceManager* DeviceManager = GEngine->GetAudioDeviceManager())
 		{
-			OutVolume *= DeviceManager->GetDynamicSoundVolume(ESoundType::Cue, Sound->GetFName());
+			if (WaveData)
+			{
+				OutVolume *= DeviceManager->GetDynamicSoundVolume(ESoundType::Wave, WaveData->GetFName());
+			}
+
+			if (ActiveSound)
+			{
+				if (const USoundCue* Sound = Cast<USoundCue>(ActiveSound->GetSound()))
+				{
+					OutVolume *= DeviceManager->GetDynamicSoundVolume(ESoundType::Cue, Sound->GetFName());
+				}
+			}
 		}
 	}
 
@@ -949,6 +1034,7 @@ float FWaveInstance::GetVolume() const
 
 bool FWaveInstance::ShouldStopDueToMaxConcurrency() const
 {
+	check(ActiveSound);
 	return ActiveSound->bShouldStopDueToMaxConcurrency;
 }
 

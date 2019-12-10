@@ -5,6 +5,7 @@
 #include "Stats/StatsMisc.h"
 #include "UObject/UObjectHash.h"
 #include "UObject/CoreNet.h"
+#include "UObject/CoreRedirects.h"
 #include "UObject/Package.h"
 #include "UObject/LinkerLoad.h"
 #include "Serialization/ObjectReader.h"
@@ -56,6 +57,9 @@ UBlueprintGeneratedClass::UBlueprintGeneratedClass(const FObjectInitializer& Obj
 	bHasNativizedParent = false;
 	bHasCookedComponentInstancingData = false;
 	bCustomPropertyListForPostConstructionInitialized = false;
+#if WITH_EDITORONLY_DATA
+	bIsSparseClassDataSerializable = false;
+#endif
 }
 
 void UBlueprintGeneratedClass::PostInitProperties()
@@ -126,6 +130,28 @@ void UBlueprintGeneratedClass::PostLoad()
 #endif
 	}
 #endif // WITH_EDITORONLY_DATA
+
+	// Update any component names that have been redirected
+	if (!FPlatformProperties::RequiresCookedData())
+	{
+		for (FBPComponentClassOverride& Override : ComponentClassOverrides)
+		{
+			const FString ComponentName = Override.ComponentName.ToString();
+			UClass* ClassToCheck = this;
+			while (ClassToCheck)
+			{
+				if (const TMap<FString, FString>* ValueChanges = FCoreRedirects::GetValueRedirects(ECoreRedirectFlags::Type_Class, ClassToCheck))
+				{
+					if (const FString* NewComponentName = ValueChanges->Find(ComponentName))
+					{
+						Override.ComponentName = **NewComponentName;
+						break;
+					}
+				}
+				ClassToCheck = ClassToCheck->GetSuperClass();
+			}
+		}
+	}
 
 	AssembleReferenceTokenStream(true);
 }
@@ -219,71 +245,17 @@ struct FConditionalRecompileClassHepler
 };
 
 extern UNREALED_API FSecondsCounterData BlueprintCompileAndLoadTimerData;
-extern COREUOBJECT_API bool GBlueprintUseCompilationManager;
 
 void UBlueprintGeneratedClass::ConditionalRecompileClass(FUObjectSerializeContext* InLoadContext)
 {
-	if(GBlueprintUseCompilationManager)
-	{
-		FBlueprintCompilationManager::FlushCompilationQueue(InLoadContext);
-		return;
-	}
-	
-	FSecondsCounterScope Timer(BlueprintCompileAndLoadTimerData);
-
-	UBlueprint* GeneratingBP = Cast<UBlueprint>(ClassGeneratedBy);
-	if (GeneratingBP && (GeneratingBP->SkeletonGeneratedClass != this))
-	{
-		const FConditionalRecompileClassHepler::ENeededAction NecessaryAction = FConditionalRecompileClassHepler::IsConditionalRecompilationNecessary(GeneratingBP);
-		if (FConditionalRecompileClassHepler::Recompile == NecessaryAction)
-		{
-			const bool bWasRegenerating = GeneratingBP->bIsRegeneratingOnLoad;
-			GeneratingBP->bIsRegeneratingOnLoad = true;
-
-			{
-				UPackage* const Package = GeneratingBP->GetOutermost();
-				const bool bStartedWithUnsavedChanges = Package != nullptr ? Package->IsDirty() : true;
-
-				// Make sure that nodes are up to date, so that we get any updated blueprint signatures
-				FBlueprintEditorUtils::RefreshExternalBlueprintDependencyNodes(GeneratingBP);
-
-				// Normal blueprints get their status reset by RecompileBlueprintBytecode, but macros will not:
-				if ((GeneratingBP->Status != BS_Error) && (GeneratingBP->BlueprintType == EBlueprintType::BPTYPE_MacroLibrary))
-				{
-					GeneratingBP->Status = BS_UpToDate;
-				}
-
-				if (Package != nullptr && Package->IsDirty() && !bStartedWithUnsavedChanges)
-				{
-					Package->SetDirtyFlag(false);
-				}
-			}
-			if ((GeneratingBP->Status != BS_Error) && (GeneratingBP->BlueprintType != EBlueprintType::BPTYPE_MacroLibrary))
-			{
-				FKismetEditorUtilities::RecompileBlueprintBytecode(GeneratingBP);
-			}
-
-			GeneratingBP->bIsRegeneratingOnLoad = bWasRegenerating;
-		}
-		else if (FConditionalRecompileClassHepler::StaticLink == NecessaryAction)
-		{
-			StaticLink(true);
-			if (*GeneratingBP->SkeletonGeneratedClass)
-			{
-				GeneratingBP->SkeletonGeneratedClass->StaticLink(true);
-			}
-		}
-	}
+	FBlueprintCompilationManager::FlushCompilationQueue(InLoadContext);
 }
 
 void UBlueprintGeneratedClass::FlushCompilationQueueForLevel()
 {
-	if(GBlueprintUseCompilationManager)
+	if(Cast<ULevelScriptBlueprint>(ClassGeneratedBy))
 	{
-		if(Cast<ULevelScriptBlueprint>(ClassGeneratedBy))
-		{
-			FBlueprintCompilationManager::FlushCompilationQueue(nullptr);
-		}
+		FBlueprintCompilationManager::FlushCompilationQueue(nullptr);
 	}
 }
 
@@ -334,9 +306,14 @@ void UBlueprintGeneratedClass::SerializeDefaultObject(UObject* Object, FStructur
 			}
 		};
 
+#if WITH_EDITOR
+		const bool bShouldUseCookedComponentInstancingData = bHasCookedComponentInstancingData && !GIsEditor;
+#else
+		const bool bShouldUseCookedComponentInstancingData = bHasCookedComponentInstancingData;
+#endif
 		// Generate "fast path" instancing data for inherited SCS node templates. This data may also be used to support inherited SCS component default value overrides
 		// in a nativized, cooked build, in which this Blueprint class inherits from a nativized Blueprint parent. See CheckAndApplyComponentTemplateOverrides() below.
-		if (InheritableComponentHandler && (bHasCookedComponentInstancingData || bHasNativizedParent))
+		if (InheritableComponentHandler && (bShouldUseCookedComponentInstancingData || bHasNativizedParent))
 		{
 			for (auto RecordIt = InheritableComponentHandler->CreateRecordIterator(); RecordIt; ++RecordIt)
 			{
@@ -344,7 +321,7 @@ void UBlueprintGeneratedClass::SerializeDefaultObject(UObject* Object, FStructur
 			}
 		}
 
-		if (bHasCookedComponentInstancingData)
+		if (bShouldUseCookedComponentInstancingData)
 		{
 			// Generate "fast path" instancing data for SCS node templates owned by this Blueprint class.
 			if (SimpleConstructionScript)
@@ -381,6 +358,16 @@ void UBlueprintGeneratedClass::SerializeDefaultObject(UObject* Object, FStructur
 			CheckAndApplyComponentTemplateOverrides(ClassDefaultObject);
 		}
 	}
+
+#if WITH_EDITORONLY_DATA
+	if (bIsSparseClassDataSerializable)
+#endif
+	{
+		if (Object->GetSparseClassDataStruct())
+		{
+			SerializeSparseClassData(FStructuredArchiveFromArchive(UnderlyingArchive).GetSlot());
+		}
+	}
 }
 
 void UBlueprintGeneratedClass::PostLoadDefaultObject(UObject* Object)
@@ -400,6 +387,18 @@ void UBlueprintGeneratedClass::PostLoadDefaultObject(UObject* Object)
 			ClassDefaultObject->LoadConfig();
 		}
 	}
+
+#if WITH_EDITOR
+#if WITH_EDITORONLY_DATA
+	Object->MoveDataToSparseClassDataStruct();
+
+	if (Object->GetSparseClassDataStruct())
+	{
+		// now that any data has been moved into the sparse data structure we can safely serialize it
+		bIsSparseClassDataSerializable = true;
+	}
+#endif
+#endif
 }
 
 bool UBlueprintGeneratedClass::BuildCustomPropertyListForPostConstruction(FCustomPropertyListNode*& InPropertyList, UStruct* InStruct, const uint8* DataPtr, const uint8* DefaultDataPtr)
@@ -603,6 +602,16 @@ void UBlueprintGeneratedClass::UpdateCustomPropertyListForPostConstruction()
 	bCustomPropertyListForPostConstructionInitialized = true;
 }
 
+void UBlueprintGeneratedClass::SetupObjectInitializer(FObjectInitializer& ObjectInitializer) const
+{
+	for (const FBPComponentClassOverride& Override : ComponentClassOverrides)
+	{
+		ObjectInitializer.SetDefaultSubobjectClass(Override.ComponentName, Override.ComponentClass);
+	}
+
+	GetSuperClass()->SetupObjectInitializer(ObjectInitializer);
+}
+
 void UBlueprintGeneratedClass::InitPropertiesFromCustomList(uint8* DataPtr, const uint8* DefaultDataPtr)
 {
 	FScopeLock SerializeAndPostLoadLock(&SerializeAndPostLoadCritical);
@@ -712,7 +721,7 @@ UInheritableComponentHandler* UBlueprintGeneratedClass::GetInheritableComponentH
 }
 
 
-UObject* UBlueprintGeneratedClass::FindArchetype(UClass* ArchetypeClass, const FName ArchetypeName) const
+UObject* UBlueprintGeneratedClass::FindArchetype(const UClass* ArchetypeClass, const FName ArchetypeName) const
 {
 	UObject* Archetype = nullptr;
 
@@ -1428,6 +1437,15 @@ void UBlueprintGeneratedClass::GetDefaultObjectPreloadDependencies(TArray<UObjec
 			OutDeps.Add(ComponentTemplate);
 		}
 	}
+
+	// Add the classes that will be used for overriding components defined in base classes
+	for (const FBPComponentClassOverride& Override : ComponentClassOverrides)
+	{
+		if (Override.ComponentClass)
+		{
+			OutDeps.Add(Override.ComponentClass);
+		}
+	}
 }
 
 bool UBlueprintGeneratedClass::NeedsLoadForServer() const
@@ -1525,6 +1543,7 @@ void UBlueprintGeneratedClass::PurgeClass(bool bRecompilingOnLoad)
 #if UE_BLUEPRINT_EVENTGRAPH_FASTCALLS
 	FastCallPairs_DEPRECATED.Empty();
 #endif
+	CalledFunctions.Empty();
 #endif //WITH_EDITOR
 }
 

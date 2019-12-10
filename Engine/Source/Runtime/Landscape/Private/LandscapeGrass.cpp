@@ -3,7 +3,6 @@
 #include "CoreMinimal.h"
 #include "GenericPlatform/GenericPlatformStackWalk.h"
 #include "HAL/FileManager.h"
-#include "Templates/ScopedPointer.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Misc/Guid.h"
@@ -55,6 +54,7 @@
 #include "InstancedStaticMesh.h"
 #include "MeshPassProcessor.h"
 #include "MeshPassProcessor.inl"
+#include "Math/Halton.h"
 
 #define LOCTEXT_NAMESPACE "Landscape"
 
@@ -204,7 +204,7 @@ static bool ShouldCacheLandscapeGrassShaders(EShaderPlatform Platform, const FMa
 {
 	// We only need grass weight shaders for Landscape vertex factories on desktop platforms
 	return (Material->IsUsedWithLandscape() || Material->IsSpecialEngineMaterial()) &&
-		IsFeatureLevelSupported(Platform, ERHIFeatureLevel::SM4) &&
+		IsFeatureLevelSupported(Platform, ERHIFeatureLevel::SM5) &&
 		((VertexFactoryType == FindVertexFactoryType(FName(TEXT("FLandscapeVertexFactory"), FNAME_Find))) || (VertexFactoryType == FindVertexFactoryType(FName(TEXT("FLandscapeXYOffsetVertexFactory"), FNAME_Find))))
 		&& !IsConsolePlatform(Platform);
 }
@@ -593,7 +593,8 @@ public:
 		check(RenderTargetTexture);
 		RenderTargetTexture->ClearColor = FLinearColor::White;
 		RenderTargetTexture->TargetGamma = 1.0f;
-		RenderTargetTexture->InitCustomFormat(TargetSize.X, TargetSize.Y, PF_B8G8R8A8, false);
+		const bool bForceLinearGamma = true;
+		RenderTargetTexture->InitCustomFormat(TargetSize.X, TargetSize.Y, PF_B8G8R8A8, bForceLinearGamma);
 		RenderTargetResource = RenderTargetTexture->GameThread_GetRenderTargetResource()->GetTextureRenderTarget2DResource();
 
 		// render
@@ -866,7 +867,7 @@ bool ULandscapeComponent::CanRenderGrassMap() const
 {
 	// Check we can render
 	UWorld* ComponentWorld = GetWorld();
-	if (!GIsEditor || GUsingNullRHI || !ComponentWorld || ComponentWorld->IsGameWorld() || ComponentWorld->FeatureLevel < ERHIFeatureLevel::SM4 || !SceneProxy)
+	if (!GIsEditor || GUsingNullRHI || !ComponentWorld || ComponentWorld->IsGameWorld() || ComponentWorld->FeatureLevel < ERHIFeatureLevel::SM5 || !SceneProxy)
 	{
 		return false;
 	}
@@ -1476,7 +1477,7 @@ struct FGrassBuilderBase
 		const float DensityScale = bEnableDensityScaling ? CVarGrassDensityScale.GetValueOnAnyThread() : 1.0f;
 		GrassDensity = GrassVariety.GrassDensity.GetValueForFeatureLevel(FeatureLevel) * DensityScale;
 
-		DrawScale = Landscape->GetRootComponent()->RelativeScale3D;
+		DrawScale = Landscape->GetRootComponent()->GetRelativeScale3D();
 		DrawLoc = Landscape->GetActorLocation();
 		LandscapeSectionOffset = Landscape->LandscapeSectionOffset;
 
@@ -1544,21 +1545,6 @@ private:
 	TArray<uint8>* WeightData;
 	int32 Stride;
 };
-
-template<uint32 Base>
-static FORCEINLINE float Halton(uint32 Index)
-{
-	float Result = 0.0f;
-	float InvBase = 1.0f / Base;
-	float Fraction = InvBase;
-	while( Index > 0 )
-	{
-		Result += ( Index % Base ) * Fraction;
-		Index /= Base;
-		Fraction *= InvBase;
-	}
-	return Result;
-}
 
 struct FAsyncGrassBuilder : public FGrassBuilderBase
 {
@@ -1783,8 +1769,8 @@ struct FAsyncGrassBuilder : public FGrassBuilderBase
 			FVector DivExtent(Extent * Div);
 			for (int32 InstanceIndex = 0; InstanceIndex < MaxNum; InstanceIndex++)
 			{
-				float HaltonX = Halton<2>(InstanceIndex + HaltonBaseIndex);
-				float HaltonY = Halton<3>(InstanceIndex + HaltonBaseIndex);
+				float HaltonX = Halton(InstanceIndex + HaltonBaseIndex, 2);
+				float HaltonY = Halton(InstanceIndex + HaltonBaseIndex, 3);
 				FVector Location(Origin.X + HaltonX * Extent.X, Origin.Y + HaltonY * Extent.Y, 0.0f);
 				FVector LocationWithHeight;
 				float Weight = GetLayerWeightAtLocationLocal(Location, &LocationWithHeight);
@@ -2045,7 +2031,7 @@ void ALandscapeProxy::FlushGrassComponents(const TSet<ULandscapeComponent*>* Onl
 			}
 		}
 #if WITH_EDITOR
-		if (GIsEditor && bFlushGrassMaps && GetWorld() && GetWorld()->FeatureLevel >= ERHIFeatureLevel::SM4)
+		if (GIsEditor && bFlushGrassMaps && GetWorld() && GetWorld()->FeatureLevel >= ERHIFeatureLevel::SM5)
 		{
 			for (ULandscapeComponent* Component : *OnlyForComponents)
 			{
@@ -2090,7 +2076,7 @@ void ALandscapeProxy::FlushGrassComponents(const TSet<ULandscapeComponent*>* Onl
 #if WITH_EDITOR
 		UWorld* World = GetWorld();
 
-		if (GIsEditor && bFlushGrassMaps && World != nullptr && World->Scene != nullptr && World->Scene->GetFeatureLevel() >= ERHIFeatureLevel::SM4)
+		if (GIsEditor && bFlushGrassMaps && World != nullptr && World->Scene != nullptr && World->Scene->GetFeatureLevel() >= ERHIFeatureLevel::SM5)
 		{
 			// Clear GrassMaps
 			for (UActorComponent* Component : GetComponents())
@@ -2151,6 +2137,151 @@ void ALandscapeProxy::RemoveAllExclusionBoxes()
 int32 ALandscapeProxy::TotalComponentsNeedingGrassMapRender = 0;
 int32 ALandscapeProxy::TotalTexturesToStreamForVisibleGrassMapRender = 0;
 int32 ALandscapeProxy::TotalComponentsNeedingTextureBaking = 0;
+
+void ALandscapeProxy::UpdateGrassDataStatus(TSet<UTexture2D*>& OutCurrentForcedStreamedTextures, TSet<UTexture2D*>* OutDesiredForcedStreamedTextures, TSet<ULandscapeComponent*>& OutComponentsNeedingGrassMapRender, TSet<ULandscapeComponent*>* OutOutdatedComponents, bool bInEnableForceResidentFlag)
+{
+	OutCurrentForcedStreamedTextures.Empty();
+	OutComponentsNeedingGrassMapRender.Empty();
+	
+	if (OutOutdatedComponents)
+	{
+		OutOutdatedComponents->Empty();
+	}
+
+	if (OutDesiredForcedStreamedTextures)
+	{
+		OutDesiredForcedStreamedTextures->Empty();
+	}
+		
+	const UWorld* World = GetWorld();
+	if (!World || World->IsGameWorld())
+	{
+		return;
+	}
+
+	// In either case we want to check the Grass textures stream state
+	const bool bCheckStreamingState = OutDesiredForcedStreamedTextures || bInEnableForceResidentFlag;
+	const bool bHasGrassTypes = GetGrassTypes().Num() > 0;
+
+	for (auto Component : LandscapeComponents)
+	{
+		if (Component != nullptr)
+		{
+			UTexture2D* Heightmap = Component->GetHeightmap();
+			// check textures currently needing force streaming
+			if (Heightmap->bForceMiplevelsToBeResident)
+			{
+				OutCurrentForcedStreamedTextures.Add(Heightmap);
+			}
+			TArray<UTexture2D*>& ComponentWeightmapTextures = Component->GetWeightmapTextures();
+
+			for (auto WeightmapTexture : ComponentWeightmapTextures)
+			{
+				if (WeightmapTexture->bForceMiplevelsToBeResident)
+				{
+					OutCurrentForcedStreamedTextures.Add(WeightmapTexture);
+				}
+			}
+
+			if (Component->IsGrassMapOutdated() && OutOutdatedComponents)
+			{
+				OutOutdatedComponents->Add(Component);
+			}
+
+			if (bHasGrassTypes || bBakeMaterialPositionOffsetIntoCollision)
+			{
+				if (Component->IsGrassMapOutdated() || !Component->GrassData->HasData())
+				{
+					OutComponentsNeedingGrassMapRender.Add(Component);
+
+					if (bCheckStreamingState && !Component->AreTexturesStreamedForGrassMapRender())
+					{
+						if (OutDesiredForcedStreamedTextures)
+						{
+							OutDesiredForcedStreamedTextures->Add(Heightmap);
+						}
+
+						if (bInEnableForceResidentFlag)
+						{
+							Heightmap->bForceMiplevelsToBeResident = true;
+						}
+
+						for (auto WeightmapTexture : ComponentWeightmapTextures)
+						{
+							if (OutDesiredForcedStreamedTextures)
+							{
+								OutDesiredForcedStreamedTextures->Add(WeightmapTexture);
+							}
+
+							if (bInEnableForceResidentFlag)
+							{
+								WeightmapTexture->bForceMiplevelsToBeResident = true;
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+void ALandscapeProxy::UpdateGrassData()
+{
+	UWorld* World = GetWorld();
+	if (!World || World->IsGameWorld())
+	{
+		return;
+	}
+
+	if (!CVarGrassEnable.GetValueOnAnyThread())
+	{
+		return;
+	}
+
+	// see if we need to flush grass for any components
+	TSet<UTexture2D*> DesiredForcedStreamedTextures;
+	TSet<UTexture2D*> CurrentForcedStreamedTextures;
+	TSet<ULandscapeComponent*> ComponentsNeedingGrassMapRender;
+	TSet<ULandscapeComponent*> OutdatedComponents;
+	const bool bEnableForceResidentFlag = true;
+	UpdateGrassDataStatus(CurrentForcedStreamedTextures, &DesiredForcedStreamedTextures, ComponentsNeedingGrassMapRender, &OutdatedComponents, bEnableForceResidentFlag);
+	if (OutdatedComponents.Num())
+	{
+		FlushGrassComponents(&OutdatedComponents);
+	}
+
+	// Remove local count from global count
+	TotalTexturesToStreamForVisibleGrassMapRender -= NumTexturesToStreamForVisibleGrassMapRender;
+	NumTexturesToStreamForVisibleGrassMapRender = 0;
+
+	// Remove local count from global count
+	TotalComponentsNeedingGrassMapRender -= NumComponentsNeedingGrassMapRender;
+	NumComponentsNeedingGrassMapRender = 0;
+
+	// Wait for Texture Streaming
+	for (UTexture2D* TextureToStream : DesiredForcedStreamedTextures)
+	{
+		TextureToStream->WaitForStreaming();
+		CurrentForcedStreamedTextures.Add(TextureToStream);
+	}
+		
+	// render grass data if we don't have any
+	for(ULandscapeComponent* Component : ComponentsNeedingGrassMapRender)
+	{
+		if (!Component->CanRenderGrassMap())
+		{
+			// we can't currently render grassmaps (eg shaders not compiled)
+			continue;
+		}
+		
+		Component->RenderGrassMap();
+	}
+		
+	for (UTexture2D* TextureToStream : CurrentForcedStreamedTextures)
+	{
+		TextureToStream->bForceMiplevelsToBeResident = false;
+	}
+}
 #endif
 
 void ALandscapeProxy::UpdateGrass(const TArray<FVector>& Cameras, bool bForceSync)
@@ -2188,52 +2319,17 @@ void ALandscapeProxy::UpdateGrass(const TArray<FVector>& Cameras, bool bForceSyn
 #if WITH_EDITOR
 			int32 RequiredTexturesNotStreamedIn = 0;
 			TSet<ULandscapeComponent*> ComponentsNeedingGrassMapRender;
+			TSet<ULandscapeComponent*> OutdatedComponents;
 			TSet<UTexture2D*> CurrentForcedStreamedTextures;
 			TSet<UTexture2D*> DesiredForceStreamedTextures;
-
-			if (!World->IsGameWorld())
+			const bool bEnableForceResidentFlag = false;
+			
+			// Do not pass in DesiredForceStreamedTextures because we build our own list
+			UpdateGrassDataStatus(CurrentForcedStreamedTextures, nullptr, ComponentsNeedingGrassMapRender, &OutdatedComponents, bEnableForceResidentFlag);
+			
+			if(OutdatedComponents.Num())
 			{
-				// see if we need to flush grass for any components
-				TSet<ULandscapeComponent*> FlushComponents;
-				for (auto Component : LandscapeComponents)
-				{
-					if (Component != nullptr)
-					{
-						UTexture2D* Heightmap = Component->GetHeightmap();
-						// check textures currently needing force streaming
-						if (Heightmap->bForceMiplevelsToBeResident)
-						{
-							CurrentForcedStreamedTextures.Add(Heightmap);
-						}
-						TArray<UTexture2D*>& ComponentWeightmapTextures = Component->GetWeightmapTextures();
-
-						for (auto WeightmapTexture : ComponentWeightmapTextures)
-						{
-							if (WeightmapTexture->bForceMiplevelsToBeResident)
-							{
-								CurrentForcedStreamedTextures.Add(WeightmapTexture);
-							}
-						}
-
-						if (Component->IsGrassMapOutdated())
-						{
-							FlushComponents.Add(Component);
-						}
-
-						if (GrassTypes.Num() > 0 || bBakeMaterialPositionOffsetIntoCollision)
-						{
-							if (Component->IsGrassMapOutdated() ||
-								!Component->GrassData->HasData())
-							{
-								ComponentsNeedingGrassMapRender.Add(Component);
-							}
-						}
-					}
-				}
-				if (FlushComponents.Num())
-				{
-					FlushGrassComponents(&FlushComponents);
-				}
+				FlushGrassComponents(&OutdatedComponents);
 			}
 #endif
 			ERHIFeatureLevel::Type FeatureLevel = World->Scene->GetFeatureLevel();

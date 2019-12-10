@@ -20,7 +20,6 @@
 #include "Styling/CoreStyle.h"
 #include "Framework/Commands/InputChord.h"
 #include "GraphEditor.h"
-#include "Templates/ScopedPointer.h"
 #include "Layout/ArrangedChildren.h"
 #include "Types/PaintArgs.h"
 #include "EditorStyleSet.h"
@@ -421,7 +420,12 @@ public:
 					const int32 CurWidgetsMaxLayerId = CurWidget.Widget->Paint(Args.WithNewParent(this), CurWidget.Geometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, ShouldBeEnabled(bParentEnabled));
 					MaxLayerId = FMath::Max(MaxLayerId, CurWidgetsMaxLayerId);
 				}
+				else
+				{
+					//SlateGI - RemoveContent
+				}
 			}
+
 			return MaxLayerId;
 		}
 		// End of SPanel Interface

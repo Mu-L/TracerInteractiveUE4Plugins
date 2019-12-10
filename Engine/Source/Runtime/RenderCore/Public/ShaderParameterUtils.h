@@ -24,7 +24,7 @@ template<typename TBufferStruct> class TUniformBufferRef;
 template<typename ShaderRHIParamRef, class ParameterType, typename TRHICmdList>
 void SetShaderValue(
 	TRHICmdList& RHICmdList,
-	ShaderRHIParamRef Shader,
+	const ShaderRHIParamRef& Shader,
 	const FShaderParameter& Parameter,
 	const ParameterType& Value,
 	uint32 ElementIndex = 0
@@ -53,7 +53,7 @@ void SetShaderValue(
 template<typename ShaderRHIParamRef, class ParameterType>
 void SetShaderValueOnContext(
 	IRHICommandContext& RHICmdListContext,
-	ShaderRHIParamRef Shader,
+	const ShaderRHIParamRef& Shader,
 	const FShaderParameter& Parameter,
 	const ParameterType& Value,
 	uint32 ElementIndex = 0
@@ -83,9 +83,10 @@ void SetShaderValueOnContext(
 
 /** Specialization of the above for C++ bool type. */
 template<typename ShaderRHIParamRef>
+UE_DEPRECATED(4.24, "Please use integer values for boolean shader parameters instead.")
 void SetShaderValue(
 	FRHICommandList& RHICmdList, 
-	ShaderRHIParamRef Shader,
+	const ShaderRHIParamRef& Shader,
 	const FShaderParameter& Parameter,
 	bool Value,
 	uint32 ElementIndex = 0
@@ -97,9 +98,25 @@ void SetShaderValue(
 
 /** Specialization of the above for C++ bool type. */
 template<typename ShaderRHIParamRef>
+UE_DEPRECATED(4.24, "Please use integer values for boolean shader parameters instead.")
 void SetShaderValue(
 	FRHIAsyncComputeCommandList& RHICmdList,
-	ShaderRHIParamRef Shader,
+	const ShaderRHIParamRef& Shader,
+	const FShaderParameter& Parameter,
+	bool Value,
+	uint32 ElementIndex = 0
+	)
+{
+	const uint32 BoolValue = Value;
+	SetShaderValue(RHICmdList, Shader, Parameter, BoolValue, ElementIndex);
+}
+
+/** Specialization of the above for C++ bool type. */
+template<typename ShaderRHIParamRef>
+UE_DEPRECATED(4.24, "Please use integer values for boolean shader parameters instead.")
+void SetShaderValue(
+	FRHICommandListImmediate& RHICmdList,
+	const ShaderRHIParamRef& Shader,
 	const FShaderParameter& Parameter,
 	bool Value,
 	uint32 ElementIndex = 0
@@ -118,7 +135,7 @@ void SetShaderValue(
 template<typename ShaderRHIParamRef,class ParameterType, typename TRHICmdList>
 void SetShaderValueArray(
 	TRHICmdList& RHICmdList,
-	ShaderRHIParamRef Shader,
+	const ShaderRHIParamRef& Shader,
 	const FShaderParameter& Parameter,
 	const ParameterType* Values,
 	uint32 NumElements,
@@ -147,7 +164,7 @@ void SetShaderValueArray(
 template<typename ShaderRHIParamRef, typename TRHICmdList>
 void SetShaderValueArray(
 	TRHICmdList& RHICmdList,
-	ShaderRHIParamRef Shader,
+	const ShaderRHIParamRef& Shader,
 	const FShaderParameter& Parameter,
 	const bool* Values,
 	uint32 NumElements,
@@ -160,6 +177,7 @@ void SetShaderValueArray(
 /**
  * Sets the value of a pixel shader bool parameter.
  */
+UE_DEPRECATED(4.24, "Please use integer values for boolean shader parameters instead.")
 inline void SetPixelShaderBool(
 	FRHICommandList& RHICmdList, 
 	FRHIPixelShader* PixelShader,
@@ -333,7 +351,7 @@ FORCEINLINE void SetSRVParameter(
 template<typename TRHIShader, typename TRHICmdList>
 FORCEINLINE void SetSRVParameter(
 	TRHICmdList& RHICmdList,
-	TRefCountPtr<TRHIShader> Shader,
+	const TRefCountPtr<TRHIShader>& Shader,
 	const FShaderResourceParameter& Parameter,
 	FRHIShaderResourceView* NewShaderResourceViewRHI
 )
@@ -407,7 +425,7 @@ inline bool SetUAVParameterIfCS(TRHICmdList& RHICmdList, FRHIComputeShader* Shad
 }
 
 template<typename TShaderRHIRef, typename TRHICmdList>
-inline void FRWShaderParameter::SetBuffer(TRHICmdList& RHICmdList, TShaderRHIRef Shader, const FRWBuffer& RWBuffer) const
+inline void FRWShaderParameter::SetBuffer(TRHICmdList& RHICmdList, const TShaderRHIRef& Shader, const FRWBuffer& RWBuffer) const
 {
 	if (!SetUAVParameterIfCS(RHICmdList, Shader, UAVParameter, RWBuffer.UAV))
 	{
@@ -416,7 +434,7 @@ inline void FRWShaderParameter::SetBuffer(TRHICmdList& RHICmdList, TShaderRHIRef
 }
 
 template<typename TShaderRHIRef, typename TRHICmdList>
-inline void FRWShaderParameter::SetBuffer(TRHICmdList& RHICmdList, TShaderRHIRef Shader, const FRWBufferStructured& RWBuffer) const
+inline void FRWShaderParameter::SetBuffer(TRHICmdList& RHICmdList, const TShaderRHIRef& Shader, const FRWBufferStructured& RWBuffer) const
 {
 	if (!SetUAVParameterIfCS(RHICmdList, Shader, UAVParameter, RWBuffer.UAV))
 	{
@@ -425,7 +443,7 @@ inline void FRWShaderParameter::SetBuffer(TRHICmdList& RHICmdList, TShaderRHIRef
 }
 
 template<typename TShaderRHIRef, typename TRHICmdList>
-inline void FRWShaderParameter::SetTexture(TRHICmdList& RHICmdList, TShaderRHIRef Shader, FRHITexture* Texture, FRHIUnorderedAccessView* UAV) const
+inline void FRWShaderParameter::SetTexture(TRHICmdList& RHICmdList, const TShaderRHIRef& Shader, FRHITexture* Texture, FRHIUnorderedAccessView* UAV) const
 {
 	if (!SetUAVParameterIfCS(RHICmdList, Shader, UAVParameter, UAV))
 	{
@@ -444,7 +462,7 @@ inline void FRWShaderParameter::UnsetUAV(TRHICmdList& RHICmdList, FRHIComputeSha
 template<typename TShaderRHIRef>
 inline void SetLocalUniformBufferParameter(
 	FRHICommandList& RHICmdList,
-	TShaderRHIRef Shader,
+	const TShaderRHIRef& Shader,
 	const FShaderUniformBufferParameter& Parameter,
 	const FLocalUniformBuffer& LocalUniformBuffer
 	)
@@ -461,7 +479,7 @@ inline void SetLocalUniformBufferParameter(
 template<typename TShaderRHIRef, typename TRHICmdList>
 inline void SetUniformBufferParameter(
 	TRHICmdList& RHICmdList,
-	TShaderRHIRef Shader,
+	const TShaderRHIRef& Shader,
 	const FShaderUniformBufferParameter& Parameter,
 	FRHIUniformBuffer* UniformBufferRHI
 	)
@@ -480,7 +498,7 @@ inline void SetUniformBufferParameter(
 template<typename TShaderRHIRef, typename TBufferStruct, typename TRHICmdList>
 inline void SetUniformBufferParameter(
 	TRHICmdList& RHICmdList,
-	TShaderRHIRef Shader,
+	const TShaderRHIRef& Shader,
 	const TShaderUniformBufferParameter<TBufferStruct>& Parameter,
 	const TUniformBufferRef<TBufferStruct>& UniformBufferRef
 	)
@@ -499,7 +517,7 @@ inline void SetUniformBufferParameter(
 template<typename TShaderRHIRef, typename TBufferStruct, typename TRHICmdList>
 inline void SetUniformBufferParameter(
 	TRHICmdList& RHICmdList,
-	TShaderRHIRef Shader,
+	const TShaderRHIRef& Shader,
 	const TShaderUniformBufferParameter<TBufferStruct>& Parameter,
 	const TUniformBuffer<TBufferStruct>& UniformBuffer
 	)
@@ -518,7 +536,7 @@ inline void SetUniformBufferParameter(
 template<typename TShaderRHIRef,typename TBufferStruct>
 inline void SetUniformBufferParameterImmediate(
 	FRHICommandList& RHICmdList,
-	TShaderRHIRef Shader,
+	const TShaderRHIRef& Shader,
 	const TShaderUniformBufferParameter<TBufferStruct>& Parameter,
 	const TBufferStruct& UniformBufferValue
 	)
@@ -539,7 +557,7 @@ inline void SetUniformBufferParameterImmediate(
 template<typename TShaderRHIRef,typename TBufferStruct, typename TRHICmdList>
 inline void SetUniformBufferParameterImmediate(
 	TRHICmdList& RHICmdList,
-	TShaderRHIRef Shader,
+	const TShaderRHIRef& Shader,
 	const TShaderUniformBufferParameter<TBufferStruct>& Parameter,
 	const TBufferStruct& UniformBufferValue
 	)

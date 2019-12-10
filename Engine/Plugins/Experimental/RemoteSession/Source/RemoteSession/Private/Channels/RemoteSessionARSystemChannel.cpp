@@ -57,10 +57,21 @@ void FARSystemProxy::AddReferencedObjects(FReferenceCollector& Collector)
 	Collector.AddReferencedObjects(TrackedGeometries);
 }
 
+/** Returns true/false based on whether AR features are available */
+bool FARSystemProxy::IsARAvailable() const
+{
+	return true;
+}
+
 EARTrackingQuality FARSystemProxy::OnGetTrackingQuality() const
 {
 	// @todo JoeG - Added a delegate for tracking quality so we can send that
 	return EARTrackingQuality::NotTracking;
+}
+
+EARTrackingQualityReason FARSystemProxy::OnGetTrackingQualityReason() const
+{
+	return EARTrackingQualityReason::InsufficientFeatures;
 }
 
 FARSessionStatus FARSystemProxy::OnGetARSessionStatus() const
@@ -402,4 +413,18 @@ void FRemoteSessionARSystemChannel::SendRemovedMessage(UARTrackedGeometry* Remov
 	Connection->SendPacket(Msg);
 
 	UE_LOG(LogRemoteSession, Log, TEXT("Sent trackable removed (%s)"), *Removed->GetName());
+}
+
+TSharedPtr<IRemoteSessionChannel> FRemoteSessionARSystemChannelFactoryWorker::Construct(ERemoteSessionChannelMode InMode, TSharedPtr<FBackChannelOSCConnection, ESPMode::ThreadSafe> InConnection) const
+{
+	bool IsSupported = (InMode == ERemoteSessionChannelMode::Read) || UARBlueprintLibrary::IsSessionTypeSupported(EARSessionType::World);
+	if (IsSupported)
+	{
+		return MakeShared<FRemoteSessionARSystemChannel>(InMode, InConnection);
+	}
+	else
+	{
+		UE_LOG(LogRemoteSession, Warning, TEXT("FRemoteSessionARSystemChannel does not support sending on this platform/device"));
+	}
+	return TSharedPtr<IRemoteSessionChannel>();
 }

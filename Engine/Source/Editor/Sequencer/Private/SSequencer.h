@@ -33,6 +33,7 @@ class SSequencerStretchBox;
 class SSequencerTreeView;
 class SCurveEditorPanel;
 class SDockTab;
+class SWindow;
 class USequencerSettings;
 class FSequencerTrackFilter;
 struct FPaintPlaybackRangeArgs;
@@ -77,13 +78,18 @@ struct FSequencerBreadcrumb
 	/** The movie scene this may point to */
 	FMovieSceneSequenceID SequenceID;
 
-	FSequencerBreadcrumb(FMovieSceneSequenceIDRef InSequenceID)
+	/** The display name of this breadcrumb */
+	FText BreadcrumbName;
+
+	FSequencerBreadcrumb(FMovieSceneSequenceIDRef InSequenceID, FText CrumbName)
 		: BreadcrumbType(FSequencerBreadcrumb::MovieSceneType)
 		, SequenceID(InSequenceID)
+		, BreadcrumbName(CrumbName)
 	{ }
 
-	FSequencerBreadcrumb()
+	FSequencerBreadcrumb(FText CrumbName)
 		: BreadcrumbType(FSequencerBreadcrumb::ShotType)
+		, BreadcrumbName(CrumbName)
 	{ }
 };
 
@@ -218,6 +224,21 @@ public:
 		/** Called when any widget contained within sequencer has received focus */
 		SLATE_EVENT( FSimpleDelegate, OnReceivedFocus )
 
+		/** Called when something is dragged over the sequencer. */
+		SLATE_EVENT( FOptionalOnDragDrop, OnReceivedDragOver )
+
+		/** Called when something is dropped onto the sequencer. */
+		SLATE_EVENT( FOptionalOnDragDrop, OnReceivedDrop )
+
+		/** Called when an asset is dropped on the sequencer. Not called if OnReceivedDrop is bound and returned true. */
+		SLATE_EVENT( FOnAssetsDrop, OnAssetsDrop )
+
+		/** Called when a class is dropped on the sequencer. Not called if OnReceivedDrop is bound and returned true. */
+		SLATE_EVENT( FOnClassesDrop, OnClassesDrop )
+		
+		/** Called when an actor is dropped on the sequencer. Not called if OnReceivedDrop is bound and returned true. */
+		SLATE_EVENT( FOnActorsDrop, OnActorsDrop )
+
 		/** Extender to use for the add menu. */
 		SLATE_ARGUMENT( TSharedPtr<FExtender>, AddMenuExtender )
 
@@ -272,8 +293,12 @@ public:
 	/** Access the tree view for this sequencer */
 	TSharedPtr<SSequencerTreeView> GetTreeView() const;
 
-	/** Generate a helper structure that can be used to transform between phsyical space and virtual space in the track area */
-	FVirtualTrackArea GetVirtualTrackArea() const;
+	/** 
+	 * Generate a helper structure that can be used to transform between phsyical space and virtual space in the track area
+	 *
+	 * @param InTrackArea	(optional) The track area to generate helper structure for, if not specified the main track area will be used.
+	 */
+	FVirtualTrackArea GetVirtualTrackArea(const SSequencerTrackArea* InTrackArea = nullptr) const;
 
 	/** Access this widget's track area widget */
 	TSharedPtr<SSequencerTrackArea> GetTrackAreaWidget() const { return TrackArea; }
@@ -370,6 +395,8 @@ private:
 	/** Makes the key group menu for the toolbar. */
 	TSharedRef<SWidget> MakeKeyGroupMenu();
 
+	void OpenTaggedBindingManager();
+
 	/** Makes the playback speed menu for the toolbar. */
 	void FillPlaybackSpeedMenu(FMenuBuilder& InMenuBuilder);
 
@@ -387,6 +414,7 @@ public:
 private:
 
 	void OnResetFilters();
+	void OnEnableAllFilters();
 	void OnTrackFilterClicked(TSharedRef<FSequencerTrackFilter> TrackFilter);
 	bool IsTrackFilterActive(TSharedRef<FSequencerTrackFilter> TrackFilter) const;
 
@@ -452,8 +480,19 @@ private:
 	/** Called when a breadcrumb is clicked on in the sequencer */
 	void OnCrumbClicked(const FSequencerBreadcrumb& Item);
 
+	void OnBreadcrumbPickerContentClicked(const FSequencerBreadcrumb& Breadcrumb);
+
+	/** Called when the user opens the breadcrumb dropdown */
+	TSharedRef<SWidget> GetBreadcrumbPickerContent();
+
 	/** Gets the root movie scene name */
 	FText GetRootAnimationName() const;
+
+	/** Get the maximum height the pinned track area should be allowed to be.. */
+	float GetPinnedAreaMaxHeight() const;
+	
+	/** Gets whether or not the Pinned track area should be visible. */
+	EVisibility GetPinnedAreaVisibility() const;
 
 	FText GetBreadcrumbTextForSection(TWeakObjectPtr<UMovieSceneSubSection> SubSection) const;
 	FText GetBreadcrumbTextForSequence(TWeakObjectPtr<UMovieSceneSequence> Sequence, bool bIsActive) const;
@@ -499,8 +538,11 @@ public:
 	void OnPaste();
 	bool CanPaste();
 
-	/** Handle Track Paste */
-	void DoPaste();
+	/**
+	 * Handle Track Paste
+	 * @return Whether the paste event was handled
+	 */
+	bool DoPaste();
 
 	/** Open the paste menu */
 	bool OpenPasteMenu();
@@ -524,8 +566,14 @@ private:
 	/** Stretch box widget. */
 	TSharedPtr<SSequencerStretchBox> StretchBox;
 
+	/** Main Sequencer Area*/
+	TSharedPtr<SVerticalBox> MainSequencerArea;
+
 	/** Section area widget */
 	TSharedPtr<SSequencerTrackArea> TrackArea;
+
+	/** Section area widget for pinned tracks*/
+	TSharedPtr<SSequencerTrackArea> PinnedTrackArea;
 
 	/** Outliner widget */
 	TSharedPtr<SSequencerTrackOutliner> TrackOutliner;
@@ -553,6 +601,12 @@ private:
 
 	/** The sequencer tree view responsible for the outliner and track areas */
 	TSharedPtr<SSequencerTreeView> TreeView;
+
+	/** The sequencer tree view for pinned tracks */
+	TSharedPtr<SSequencerTreeView> PinnedTreeView;
+
+	/** Dropdown for selecting breadcrumbs */
+	TSharedPtr<class SComboButton> BreadcrumbPickerButton;
 
 	/** The main sequencer interface */
 	TWeakPtr<FSequencer> SequencerPtr;
@@ -613,6 +667,21 @@ private:
 	/** Called when any widget contained within sequencer has received focus */
 	FSimpleDelegate OnReceivedFocus;
 
+	/** Called when something is dragged over the sequencer. */
+	FOptionalOnDragDrop OnReceivedDragOver;
+
+	/** Called when something is dropped onto the sequencer. */
+	FOptionalOnDragDrop OnReceivedDrop;
+
+	/** Called when an asset is dropped on the sequencer. */
+	FOnAssetsDrop OnAssetsDrop;
+
+	/** Called when a class is dropped on the sequencer. */
+	FOnClassesDrop OnClassesDrop;
+	
+	/** Called when an actor is dropped on the sequencer. */
+	FOnActorsDrop OnActorsDrop;
+
 	/** Cached clamp and view range for unlinking the curve editor time range */
 	TRange<double> CachedClampRange;
 	TRange<double> CachedViewRange;
@@ -628,6 +697,8 @@ private:
 
 	/** All possible track filter objects */
 	TArray< TSharedRef<FSequencerTrackFilter> > AllTrackFilters;
+
+	TWeakPtr<SWindow> WeakExposedBindingsWindow;
 
 public:
 	static const FName CurveEditorTabName;

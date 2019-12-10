@@ -29,6 +29,13 @@
 
 UOodleTrainerCommandlet::UOodleTrainerCommandlet(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
+	, bCompressionTest(false)
+	, HashTableSize(19)
+	, DictionarySize(4 * 1024 * 1024)
+	, DictionaryTrials(3)
+	, TrialRandomness(200)
+	, TrialGenerations(1)
+	, bNoTrials(false)
 {
 	LogToConsole = true;
 }
@@ -611,9 +618,17 @@ bool FOodleDictionaryGenerator::InitGenerator()
 	bDebugDump = FParse::Param(FCommandLine::Get(), TEXT("OodleDebugDump"));
 
 	// Parse and verify parameters
-	// @todo #JohnB: Set these defaults from the .ini file as well (commandline overriding) - mandatory for tailoring to specific games,
-	//					using the games .ini file
+	const UOodleTrainerCommandlet* CDO = GetDefault<UOodleTrainerCommandlet>();
 
+	HashTableSize = CDO->HashTableSize;
+	DictionarySize = CDO->DictionarySize;
+	DictionaryTrials = CDO->DictionaryTrials;
+	TrialRandomness = CDO->TrialRandomness;
+	TrialGenerations = CDO->TrialGenerations;
+	bNoTrials = CDO->bNoTrials;
+	bCompressionTest = CDO->bCompressionTest;
+
+	// Commandline overrides
 	FParse::Value(FCommandLine::Get(), TEXT("-HashTableSize="), HashTableSize);
 	FParse::Value(FCommandLine::Get(), TEXT("-DictionarySize="), DictionarySize);
 	FParse::Value(FCommandLine::Get(), TEXT("-DictionaryTrials="), DictionaryTrials);
@@ -1051,8 +1066,6 @@ bool FOodleDictionaryGenerator::GenerateAndWriteDictionary()
 			uint8* CurPacket = CompressionTestPackets[CurPacketIdx];
 			int32 CurPacketSize = CompressionTestPacketSizes[CurPacketIdx];
 
-			check(OodleLZ_GetCompressedBufferSizeNeeded(CurPacketSize) <= MAX_OODLE_BUFFER);
-
 			SINTa CompressedLengthSINT = 0;
 			
 			CompressedLengthSINT = OodleNetwork1UDP_Encode(CompressorState, SharedDictionary, CurPacket, CurPacketSize,
@@ -1209,7 +1222,7 @@ void FOodleDictionaryGenerator::Cleanup()
 		MergeMap.Empty();
 	}
 }
-#endif // HAS_OODLE_SDK
+#endif
 
 #endif // !UE_BUILD_SHIPPING || OODLE_DEV_SHIPPING
 

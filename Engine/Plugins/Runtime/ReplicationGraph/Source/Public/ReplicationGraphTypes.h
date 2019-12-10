@@ -79,6 +79,11 @@ FORCEINLINE bool IsActorValidForReplication(const FActorRepListType& In) { retur
 // Tests if an actor is valid for replication gathering. Meaning, it can be gathered from the replication graph and considered for replication.
 FORCEINLINE bool IsActorValidForReplicationGather(const FActorRepListType& In)
 { 
+	if (In == nullptr)
+	{
+		return false;
+	}
+
 	if (!IsActorValidForReplication(In))
 		return false;
 
@@ -715,6 +720,7 @@ struct FGlobalActorReplicationInfoMap
 	FORCEINLINE void SetClassInfo(UClass* InClass, const FClassReplicationInfo& Info) {	ClassMap.Set(InClass, Info); }
 	
 	FORCEINLINE TMap<FActorRepListType, TUniquePtr<FGlobalActorReplicationInfo>>::TIterator CreateActorMapIterator() { return ActorMap.CreateIterator(); }
+	FORCEINLINE TMap<FActorRepListType, TUniquePtr<FGlobalActorReplicationInfo>>::TConstIterator CreateActorMapIterator() const { return ActorMap.CreateConstIterator(); }
 	FORCEINLINE TMap<FObjectKey, FClassReplicationInfo>::TIterator CreateClassMapIterator() { return ClassMap.CreateIterator(); }
 
 	int32 Num() const { return ActorMap.Num(); }
@@ -736,13 +742,13 @@ struct FGlobalActorReplicationInfoMap
 		ClassMap.CountBytes(Ar);
 	}
 
-	enum EWarnFlag
+	enum class EWarnFlag : uint8
 	{
 		None = 0,
-		WarnAlreadyDependant = 1 << 1,
+		WarnAlreadyDependant = 1 << 0,
 	};
 
-	REPLICATIONGRAPH_API void AddDependentActor(AActor* Parent, AActor* Child, FGlobalActorReplicationInfoMap::EWarnFlag WarnFlag = FGlobalActorReplicationInfoMap::None);
+	REPLICATIONGRAPH_API void AddDependentActor(AActor* Parent, AActor* Child, FGlobalActorReplicationInfoMap::EWarnFlag WarnFlag = FGlobalActorReplicationInfoMap::EWarnFlag::None);
 
 	void RemoveDependentActor(AActor* Parent, AActor* Child)
 	{
@@ -804,6 +810,8 @@ private:
 	TMap<FActorRepListType, TUniquePtr<FGlobalActorReplicationInfo>> ActorMap;
 	TClassMap<FClassReplicationInfo> ClassMap;
 };
+
+ENUM_CLASS_FLAGS(FGlobalActorReplicationInfoMap::EWarnFlag);
 
 /** Per-Actor data that is stored per connection */
 struct FConnectionReplicationActorInfo
@@ -1361,14 +1369,20 @@ struct FReplicationGraphCSVTracker
 	/** Tracks an explicitly set class. This does NOT include child classes! This is the fastest stat and should be fine to enable in shipping/test builds.  */
 	void SetExplicitClassTracking(UClass* ExactActorClass, const FString& StatNamePrefix)
 	{
-		ExplicitClassTracker.Emplace(ExactActorClass, StatNamePrefix);
+		if (!ExplicitClassTracker.Contains(ExactActorClass))
+		{
+			ExplicitClassTracker.Emplace(ExactActorClass, StatNamePrefix);
+		}
 	}
 
 	/** Sets explicit class tracking for fast/shared path replication. Does not include base classes */
 	void SetExplicitClassTracking_FastPath(UClass* ExactActorClass, const FString& StatNamePrefix)
 	{
-		FString FinalStrPrefix = TEXT("FastPath_") + StatNamePrefix;
-		ExplicitClassTracker_FastPath.Emplace(ExactActorClass, FinalStrPrefix);
+		if (!ExplicitClassTracker_FastPath.Contains(ExactActorClass))
+		{
+			FString FinalStrPrefix = TEXT("FastPath_") + StatNamePrefix;
+			ExplicitClassTracker_FastPath.Emplace(ExactActorClass, FinalStrPrefix);
+		}
 	}
 
 	/** Tracks a class and all of its children (under a single stat set). This will be a little slower (TMap lookup) but still probably ok if used in moderation (only track your top 3 or so classes) */

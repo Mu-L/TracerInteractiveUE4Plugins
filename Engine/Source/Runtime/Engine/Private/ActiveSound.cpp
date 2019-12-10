@@ -10,7 +10,6 @@
 #include "Sound/SoundWave.h"
 #include "Sound/SoundNodeAttenuation.h"
 #include "SubtitleManager.h"
-#include "DSP/Dsp.h"
 
 static int32 AudioOcclusionDisabledCvar = 0;
 FAutoConsoleVariableRef CVarAudioOcclusionEnabled(
@@ -33,6 +32,7 @@ FActiveSound::FActiveSound()
 	: World(nullptr)
 	, WorldID(0)
 	, Sound(nullptr)
+	, SourceEffectChain(nullptr)
 	, AudioComponentID(0)
 	, OwnerID(0)
 	, AudioDevice(nullptr)
@@ -79,9 +79,6 @@ FActiveSound::FActiveSound()
 	, PlaybackTimeNonVirtualized(0.0f)
 	, MinCurrentPitch(1.0f)
 	, RequestedStartTime(0.0f)
-	, CurrentAdjustVolumeMultiplier(1.0f)
-	, TargetAdjustVolumeMultiplier(1.0f)
-	, TargetAdjustVolumeStopTime(-1.0f)
 	, VolumeMultiplier(1.0f)
 	, PitchMultiplier(1.0f)
 	, LowPassFilterFrequency(MAX_FILTER_FREQUENCY)
@@ -168,8 +165,19 @@ void FActiveSound::AddReferencedObjects( FReferenceCollector& Collector)
 		}
 	}
 
-	Collector.AddReferencedObject(Sound);
 	Collector.AddReferencedObject(SoundClassOverride);
+
+	Collector.AddReferencedObject(SourceEffectChain);
+	if (SourceEffectChain)
+	{
+		SourceEffectChain->AddReferencedEffects(Collector);
+	}
+
+	Collector.AddReferencedObject(Sound);
+	if (Sound && Sound->SourceEffectChain)
+	{
+		Sound->SourceEffectChain->AddReferencedEffects(Collector);
+	}
 
 	for (USoundConcurrency* Concurrency : ConcurrencySet)
 	{
@@ -186,6 +194,21 @@ void FActiveSound::AddReferencedObjects( FReferenceCollector& Collector)
 			Collector.AddReferencedObject(Param.SoundWaveParam);
 		}
 	}
+}
+
+int32 FActiveSound::GetPlayCount() const
+{
+	if (!Sound || !AudioDevice)
+	{
+		return 0;
+	}
+
+	if (const int32* PlayCount = Sound->CurrentPlayCount.Find(AudioDevice->DeviceHandle))
+	{
+		return *PlayCount;
+	}
+
+	return 0;
 }
 
 void FActiveSound::SetPitch(float Value)
@@ -209,6 +232,11 @@ void FActiveSound::SetSound(USoundBase* InSound)
 	Sound = InSound;
 	bApplyInteriorVolumes = (SoundClassOverride && SoundClassOverride->Properties.bApplyAmbientVolumes)
 							|| (Sound && Sound->ShouldApplyInteriorVolumes());
+}
+
+void FActiveSound::SetSourceEffectChain(USoundEffectSourcePresetChain* InSourceEffectChain)
+{
+	SourceEffectChain = InSourceEffectChain;
 }
 
 void FActiveSound::SetSoundClass(USoundClass* SoundClass)
@@ -342,6 +370,14 @@ void FActiveSound::SetSourceBusSend(EBusSendType BusSendType, const FSoundSource
 
 	// Otherwise, add it to the source bus send overrides
 	SoundSourceBusSendsOverride[(int32)BusSendType].Add(SourceBusSendInfo);
+}
+
+void FActiveSound::Stop()
+{
+	if (AudioDevice)
+	{
+		AudioDevice->AddSoundToStop(this);
+	}
 }
 
 void FActiveSound::GetSoundSubmixSends(TArray<FSoundSubmixSendInfo>& OutSends) const
@@ -511,11 +547,7 @@ void FActiveSound::UpdateWaveInstances(TArray<FWaveInstance*> &InWaveInstances, 
 	ParseParams.Transform = Transform;
 	ParseParams.StartTime = RequestedStartTime;
 
-	// Default values.
-	// It's all Multiplicative!  So now people are all modifying the multiplier values via various means
-	// (even after the Sound has started playing, and this line takes them all into account and gives us
-	// final value that is correct
-	UpdateAdjustVolumeMultiplier(DeltaTime);
+	ComponentVolumeFader.Update(DeltaTime);
 
 	ParseParams.VolumeMultiplier = GetVolume();
 
@@ -537,7 +569,7 @@ void FActiveSound::UpdateWaveInstances(TArray<FWaveInstance*> &InWaveInstances, 
 	}
 
 	// Set up the base source effect chain.
-	ParseParams.SourceEffectChain = Sound->SourceEffectChain;
+	ParseParams.SourceEffectChain = GetSourceEffectChain();
 
 	// Setup the envelope attack and release times
 	ParseParams.EnvelopeFollowerAttackTime = EnvelopeFollowerAttackTime;
@@ -561,7 +593,7 @@ void FActiveSound::UpdateWaveInstances(TArray<FWaveInstance*> &InWaveInstances, 
 
 	// Recurse nodes, have SoundWave's create new wave instances and update bFinished unless we finished fading out.
 	bFinished = true;
-	if (FadeOut == EFadeOut::None || (PlaybackTime <= TargetAdjustVolumeStopTime))
+	if (FadeOut == EFadeOut::None || ComponentVolumeFader.IsActive())
 	{
 		bool bReverbSendLevelWasSet = false;
 		if (bHasAttenuationSettings)
@@ -625,7 +657,7 @@ void FActiveSound::UpdateWaveInstances(TArray<FWaveInstance*> &InWaveInstances, 
 			{
 				check(WaveInstance);
 
-				float WaveInstanceVolume = WaveInstance->GetVolumeWithDistanceAttenuation();
+				float WaveInstanceVolume = WaveInstance->GetVolumeWithDistanceAttenuation() * WaveInstance->GetDynamicVolume();
 				if (WaveInstanceVolume > VolumeConcurrency)
 				{
 					VolumeConcurrency = WaveInstanceVolume;
@@ -730,9 +762,17 @@ USoundModulationPluginSourceSettingsBase* FActiveSound::FindModulationSettings()
 {
 	if (UClass* PluginClass = GetAudioPluginCustomSettingsClass(EAudioPlugin::MODULATION))
 	{
-		if (Sound->Modulation.Settings.Num() > 0)
+		for (USoundModulationPluginSourceSettingsBase* Settings : Sound->Modulation.Settings)
 		{
-			for (USoundModulationPluginSourceSettingsBase* Settings : Sound->Modulation.Settings)
+			if (Settings && Settings->IsA(PluginClass))
+			{
+				return Settings;
+			}
+		}
+
+		if (UAudioComponent* AudioComponent = UAudioComponent::GetAudioComponentFromID(AudioComponentID))
+		{
+			for (USoundModulationPluginSourceSettingsBase* Settings : AudioComponent->Modulation.Settings)
 			{
 				if (Settings && Settings->IsA(PluginClass))
 				{
@@ -740,9 +780,10 @@ USoundModulationPluginSourceSettingsBase* FActiveSound::FindModulationSettings()
 				}
 			}
 		}
-		else if (UAudioComponent* AudioComponent = UAudioComponent::GetAudioComponentFromID(AudioComponentID))
+
+		if (USoundClass* SoundClass = Sound->GetSoundClass())
 		{
-			for (USoundModulationPluginSourceSettingsBase* Settings : AudioComponent->Modulation.Settings)
+			for (USoundModulationPluginSourceSettingsBase* Settings : SoundClass->Modulation.Settings)
 			{
 				if (Settings && Settings->IsA(PluginClass))
 				{
@@ -755,7 +796,7 @@ USoundModulationPluginSourceSettingsBase* FActiveSound::FindModulationSettings()
 	return nullptr;
 }
 
-void FActiveSound::Stop(bool bStopNow)
+void FActiveSound::MarkPendingDestroy(bool bDestroyNow)
 {
 	check(AudioDevice);
 
@@ -763,7 +804,23 @@ void FActiveSound::Stop(bool bStopNow)
 
 	if (Sound && !bIsStopping)
 	{
-		Sound->CurrentPlayCount = FMath::Max(Sound->CurrentPlayCount - 1, 0);
+		int32* PlayCount = AudioDevice ? Sound->CurrentPlayCount.Find(AudioDevice->DeviceHandle) : nullptr;
+		if (PlayCount)
+		{
+			*PlayCount = FMath::Max(*PlayCount - 1, 0);
+			if (*PlayCount == 0)
+			{
+				Sound->CurrentPlayCount.Remove(AudioDevice->DeviceHandle);
+			}
+		}
+
+		if (AudioDevice->IsModulationPluginEnabled() && AudioDevice->ModulationInterface.IsValid())
+		{
+			if (USoundModulationPluginSourceSettingsBase* ModulationSettings = FindModulationSettings())
+			{
+				AudioDevice->ModulationInterface->OnReleaseSound(static_cast<ISoundModulatable&>(*this));
+			}
+		}
 	}
 
 	TArray<FWaveInstance*> ToDelete;
@@ -778,7 +835,7 @@ void FActiveSound::Stop(bool bStopNow)
 			bool bStopped = false;
 			if (AudioDevice->IsAudioMixerEnabled() && AudioDevice->IsStoppingVoicesEnabled())
 			{
-				if (bStopNow || !AudioDevice->GetNumFreeSources())
+				if (bDestroyNow || !AudioDevice->GetNumFreeSources())
 				{
 					Source->StopNow();
 					bStopped = true;
@@ -828,7 +885,7 @@ void FActiveSound::Stop(bool bStopNow)
 		RemoveWaveInstance(WaveInstance->WaveInstanceHash);
 	}
 
-	if (bStopNow)
+	if (bDestroyNow)
 	{
 		bIsStopping = false;
 	}
@@ -916,38 +973,6 @@ void FActiveSound::RemoveWaveInstance(const UPTRINT WaveInstanceHash)
 		WaveInstances.Remove(WaveInstanceHash);
 		delete WaveInstance;
 	}
-}
-
-void FActiveSound::UpdateAdjustVolumeMultiplier(const float DeltaTime)
-{
-	// Choose min/max bound and clamp dt to prevent unwanted spikes in volume
-	float MinValue = 0.0f;
-	float MaxValue = 0.0f;
-	if (CurrentAdjustVolumeMultiplier < TargetAdjustVolumeMultiplier)
-	{
-		MinValue = CurrentAdjustVolumeMultiplier;
-		MaxValue = TargetAdjustVolumeMultiplier;
-	}
-	else
-	{
-		MinValue = TargetAdjustVolumeMultiplier;
-		MaxValue = CurrentAdjustVolumeMultiplier;
-	}
-
-	float DeltaTimeValue = FMath::Min(DeltaTime, 0.5f);
-
-	// keep stepping towards our target until we hit our stop time
-	if (PlaybackTime < TargetAdjustVolumeStopTime)
-	{
-		CurrentAdjustVolumeMultiplier += (TargetAdjustVolumeMultiplier - CurrentAdjustVolumeMultiplier) * DeltaTimeValue / (TargetAdjustVolumeStopTime - PlaybackTime);
-	}
-	else
-	{
-		CurrentAdjustVolumeMultiplier = TargetAdjustVolumeMultiplier;
-	}
-
-	// Apply final clamp
-	CurrentAdjustVolumeMultiplier = FMath::Clamp(CurrentAdjustVolumeMultiplier, MinValue, MaxValue);
 }
 
 void FActiveSound::OcclusionTraceDone(const FTraceHandle& TraceHandle, FTraceDatum& TraceDatum)
@@ -1194,7 +1219,7 @@ bool FActiveSound::GetFloatParameter( const FName InName, float& OutFloat ) cons
 
 float FActiveSound::GetVolume() const
 {
-	const float Volume = VolumeMultiplier * CurrentAdjustVolumeMultiplier * GetTotalConcurrencyVolumeScale();
+	const float Volume = VolumeMultiplier * ComponentVolumeFader.GetVolume() * GetTotalConcurrencyVolumeScale();
 	return Sound ? Volume * Sound->GetVolumeMultiplier() : Volume;
 }
 
@@ -1521,8 +1546,6 @@ void FActiveSound::ParseAttenuation(FSoundParseParameters& OutParseParams, const
 
 void FActiveSound::UpdateAttenuation(float DeltaTime, FSoundParseParameters& ParseParams, const FListener& Listener, const FSoundAttenuationSettings* SettingsAttenuationNode)
 {
-	const FVector& ListenerLocation = Listener.Transform.GetTranslation();
-
 	// Get the attenuation settings to use for this application to the active sound
 	const FSoundAttenuationSettings* Settings = SettingsAttenuationNode ? SettingsAttenuationNode : &AttenuationSettings;
 
@@ -1573,7 +1596,8 @@ void FActiveSound::UpdateAttenuation(float DeltaTime, FSoundParseParameters& Par
 		}
 		else
 		{
-			ParseParams.DistanceAttenuation *= Settings->Evaluate(ParseParams.Transform, ListenerLocation, FocusDataToApply.DistanceScale);
+			const FVector ListenerTranslation = ListenerData.ListenerTransform.GetTranslation();
+			ParseParams.DistanceAttenuation *= Settings->Evaluate(ParseParams.Transform, ListenerTranslation, FocusDataToApply.DistanceScale);
 		}
 	}
 
@@ -1669,17 +1693,25 @@ void FActiveSound::UpdateAttenuation(float DeltaTime, FSoundParseParameters& Par
 	ParseParams.bApplyNormalizationToStereoSounds = Settings->bApplyNormalizationToStereoSounds;
 	ParseParams.bUseSpatialization |= Settings->bSpatialize;
 
-	if (Settings->SpatializationAlgorithm == ESoundSpatializationAlgorithm::SPATIALIZATION_Default && AudioDevice->IsHRTFEnabledForAll())
-	{
-		ParseParams.SpatializationMethod = ESoundSpatializationAlgorithm::SPATIALIZATION_HRTF;
-	}
-	else if (Settings->SpatializationAlgorithm == ESoundSpatializationAlgorithm::SPATIALIZATION_HRTF && AudioDevice->IsHRTFDisabled())
+	// Check the binaural radius to determine if we're going to HRTF spatialize
+	if (ListenerData.ListenerToSoundDistance < Settings->BinauralRadius)
 	{
 		ParseParams.SpatializationMethod = ESoundSpatializationAlgorithm::SPATIALIZATION_Default;
 	}
 	else
 	{
-		ParseParams.SpatializationMethod = Settings->SpatializationAlgorithm;
+		if (Settings->SpatializationAlgorithm == ESoundSpatializationAlgorithm::SPATIALIZATION_Default && AudioDevice->IsHRTFEnabledForAll())
+		{
+			ParseParams.SpatializationMethod = ESoundSpatializationAlgorithm::SPATIALIZATION_HRTF;
+		}
+		else if (Settings->SpatializationAlgorithm == ESoundSpatializationAlgorithm::SPATIALIZATION_HRTF && AudioDevice->IsHRTFDisabled())
+		{
+			ParseParams.SpatializationMethod = ESoundSpatializationAlgorithm::SPATIALIZATION_Default;
+		}
+		else
+		{
+			ParseParams.SpatializationMethod = Settings->SpatializationAlgorithm;
+		}
 	}
 
 	// If not overriding from a node, set focus data

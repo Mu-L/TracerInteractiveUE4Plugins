@@ -12,6 +12,27 @@
 class FUICommandList;
 
 /**
+ * Unreal editor main frame actions related to the Layout section
+ */
+class FMainFrameLayoutCommands
+{
+public:
+	// Load-based commands
+	TArray<TSharedPtr<FUICommandInfo>> LoadLayoutCommands;
+	TArray<TSharedPtr<FUICommandInfo>> LoadUserLayoutCommands;
+	TSharedPtr< FUICommandInfo > ImportLayout;
+	// Save-based commands
+	TArray<TSharedPtr<FUICommandInfo>> OverrideLayoutCommands;
+	TArray<TSharedPtr<FUICommandInfo>> OverrideUserLayoutCommands;
+	TSharedPtr< FUICommandInfo > SaveLayoutAs;
+	TSharedPtr< FUICommandInfo > ExportLayout;
+	// Remove-based commands
+	TArray<TSharedPtr<FUICommandInfo>> RemoveLayoutCommands;
+	TArray<TSharedPtr<FUICommandInfo>> RemoveUserLayoutCommands;
+	TSharedPtr< FUICommandInfo > RemoveUserLayouts;
+};
+
+/**
  * Unreal editor main frame actions
  */
 class FMainFrameCommands : public TCommands<FMainFrameCommands>
@@ -61,8 +82,9 @@ public:
 	TSharedPtr< FUICommandInfo > AboutUnrealEd;
 	TSharedPtr< FUICommandInfo > CreditsUnrealEd;
 
-	TSharedPtr< FUICommandInfo > ResetLayout;
-	TSharedPtr< FUICommandInfo > SaveLayout;
+	// Layout
+	FMainFrameLayoutCommands MainFrameLayoutCommands;
+
 	TSharedPtr< FUICommandInfo > ToggleFullscreen;
 
 	virtual void RegisterCommands() override;
@@ -73,6 +95,8 @@ private:
 	/** Console command for toggling full screen.  We need this to expose the full screen toggle action to
 	    the game UI system for play-in-editor view ports */
 	FAutoConsoleCommand ToggleFullscreenConsoleCommand;
+
+	void RegisterLayoutCommands();
 };
 
 
@@ -182,6 +206,12 @@ public:
 	/** Determines whether the specified build configuration option is checked. */
 	static bool PackageBuildConfigurationIsChecked( EProjectPackagingBuildConfigurations BuildConfiguration );
 
+	/** Sets the project packaging build configuration. */
+	static void PackageBuildTarget( FString TargetName );
+
+	/** Determines whether the specified build configuration option is checked. */
+	static bool PackageBuildTargetIsChecked( FString TargetName );
+
 	/** Packages the project for the specified platform. */
 	static void PackageProject( const FName InPlatformInfoName );
 
@@ -196,6 +226,9 @@ public:
 
 	/** Opens an IDE to edit c++ code */
 	static void OpenIDE();
+
+	/** Determines whether we can open the IDE to edit c++ code */
+	static bool CanOpenIDE();
 
 	/** Zips up the project */
 	static void ZipUpProject();
@@ -214,12 +247,6 @@ public:
 
 	/** Opens the directory where the backup for preferences is stored. */
 	static void OpenBackupDirectory( FString BackupFile );
-
-	/** Resets the visual state of the editor */
-	static void ResetLayout();
-
-	/** Save the visual state of the editor */
-	static void SaveLayout();
 
 	/** Toggle the level editor's fullscreen mode */
 	static void ToggleFullscreen_Execute();

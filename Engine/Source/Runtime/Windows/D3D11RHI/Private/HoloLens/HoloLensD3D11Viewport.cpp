@@ -193,7 +193,31 @@ FD3D11Viewport::FD3D11Viewport(FD3D11DynamicRHI* InD3DRHI,HWND InWindowHandle,ui
 	BeginInitResource(&FrameSyncEvent);
 }
 
+
+// When a window has moved or resized we need to check whether it is on a HDR monitor or not. Set the correct color space of the monitor
+void FD3D11Viewport::CheckHDRMonitorStatus()
+{
+	PixelColorSpace = EColorSpaceAndEOTF::ERec709_sRGB;
+}
+
 void FD3D11Viewport::ConditionalResetSwapChain(bool bIgnoreFocus)
+{
+	if (!bIsValid)
+	{
+		if (bFullscreenLost)
+		{
+			FlushRenderingCommands();
+			bFullscreenLost = false;
+			Resize(SizeX, SizeY, false, PixelFormat);
+		}
+		else
+		{
+			ResetSwapChainInternal(bIgnoreFocus);
+		}
+	}
+}
+
+void FD3D11Viewport::ResetSwapChainInternal(bool bIgnoreFocus)
 {
 	if(!bIsValid)
 	{

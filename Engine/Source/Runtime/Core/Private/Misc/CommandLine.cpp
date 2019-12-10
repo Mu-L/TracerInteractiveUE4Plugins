@@ -17,7 +17,12 @@ TCHAR FCommandLine::CmdLine[FCommandLine::MaxCommandLineSize] = TEXT("");
 TCHAR FCommandLine::OriginalCmdLine[FCommandLine::MaxCommandLineSize] = TEXT("");
 TCHAR FCommandLine::LoggingCmdLine[FCommandLine::MaxCommandLineSize] = TEXT("");
 TCHAR FCommandLine::LoggingOriginalCmdLine[FCommandLine::MaxCommandLineSize] = TEXT("");
-FString FCommandLine::SubprocessCommandLine(TEXT(" -Multiprocess"));
+
+FString& FCommandLine::GetSubprocessCommandLine_Internal()
+{
+	static FString SubprocessCommandLine = TEXT(" -Multiprocess");
+	return SubprocessCommandLine;
+}
 
 bool FCommandLine::IsInitialized()
 {
@@ -52,12 +57,12 @@ bool FCommandLine::Set(const TCHAR* NewCommandLine)
 {
 	if (!bIsInitialized)
 	{
-		FCString::Strncpy(OriginalCmdLine, NewCommandLine, ARRAY_COUNT(OriginalCmdLine));
-		FCString::Strncpy(LoggingOriginalCmdLine, NewCommandLine, ARRAY_COUNT(LoggingOriginalCmdLine));
+		FCString::Strncpy(OriginalCmdLine, NewCommandLine, UE_ARRAY_COUNT(OriginalCmdLine));
+		FCString::Strncpy(LoggingOriginalCmdLine, NewCommandLine, UE_ARRAY_COUNT(LoggingOriginalCmdLine));
 	}
 
-	FCString::Strncpy( CmdLine, NewCommandLine, ARRAY_COUNT(CmdLine) );
-	FCString::Strncpy(LoggingCmdLine, NewCommandLine, ARRAY_COUNT(LoggingCmdLine));
+	FCString::Strncpy( CmdLine, NewCommandLine, UE_ARRAY_COUNT(CmdLine) );
+	FCString::Strncpy(LoggingCmdLine, NewCommandLine, UE_ARRAY_COUNT(LoggingCmdLine));
 	// If configured as part of the build, strip out any unapproved args
 	WhitelistCommandLines();
 
@@ -80,7 +85,7 @@ bool FCommandLine::Set(const TCHAR* NewCommandLine)
 
 void FCommandLine::Append(const TCHAR* AppendString)
 {
-	FCString::Strncat( CmdLine, AppendString, ARRAY_COUNT(CmdLine) );
+	FCString::Strncat( CmdLine, AppendString, UE_ARRAY_COUNT(CmdLine) );
 	// If configured as part of the build, strip out any unapproved args
 	WhitelistCommandLines();
 }
@@ -139,16 +144,16 @@ void FCommandLine::WhitelistCommandLines()
 	}
 	// Process the original command line
 	TArray<FString> OriginalList = FilterCommandLine(OriginalCmdLine);
-	BuildWhitelistCommandLine(OriginalCmdLine, ARRAY_COUNT(OriginalCmdLine), OriginalList);
+	BuildWhitelistCommandLine(OriginalCmdLine, UE_ARRAY_COUNT(OriginalCmdLine), OriginalList);
 	// Process the current command line
 	TArray<FString> CmdList = FilterCommandLine(CmdLine);
-	BuildWhitelistCommandLine(CmdLine, ARRAY_COUNT(CmdLine), CmdList);
+	BuildWhitelistCommandLine(CmdLine, UE_ARRAY_COUNT(CmdLine), CmdList);
 	// Process the command line for logging purposes
 	TArray<FString> LoggingCmdList = FilterCommandLineForLogging(LoggingCmdLine);
-	BuildWhitelistCommandLine(LoggingCmdLine, ARRAY_COUNT(LoggingCmdLine), LoggingCmdList);
+	BuildWhitelistCommandLine(LoggingCmdLine, UE_ARRAY_COUNT(LoggingCmdLine), LoggingCmdList);
 	// Process the original command line for logging purposes
 	TArray<FString> LoggingOriginalCmdList = FilterCommandLineForLogging(LoggingOriginalCmdLine);
-	BuildWhitelistCommandLine(LoggingOriginalCmdLine, ARRAY_COUNT(LoggingOriginalCmdLine), LoggingOriginalCmdList);
+	BuildWhitelistCommandLine(LoggingOriginalCmdLine, UE_ARRAY_COUNT(LoggingOriginalCmdLine), LoggingOriginalCmdList);
 }
 
 TArray<FString> FCommandLine::FilterCommandLine(TCHAR* CommandLine)
@@ -225,6 +230,8 @@ void FCommandLine::BuildWhitelistCommandLine(TCHAR* CommandLine, uint32 ArrayCou
 
 void FCommandLine::AddToSubprocessCommandline( const TCHAR* Param )
 {
+	FString& SubprocessCommandLine = GetSubprocessCommandLine_Internal();
+
 	check( Param != NULL );
 	if (Param[0] != ' ')
 	{
@@ -235,7 +242,7 @@ void FCommandLine::AddToSubprocessCommandline( const TCHAR* Param )
 
 const FString& FCommandLine::GetSubprocessCommandline()
 {
-	return SubprocessCommandLine;
+	return GetSubprocessCommandLine_Internal();
 }
 
 /** 
@@ -292,4 +299,49 @@ void FCommandLine::Parse(const TCHAR* InCmdLine, TArray<FString>& Tokens, TArray
 			new(Tokens) FString(NextToken);
 		}
 	}
+}
+
+
+FString FCommandLine::BuildFromArgV(const TCHAR* Prefix, int32 ArgC, TCHAR* ArgV[], const TCHAR* Suffix)
+{
+	FString Result;
+
+	// loop over the parameters, skipping the first one (which is the executable name)
+	for (int32 Arg = 1; Arg < ArgC; Arg++)
+	{
+		FString ThisArg = ArgV[Arg];
+		if (ThisArg.Contains(TEXT(" ")) && !ThisArg.Contains(TEXT("\"")))
+		{
+			int32 EqualsAt = ThisArg.Find(TEXT("="));
+			if (EqualsAt > 0 && ThisArg.Find(TEXT(" ")) > EqualsAt)
+			{
+				ThisArg = ThisArg.Left(EqualsAt + 1) + FString("\"") + ThisArg.RightChop(EqualsAt + 1) + FString("\"");
+
+			}
+			else
+			{
+				ThisArg = FString("\"") + ThisArg + FString("\"");
+			}
+		}
+
+		Result += ThisArg;
+		// put a space between each argument (not needed after the end)
+		if (Arg + 1 < ArgC)
+		{
+			Result += TEXT(" ");
+		}
+	}
+
+	// add the prefix and suffix if provided
+	if (Prefix)
+	{
+		Result = FString::Printf(TEXT("%s %s"), Prefix, *Result);
+	}
+
+	if (Suffix)
+	{
+		Result = FString::Printf(TEXT("%s %s"), *Result, Suffix);
+	}
+
+	return Result;
 }

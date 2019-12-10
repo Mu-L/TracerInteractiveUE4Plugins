@@ -9,6 +9,7 @@
 #include "GameplayCueManager.h"
 #include "GameplayTagResponseTable.h"
 #include "GameplayTagsManager.h"
+#include "UObject/UObjectIterator.h"
 
 #if WITH_EDITOR
 #include "Editor.h"
@@ -45,6 +46,8 @@ void UAbilitySystemGlobals::InitGlobalData()
 	GetGameplayCueManager();
 	GetGameplayTagResponseTable();
 	InitGlobalTags();
+
+	TargetDataStructCache.InitForType(FGameplayAbilityTargetData::StaticStruct());
 
 	// Register for PreloadMap so cleanup can occur on map transitions
 	FCoreUObjectDelegates::PreLoadMap.AddUObject(this, &UAbilitySystemGlobals::HandlePreLoadMap);
@@ -127,7 +130,7 @@ const FName& UAbilitySystemGlobals::GetGameplayModEvaluationChannelAlias(EGamepl
 
 const FName& UAbilitySystemGlobals::GetGameplayModEvaluationChannelAlias(int32 Index) const
 {
-	check(Index >= 0 && Index < ARRAY_COUNT(GameplayModEvaluationChannelAliases));
+	check(Index >= 0 && Index < UE_ARRAY_COUNT(GameplayModEvaluationChannelAliases));
 	return GameplayModEvaluationChannelAliases[Index];
 }
 
@@ -501,4 +504,49 @@ void UAbilitySystemGlobals::NonShipping_ApplyGlobalAbilityScaler_Duration(float&
 		Duration /= AbilitySystemGlobalScaler;
 	}
 #endif
+}
+
+void FNetSerializeScriptStructCache::InitForType(UScriptStruct* InScriptStruct)
+{
+	// Find all script structs of this type and add them to the list
+	// (not sure of a better way to do this but it should only happen once at startup)
+	for (TObjectIterator<UScriptStruct> It; It; ++It)
+	{
+		if (It->IsChildOf(InScriptStruct))
+		{
+			ScriptStructs.Add(*It);
+		}
+	}
+	
+	ScriptStructs.Sort([](const UScriptStruct& A, const UScriptStruct& B) { return A.GetName().ToLower() > B.GetName().ToLower(); });
+}
+
+bool FNetSerializeScriptStructCache::NetSerialize(FArchive& Ar, UScriptStruct*& Struct)
+{
+	if (Ar.IsSaving())
+	{
+		int32 idx;
+		if (ScriptStructs.Find(Struct, idx))
+		{
+			check(idx < (1 << 8));
+			uint8 b = idx;
+			Ar.SerializeBits(&b, 8);
+			return true;
+		}
+		ABILITY_LOG(Error, TEXT("Could not find %s in ScriptStructCache"), *GetNameSafe(Struct));
+		return false;
+	}
+	else
+	{
+		uint8 b = 0;
+		Ar.SerializeBits(&b, 8);
+		if (ScriptStructs.IsValidIndex(b))
+		{
+			Struct = ScriptStructs[b];
+			return true;
+		}
+
+		ABILITY_LOG(Error, TEXT("Could not script struct at idx %d"), b);
+		return false;
+	}
 }

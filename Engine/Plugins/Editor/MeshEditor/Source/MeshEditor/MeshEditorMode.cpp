@@ -6,7 +6,7 @@
 #include "MeshEditorModeToolkit.h"
 #include "MeshEditorUtilities.h"
 #include "EditableMesh.h"
-#include "MeshAttributes.h"
+#include "StaticMeshAttributes.h"
 #include "EditableMeshFactory.h"
 #include "MeshElement.h"
 #include "DynamicMeshBuilder.h"
@@ -46,7 +46,7 @@
 #include "Framework/Application/SlateApplication.h"
 #include "Materials/Material.h"
 #include "Components/PrimitiveComponent.h"
-#include "ILevelViewport.h"
+#include "IAssetViewport.h"
 #include "SLevelViewport.h"
 #include "MeshEditorSelectionModifiers.h"
 #include "Algo/Find.h"
@@ -960,10 +960,11 @@ void FMeshEditorMode::Enter()
 	{
 		const TSharedRef<ILevelEditor>& LevelEditor = LevelEditorModule.GetFirstLevelEditor().ToSharedRef();
 
+
 		// Do we have an active perspective viewport that is valid for VR?  If so, go ahead and use that.
 		TSharedPtr<FEditorViewportClient> ViewportClient;
 		{
-			TSharedPtr<ILevelViewport> ActiveLevelViewport = LevelEditor->GetActiveViewportInterface();
+			TSharedPtr<IAssetViewport> ActiveLevelViewport = LevelEditor->GetActiveViewportInterface();
 			if (ActiveLevelViewport.IsValid())
 			{
 				ViewportClient = StaticCastSharedRef<SLevelViewport>(ActiveLevelViewport->AsWidget())->GetViewportClient();
@@ -1033,7 +1034,7 @@ void FMeshEditorMode::Exit()
 
 	// Geometry will no longer be selected, so notify that selection changed.  This makes sure that other modes are prepared
 	// to interact with whichever objects are still selected, now that mesh editing has finished
-	if( !GIsRequestingExit )
+	if( !IsEngineExitRequested() )
 	{
 		GEditor->NoteSelectionChange();
 	}
@@ -1436,7 +1437,7 @@ void FMeshEditorMode::UpdateDebugNormals()
 			// @todo mesheditor: total debug feature for now. Need a way of making this look nice.
 			const float Length = 10.0f; // @todo mesheditor: determine length of debug line from distance from the mesh origin to the camera?
 
-			for( const FVertexInstanceID VertexInstanceID : MeshDescription->GetPolygonPerimeterVertexInstances( PolygonID ) )
+			for( const FVertexInstanceID VertexInstanceID : MeshDescription->GetPolygonVertexInstances( PolygonID ) )
 			{
 				const FVector Position = VertexPositions[ MeshDescription->GetVertexInstanceVertex( VertexInstanceID ) ];
 				const FVector Normal = VertexNormals[ VertexInstanceID ];
@@ -2109,7 +2110,7 @@ void FMeshEditorMode::FrameSelectedElements( FEditorViewportClient* ViewportClie
 					{
 						const FPolygonID PolygonID( PolygonElement.ElementAddress.ElementID );
 
-						for( const FVertexInstanceID VertexInstanceID : MeshDescription->GetPolygonPerimeterVertexInstances( PolygonID ) )
+						for( const FVertexInstanceID VertexInstanceID : MeshDescription->GetPolygonVertexInstances( PolygonID ) )
 						{
 							const FVector VertexPosition = VertexPositions[ MeshDescription->GetVertexInstanceVertex( VertexInstanceID ) ];
 							BoundingBox += Component->GetComponentTransform().TransformPosition( VertexPosition );
@@ -2489,14 +2490,15 @@ void FMeshEditorMode::AddMeshElementToOverlay( UOverlayComponent* OverlayCompone
 					case EEditableMeshElementType::Polygon:
 					{
 						const FPolygonID PolygonID( MeshElement.ElementAddress.ElementID );
-						const int32 PolygonTriangleCount = EditableMesh->GetPolygonTriangulatedTriangleCount( PolygonID );
+						const TArray<FTriangleID>& TriangleIDs = MeshDescription->GetPolygonTriangleIDs( PolygonID );
 
-						for( int32 PolygonTriangle = 0; PolygonTriangle < PolygonTriangleCount; PolygonTriangle++ )
+						for( int32 PolygonTriangle = 0; PolygonTriangle < TriangleIDs.Num(); PolygonTriangle++ )
 						{
+							const FTriangleID TriangleID = TriangleIDs[ PolygonTriangle ];
 							FVector TriangleVertexPositions[ 3 ];
 							for( int32 TriangleVertex = 0; TriangleVertex < 3; TriangleVertex++ )
 							{
-								const FVertexInstanceID VertexInstanceID = EditableMesh->GetPolygonTriangulatedTriangle( PolygonID, PolygonTriangle ).GetVertexInstanceID( TriangleVertex );
+								const FVertexInstanceID VertexInstanceID = MeshDescription->GetTriangleVertexInstance( TriangleID, TriangleVertex );
 								const FVertexID VertexID = EditableMesh->GetVertexInstanceVertex( VertexInstanceID );
 								TriangleVertexPositions[ TriangleVertex ] = ComponentToWorldMatrix.TransformPosition( VertexPositions[ VertexID ] );
 							}
@@ -4487,11 +4489,10 @@ void FMeshEditorMode::UpdateSelectedEditableMeshes()
 		AActor* Actor = Cast<AActor>( *SelectionIt );
 		if( Actor != nullptr )
 		{
-			TArray<UActorComponent*> PrimitiveComponents = Actor->GetComponentsByClass( UPrimitiveComponent::StaticClass() );
-			for( UActorComponent* PrimitiveActorComponent : PrimitiveComponents )
+			TInlineComponentArray<UPrimitiveComponent*> PrimitiveComponents;
+			Actor->GetComponents(PrimitiveComponents);
+			for(UPrimitiveComponent* Component : PrimitiveComponents )
 			{
-				UPrimitiveComponent* Component = CastChecked<UPrimitiveComponent>( PrimitiveActorComponent );
-
 				// Don't bother with editor-only 'helper' actors, we never want to visualize or edit geometry on those
 				if( !Component->IsEditorOnly() &&
 					Component->GetCollisionEnabled() != ECollisionEnabled::NoCollision &&

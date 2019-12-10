@@ -7,7 +7,7 @@
 #include "UObject/Package.h"
 #include "Misc/PackageName.h"
 #include "Editor.h"
-#include "Toolkits/AssetEditorManager.h"
+
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimCompress.h"
 #include "Animation/AnimCompress_BitwiseCompressOnly.h"
@@ -19,6 +19,7 @@
 #include "Animation/AnimationRecordingSettings.h"
 #include "Animation/AnimNotifies/AnimNotify.h"
 #include "Animation/AnimNotifies/AnimNotifyState.h"
+#include "Subsystems/AssetEditorSubsystem.h"
 
 #define LOCTEXT_NAMESPACE "FAnimationRecorder"
 
@@ -409,7 +410,7 @@ UAnimSequence* FAnimationRecorder::StopRecord(bool bShowMessage)
 				{
 					TArray<UObject*> Assets;
 					Assets.Add(ReturnObject);
-					FAssetEditorManager::Get().OpenEditorForAssets(Assets);
+					GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAssets(Assets);
 				});
 				Info.HyperlinkText = FText::Format(LOCTEXT("OpenNewAnimationHyperlink", "Open {0}"), FText::FromString(AnimationObject->GetName()));
 				TSharedPtr<SNotificationItem> Notification = FSlateNotificationManager::Get().AddNotification(Info);
@@ -822,8 +823,8 @@ void FAnimRecorderInstance::InitInternal(USkeletalMeshComponent* InComponent, co
 
 	if (InComponent)
 	{
-		CachedSkelCompForcedLodModel = InComponent->ForcedLodModel;
-		InComponent->ForcedLodModel = 1;
+		CachedSkelCompForcedLodModel = InComponent->GetForcedLOD();
+		InComponent->SetForcedLOD(1);
 
 		// turn off URO and make sure we always update even if out of view
 		bCachedEnableUpdateRateOptimizations = InComponent->bEnableUpdateRateOptimizations;
@@ -875,7 +876,7 @@ void FAnimRecorderInstance::FinishRecording(bool bShowMessage)
 	if (SkelComp.IsValid())
 	{
 		// restore force lod setting
-		SkelComp->ForcedLodModel = CachedSkelCompForcedLodModel;
+		SkelComp->SetForcedLOD(CachedSkelCompForcedLodModel);
 
 		// restore update flags
 		SkelComp->bEnableUpdateRateOptimizations = bCachedEnableUpdateRateOptimizations;

@@ -256,6 +256,7 @@ void FRenderAssetInstanceView::SwapData(FRenderAssetInstanceView* Lfs, FRenderAs
 	check(Lfs->Elements.Num() == Rhs->Elements.Num());
 	check(Lfs->RenderAssetMap.Num() == Rhs->RenderAssetMap.Num());
 	check(Lfs->CompiledRenderAssetMap.Num() == 0 && Rhs->CompiledRenderAssetMap.Num() == 0);
+	check(!Lfs->CompiledNumForcedLODCompMap.Num() && !Rhs->CompiledNumForcedLODCompMap.Num());
 
 	FMemory::Memswap(&Lfs->Bounds4 , &Rhs->Bounds4, sizeof(Lfs->Bounds4));
 	FMemory::Memswap(&Lfs->Elements , &Rhs->Elements, sizeof(Lfs->Elements));
@@ -555,6 +556,15 @@ void FRenderAssetInstanceAsyncView::GetRenderAssetScreenSize(
 					const FRenderAssetInstanceView::FCompiledElement& CompiledElement = CompiledElementData[CompiledElementIndex];
 					if (ensure(BoundsViewInfo.IsValidIndex(CompiledElement.BoundsIndex)))
 					{
+						// Texel factor wasn't available because the component wasn't registered. Lazy initialize it now.
+						if (AssetType != FStreamingRenderAsset::AT_Texture
+							&& CompiledElement.TexelFactor == 0.f
+							&& ensure(CompiledElement.BoundsIndex < View->NumBounds4() * 4))
+						{
+							FRenderAssetInstanceView::FCompiledElement* MutableCompiledElement = const_cast<FRenderAssetInstanceView::FCompiledElement*>(&CompiledElement);
+							MutableCompiledElement->TexelFactor = View->GetBounds4(CompiledElement.BoundsIndex / 4).Radius.Component(CompiledElement.BoundsIndex % 4) * 2.f;
+						}
+
 						ProcessElement(
 							AssetType,
 							BoundsViewInfo[CompiledElement.BoundsIndex],
@@ -578,7 +588,7 @@ void FRenderAssetInstanceAsyncView::GetRenderAssetScreenSize(
 		else
 		{
 			int32 IterationCount_DebuggingOnly = 0;
-			for (auto It = View->GetElementIterator(InAsset); It && (MaxSize_VisibleOnly < MAX_TEXTURE_SIZE || LogPrefix); ++It, ++IterationCount_DebuggingOnly)
+			for (auto It = View->GetElementIterator(InAsset); It && (AssetType != FStreamingRenderAsset::AT_Texture || MaxSize_VisibleOnly < MAX_TEXTURE_SIZE || LogPrefix); ++It, ++IterationCount_DebuggingOnly)
 			{
 				View->VerifyElementIdx_DebuggingOnly(It.GetCurElementIdx_ForDebuggingOnly(), IterationCount_DebuggingOnly);
 				// Only handle elements that are in bounds.
@@ -599,4 +609,14 @@ void FRenderAssetInstanceAsyncView::GetRenderAssetScreenSize(
 bool FRenderAssetInstanceAsyncView::HasRenderAssetReferences(const UStreamableRenderAsset* InAsset) const
 {
 	return View.IsValid() && (bool)View->GetElementIterator(InAsset);
+}
+
+bool FRenderAssetInstanceAsyncView::HasComponentWithForcedLOD(const UStreamableRenderAsset* InAsset) const
+{
+	return View.IsValid() && View->HasComponentWithForcedLOD(InAsset);
+}
+
+bool FRenderAssetInstanceAsyncView::HasAnyComponentWithForcedLOD() const
+{
+	return View.IsValid() && View->HasAnyComponentWithForcedLOD();
 }

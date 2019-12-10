@@ -3,8 +3,9 @@
 #include "Units/Animation/RigUnit_GetWorldTime.h"
 #include "Units/RigUnitContext.h"
 
-void FRigUnit_GetWorldTime::Execute(const FRigUnitContext& Context)
+FRigUnit_GetWorldTime_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	FDateTime Now = FDateTime::Now();
 	Year = (float)Now.GetYear();
 	Month = (float)Now.GetMonth();

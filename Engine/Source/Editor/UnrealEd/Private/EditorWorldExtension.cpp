@@ -40,6 +40,10 @@ bool UEditorWorldExtension::InputAxis( FEditorViewportClient* InViewportClient, 
 
 UWorld* UEditorWorldExtension::GetWorld() const
 {
+	if (OwningExtensionsCollection == nullptr)
+	{
+		return nullptr;
+	}
 	return OwningExtensionsCollection->GetWorld();
 }
 
@@ -66,9 +70,10 @@ AActor* UEditorWorldExtension::SpawnTransientSceneActor(TSubclassOf<AActor> Acto
 	const bool bWasWorldPackageDirty = World->GetOutermost()->IsDirty();
 
 	FActorSpawnParameters ActorSpawnParameters;
-	ActorSpawnParameters.Name = MakeUniqueObjectName(World, ActorClass, *ActorName);
+	ActorSpawnParameters.Name = MakeUniqueObjectName(World->GetCurrentLevel(), ActorClass, *ActorName);
 	ActorSpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 	ActorSpawnParameters.ObjectFlags = InObjectFlags;
+	ActorSpawnParameters.OverrideLevel = World->GetCurrentLevel();
 
 	check(ActorClass != nullptr);
 	AActor* NewActor = World->SpawnActor< AActor >(ActorClass, ActorSpawnParameters);
@@ -472,7 +477,7 @@ void UEditorWorldExtensionCollection::OnPreEndPIE(bool bWasSimulatingInEditor)
 {
 	if (!bWasSimulatingInEditor && LastEditorWorld.IsValid() && LastEditorWorld.Get() == GEditor->EditorWorld)
 	{
-		if (!GIsRequestingExit)
+		if (!IsEngineExitRequested())
 		{
 			// PIE to Editor 
 			// Revert back to the editor world before closing the play world, otherwise actors and objects will be destroyed.
@@ -488,7 +493,7 @@ void UEditorWorldExtensionCollection::OnEndPIE( bool bWasSimulatingInEditor )
 {
 	if( bWasSimulatingInEditor && LastEditorWorld.IsValid() && LastEditorWorld.Get() == GEditor->EditorWorld )
 	{
-		if( !GIsRequestingExit )
+		if( !IsEngineExitRequested() )
 		{
 			UWorld* SimulateWorld = Currentworld.Get();
 

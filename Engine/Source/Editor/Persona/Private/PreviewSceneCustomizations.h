@@ -11,6 +11,10 @@
 #include "IPersonaToolkit.h"
 #include "AnimationEditorPreviewScene.h"
 
+#ifndef CHAOS_SIMULATION_DETAIL_VIEW_FACTORY_SELECTOR  // TODO: Decide whether to keep the detail view cloth selector after nvcloth has been removed
+#define CHAOS_SIMULATION_DETAIL_VIEW_FACTORY_SELECTOR WITH_CHAOS
+#endif
+
 struct FAssetData;
 class FDetailWidgetRow;
 class IDetailChildrenBuilder;
@@ -47,7 +51,7 @@ private:
 
 	FReply OnSaveCollectionClicked(TSharedRef<IPropertyHandle> InAdditionalMeshesProperty, IDetailLayoutBuilder* DetailLayoutBuilder);
 
-	bool HandleShouldFilterAsset(const FAssetData& InAssetData, bool bCanUseDifferentSkeleton);
+	bool HandleShouldFilterAsset(const FAssetData& InAssetData, FName InTag, bool bCanUseDifferentSkeleton);
 
 	bool HandleShouldFilterAdditionalMesh(const FAssetData& InAssetData, bool bCanUseDifferentSkeleton);
 
@@ -65,6 +69,8 @@ private:
 
 	void HandleMeshChanged(const FAssetData& InAssetData);
 
+	void HandlePreviewAnimBlueprintChanged(const FAssetData& InAssetData);
+
 	void HandleAdditionalMeshesChanged(const FAssetData& InAssetData, IDetailLayoutBuilder* DetailLayoutBuilder);
 
 	void HandleAllowDifferentSkeletonsCheckedStateChanged(ECheckBoxState CheckState);
@@ -74,6 +80,17 @@ private:
 	void HandleUseCustomAnimBPCheckedStateChanged(ECheckBoxState CheckState);
 
 	ECheckBoxState HandleUseCustomAnimBPIsChecked() const;
+
+#if CHAOS_SIMULATION_DETAIL_VIEW_FACTORY_SELECTOR
+	// Make the widget of each item in the preview cloth factory combo box
+	TSharedRef<SWidget> MakeClothingSimulationFactoryWidget(TSharedPtr<TSubclassOf<class UClothingSimulationFactory>> Item) const;
+
+	// Called when the cloth factory combo box selection changes, when a new parameter type is selected
+	void OnClothingSimulationFactorySelectionChanged(TSharedPtr<TSubclassOf<class UClothingSimulationFactory>> Item, ESelectInfo::Type SelectInfo) const;
+
+	// Delegate for getting the current preview cloth factory class name as text
+	FText GetCurrentClothingSimulationFactoryText() const;
+#endif  // #if CHAOS_SIMULATION_DETAIL_VIEW_FACTORY_SELECTOR
 
 private:
 	/** Cached skeleton name to check for asset registry tags */
@@ -96,6 +113,11 @@ private:
 
 	/** This is list of class available to filter asset by. This list doesn't change once loaded, so only collect once */
 	static TArray<FName> AvailableClassNameList;
+
+#if CHAOS_SIMULATION_DETAIL_VIEW_FACTORY_SELECTOR
+	/** List of available cloth simulation factories. */
+	TArray<TSharedPtr<TSubclassOf<class UClothingSimulationFactory>>> ClothSimulationFactoryList;
+#endif  // #if CHAOS_SIMULATION_DETAIL_VIEW_FACTORY_SELECTOR
 
 	// Our layout builder (cached so we can refresh)
 	IDetailLayoutBuilder* MyDetailLayout;

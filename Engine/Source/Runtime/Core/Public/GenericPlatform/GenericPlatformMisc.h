@@ -10,11 +10,12 @@
 class Error;
 class GenericApplication;
 class IPlatformChunkInstall;
-class IPlatformInstallBundleManager;
+class IInstallBundleManager;
 class IPlatformCompression;
 struct FGenericCrashContext;
 struct FGenericMemoryWarningContext;
-struct FChunkTagID;
+struct FCustomChunk;
+enum class ECustomChunkType : uint8;
 
 template <typename FuncType>
 class TFunction;
@@ -25,12 +26,10 @@ class TFunction;
 #define UE_DEBUG_BREAK() ((void)(FPlatformMisc::IsDebuggerPresent() && ([] () { UE_DEBUG_BREAK_IMPL(); } (), 1)))
 #endif
 
-namespace EBuildConfigurations
-{
 	/**
-	 * Enumerates build configurations.
+ * Available build configurations. Mirorred from UnrealTargetConfiguration.
 	 */
-	enum Type
+enum class EBuildConfiguration : uint8
 	{
 		/** Unknown build configuration. */
 		Unknown,
@@ -54,10 +53,10 @@ namespace EBuildConfigurations
 	/**
 	 * Returns the string representation of the specified EBuildConfiguration value.
 	 *
-	 * @param Configuration The string to get the EBuildConfiguration::Type for.
-	 * @return An EBuildConfiguration::Type value.
+ * @param Configuration The string to get the EBuildConfiguration for.
+ * @return An EBuildConfiguration value.
 	 */
-	CORE_API EBuildConfigurations::Type FromString( const FString& Configuration );
+CORE_API bool LexTryParseString(EBuildConfiguration& OutConfiguration, const TCHAR* Configuration);
 
 	/**
 	 * Returns the string representation of the specified EBuildConfiguration value.
@@ -65,7 +64,48 @@ namespace EBuildConfigurations
 	 * @param Configuration The value to get the string for.
 	 * @return The string representation.
 	 */
-	CORE_API const TCHAR* ToString( EBuildConfigurations::Type Configuration );
+CORE_API const TCHAR* LexToString(EBuildConfiguration Configuration);
+
+namespace EBuildConfigurations
+{
+	UE_DEPRECATED(4.24, "EBuildConfigurations::Type is deprecated. Use EBuildConfiguration instead.")
+	typedef EBuildConfiguration Type;
+
+	UE_DEPRECATED(4.24, "EBuildConfigurations::Unknown is deprecated. Use EBuildConfiguration::Unknown instead.")
+	static const EBuildConfiguration Unknown = EBuildConfiguration::Unknown;
+
+	UE_DEPRECATED(4.24, "EBuildConfigurations::Debug is deprecated. Use EBuildConfiguration::Debug instead.")
+	static const EBuildConfiguration Debug = EBuildConfiguration::Debug;
+
+	UE_DEPRECATED(4.24, "EBuildConfigurations::DebugGame is deprecated. Use EBuildConfiguration::DebugGame instead.")
+	static const EBuildConfiguration DebugGame = EBuildConfiguration::DebugGame;
+
+	UE_DEPRECATED(4.24, "EBuildConfigurations::Development is deprecated. Use EBuildConfiguration::Development instead.")
+	static const EBuildConfiguration Development = EBuildConfiguration::Development;
+
+	UE_DEPRECATED(4.24, "EBuildConfigurations::Test is deprecated. Use EBuildConfiguration::Test instead.")
+	static const EBuildConfiguration Test = EBuildConfiguration::Test;
+
+	UE_DEPRECATED(4.24, "EBuildConfigurations::Shipping is deprecated. Use EBuildConfiguration::Shipping instead.")
+	static const EBuildConfiguration Shipping = EBuildConfiguration::Shipping;
+
+	/**
+	 * Returns the string representation of the specified EBuildConfiguration value.
+	 *
+	 * @param Configuration The string to get the EBuildConfiguration for.
+	 * @return An EBuildConfiguration value.
+	 */
+	UE_DEPRECATED(4.24, "EBuildConfigurations::FromString() is deprecated. Use LexFromString() instead.")
+	CORE_API EBuildConfiguration FromString( const FString& Configuration );
+
+	/**
+	 * Returns the string representation of the specified EBuildConfiguration value.
+	 *
+	 * @param Configuration The value to get the string for.
+	 * @return The string representation.
+	 */
+	UE_DEPRECATED(4.24, "EBuildConfigurations::ToString() is deprecated. Use LexToString() instead.")
+	CORE_API const TCHAR* ToString( EBuildConfiguration Configuration );
 
 	/**
 	 * Returns the localized text representation of the specified EBuildConfiguration value.
@@ -73,52 +113,73 @@ namespace EBuildConfigurations
 	 * @param Configuration The value to get the text for.
 	 * @return The localized Build configuration text
 	 */
-	CORE_API FText ToText( EBuildConfigurations::Type Configuration );
+	CORE_API FText ToText( EBuildConfiguration Configuration );
 }
 
-FORCEINLINE const TCHAR* LexToString(EBuildConfigurations::Type Configuration)
-{
-	return EBuildConfigurations::ToString(Configuration);
-}
-
-
-namespace EBuildTargets
-{
 	/**
-	 * Enumerates build targets.
+ * Enumerates build target types.
 	 */
-	enum Type
+enum class EBuildTargetType : uint8
 	{
 		/** Unknown build target. */
 		Unknown,
-
-		/** Editor target. */
-		Editor,
 
 		/** Game target. */
 		Game,
 
 		/** Server target. */
-		Server
+	Server,
+
+	/** Client target. */
+	Client,
+
+	/** Editor target. */
+	Editor,
+
+	/** Program target. */
+	Program,
 	};
 
 	/**
 	 * Returns the string representation of the specified EBuildTarget value.
 	 *
-	 * @param Target The string to get the EBuildTarget::Type for.
-	 * @return An EBuildTarget::Type value.
+ * @param OutType The value to get the string for.
+ * @param Text The text to parse.
+ * @return The string representation.
 	 */
-	CORE_API EBuildTargets::Type FromString( const FString& Target );
+CORE_API bool LexTryParseString(EBuildTargetType& OutType, const TCHAR* Text);
 
 	/**
-	 * Returns the string representation of the specified EBuildTarget value.
+ * Returns the string representation of the specified EBuildTargetType value.
 	 *
-	 * @param Target The value to get the string for.
-	 * @return The string representation.
+ * @param Target The string to get the EBuildTargetType for.
+ * @return An EBuildTarget::Type value.
 	 */
-	CORE_API const TCHAR* ToString( EBuildTargets::Type Target );
-}
+CORE_API const TCHAR* LexToString(EBuildTargetType Type);
 
+namespace EBuildTargets
+{
+	UE_DEPRECATED(4.24, "EBuildTargets::Type is deprecated. Use EBuildTargetType instead.")
+	typedef EBuildTargetType Type;
+
+	UE_DEPRECATED(4.24, "EBuildTargets::Unknown is deprecated. Use EBuildTargetType::Unknown instead.")
+	static const EBuildTargetType Unknown = EBuildTargetType::Unknown;
+
+	UE_DEPRECATED(4.24, "EBuildTargets::Editor is deprecated. Use EBuildTargetType::Unknown instead.")
+	static const EBuildTargetType Editor = EBuildTargetType::Editor;
+
+	UE_DEPRECATED(4.24, "EBuildTargets::Game is deprecated. Use EBuildTargetType::Unknown instead.")
+	static const EBuildTargetType Game = EBuildTargetType::Game;
+
+	UE_DEPRECATED(4.24, "EBuildTargets::Server is deprecated. Use EBuildTargetType::Unknown instead.")
+	static const EBuildTargetType Server = EBuildTargetType::Server;
+
+	UE_DEPRECATED(4.24, "EBuildTargets::FromString is deprecated. Use LexFromString() instead.")
+	CORE_API EBuildTargetType FromString( const FString& Target );
+	
+	UE_DEPRECATED(4.24, "EBuildTargets::FromString is deprecated. Use LexFromString() instead.")
+	CORE_API const TCHAR* ToString(EBuildTargetType Target);
+}
 
 /**
  * Enumerates the modes a convertible laptop can be in.
@@ -497,6 +558,15 @@ struct CORE_API FGenericPlatformMisc
 		return true;
 	}
 
+	static bool AllowLocalCaching()
+	{
+#if PLATFORM_DESKTOP
+		return true;
+#else
+		return false;
+#endif
+	}
+
 	/** Platform can generate a full-memory crashdump during crash handling. */
 	static bool SupportsFullCrashDumps()
 	{
@@ -524,6 +594,14 @@ struct CORE_API FGenericPlatformMisc
 	{
 	}
 
+	/**
+	 * Determines if a warning handler has been set
+	 */
+	static bool HasMemoryWarningHandler()
+	{
+		return false;
+	}
+	
 	FORCEINLINE static uint32 GetLastError()
 	{
 		return 0;
@@ -796,7 +874,7 @@ public:
 	static const TCHAR* RootDir();
 
 	/** get additional directories which can be considered as root directories */
-	static const TArray<FString>& GetAdditionalRootDirectories();
+	static TArray<FString> GetAdditionalRootDirectories();
 	/** add an additional root directory */
 	static void AddAdditionalRootDirectory(const FString& RootDir);
 
@@ -853,13 +931,6 @@ public:
 	 * @return	Returns the platform specific chunk based install implementation
 	 */
 	static IPlatformChunkInstall* GetPlatformChunkInstall();
-
-	/**
-	 * Returns the platform specific Install Bundle Manager
-	 *
-	 * @return	Returns the platform specific Install Bundle Manager implementation
-	 */
-	static IPlatformInstallBundleManager* GetPlatformInstallBundleManager();
 
 	/**
 	 * Returns the platform specific compression interface
@@ -1059,7 +1130,30 @@ public:
 		return false;
 	}
 
-	/** 
+	static bool ShouldDisplayTouchInterfaceOnFakingTouchEvents()
+	{	// FSlateApplication::Get().IsFakingTouchEvents() will trigger to display the Touch Interface
+		// on some platforms, we want to ignore that condition
+		return true;
+	}
+
+	static bool DesktopTouchScreen()
+	{
+#if PLATFORM_DESKTOP
+		return true;
+#else
+		return false;
+#endif
+	}
+
+	static bool FullscreenSameAsWindowedFullscreen()
+	{
+		// On some platforms, Fullscreen and WindowedFullscreen behave the same.
+		//     e.g. On Linux, see FLinuxWindow::ReshapeWindow()/SetWindowMode()
+		//          Allowing Fullscreen window mode confuses higher level code (see UE-19996).
+		return false;
+	}
+
+	/**
 	 * Returns whether this is a 'stereo only' platform. In general, stereo only platforms will not 
 	 * support on-screen touch input nor require virtual joysticks (though you should use those query 
 	 * functions to verify). The screen is always used for stereo output, and isn't a mode that is 
@@ -1235,12 +1329,6 @@ public:
 	}
 
 	/**
-	 * Returns a list of platforms that are confidential in nature. To avoid hardcoding the list, this
-	 * looks on disk the first time for special files, so it is non-instant.
-	 */
-	static const TArray<FString>& GetConfidentialPlatforms();
-	
-	/**
 	 * For mobile devices, this will crank up a haptic engine for the specified type to be played later with TriggerMobileHaptics
 	 * If this is called again before Release, it will switch to this type
 	 */
@@ -1277,7 +1365,9 @@ public:
 
 	static bool RequestDeviceCheckToken(TFunction<void(const TArray<uint8>&)> QuerySucceededFunc, TFunction<void(const FString&, const FString&)> QueryFailedFunc);
 
-	static TArray<FChunkTagID> GetOnDemandChunkTagIDs();
+	static TArray<FCustomChunk> GetAllOnDemandChunks();
+	static TArray<FCustomChunk> GetAllLanguageChunks();
+	static TArray<FCustomChunk> GetCustomChunksByType(ECustomChunkType DesiredChunkType);
 
 	/*
 	 * Loads a text file relative to the package root on platforms that distribute apps in package formats.
@@ -1285,9 +1375,30 @@ public:
 	*/
 	static FString LoadTextFileFromPlatformPackage(const FString& RelativePath);
 
+	static bool FileExistsInPlatformPackage(const FString& RelativePath);
+
+	/**
+	 * Frees any memory retained by FGenericPlatformMisc.
+	 */
+	static void TearDown();
+
 	static void ParseChunkIdPakchunkIndexMapping(TArray<FString> ChunkIndexRedirects, TMap<int32, int32>& OutMapping);
 
 	static void PumpMessagesOutsideMainLoop()
+	{
+	}
+
+	static void HidePlatformStartupScreen()
+	{
+
+	}
+
+	FORCEINLINE static bool UseHDRByDefault()
+	{
+		return false;
+	}
+
+	FORCEINLINE static void ChooseHDRDeviceAndColorGamut(uint32 DeviceId, uint32 DisplayNitLevel, int32& OutputDevice, int32& ColorGamut)
 	{
 	}
 
@@ -1308,7 +1419,7 @@ protected:
 #endif	//#if !UE_BUILD_SHIPPING
 
 private:
-	static TArray<FString>& Internal_GetAdditionalRootDirectories();
+	struct FStaticData;
 };
 
 

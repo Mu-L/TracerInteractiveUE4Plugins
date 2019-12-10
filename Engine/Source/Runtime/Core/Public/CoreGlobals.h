@@ -71,7 +71,7 @@ struct CORE_API FScopedBootTiming
 };
 
 
-#define SCOPED_BOOT_TIMING(x) TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(TEXT(x)); FScopedBootTiming ANONYMOUS_VARIABLE(BootTiming_)(x);
+#define SCOPED_BOOT_TIMING(x) TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(x); FScopedBootTiming ANONYMOUS_VARIABLE(BootTiming_)(x);
 
 #define GLog GetGlobalLogSingleton()
 extern CORE_API FConfigCacheIni* GConfig;
@@ -86,7 +86,36 @@ extern CORE_API TCHAR GErrorHist[16384];
 // #crashReport: 2014-08-19 Combine into one, refactor.
 extern CORE_API TCHAR GErrorExceptionDescription[4096];
 
-extern CORE_API const FText GTrue, GFalse, GYes, GNo, GNone;
+struct CORE_API FCoreTexts
+{
+	const FText& True;
+	const FText& False;
+	const FText& Yes;
+	const FText& No;
+	const FText& None;
+
+	static const FCoreTexts& Get();
+
+	/** Invalidates existing references. Do not use FCoreTexts after calling. */
+	static void TearDown();
+
+	// Non-copyable
+	FCoreTexts(const FCoreTexts&) = delete;
+	FCoreTexts& operator=(const FCoreTexts&) = delete;
+};
+
+#if !defined(DISABLE_LEGACY_CORE_TEXTS) || DISABLE_LEGACY_CORE_TEXTS == 0
+UE_DEPRECATED(4.23, "GTrue has been deprecated in favor of FCoreTexts::Get().True.")
+extern CORE_API const FText GTrue;
+UE_DEPRECATED(4.23, "GFalse has been deprecated in favor of FCoreTexts::Get().False.")
+extern CORE_API const FText GFalse;
+UE_DEPRECATED(4.23, "GYes has been deprecated in favor of FCoreTexts::Get().Yes.")
+extern CORE_API const FText GYes;
+UE_DEPRECATED(4.23, "GNo has been deprecated in favor of FCoreTexts::Get().No.")
+extern CORE_API const FText GNo;
+UE_DEPRECATED(4.23, "GNone has been deprecated in favor of FCoreTexts::Get().None.")
+extern CORE_API const FText GNone;
+#endif
 
 /** If true, this executable is able to run all games (which are loaded as DLL's). */
 extern CORE_API bool GIsGameAgnosticExe;
@@ -223,7 +252,21 @@ extern CORE_API bool GIsSilent;
 extern CORE_API bool GIsSlowTask;
 extern CORE_API bool GSlowTaskOccurred;
 extern CORE_API bool GIsGuarded;
+
+UE_DEPRECATED(4.24, "Please use IsEngineExitRequested()/RequestEngineExit(const FString&)")
 extern CORE_API bool GIsRequestingExit;
+
+FORCEINLINE bool IsEngineExitRequested()
+{
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
+	return GIsRequestingExit;
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
+}
+
+// Request that the engine exit as soon as it can safely do so
+// The ReasonString is not optional and should be a useful description of why the engine exit is requested
+CORE_API void RequestEngineExit(const TCHAR* ReasonString);
+CORE_API void RequestEngineExit(const FString& ReasonString);
 
 /**
 *	Global value indicating on-screen warnings/message should be displayed.
@@ -259,6 +302,7 @@ extern CORE_API FString GHardwareIni;
 extern CORE_API FString GInputIni;
 extern CORE_API FString GGameIni;
 extern CORE_API FString GGameUserSettingsIni;
+extern CORE_API FString GRuntimeOptionsIni;
 
 extern CORE_API float GNearClippingPlane;
 
@@ -373,7 +417,7 @@ extern CORE_API bool GIsGameThreadIdInitialized;
 extern CORE_API bool GShouldSuspendRenderingThread;
 
 /** Determines what kind of trace should occur, NAME_None for none. */
-extern CORE_API FName GCurrentTraceName;
+extern CORE_API FLazyName GCurrentTraceName;
 
 /** How to print the time in log output. */
 extern CORE_API ELogTimes::Type GPrintLogTimes;
@@ -397,9 +441,9 @@ extern CORE_API bool GIsDemoMode;
 
 /** Name of the core package. */
 //@Package name transition, remove the double checks 
-extern CORE_API FName GLongCorePackageName;
+extern CORE_API FLazyName GLongCorePackageName;
 //@Package name transition, remove the double checks 
-extern CORE_API FName GLongCoreUObjectPackageName;
+extern CORE_API FLazyName GLongCoreUObjectPackageName;
 
 /** Whether or not a unit test is currently being run. */
 extern CORE_API bool GIsAutomationTesting;

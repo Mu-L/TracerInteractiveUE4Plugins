@@ -111,7 +111,8 @@ static int32 GGPUSkinCacheFlushCounter = 0;
 
 static inline bool DoesPlatformSupportGPUSkinCache(EShaderPlatform Platform)
 {
-	return Platform == SP_PCD3D_SM5 || IsMetalSM5Platform(Platform) || IsVulkanSM5Platform(Platform) || Platform == SP_OPENGL_SM5;
+	return Platform == SP_PCD3D_SM5 || IsMetalSM5Platform(Platform) || IsVulkanSM5Platform(Platform) || Platform == SP_OPENGL_SM5 
+		|| FDataDrivenShaderPlatformInfo::GetInfo(Platform).bSupportsGPUSkinCache;
 }
 
 ENGINE_API bool IsGPUSkinCacheAvailable(EShaderPlatform Platform)
@@ -255,6 +256,22 @@ public:
 		DispatchData[Section].UpdateVertexFactoryDeclaration();
 	}
 
+	inline FCachedGeometrySection GetCachedGeometry(int32 SectionIndex) const
+	{
+		FCachedGeometrySection MeshSection;
+		const FSkelMeshRenderSection& Section = *DispatchData[SectionIndex].Section;
+		MeshSection.PositionBuffer	= DispatchData[SectionIndex].PositionBuffer->SRV;
+		MeshSection.TotalVertexCount= DispatchData[SectionIndex].PositionBuffer->NumBytes / (sizeof(float)*3);
+		MeshSection.NumPrimitives	= Section.NumTriangles;
+		MeshSection.IndexBaseIndex	= Section.BaseIndex;
+		MeshSection.VertexBaseIndex = Section.BaseVertexIndex;
+		MeshSection.IndexBuffer		= nullptr;
+		MeshSection.TotalIndexCount	= 0;
+		MeshSection.LODIndex		= 0;
+		MeshSection.SectionIndex	= SectionIndex;
+		return MeshSection;
+	}
+
 	bool IsSectionValid(int32 Section) const
 	{
 		const FSectionDispatchData& SectionData = DispatchData[Section];
@@ -344,25 +361,23 @@ public:
 		}
 	}
 
-	void CreateMergedPositionVertexBuffer(FRHICommandList& RHICmdList, FVertexBufferRHIRef OutVertexBuffer)
+#if RHI_RAYTRACING
+	void GetRayTracingSegmentVertexBuffers(TArrayView<FRayTracingGeometrySegment> OutSegments) const
 	{
-	#if RHI_RAYTRACING
-		TArray<FCopyBufferRegionParams> CopyParams;
+		check(OutSegments.Num() == DispatchData.Num());
 
 		for (int32 SectionIdx = 0; SectionIdx < DispatchData.Num(); SectionIdx++)
 		{
-			CopyParams.Add(FCopyBufferRegionParams {
-				OutVertexBuffer,
-				DispatchData[SectionIdx].OutputStreamStart * sizeof(FVector),
-				DispatchData[SectionIdx].PositionBuffer->Buffer,
-				DispatchData[SectionIdx].OutputStreamStart * sizeof(FVector),
-				DispatchData[SectionIdx].NumVertices * sizeof(FVector) }
-			);
-		}
+			const FSectionDispatchData& SectionData = DispatchData[SectionIdx];
+			FRayTracingGeometrySegment& Segment = OutSegments[SectionIdx];
 
-		RHICmdList.CopyBufferRegions(CopyParams);
-	#endif
+			Segment.VertexBuffer = SectionData.PositionBuffer->Buffer;
+			Segment.VertexBufferOffset = 0;
+
+			check(SectionData.Section->NumTriangles == Segment.NumPrimitives);
+		}
 	}
+#endif // RHI_RAYTRACING
 
 protected:
 	FGPUSkinCache::FRWBuffersAllocation* PositionAllocation;
@@ -612,16 +627,20 @@ void FGPUSkinCache::CommitRayTracingGeometryUpdates(FRHICommandList& RHICmdList)
 
 	if (RayTracingGeometriesToUpdate.Num())
 	{
-		TArray<FAccelerationStructureUpdateParams> Updates;
-		for (const auto& RayTracingGeometry : RayTracingGeometriesToUpdate)
+		// Flush any remaining pending resource barriers before performing BVH updates
+		TransitionAllToReadable(RHICmdList);
+
+		TArray<FAccelerationStructureBuildParams> Updates;
+		for (const FRayTracingGeometry* RayTracingGeometry : RayTracingGeometriesToUpdate)
 		{
-			FAccelerationStructureUpdateParams Params;
+			FAccelerationStructureBuildParams Params;
+			Params.BuildMode = EAccelerationStructureBuildMode::Update;
 			Params.Geometry = RayTracingGeometry->RayTracingGeometryRHI;
-			Params.VertexBuffer = RayTracingGeometry->Initializer.PositionVertexBuffer;
+			Params.Segments = RayTracingGeometry->Initializer.Segments;
 			Updates.Add(Params);
 		}
 
-		RHICmdList.UpdateAccelerationStructures(Updates);
+		RHICmdList.BuildAccelerationStructures(Updates);
 		RayTracingGeometriesToUpdate.Reset();
 	}
 }
@@ -632,7 +651,7 @@ void FGPUSkinCache::TransitionToWriteable(FRHICommandList& RHICmdList)
 {
 	int32 BufferIndex = InternalUpdateCount % GPUSKINCACHE_FRAMES;
 	FRHIUnorderedAccessView* OutUAVs[] = { SkinCacheBuffer[BufferIndex].UAV };
-	RHICmdList.TransitionResources(EResourceTransitionAccess::ERWNoBarrier, EResourceTransitionPipeline::EGfxToCompute, OutUAVs, ARRAY_COUNT(OutUAVs));
+	RHICmdList.TransitionResources(EResourceTransitionAccess::ERWNoBarrier, EResourceTransitionPipeline::EGfxToCompute, OutUAVs, UE_ARRAY_COUNT(OutUAVs));
 }
 
 void FGPUSkinCache::TransitionAllToWriteable(FRHICommandList& RHICmdList)
@@ -646,7 +665,7 @@ void FGPUSkinCache::TransitionAllToWriteable(FRHICommandList& RHICmdList)
 			OutUAVs[Index] = SkinCacheBuffer[Index].UAV;
 		}
 
-		RHICmdList.TransitionResources(EResourceTransitionAccess::ERWNoBarrier, EResourceTransitionPipeline::EGfxToCompute, OutUAVs, ARRAY_COUNT(OutUAVs));
+		RHICmdList.TransitionResources(EResourceTransitionAccess::ERWNoBarrier, EResourceTransitionPipeline::EGfxToCompute, OutUAVs, UE_ARRAY_COUNT(OutUAVs));
 	}
 }
 #endif
@@ -1270,10 +1289,6 @@ void FGPUSkinCache::DispatchUpdateSkinning(FRHICommandListImmediate& RHICmdList,
 	uint32 PreviousRevision = ShaderData.GetRevisionNumber(true);
 
 	DispatchData.TangentBuffer = DispatchData.PositionTracker.GetTangentBuffer();
-	if (DispatchData.TangentBuffer)
-	{
-		BuffersToTransition.Add(DispatchData.TangentBuffer->UAV);
-	}
 
 	DispatchData.PreviousPositionBuffer = DispatchData.PositionTracker.Find(PrevBoneBuffer, PreviousRevision);
 	if (!DispatchData.PreviousPositionBuffer)
@@ -1286,13 +1301,19 @@ void FGPUSkinCache::DispatchUpdateSkinning(FRHICommandListImmediate& RHICmdList,
 		Shader->SetParameters(RHICmdList, PrevBoneBuffer, Entry, DispatchData, DispatchData.GetPreviousPositionRWBuffer()->UAV, DispatchData.GetTangentRWBuffer() ? DispatchData.GetTangentRWBuffer()->UAV : nullptr);
 
 		RHICmdList.TransitionResource(EResourceTransitionAccess::EWritable, EResourceTransitionPipeline::EGfxToCompute, DispatchData.GetPreviousPositionRWBuffer()->UAV.GetReference());
+		BuffersToTransition.Add(DispatchData.GetPreviousPositionRWBuffer()->UAV);
+
+		if (DispatchData.TangentBuffer)
+		{
+			RHICmdList.TransitionResource(EResourceTransitionAccess::EWritable, EResourceTransitionPipeline::EGfxToCompute, DispatchData.TangentBuffer->UAV.GetReference());
+			BuffersToTransition.Add(DispatchData.TangentBuffer->UAV);
+		}
 
 		uint32 VertexCountAlign64 = FMath::DivideAndRoundUp(DispatchData.NumVertices, (uint32)64);
 		INC_DWORD_STAT_BY(STAT_GPUSkinCache_TotalNumVertices, VertexCountAlign64 * 64);
 		RHICmdList.DispatchComputeShader(VertexCountAlign64, 1, 1);
 		Shader->UnsetParameters(RHICmdList);
 
-		BuffersToTransition.Add(DispatchData.GetPreviousPositionRWBuffer()->UAV);
 	}
 
 	DispatchData.PositionBuffer = DispatchData.PositionTracker.Find(BoneBuffer, CurrentRevision);
@@ -1306,13 +1327,19 @@ void FGPUSkinCache::DispatchUpdateSkinning(FRHICommandListImmediate& RHICmdList,
 		Shader->SetParameters(RHICmdList, BoneBuffer, Entry, DispatchData, DispatchData.GetPositionRWBuffer()->UAV, DispatchData.GetTangentRWBuffer() ? DispatchData.GetTangentRWBuffer()->UAV : nullptr);
 
 		RHICmdList.TransitionResource(EResourceTransitionAccess::EWritable, EResourceTransitionPipeline::EGfxToCompute, DispatchData.GetPositionRWBuffer()->UAV.GetReference());
+		BuffersToTransition.Add(DispatchData.GetPositionRWBuffer()->UAV);
+
+		if (DispatchData.TangentBuffer)
+		{
+			RHICmdList.TransitionResource(EResourceTransitionAccess::EWritable, EResourceTransitionPipeline::EGfxToCompute, DispatchData.TangentBuffer->UAV.GetReference());
+			BuffersToTransition.Add(DispatchData.TangentBuffer->UAV);
+		}
 
 		uint32 VertexCountAlign64 = FMath::DivideAndRoundUp(DispatchData.NumVertices, (uint32)64);
 		INC_DWORD_STAT_BY(STAT_GPUSkinCache_TotalNumVertices, VertexCountAlign64 * 64);
 		RHICmdList.DispatchComputeShader(VertexCountAlign64, 1, 1);
 		Shader->UnsetParameters(RHICmdList);
 
-		BuffersToTransition.Add(DispatchData.GetPositionRWBuffer()->UAV);
 	}
 
 	check(DispatchData.PreviousPositionBuffer != DispatchData.PositionBuffer);
@@ -1362,10 +1389,12 @@ void FGPUSkinCache::ReleaseSkinCacheEntry(FGPUSkinCacheEntry* SkinCacheEntry)
 	delete SkinCacheEntry;
 }
 
-void FGPUSkinCache::CreateMergedPositionVertexBuffer(FRHICommandList& RHICmdList, FGPUSkinCacheEntry* SkinCacheEntry, FVertexBufferRHIRef OutVertexBuffer)
+#if RHI_RAYTRACING
+void FGPUSkinCache::GetRayTracingSegmentVertexBuffers(const FGPUSkinCacheEntry& SkinCacheEntry, TArrayView<FRayTracingGeometrySegment> OutSegments)
 {
-	SkinCacheEntry->CreateMergedPositionVertexBuffer(RHICmdList, OutVertexBuffer);
+	SkinCacheEntry.GetRayTracingSegmentVertexBuffers(OutSegments);
 }
+#endif // RHI_RAYTRACING
 
 bool FGPUSkinCache::IsEntryValid(FGPUSkinCacheEntry* SkinCacheEntry, int32 Section)
 {
@@ -1390,6 +1419,11 @@ void FGPUSkinCache::InvalidateAllEntries()
 	}
 	StagingBuffers.SetNum(0, false);
 	SET_MEMORY_STAT(STAT_GPUSkinCache_TangentsIntermediateMemUsed, 0);
+}
+
+FCachedGeometrySection FGPUSkinCache::GetCachedGeometry(FGPUSkinCacheEntry* InOutEntry, uint32 sectionIndex)
+{
+	return InOutEntry ? InOutEntry->GetCachedGeometry(sectionIndex) : FCachedGeometrySection();
 }
 
 void FGPUSkinCache::CVarSinkFunction()

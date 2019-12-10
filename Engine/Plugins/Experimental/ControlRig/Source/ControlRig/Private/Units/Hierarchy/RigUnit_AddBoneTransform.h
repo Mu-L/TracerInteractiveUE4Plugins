@@ -15,12 +15,14 @@ struct FRigUnit_AddBoneTransform : public FRigUnitMutable
 	GENERATED_BODY()
 
 	FRigUnit_AddBoneTransform()
-		: bPostMultiply(false)
+		: Weight(1.f)
+		, bPostMultiply(false)
 		, bPropagateToChildren(false)
 		, CachedBoneIndex(INDEX_NONE)
 	{}
 
 	virtual FString GetUnitLabel() const override;
+	RIGVM_METHOD()
 	virtual void Execute(const FRigUnitContext& Context) override;
 
 	/**
@@ -34,6 +36,12 @@ struct FRigUnit_AddBoneTransform : public FRigUnitMutable
 	 */
 	UPROPERTY(meta = (Input))
 	FTransform Transform;
+
+	/**
+	 * The weight of the change - how much the change should be applied
+	 */
+	UPROPERTY(meta = (Input, UIMin = "0.0", UIMax = "1.0"))
+	float Weight;
 
 	/**
 	 * If set to true the transform will be post multiplied, otherwise pre multiplied.

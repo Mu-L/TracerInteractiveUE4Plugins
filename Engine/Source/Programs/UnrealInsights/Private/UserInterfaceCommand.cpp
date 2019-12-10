@@ -61,8 +61,8 @@ void FUserInterfaceCommand::Run()
 
 	// Manually load in the source code access plugins, as standalone programs don't currently support plugins.
 #if PLATFORM_MAC
-	IModuleInterface& XCodeSourceCodeAccessModule = FModuleManager::LoadModuleChecked<IModuleInterface>(FName("XCodeSourceCodeAccess"));
-	SourceCodeAccessModule.SetAccessor(FName("XCodeSourceCodeAccess"));
+	//im:TODO: IModuleInterface& XCodeSourceCodeAccessModule = FModuleManager::LoadModuleChecked<IModuleInterface>(FName("XCodeSourceCodeAccess"));
+	//im:TODO: SourceCodeAccessModule.SetAccessor(FName("XCodeSourceCodeAccess"));
 #elif PLATFORM_WINDOWS
 	//im:TODO: IModuleInterface& VisualStudioSourceCodeAccessModule = FModuleManager::LoadModuleChecked<IModuleInterface>(FName("VisualStudioSourceCodeAccess"));
 	//im:TODO: SourceCodeAccessModule.SetAccessor(FName("VisualStudioSourceCodeAccess"));
@@ -78,7 +78,7 @@ void FUserInterfaceCommand::Run()
 	double LastTime = FPlatformTime::Seconds();
 	const float IdealFrameTime = 1.0f / IDEAL_FRAMERATE;
 
-	while (!GIsRequestingExit)
+	while (!IsEngineExitRequested())
 	{
 		// Save the state of the tabs here rather than after close of application (the tabs are undesirably saved out with ClosedTab state on application close).
 		//UserInterfaceCommand::UserConfiguredNewLayout = FGlobalTabmanager::Get()->PersistLayout();
@@ -110,8 +110,13 @@ void FUserInterfaceCommand::Run()
 
 void FUserInterfaceCommand::InitializeSlateApplication(const FString& LayoutIni)
 {
+	//TODO: FSlateApplication::InitHighDPI(true);
+
 	// Crank up a normal Slate application using the platform's standalone renderer.
 	FSlateApplication::InitializeAsStandaloneApplication(GetStandardStandaloneRenderer());
+
+	// Menu anims aren't supported. See Runtime\Slate\Private\Framework\Application\MenuStack.cpp.
+	FSlateApplication::Get().EnableMenuAnimations(false);
 
 	// Set the application name.
 	FGlobalTabmanager::Get()->SetApplicationTitle(NSLOCTEXT("UnrealInsights", "AppTitle", "Unreal Insights"));

@@ -178,7 +178,7 @@ bool FSkeletalMeshSkinningData::IsUsed()const
 	return false;
 }
 
-bool FSkeletalMeshSkinningData::Tick(float InDeltaSeconds)
+bool FSkeletalMeshSkinningData::Tick(float InDeltaSeconds, bool bRequirePreskin)
 {
 	USkeletalMeshComponent* SkelComp = MeshComp.Get();
 	check(SkelComp);
@@ -196,86 +196,138 @@ bool FSkeletalMeshSkinningData::Tick(float InDeltaSeconds)
 		PrevBoneRefToLocals() = CurrBoneRefToLocals();
 	}
 
-	for (int32 LODIndex = 0; LODIndex < LODData.Num(); ++LODIndex)
+	if (bRequirePreskin)
 	{
-		FLODData& LOD = LODData[LODIndex];
-		if (LOD.PreSkinnedVertsUsers > 0)
+		for (int32 LODIndex = 0; LODIndex < LODData.Num(); ++LODIndex)
 		{
-			//TODO: If we pass the sections in the usage too, we can probably skin a minimal set of verts just for the used regions.
-			FSkeletalMeshLODRenderData& SkelMeshLODData = SkelComp->SkeletalMesh->GetResourceForRendering()->LODRenderData[LODIndex];
-			FSkinWeightVertexBuffer* SkinWeightBuffer = SkelComp->GetSkinWeightBuffer(LODIndex);
-			USkeletalMeshComponent::ComputeSkinnedPositions(SkelComp, CurrSkinnedPositions(LODIndex), CurrBoneRefToLocals(), SkelMeshLODData, *SkinWeightBuffer);
-			//check(CurrSkinnedPositions(LODIndex).Num() == SkelMeshLODData.NumVertices);
-			//Prime the previous positions if they're missing
-			if (PrevSkinnedPositions(LODIndex).Num() != CurrSkinnedPositions(LODIndex).Num())
+			FLODData& LOD = LODData[LODIndex];
+			if (LOD.PreSkinnedVertsUsers > 0)
 			{
-				PrevSkinnedPositions(LODIndex) = CurrSkinnedPositions(LODIndex);
+				//TODO: If we pass the sections in the usage too, we can probably skin a minimal set of verts just for the used regions.
+				FSkeletalMeshLODRenderData& SkelMeshLODData = SkelComp->SkeletalMesh->GetResourceForRendering()->LODRenderData[LODIndex];
+				FSkinWeightVertexBuffer* SkinWeightBuffer = SkelComp->GetSkinWeightBuffer(LODIndex);
+				USkeletalMeshComponent::ComputeSkinnedPositions(SkelComp, CurrSkinnedPositions(LODIndex), CurrBoneRefToLocals(), SkelMeshLODData, *SkinWeightBuffer);
+				//check(CurrSkinnedPositions(LODIndex).Num() == SkelMeshLODData.NumVertices);
+				//Prime the previous positions if they're missing
+				if (PrevSkinnedPositions(LODIndex).Num() != CurrSkinnedPositions(LODIndex).Num())
+				{
+					PrevSkinnedPositions(LODIndex) = CurrSkinnedPositions(LODIndex);
+				}
 			}
 		}
 	}
-	
+
 	bForceDataRefresh = false;
 	return true;
 }
 
 //////////////////////////////////////////////////////////////////////////
 
-FSkeletalMeshSkinningDataHandle FNDI_SkeletalMesh_GeneratedData::GetCachedSkinningData(TWeakObjectPtr<USkeletalMeshComponent>& InComponent, FSkeletalMeshSkinningDataUsage Usage)
+FSkeletalMeshSkinningDataHandle FNDI_SkeletalMesh_GeneratedData::GetCachedSkinningData(TWeakObjectPtr<USkeletalMeshComponent>& Component, FSkeletalMeshSkinningDataUsage Usage)
 {
-	FScopeLock Lock(&CriticalSection);
-	
-	USkeletalMeshComponent* Component = InComponent.Get();
-	check(Component);
-	TSharedPtr<FSkeletalMeshSkinningData> SkinningData = nullptr;
+	check(Component.Get() != nullptr);
 
-	if (TSharedPtr<FSkeletalMeshSkinningData>* Existing = CachedSkinningData.Find(Component))
+	// Attempt to Find data
 	{
-		check(Existing->IsValid());//We shouldn't be able to have an invalid ptr here.
-		SkinningData = *Existing;
-	}
-	else
-	{
-		SkinningData = MakeShared<FSkeletalMeshSkinningData>(InComponent);
-		CachedSkinningData.Add(Component) = SkinningData;
+		FRWScopeLock ReadLock(CachedSkinningDataGuard, SLT_ReadOnly);
+		if ( CachedSkinningDataAndUsage* Existing = CachedSkinningData.Find(Component) )
+		{
+			check(Existing->SkinningData.IsValid());
+			return FSkeletalMeshSkinningDataHandle(Existing->Usage, Existing->SkinningData);
+		}
 	}
 
-	return FSkeletalMeshSkinningDataHandle(Usage, SkinningData);
+	// We need to add
+	FRWScopeLock WriteLock(CachedSkinningDataGuard, SLT_Write);
+	CachedSkinningDataAndUsage& NewData = CachedSkinningData.FindOrAdd(Component);
+	NewData.Usage = Usage;
+	NewData.SkinningData = MakeShared<FSkeletalMeshSkinningData>(Component);
+	return FSkeletalMeshSkinningDataHandle(NewData.Usage, NewData.SkinningData);
 }
 
-void FNDI_SkeletalMesh_GeneratedData::TickGeneratedData(float DeltaSeconds)
+void FNDI_SkeletalMesh_GeneratedData::TickGeneratedData(ETickingGroup TickGroup, float DeltaSeconds)
 {
 	check(IsInGameThread());
 	SCOPE_CYCLE_COUNTER(STAT_NiagaraSkel_PreSkin);
 
-	//Tick skinning data.
+	FRWScopeLock WriteLock(CachedSkinningDataGuard, SLT_Write);
+
+	// We may want to look at separating out how we manage the ticks here
+	//-OPT: Move into different arrays per tick group, manage promotions, demotions, etc, or add ourselves as a subsequent of the component's tick
+	TArray<TWeakObjectPtr<USkeletalMeshComponent>, TInlineAllocator<32>> ToRemove;
+	TArray<FSkeletalMeshSkinningData*, TInlineAllocator<32>> ToTickBonesOnly;
+	TArray<FSkeletalMeshSkinningData*, TInlineAllocator<32>> ToTickPreskin;
+	const bool bForceTick = TickGroup == NiagaraLastTickGroup;
+
+	ToTickBonesOnly.Reserve(CachedSkinningData.Num());
+	ToTickPreskin.Reserve(CachedSkinningData.Num());
+
+	for (TPair<TWeakObjectPtr<USkeletalMeshComponent>, CachedSkinningDataAndUsage>& Pair : CachedSkinningData)
 	{
-		TArray<TWeakObjectPtr<USkeletalMeshComponent>, TInlineAllocator<64>> ToRemove;
-		TArray<FSkeletalMeshSkinningData*> ToTick;
-		ToTick.Reserve(CachedSkinningData.Num());
-		for (TPair<TWeakObjectPtr<USkeletalMeshComponent>, TSharedPtr<FSkeletalMeshSkinningData>>& Pair : CachedSkinningData)
+		if ( TickGroup == NiagaraFirstTickGroup )
 		{
-			TSharedPtr<FSkeletalMeshSkinningData>& Ptr = Pair.Value;
-			FSkeletalMeshSkinningData* SkinData = Ptr.Get();
-			USkeletalMeshComponent* Component = Pair.Key.Get();
-			check(SkinData);
-			if (Ptr.IsUnique() || !Component || !Ptr->IsUsed())
+			Pair.Value.bHasTicked = false;
+		}
+
+		// Should remove?
+		TSharedPtr<FSkeletalMeshSkinningData>& SkinningData = Pair.Value.SkinningData;
+		USkeletalMeshComponent* Component = Pair.Key.Get();
+		if ( (Component == nullptr) || SkinningData.IsUnique() || !SkinningData->IsUsed() )
+		{
+			ToRemove.Add(Pair.Key);
+			continue;
+		}
+
+		if ( Pair.Value.bHasTicked == true )
+		{
+			continue;
+		}
+
+		// Has ticked or can be ticked
+		if (bForceTick == false)
+		{
+			const ETickingGroup PrereqTickGroup = FMath::Max(Component->PrimaryComponentTick.TickGroup, Component->PrimaryComponentTick.EndTickGroup);
+			if ((PrereqTickGroup > TickGroup) || (Component->PrimaryComponentTick.IsCompletionHandleValid() && !Component->PrimaryComponentTick.GetCompletionHandle()->IsComplete()))
 			{
-				ToRemove.Add(Pair.Key);//Remove unused skin data or for those with GCd components as we go.
-			}
-			else
-			{
-				ToTick.Add(SkinData);
+				continue;
 			}
 		}
 
-		for (TWeakObjectPtr<USkeletalMeshComponent> Key : ToRemove)
-		{
-			CachedSkinningData.Remove(Key);
-		}
+		// We are going to tick this one
+		Pair.Value.bHasTicked = true;
 
-		ParallelFor(ToTick.Num(), [&](int32 Index)
+		FSkeletalMeshSkinningDataUsage Usage = Pair.Value.Usage;
+		FSkeletalMeshSkinningData* SkinningDataPtr = SkinningData.Get();
+		check(SkinningDataPtr);
+
+		if (Usage.NeedPreSkinnedVerts())
 		{
-			ToTick[Index]->Tick(DeltaSeconds);
+			ToTickPreskin.Add(SkinningDataPtr);
+		}
+		else
+		{
+			ToTickBonesOnly.Add(SkinningDataPtr);
+		}
+	}
+
+	for (TWeakObjectPtr<USkeletalMeshComponent> Key : ToRemove)
+	{
+		CachedSkinningData.Remove(Key);
+	}
+	
+	// First tick the meshes that don't need pre-skinning. 
+	// This prevents additional threading overhead when we don't need to pre-skin.
+	for (int i = 0; i < ToTickBonesOnly.Num(); i++)
+	{
+		ToTickBonesOnly[i]->Tick(DeltaSeconds, false);
+	}
+		
+	// Then tick the remaining meshes requiring pre-skinning in parallel
+	if (ToTickPreskin.Num() != 0)
+	{
+		ParallelFor(ToTickPreskin.Num(), [&](int32 Index)
+		{
+			ToTickPreskin[Index]->Tick(DeltaSeconds, true);
 		});
 	}
 }
@@ -291,30 +343,55 @@ FSkeletalMeshGpuSpawnStaticBuffers::~FSkeletalMeshGpuSpawnStaticBuffers()
 
 void FSkeletalMeshGpuSpawnStaticBuffers::Initialise(FNDISkeletalMesh_InstanceData* InstData, const FSkeletalMeshLODRenderData& SkeletalMeshLODRenderData, const FSkeletalMeshSamplingLODBuiltData& MeshSamplingLODBuiltData)
 {
-	SkeletalMeshSamplingLODBuiltData = &MeshSamplingLODBuiltData;
-	bUseGpuUniformlyDistributedSampling = InstData->bIsGpuUniformlyDistributedSampling;
+	if (!InstData)
+    {
+		SkeletalMeshSamplingLODBuiltData = nullptr;
+		bUseGpuUniformlyDistributedSampling = false;
 
-	LODRenderData = &SkeletalMeshLODRenderData;
-	TriangleCount = SkeletalMeshLODRenderData.MultiSizeIndexContainer.GetIndexBuffer()->Num() / 3;
-	VertexCount = SkeletalMeshLODRenderData.GetNumVertices();
-	check(TriangleCount > 0);
-	check(VertexCount > 0);
+		LODRenderData = nullptr;
+		TriangleCount = 0;
+		VertexCount = 0;
 
-	// Copy Specific Bones / Socket data into arrays that the renderer will use to create read buffers
-	//-TODO: Exclude setting up these arrays if we don't sample from them
-	NumSpecificBones = InstData->SpecificBones.Num();
-	if (NumSpecificBones > 0)
-	{
-		SpecificBonesArray.Reserve(NumSpecificBones);
-		for ( int32 v : InstData->SpecificBones )
-		{
-			check(v <= 65535);
-			SpecificBonesArray.Add(v);
-		}
+		NumSpecificBones = 0;
+		SpecificBonesArray.Empty();
+		NumSpecificSockets = 0;
+		SpecificSocketBoneOffset = 0;
+		return;
 	}
+	else
+	{
+		SkeletalMeshSamplingLODBuiltData = &MeshSamplingLODBuiltData;
+		bUseGpuUniformlyDistributedSampling = InstData->bIsGpuUniformlyDistributedSampling;
 
-	NumSpecificSockets = InstData->SpecificSockets.Num();
-	SpecificSocketBoneOffset = InstData->SpecificSocketBoneOffset;
+		LODRenderData = &SkeletalMeshLODRenderData;
+		TriangleCount = SkeletalMeshLODRenderData.MultiSizeIndexContainer.GetIndexBuffer()->Num() / 3;
+		VertexCount = SkeletalMeshLODRenderData.GetNumVertices();
+
+		if (TriangleCount == 0)
+		{
+			UE_LOG(LogNiagara, Warning, TEXT("FSkeletalMeshGpuSpawnStaticBuffers> Triangle count is invalid %d"), TriangleCount, (InstData && InstData->Mesh) ? *InstData->Mesh->GetFullName() : TEXT("Unknown Mesh"));
+		}
+		if (VertexCount == 0)
+		{
+			UE_LOG(LogNiagara, Warning, TEXT("FSkeletalMeshGpuSpawnStaticBuffers> Vertex count is invalid %d"), VertexCount, (InstData && InstData->Mesh) ? *InstData->Mesh->GetFullName() : TEXT("Unknown Mesh"));
+		}
+
+		// Copy Specific Bones / Socket data into arrays that the renderer will use to create read buffers
+		//-TODO: Exclude setting up these arrays if we don't sample from them
+		NumSpecificBones = InstData->SpecificBones.Num();
+		if (NumSpecificBones > 0)
+		{
+			SpecificBonesArray.Reserve(NumSpecificBones);
+			for (int32 v : InstData->SpecificBones)
+			{
+				check(v <= 65535);
+				SpecificBonesArray.Add(v);
+			}
+		}
+
+		NumSpecificSockets = InstData->SpecificSockets.Num();
+		SpecificSocketBoneOffset = InstData->SpecificSocketBoneOffset;
+	}
 }
 
 void FSkeletalMeshGpuSpawnStaticBuffers::InitRHI()
@@ -838,7 +915,7 @@ private:
 
 //////////////////////////////////////////////////////////////////////////
 
-void FNiagaraDataInterfaceProxySkeletalMesh::ConsumePerInstanceDataFromGameThread(void* PerInstanceData, const FGuid& Instance)
+void FNiagaraDataInterfaceProxySkeletalMesh::ConsumePerInstanceDataFromGameThread(void* PerInstanceData, const FNiagaraSystemInstanceID& Instance)
 {
 	FNiagaraDISkeletalMeshPassedDataToRT* SourceData = static_cast<FNiagaraDISkeletalMeshPassedDataToRT*>(PerInstanceData);
 
@@ -859,7 +936,7 @@ void FNiagaraDataInterfaceProxySkeletalMesh::ConsumePerInstanceDataFromGameThrea
 //////////////////////////////////////////////////////////////////////////
 //FNDISkeletalMesh_InstanceData
 
-void UNiagaraDataInterfaceSkeletalMesh::ProvidePerInstanceDataForRenderThread(void* DataForRenderThread, void* PerInstanceData, const FGuid& SystemInstance)
+void UNiagaraDataInterfaceSkeletalMesh::ProvidePerInstanceDataForRenderThread(void* DataForRenderThread, void* PerInstanceData, const FNiagaraSystemInstanceID& SystemInstance)
 {
 	FNiagaraDISkeletalMeshPassedDataToRT* Data = static_cast<FNiagaraDISkeletalMeshPassedDataToRT*>(DataForRenderThread);
 	FNDISkeletalMesh_InstanceData* SourceData = static_cast<FNDISkeletalMesh_InstanceData*>(PerInstanceData);
@@ -876,17 +953,64 @@ void UNiagaraDataInterfaceSkeletalMesh::ProvidePerInstanceDataForRenderThread(vo
 	Data->MeshSkinWeightBufferSrv = SourceData->MeshSkinWeightBufferSrv;
 }
 
-USkeletalMesh* UNiagaraDataInterfaceSkeletalMesh::GetSkeletalMeshHelper(UNiagaraDataInterfaceSkeletalMesh* Interface, UNiagaraComponent* OwningComponent, TWeakObjectPtr<USceneComponent>& SceneComponent, USkeletalMeshComponent*& FoundSkelComp)
+USkeletalMesh* UNiagaraDataInterfaceSkeletalMesh::GetSkeletalMesh(UNiagaraComponent* OwningComponent, TWeakObjectPtr<USceneComponent>& SceneComponent, USkeletalMeshComponent*& FoundSkelComp, FNDISkeletalMesh_InstanceData* InstData)
 {
 	USkeletalMesh* Mesh = nullptr;
-	if (Interface->SourceComponent)
+	if (MeshUserParameter.Parameter.IsValid() && InstData)
 	{
-		Mesh = Interface->SourceComponent->SkeletalMesh;
-		FoundSkelComp = Interface->SourceComponent;
+		FNiagaraSystemInstance* SystemInstance = OwningComponent->GetSystemInstance();
+		if (UObject* UserParamObject = InstData->UserParamBinding.Init(SystemInstance->GetInstanceParameters(), MeshUserParameter.Parameter))
+		{
+			InstData->CachedUserParam = UserParamObject;
+			if (USkeletalMeshComponent* UserSkelMeshComp = Cast<USkeletalMeshComponent>(UserParamObject))
+			{
+				FoundSkelComp = UserSkelMeshComp;
+				Mesh = FoundSkelComp->SkeletalMesh;
+			}
+			else if (ASkeletalMeshActor* UserSkelMeshActor = Cast<ASkeletalMeshActor>(UserParamObject))
+			{
+				FoundSkelComp = UserSkelMeshActor->GetSkeletalMeshComponent();
+				Mesh = FoundSkelComp->SkeletalMesh;
+			}
+			else if (AActor* Actor = Cast<AActor>(UserParamObject))
+			{
+				for (UActorComponent* ActorComp : Actor->GetComponents())
+				{
+					USkeletalMeshComponent* SourceComp = Cast<USkeletalMeshComponent>(ActorComp);
+					if (SourceComp)
+					{
+						USkeletalMesh* PossibleMesh = SourceComp->SkeletalMesh;
+						if (PossibleMesh != nullptr/* && PossibleMesh->bAllowCPUAccess*/)
+						{
+							Mesh = PossibleMesh;
+							FoundSkelComp = SourceComp;
+							break;
+						}
+					}
+				}
+			}
+			else
+			{
+				//We have a valid, non-null UObject parameter type but it is not a type we can use to get a skeletal mesh from. 
+				UE_LOG(LogNiagara, Warning, TEXT("SkeletalMesh data interface using object parameter with invalid type. Skeletal Mesh Data Interfaces can only get a valid mesh from SkeletalMeshComponents, SkeletalMeshActors or Actors."));
+				UE_LOG(LogNiagara, Warning, TEXT("Invalid Parameter : %s"), *UserParamObject->GetFullName());
+				UE_LOG(LogNiagara, Warning, TEXT("Niagara Component : %s"), *OwningComponent->GetFullName());
+				UE_LOG(LogNiagara, Warning, TEXT("System : %s"), *OwningComponent->GetAsset()->GetFullName());
+			}
+		}
+		else
+		{
+			//WARNING - We have a valid user param but the object set is null.
+		}
 	}
-	else if (Interface->Source)
+	else if (SourceComponent)
 	{
-		ASkeletalMeshActor* MeshActor = Cast<ASkeletalMeshActor>(Interface->Source);
+		Mesh = SourceComponent->SkeletalMesh;
+		FoundSkelComp = SourceComponent;
+	}
+	else if (Source)
+	{
+		ASkeletalMeshActor* MeshActor = Cast<ASkeletalMeshActor>(Source);
 		USkeletalMeshComponent* SourceComp = nullptr;
 		if (MeshActor != nullptr)
 		{
@@ -894,7 +1018,7 @@ USkeletalMesh* UNiagaraDataInterfaceSkeletalMesh::GetSkeletalMeshHelper(UNiagara
 		}
 		else
 		{
-			SourceComp = Interface->Source->FindComponentByClass<USkeletalMeshComponent>();
+			SourceComp = Source->FindComponentByClass<USkeletalMeshComponent>();
 		}
 
 		if (SourceComp)
@@ -904,7 +1028,7 @@ USkeletalMesh* UNiagaraDataInterfaceSkeletalMesh::GetSkeletalMeshHelper(UNiagara
 		}
 		else
 		{
-			SceneComponent = Interface->Source->GetRootComponent();
+			SceneComponent = Source->GetRootComponent();
 		}
 	}
 	else
@@ -923,8 +1047,7 @@ USkeletalMesh* UNiagaraDataInterfaceSkeletalMesh::GetSkeletalMeshHelper(UNiagara
 			}
 			else if (AActor* Owner = SimComp->GetAttachmentRootActor())
 			{
-				TArray<UActorComponent*> SourceComps = Owner->GetComponentsByClass(USkeletalMeshComponent::StaticClass());
-				for (UActorComponent* ActorComp : SourceComps)
+				for (UActorComponent* ActorComp : Owner->GetComponents())
 				{
 					USkeletalMeshComponent* SourceComp = Cast<USkeletalMeshComponent>(ActorComp);
 					if (SourceComp)
@@ -951,11 +1074,13 @@ USkeletalMesh* UNiagaraDataInterfaceSkeletalMesh::GetSkeletalMeshHelper(UNiagara
 	{
 		SceneComponent = FoundSkelComp;
 	}
-	
-	if (!Mesh && Interface->DefaultMesh)
+
+#if WITH_EDITORONLY_DATA
+	if (!Mesh && DefaultMesh)
 	{
-		Mesh = Interface->DefaultMesh;
+		Mesh = DefaultMesh;
 	}
+#endif
 
 	return Mesh;
 }
@@ -973,16 +1098,18 @@ bool FNDISkeletalMesh_InstanceData::Init(UNiagaraDataInterfaceSkeletalMesh* Inte
 	TransformInverseTransposed = FMatrix::Identity;
 	PrevTransform = FMatrix::Identity;
 	PrevTransformInverseTransposed = FMatrix::Identity;
-	DeltaSeconds = 0.0f;
+	DeltaSeconds = SystemInstance->GetComponent()->GetWorld()->GetDeltaSeconds();
 	ChangeId = Interface->ChangeId;
 	bIsGpuUniformlyDistributedSampling = false;
 	MeshWeightStrideByte = 0;
 	MeshGpuSpawnStaticBuffers = nullptr;
 	MeshGpuSpawnDynamicBuffers = nullptr;
 
+	bAllowCPUMeshDataAccess = true;
+
 	// Get skel mesh and confirm have valid data
 	USkeletalMeshComponent* NewSkelComp = nullptr;
-	Mesh = UNiagaraDataInterfaceSkeletalMesh::GetSkeletalMeshHelper(Interface, SystemInstance->GetComponent(), Component, NewSkelComp);
+	Mesh = Interface->GetSkeletalMesh(SystemInstance->GetComponent(), Component, NewSkelComp, this);
 	MeshSafe = Mesh;
 
 	if (!Mesh)
@@ -1104,16 +1231,15 @@ bool FNDISkeletalMesh_InstanceData::Init(UNiagaraDataInterfaceSkeletalMesh* Inte
 	bool bNeedDataImmediately = true;
 		
 	//Grab a handle to the skinning data if we have a component to skin.
-	ENDISkeletalMesh_SkinningMode SkinningMode = (Interface->bUseTriangleSampling || Interface->bUseVertexSampling) ? Interface->SkinningMode : ENDISkeletalMesh_SkinningMode::None;
+	const ENDISkeletalMesh_SkinningMode SkinningMode = Interface->SkinningMode;
 	FSkeletalMeshSkinningDataUsage Usage(
 		LODIndex,
-		SkinningMode == ENDISkeletalMesh_SkinningMode::SkinOnTheFly || SkinningMode == ENDISkeletalMesh_SkinningMode::PreSkin || Interface->bUseSkeletonSampling,
+		SkinningMode == ENDISkeletalMesh_SkinningMode::SkinOnTheFly || SkinningMode == ENDISkeletalMesh_SkinningMode::PreSkin,
 		SkinningMode == ENDISkeletalMesh_SkinningMode::PreSkin,
 		bNeedDataImmediately);
 
 	if (NewSkelComp)
 	{
-		SkinningMode = Interface->SkinningMode;
 		TWeakObjectPtr<USkeletalMeshComponent> SkelWeakCompPtr = NewSkelComp;
 		FNDI_SkeletalMesh_GeneratedData& GeneratedData = SystemInstance->GetWorldManager()->GetSkeletalMeshGeneratedData();
 		SkinningData = GeneratedData.GetCachedSkinningData(SkelWeakCompPtr, Usage);
@@ -1133,52 +1259,29 @@ bool FNDISkeletalMesh_InstanceData::Init(UNiagaraDataInterfaceSkeletalMesh* Inte
 	FSkinWeightVertexBuffer* SkinWeightBuffer = nullptr;
 	FSkeletalMeshLODRenderData& LODData = GetLODRenderDataAndSkinWeights(SkinWeightBuffer);
 
-	//Check for the validity of the Mesh's cpu data.
-	if ( Interface->bUseTriangleSampling || Interface->bUseVertexSampling )
+	// Check for the validity of the Mesh's cpu data.
 	{
-		if ( !Mesh->GetLODInfo(LODIndex)->bAllowCPUAccess )
+		if ( Mesh->GetLODInfo(LODIndex)->bAllowCPUAccess )
 		{
-			UE_LOG(LogNiagara, Warning, TEXT("Skeletal Mesh Data Interface is trying to spawn from a whole mesh that does not allow CPU Access.\nInterface: %s\nMesh: %s\nLOD: %d"),
-				*Interface->GetFullName(),
-				*Mesh->GetFullName(),
-				LODIndex);
+			const bool LODDataNumVerticesCorrect = LODData.GetNumVertices() > 0;
+			const bool LODDataPositonNumVerticesCorrect = LODData.StaticVertexBuffers.PositionVertexBuffer.GetNumVertices() > 0;
+			const bool bSkinWeightBuffer = SkinWeightBuffer != nullptr;
+			const bool SkinWeightBufferNumVerticesCorrect = bSkinWeightBuffer && (SkinWeightBuffer->GetNumVertices() > 0);
+			const bool bIndexBufferValid = LODData.MultiSizeIndexContainer.IsIndexBufferValid();
+			const bool bIndexBufferFound = bIndexBufferValid && (LODData.MultiSizeIndexContainer.GetIndexBuffer() != nullptr);
+			const bool bIndexBufferNumCorrect = bIndexBufferFound && (LODData.MultiSizeIndexContainer.GetIndexBuffer()->Num() > 0);
 
-			return false;
+			bAllowCPUMeshDataAccess = LODDataNumVerticesCorrect &&
+				LODDataPositonNumVerticesCorrect &&
+				bSkinWeightBuffer &&
+				SkinWeightBufferNumVerticesCorrect &&
+				bIndexBufferValid &&
+				bIndexBufferFound &&
+				bIndexBufferNumCorrect;
 		}
-
-		bool LODDataNumVerticesCorrect = LODData.GetNumVertices() > 0;
-		bool LODDataPositonNumVerticesCorrect = LODData.StaticVertexBuffers.PositionVertexBuffer.GetNumVertices() > 0;
-		bool bSkinWeightBuffer = SkinWeightBuffer != nullptr;
-		bool SkinWeightBufferNumVerticesCorrect = bSkinWeightBuffer && (SkinWeightBuffer->GetNumVertices() > 0);
-		bool bIndexBufferValid = LODData.MultiSizeIndexContainer.IsIndexBufferValid();
-		bool bIndexBufferFound = bIndexBufferValid && (LODData.MultiSizeIndexContainer.GetIndexBuffer() != nullptr);
-		bool bIndexBufferNumCorrect = bIndexBufferFound && (LODData.MultiSizeIndexContainer.GetIndexBuffer()->Num() > 0);
-
-		bool bMeshCPUDataValid = LODDataNumVerticesCorrect &&
-			LODDataPositonNumVerticesCorrect &&
-			bSkinWeightBuffer &&
-			SkinWeightBufferNumVerticesCorrect &&
-			bIndexBufferValid &&
-			bIndexBufferFound &&
-			bIndexBufferNumCorrect;
-
-		if (!bMeshCPUDataValid)
+		else
 		{
-			UE_LOG(LogNiagara, Warning, TEXT("Skeletal Mesh Data Interface is trying to sample from a mesh with missing CPU vertex or index data.\nInterface: %s\nMesh: %s\nLOD: %d\n"
-				"LODDataNumVerticesCorrect: %d  LODDataPositonNumVerticesCorrect : %d  bSkinWeightBuffer : %d  SkinWeightBufferNumVerticesCorrect : %d bIndexBufferValid : %d  bIndexBufferFound : %d  bIndexBufferNumCorrect : %d"),
-				*Interface->GetFullName(),
-				*Mesh->GetFullName(),
-				LODIndex,
-				LODDataNumVerticesCorrect ? 1 : 0,
-				LODDataPositonNumVerticesCorrect ? 1 : 0,
-				bSkinWeightBuffer ? 1 : 0,
-				SkinWeightBufferNumVerticesCorrect ? 1 : 0,
-				bIndexBufferValid ? 1 : 0,
-				bIndexBufferFound ? 1 : 0,
-				bIndexBufferNumCorrect ? 1 : 0
-			);
-
-			return false;
+			bAllowCPUMeshDataAccess = false;
 		}
 	}
 
@@ -1285,12 +1388,22 @@ bool FNDISkeletalMesh_InstanceData::ResetRequired(UNiagaraDataInterfaceSkeletalM
 		//The component we were bound to is no longer valid so we have to trigger a reset.
 		return true;
 	}
-		
+	
 	if (USkeletalMeshComponent* SkelComp = Cast<USkeletalMeshComponent>(Comp))
 	{
-		if (!SkelComp->SkeletalMesh)
+		if (!SkelComp->SkeletalMesh)//TODO: Handle clearing the mesh gracefully.
 		{
 			return true;
+		}
+
+		//If the user ptr has been changed to look at a new mesh component. TODO: Handle more gracefully.
+		if (Interface->MeshUserParameter.Parameter.IsValid())
+		{
+			UObject* NewUserParam = UserParamBinding.GetValue();
+			if (CachedUserParam != NewUserParam)
+			{
+				return true;
+			}
 		}
 		
 		// Handle the case where they've procedurally swapped out the skeletal mesh from
@@ -1306,10 +1419,12 @@ bool FNDISkeletalMesh_InstanceData::ResetRequired(UNiagaraDataInterfaceSkeletalM
 	}
 	else
 	{
+#if WITH_EDITORONLY_DATA
 		if (!Interface->DefaultMesh)
 		{
 			return true;
 		}
+#endif
 	}
 
 	if (Interface->ChangeId != ChangeId)
@@ -1437,13 +1552,15 @@ void FNDISkeletalMesh_InstanceData::Release()
 
 UNiagaraDataInterfaceSkeletalMesh::UNiagaraDataInterfaceSkeletalMesh(FObjectInitializer const& ObjectInitializer)
 	: Super(ObjectInitializer)
+#if WITH_EDITORONLY_DATA
 	, DefaultMesh(nullptr)
+#endif
 	, Source(nullptr)
 	, SkinningMode(ENDISkeletalMesh_SkinningMode::SkinOnTheFly)
 	, WholeMeshLOD(INDEX_NONE)
-	, bUseTriangleSampling(true)
-	, bUseVertexSampling(true)
-	, bUseSkeletonSampling(true)
+#if WITH_EDITORONLY_DATA
+	, bRequiresCPUAccess(false)
+#endif
 	, ChangeId(0)
 {
 	Proxy = MakeShared<FNiagaraDataInterfaceProxySkeletalMesh, ESPMode::ThreadSafe>();
@@ -1469,14 +1586,14 @@ void UNiagaraDataInterfaceSkeletalMesh::PostEditChangeProperty(FPropertyChangedE
 {
 	Super::PostEditChangeProperty(PropertyChangedEvent);
 
+#if WITH_EDITORONLY_DATA
 	// If the change comes from an interaction (and not just a generic change) reset the usage flags.
 	// todo : this and the usage binding need to be done in the a precompilation parsing (or whever the script is compiled).
 	if (PropertyChangedEvent.Property)
 	{
-		bUseTriangleSampling = false;
-		bUseVertexSampling = false;
-		bUseSkeletonSampling = false;
+		bRequiresCPUAccess = false;
 	}
+#endif
 	ChangeId++;
 }
 
@@ -1501,46 +1618,46 @@ void UNiagaraDataInterfaceSkeletalMesh::GetVMExternalFunction(const FVMExternalF
 		return;
 	}
 
-	BindTriangleSamplingFunction(BindingInfo, InstData, OutFunc);
-
-	if (OutFunc.IsBound())
-	{
-#if WITH_EDITOR
-		if (!bUseTriangleSampling)
-		{
-			bUseTriangleSampling = true;
-			MarkPackageDirty();
-		}
-#endif // WITH_EDITOR
-		return;
-	}
-
-	BindVertexSamplingFunction(BindingInfo, InstData, OutFunc);
-
-	if (OutFunc.IsBound())
-	{
-#if WITH_EDITOR
-		if (!bUseVertexSampling)
-		{
-			bUseVertexSampling = true;
-			MarkPackageDirty();
-		}
-#endif // WITH_EDITOR
-		return;
-	}
-
+	// Bind skeleton sampling function
 	BindSkeletonSamplingFunction(BindingInfo, InstData, OutFunc);
-
-#if WITH_EDITOR
 	if (OutFunc.IsBound())
 	{
-		if (!bUseSkeletonSampling)
-		{
-			bUseSkeletonSampling = true;
-			MarkPackageDirty();
-		}
+		return;
 	}
+
+	// Bind triangle sampling function
+	BindTriangleSamplingFunction(BindingInfo, InstData, OutFunc);
+	if (OutFunc.IsBound())
+	{
+		if (!InstData->bAllowCPUMeshDataAccess)
+		{
+			UE_LOG(LogNiagara, Warning, TEXT("Skeletal Mesh Data Interface is trying to use triangle sampling but CPU access or the data is invalid. Interface: %s"), *GetFullName());
+			OutFunc.Unbind();
+			return;
+		}
+
+#if WITH_EDITOR
+		bRequiresCPUAccess = true;
 #endif // WITH_EDITOR
+		return;
+	}
+
+	// Bind vertex sampling function
+	BindVertexSamplingFunction(BindingInfo, InstData, OutFunc);
+	if (OutFunc.IsBound())
+	{
+		if (!InstData->bAllowCPUMeshDataAccess)
+		{
+			UE_LOG(LogNiagara, Warning, TEXT("Skeletal Mesh Data Interface is trying to use vertex sampling but CPU access or the data is invalid. Interface: %s"), *GetFullName());
+			OutFunc.Unbind();
+			return;
+		}
+
+#if WITH_EDITOR
+		bRequiresCPUAccess = true;
+#endif // WITH_EDITOR
+		return;
+	}
 }
 
 
@@ -1553,15 +1670,16 @@ bool UNiagaraDataInterfaceSkeletalMesh::CopyToInternal(UNiagaraDataInterface* De
 
 	UNiagaraDataInterfaceSkeletalMesh* OtherTyped = CastChecked<UNiagaraDataInterfaceSkeletalMesh>(Destination);
 	OtherTyped->Source = Source;
-	OtherTyped->DefaultMesh = DefaultMesh;
+	OtherTyped->MeshUserParameter = MeshUserParameter;
 	OtherTyped->SkinningMode = SkinningMode;
 	OtherTyped->SamplingRegions = SamplingRegions;
 	OtherTyped->WholeMeshLOD = WholeMeshLOD;
 	OtherTyped->SpecificBones = SpecificBones;
 	OtherTyped->SpecificSockets = SpecificSockets;
-	OtherTyped->bUseTriangleSampling = bUseTriangleSampling;
-	OtherTyped->bUseVertexSampling = bUseVertexSampling;
-	OtherTyped->bUseSkeletonSampling = bUseSkeletonSampling;
+#if WITH_EDITORONLY_DATA
+	OtherTyped->DefaultMesh = DefaultMesh;
+	OtherTyped->bRequiresCPUAccess = bRequiresCPUAccess;
+#endif
 	return true;
 }
 
@@ -1573,7 +1691,10 @@ bool UNiagaraDataInterfaceSkeletalMesh::Equals(const UNiagaraDataInterface* Othe
 	}
 	const UNiagaraDataInterfaceSkeletalMesh* OtherTyped = CastChecked<const UNiagaraDataInterfaceSkeletalMesh>(Other);
 	return OtherTyped->Source == Source &&
+#if WITH_EDITORONLY_DATA
 		OtherTyped->DefaultMesh == DefaultMesh &&
+#endif
+		OtherTyped->MeshUserParameter == MeshUserParameter &&
 		OtherTyped->SkinningMode == SkinningMode &&
 		OtherTyped->SamplingRegions == SamplingRegions &&
 		OtherTyped->WholeMeshLOD == WholeMeshLOD &&
@@ -1628,7 +1749,8 @@ TArray<FNiagaraDataInterfaceError> UNiagaraDataInterfaceSkeletalMesh::GetErrors(
 	bool bHasNoMeshAssignedError = false;
 	
 	// Collect Errors
-	if (DefaultMesh != nullptr && (bUseTriangleSampling || bUseVertexSampling))
+#if WITH_EDITORONLY_DATA
+	if (DefaultMesh != nullptr && bRequiresCPUAccess)
 	{
 		for (auto info : DefaultMesh->GetLODInfoArray())
 		{
@@ -1660,6 +1782,7 @@ TArray<FNiagaraDataInterfaceError> UNiagaraDataInterfaceSkeletalMesh::GetErrors(
 
 		Errors.Add(CPUAccessNotAllowedError);
 	}
+#endif
 
 	if (Source == nullptr && bHasNoMeshAssignedError)
 	{
@@ -1955,7 +2078,14 @@ bool UNiagaraDataInterfaceSkeletalMesh::GetFunctionHLSL(const FName& DefinitionF
 	{
 		static const TCHAR* FormatSample = TEXT("void {InstanceFunctionName} (in int SocketIndex, out int Bone) { {GetDISkelMeshContextName} DISkelMesh_GetSpecificSocketBoneAt(DIContext, SocketIndex, Bone); }");
 		OutHLSL += FString::Format(FormatSample, ArgsSample);
-	}
+	} 
+	else if (DefinitionFunctionName == FSkeletalMeshInterfaceHelper::GetSpecificSocketTransformName)
+	{
+		// TODO: This just returns the Identity transform.
+		// TODO: Make this work on the GPU?
+		static const TCHAR* FormatSample = TEXT("void {InstanceFunctionName} (in int SocketIndex, in int bShouldApplyTransform, out float3 Translation, out float4 Rotation, out float4 Scale) { Translation = float3(0.0, 0.0, 0.0); Rotation = float4(0.0, 0.0, 0.0, 1.0); Scale = float3(1.0, 1.0, 1.0); }");
+		OutHLSL += FString::Format(FormatSample, ArgsSample);
+	} 
 	else if (DefinitionFunctionName == FSkeletalMeshInterfaceHelper::RandomSpecificSocketBoneName)
 	{
 		static const TCHAR* FormatSample = TEXT("void {InstanceFunctionName} (out int SocketBone) { {GetDISkelMeshContextName} DISkelMesh_RandomSpecificSocketBone(DIContext, SocketBone); }");
@@ -1994,6 +2124,17 @@ void UNiagaraDataInterfaceSkeletalMesh::SetSourceComponentFromBlueprints(USkelet
 	ChangeId++;
 	SourceComponent = ComponentToUse;
 	Source = ComponentToUse->GetOwner();
+}
+
+ETickingGroup UNiagaraDataInterfaceSkeletalMesh::CalculateTickGroup(void* PerInstanceData) const
+{
+	FNDISkeletalMesh_InstanceData* InstData = static_cast<FNDISkeletalMesh_InstanceData*>(PerInstanceData);
+	USkeletalMeshComponent* Component = Cast<USkeletalMeshComponent>(InstData->Component.Get());
+	if ( Component )
+	{
+		return ETickingGroup(FMath::Max(Component->PrimaryComponentTick.TickGroup, Component->PrimaryComponentTick.EndTickGroup) + 1);
+	}
+	return NiagaraFirstTickGroup;
 }
 
 //UNiagaraDataInterfaceSkeletalMesh END

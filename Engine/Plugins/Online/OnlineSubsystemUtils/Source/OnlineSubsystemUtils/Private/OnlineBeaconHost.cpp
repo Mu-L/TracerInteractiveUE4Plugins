@@ -174,7 +174,7 @@ void AOnlineBeaconHost::NotifyControlMessage(UNetConnection* Connection, uint8 M
 								Connection->PlayerId = UniqueId;
 								Connection->OwningActor = NewClientActor;
 								Connection->SetClientLoginState(EClientLoginState::ReceivedJoin);
-								NewClientActor->Role = ROLE_Authority;
+								NewClientActor->SetRole(ROLE_Authority);
 								NewClientActor->SetReplicates(false);
 								check(NetDriverName == NetDriver->NetDriverName);
 								NewClientActor->SetNetDriverName(NetDriverName);
@@ -364,7 +364,7 @@ void AOnlineBeaconHost::SendWelcomeControlMessage(const FEncryptionKeyResponse& 
 		{
 			if (Response.Response == EEncryptionResponse::Success)
 			{
-				Connection->EnableEncryptionWithKeyServer(Response.EncryptionKey);
+				Connection->EnableEncryptionServer(Response.EncryptionData);
 				SendWelcomeControlMessage(Connection);
 			}
 			else

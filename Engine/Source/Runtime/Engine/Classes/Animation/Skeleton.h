@@ -124,11 +124,10 @@ struct FReferencePose
 	 * Serializes the bones
 	 *
 	 * @param Ar - The archive to serialize into.
-	 * @param Rect - The bone container to serialize.
-	 *
-	 * @return Reference to the Archive after serialization.
+	 * @param P - The FReferencePose to serialize
+	 * @param Outer - The object containing this instance. Used to determine if we're loading cooked data.
 	 */
-	friend FArchive& operator<<(FArchive& Ar, FReferencePose & P);
+	friend void SerializeReferencePose(FArchive& Ar, FReferencePose& P, UObject* Outer);
 };
 
 USTRUCT()
@@ -384,6 +383,9 @@ protected:
 	UPROPERTY()
 	FSmartNameContainer SmartNames;
 
+	// Cached ptr to the persistent AnimCurveMapping
+	FSmartNameMapping* AnimCurveMapping;
+
 	// this is default curve uid list used like ref pose, as default value
 	// don't use this unless you want all curves from the skeleton
 	// FBoneContainer contains only list that is used by current LOD
@@ -557,10 +559,19 @@ public:
 
 #if WITH_EDITORONLY_DATA
 
-	// @todo document
+	/*
+	 * Collect animation notifies that are referenced in all animations that use this skeleton (uses the asset registry).
+	 * Updates the cached AnimationNotifies array.
+	 */
 	ENGINE_API void CollectAnimationNotifies();
 
-	// @todo document
+	/*
+	 * Collect animation notifies that are referenced in all animations that use this skeleton (uses the asset registry).
+	 * @param	OutNotifies		All the notifies that were found
+	 */
+	ENGINE_API void CollectAnimationNotifies(TArray<FName>& OutNotifies) const;
+
+	// Adds a new anim notify to the cached AnimationNotifies array.
 	ENGINE_API void AddNewAnimationNotify(FName NewAnimNotifyName);
 
 	ENGINE_API USkeletalMesh* GetAssetPreviewMesh(UObject* InAsset);
@@ -835,8 +846,8 @@ public:
 	ENGINE_API void RemoveBonesFromSkeleton(const TArray<FName>& BonesToRemove, bool bRemoveChildBones);
 
 	// Asset registry information for animation notifies
-	static const FName AnimNotifyTag;
-	static const FString AnimNotifyTagDelimiter;
+	ENGINE_API static const FName AnimNotifyTag;
+	ENGINE_API static const FString AnimNotifyTagDelimiter;
 
 	// Asset registry information for animation curves
 	ENGINE_API static const FName CurveNameTag;

@@ -906,12 +906,20 @@ bool GetSourceNameFromItem(TSharedPtr<ISkeletonTreeItem> SourceBone, FName& OutN
 void SSkeletonTree::FillVirtualBoneSubmenu(FMenuBuilder& MenuBuilder, TArray<TSharedPtr<ISkeletonTreeItem>> SourceBones)
 {
 	const bool bShowVirtualBones = false;
-	TSharedRef<SWidget> MenuContent = SNew(SBoneTreeMenu)
+	TSharedRef<SBoneTreeMenu> MenuContent = SNew(SBoneTreeMenu)
 		.bShowVirtualBones(false)
 		.Title(LOCTEXT("TargetBonePickerTitle", "Pick Target Bone..."))
 		.OnBoneSelectionChanged(this, &SSkeletonTree::OnVirtualTargetBonePicked, SourceBones)
 		.OnGetReferenceSkeleton(this, &SSkeletonTree::OnGetReferenceSkeleton);
 	MenuBuilder.AddWidget(MenuContent, FText::GetEmpty(), true);
+
+	MenuContent->RegisterActiveTimer(0.0f, FWidgetActiveTimerDelegate::CreateLambda(
+		[FilterTextBox = MenuContent->GetFilterTextWidget()](double, float)
+		{
+			FSlateApplication::Get().SetKeyboardFocus(FilterTextBox);
+			return EActiveTimerReturnType::Stop;
+		}
+	));
 }
 
 void SSkeletonTree::OnVirtualTargetBonePicked(FName TargetBoneName, TArray<TSharedPtr<ISkeletonTreeItem>> SourceBones)
@@ -1024,46 +1032,52 @@ void SSkeletonTree::RemoveFromLOD(int32 LODIndex, bool bIncludeSelected, bool bI
 
 		TArray<FName> BonesToRemove;
 
-		for (const TSharedPtr<FSkeletonTreeBoneItem>& Item : TreeSelection.GetSelectedItems<FSkeletonTreeBoneItem>())
+		//Scoped post edit change
 		{
-			FName BoneName = Item->GetRowItemName();
-			int32 BoneIndex = RefSkeleton.FindBoneIndex(BoneName);
-			if (BoneIndex != INDEX_NONE)
+			FScopedSkeletalMeshPostEditChange ScopedPostEditChange(PreviewMeshComponent->SkeletalMesh);
+
+			for (const TSharedPtr<FSkeletonTreeBoneItem>& Item : TreeSelection.GetSelectedItems<FSkeletonTreeBoneItem>())
 			{
-				if (bIncludeSelected)
+				FName BoneName = Item->GetRowItemName();
+				int32 BoneIndex = RefSkeleton.FindBoneIndex(BoneName);
+				if (BoneIndex != INDEX_NONE)
 				{
-					PreviewMeshComponent->SkeletalMesh->AddBoneToReductionSetting(LODIndex, BoneName);
-					BonesToRemove.AddUnique(BoneName);
-				}
-				else
-				{
-					for (int32 ChildIndex = BoneIndex + 1; ChildIndex < RefSkeleton.GetRawBoneNum(); ++ChildIndex)
+					if (bIncludeSelected)
 					{
-						if (RefSkeleton.GetParentIndex(ChildIndex) == BoneIndex)
+						PreviewMeshComponent->SkeletalMesh->AddBoneToReductionSetting(LODIndex, BoneName);
+						BonesToRemove.AddUnique(BoneName);
+					}
+					else
+					{
+						for (int32 ChildIndex = BoneIndex + 1; ChildIndex < RefSkeleton.GetRawBoneNum(); ++ChildIndex)
 						{
-							FName ChildBoneName = RefSkeleton.GetBoneName(ChildIndex);
-							PreviewMeshComponent->SkeletalMesh->AddBoneToReductionSetting(LODIndex, ChildBoneName);
-							BonesToRemove.AddUnique(ChildBoneName);
+							if (RefSkeleton.GetParentIndex(ChildIndex) == BoneIndex)
+							{
+								FName ChildBoneName = RefSkeleton.GetBoneName(ChildIndex);
+								PreviewMeshComponent->SkeletalMesh->AddBoneToReductionSetting(LODIndex, ChildBoneName);
+								BonesToRemove.AddUnique(ChildBoneName);
+							}
 						}
 					}
 				}
 			}
-		}
 
-		int32 TotalLOD = PreviewMeshComponent->SkeletalMesh->GetLODNum();
-		IMeshUtilities& MeshUtilities = FModuleManager::Get().LoadModuleChecked<IMeshUtilities>("MeshUtilities");
+			int32 TotalLOD = PreviewMeshComponent->SkeletalMesh->GetLODNum();
+			IMeshUtilities& MeshUtilities = FModuleManager::Get().LoadModuleChecked<IMeshUtilities>("MeshUtilities");
 
-		if (bIncludeBelowLODs)
-		{
-			for (int32 Index = LODIndex + 1; Index < TotalLOD; ++Index)
+		
+			if (bIncludeBelowLODs)
 			{
-				MeshUtilities.RemoveBonesFromMesh(PreviewMeshComponent->SkeletalMesh, Index, &BonesToRemove);
-				PreviewMeshComponent->SkeletalMesh->AddBoneToReductionSetting(Index, BonesToRemove);
+				for (int32 Index = LODIndex + 1; Index < TotalLOD; ++Index)
+				{
+					MeshUtilities.RemoveBonesFromMesh(PreviewMeshComponent->SkeletalMesh, Index, &BonesToRemove);
+					PreviewMeshComponent->SkeletalMesh->AddBoneToReductionSetting(Index, BonesToRemove);
+				}
 			}
-		}
 
-		// remove from current LOD
-		MeshUtilities.RemoveBonesFromMesh(PreviewMeshComponent->SkeletalMesh, LODIndex, &BonesToRemove);
+			// remove from current LOD
+			MeshUtilities.RemoveBonesFromMesh(PreviewMeshComponent->SkeletalMesh, LODIndex, &BonesToRemove);
+		}
 		// update UI to reflect the change
 		OnLODSwitched();
 	}

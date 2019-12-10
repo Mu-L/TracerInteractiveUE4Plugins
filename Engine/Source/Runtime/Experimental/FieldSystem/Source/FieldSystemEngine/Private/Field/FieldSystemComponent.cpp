@@ -4,24 +4,22 @@
 
 #include "Async/ParallelFor.h"
 #include "ChaosSolversModule.h"
-#include "Chaos/RigidParticles.h"
 #include "Field/FieldSystemCoreAlgo.h"
 #include "Field/FieldSystemSceneProxy.h"
 #include "Field/FieldSystemNodes.h"
 #include "Modules/ModuleManager.h"
 #include "Misc/CoreMiscDefines.h"
 #include "Physics/Experimental/PhysScene_Chaos.h"
-#include "SolverObjects/FieldSystemPhysicsObject.h"
+#include "PhysicsProxy/FieldSystemPhysicsProxy.h"
+#include "PBDRigidsSolver.h"
 
 DEFINE_LOG_CATEGORY_STATIC(FSC_Log, NoLogging, All);
 
 UFieldSystemComponent::UFieldSystemComponent(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 	, FieldSystem(nullptr)
-#if INCLUDE_CHAOS
-	, PhysicsObject(nullptr)
+	, PhysicsProxy(nullptr)
 	, ChaosModule(nullptr)
-#endif
 	, bHasPhysicsState(false)
 {
 	UE_LOG(FSC_Log, Log, TEXT("FieldSystemComponent[%p]::UFieldSystemComponent()"),this);
@@ -45,36 +43,44 @@ void UFieldSystemComponent::OnCreatePhysicsState()
 	const bool bValidWorld = GetWorld() && GetWorld()->IsGameWorld();
 	if(bValidWorld)
 	{
-#if INCLUDE_CHAOS
 		// Check we can get a suitable dispatcher
 		ChaosModule = FModuleManager::Get().GetModulePtr<FChaosSolversModule>("ChaosSolvers");
 		check(ChaosModule);
 
-		PhysicsObject = new FFieldSystemPhysicsObject(this);
+		PhysicsProxy = new FFieldSystemPhysicsProxy(this);
+#if INCLUDE_CHAOS
 		TSharedPtr<FPhysScene_Chaos> Scene = GetOwner()->GetWorld()->PhysicsScene_Chaos;
-		Scene->AddObject(this, PhysicsObject);
+		Scene->AddObject(this, PhysicsProxy);
 #endif
 
 		bHasPhysicsState = true;
+
+		if(FieldSystem)
+		{
+			for(FFieldSystemCommand& Cmd : FieldSystem->Commands)
+			{
+				DispatchCommand(Cmd);
+			}
+		}
 	}
 }
 
 void UFieldSystemComponent::OnDestroyPhysicsState()
 {
 	UActorComponent::OnDestroyPhysicsState();
-#if INCLUDE_CHAOS
-	if (!PhysicsObject)
+	if (!PhysicsProxy)
 	{
 		check(!bHasPhysicsState);
 		return;
 	}
 
+#if INCLUDE_CHAOS
 	TSharedPtr<FPhysScene_Chaos> Scene = GetOwner()->GetWorld()->PhysicsScene_Chaos;
-	Scene->RemoveObject(PhysicsObject);
+	Scene->RemoveObject(PhysicsProxy);
+#endif
 
 	ChaosModule = nullptr;
-	PhysicsObject = nullptr;
-#endif
+	PhysicsProxy = nullptr;
 
 	bHasPhysicsState = false;
 	
@@ -92,7 +98,6 @@ bool UFieldSystemComponent::HasValidPhysicsState() const
 
 void UFieldSystemComponent::DispatchCommand(const FFieldSystemCommand& InCommand)
 {
-#if INCLUDE_CHAOS
 	if (HasValidPhysicsState())
 	{
 		checkSlow(ChaosModule); // Should already be checked from OnCreatePhysicsState
@@ -100,7 +105,7 @@ void UFieldSystemComponent::DispatchCommand(const FFieldSystemCommand& InCommand
 		checkSlow(PhysicsDispatcher); // Should always have one of these
 
 		// Assemble a list of compatible solvers
-		TArray<Chaos::FPBDRigidsSolver*> SolverList;
+		TArray<Chaos::FPhysicsSolver*> SolverList;
 		if(SupportedSolvers.Num() > 0)
 		{
 			for(TSoftObjectPtr<AChaosSolverActor>& SolverActorPtr : SupportedSolvers)
@@ -112,23 +117,22 @@ void UFieldSystemComponent::DispatchCommand(const FFieldSystemCommand& InCommand
 			}
 		}
 
-		PhysicsDispatcher->EnqueueCommand([PhysicsObject = this->PhysicsObject, NewCommand = InCommand, ChaosModule = this->ChaosModule, SolverList]()
+		PhysicsDispatcher->EnqueueCommandImmediate([PhysicsProxy = this->PhysicsProxy, NewCommand = InCommand, ChaosModule = this->ChaosModule, SolverList]()
 		{
 			const int32 NumFilterSolvers = SolverList.Num();
-			const TArray<Chaos::FPBDRigidsSolver*>& Solvers = ChaosModule->GetSolvers();
+			const TArray<Chaos::FPhysicsSolver*>& Solvers = ChaosModule->GetSolvers();
 
-			for(Chaos::FPBDRigidsSolver* Solver : Solvers)
+			for(Chaos::FPhysicsSolver* Solver : Solvers)
 			{
 				const bool bSolverValid = NumFilterSolvers == 0 || SolverList.Contains(Solver);
 
-				if(Solver->Enabled() && Solver->HasActiveObjects() && bSolverValid)
+				if(Solver->Enabled() && Solver->HasActiveParticles() && bSolverValid)
 				{
-					PhysicsObject->BufferCommand(Solver, NewCommand);
+					PhysicsProxy->BufferCommand(Solver, NewCommand);
 				}
 			}
 		});
 	}
-#endif
 }
 
 void UFieldSystemComponent::ApplyStayDynamicField(bool Enabled, FVector Position, float Radius)

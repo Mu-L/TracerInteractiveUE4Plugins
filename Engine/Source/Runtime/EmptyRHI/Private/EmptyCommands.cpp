@@ -12,11 +12,6 @@ void FEmptyDynamicRHI::RHISetStreamSource(uint32 StreamIndex, FRHIVertexBuffer* 
 
 }
 
-void FEmptyDynamicRHI::RHISetStreamOutTargets(uint32 NumTargets, const FRHIVertexBuffer** VertexBuffers, const uint32* Offsets)
-{
-
-}
-
 void FEmptyDynamicRHI::RHISetRasterizerState(FRHIRasterizerState* NewStateRHI)
 {
 	FEmptyRasterizerState* NewState = ResourceCast(NewStateRHI);
@@ -402,6 +397,12 @@ void* FEmptyDynamicRHI::RHIGetNativeDevice()
 {
 	return nullptr;
 }
+
+void* FEmptyDynamicRHI::RHIGetNativeInstance()
+{
+	return nullptr;
+}
+
 
 void FEmptyDynamicRHI::RHIExecuteCommandList(FRHICommandList* CmdList)
 {

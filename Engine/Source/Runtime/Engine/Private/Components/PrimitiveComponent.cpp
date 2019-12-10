@@ -45,6 +45,8 @@
 
 #define LOCTEXT_NAMESPACE "PrimitiveComponent"
 
+CSV_DEFINE_CATEGORY(PrimitiveComponent, false);
+
 //////////////////////////////////////////////////////////////////////////
 // Globals
 
@@ -329,6 +331,7 @@ UPrimitiveComponent::UPrimitiveComponent(const FObjectInitializer& ObjectInitial
 	bVisibleInReflectionCaptures = true;
 	bVisibleInRayTracing = true;
 	bRenderInMainPass = true;
+	bRenderInDepthPass = true;
 	VisibilityId = INDEX_NONE;
 #if WITH_EDITORONLY_DATA
 	CanBeCharacterBase_DEPRECATED = ECB_Yes;
@@ -340,6 +343,8 @@ UPrimitiveComponent::UPrimitiveComponent(const FObjectInitializer& ObjectInitial
 
 	LDMaxDrawDistance = 0.f;
 	CachedMaxDrawDistance = 0.f;
+	bUseMaxLODAsImposter = false;
+	bBatchImpostersAsInstances = false;
 	bNeverDistanceCull = false;
 
 	bUseEditorCompositing = false;
@@ -365,7 +370,6 @@ UPrimitiveComponent::UPrimitiveComponent(const FObjectInitializer& ObjectInitial
 	bReceiveMobileCSMShadows = true;
 #if WITH_EDITORONLY_DATA
 	bEnableAutoLODGeneration = true;
-	bUseMaxLODAsImposter = false;
 #endif // WITH_EDITORONLY_DATA
 }
 
@@ -738,6 +742,12 @@ void UPrimitiveComponent::OnCreatePhysicsState()
 			{
 				BodyTransform.SetScale3D(FVector(KINDA_SMALL_NUMBER));
 			}
+#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+			if ((BodyInstance.GetCollisionEnabled() != ECollisionEnabled::NoCollision) && (FMath::IsNearlyZero(BodyScale.X) || FMath::IsNearlyZero(BodyScale.Y) || FMath::IsNearlyZero(BodyScale.Z)))
+			{
+				UE_LOG(LogPhysics, Warning, TEXT("Scale for %s has a component set to zero, which will result in a bad body instance. Scale:%s"), *GetPathNameSafe(this), *BodyScale.ToString());
+			}
+#endif
 
 			// Create the body.
 			BodyInstance.InitBody(BodySetup, BodyTransform, this, GetWorld()->GetPhysicsScene());		
@@ -915,6 +925,18 @@ void UPrimitiveComponent::PostEditChangeProperty(FPropertyChangedEvent& Property
 		{
 			MarkRenderStateDirty();
 		}
+
+	}
+
+	if (UProperty* MemberPropertyThatChanged = PropertyChangedEvent.MemberProperty)
+	{
+		const FName MemberPropertyName = MemberPropertyThatChanged->GetFName();
+
+		// Reregister to get the custom primitive data to the proxy
+		if (MemberPropertyName == GET_MEMBER_NAME_CHECKED(UPrimitiveComponent, CustomPrimitiveData))
+		{
+			MarkRenderStateDirty();
+		}
 	}
 
 	if (LightmapType == ELightmapType::ForceSurface && GetStaticLightingType() == LMIT_None)
@@ -1013,34 +1035,6 @@ bool UPrimitiveComponent::CanEditChange(const UProperty* InProperty) const
 		if (PropertyName == CastInsetShadowName)
 		{
 			return !bSelfShadowOnly;
-		}
-
-		if (PropertyName == CastShadowName)
-		{
-			// Look for any lit materials
-			bool bHasAnyLitMaterials = false;
-			const int32 NumMaterials = GetNumMaterials();
-			for (int32 MaterialIndex = 0; (MaterialIndex < NumMaterials) && !bHasAnyLitMaterials; ++MaterialIndex)
-			{
-				UMaterialInterface* Material = GetMaterial(MaterialIndex);
-
-				if (Material)
-				{
-					if (Material->GetShadingModels().IsLit())
-					{
-						bHasAnyLitMaterials = true;
-					}
-				}
-				else
-				{
-					// Default material is lit
-					bHasAnyLitMaterials = true;
-				}
-			}
-
-			// If there's at least one lit section it could cast shadows, so let the property be edited.
-			// The 0 materials catch is in case any components aren't properly implementing the GetMaterial API, they might or might not work with shadows.
-			return (NumMaterials == 0) || bHasAnyLitMaterials;
 		}
 	}
 
@@ -1388,6 +1382,33 @@ void UPrimitiveComponent::SetCastShadow(bool NewCastShadow)
 	if(NewCastShadow != CastShadow)
 	{
 		CastShadow = NewCastShadow;
+		MarkRenderStateDirty();
+	}
+}
+
+void UPrimitiveComponent::SetCastInsetShadow(bool bInCastInsetShadow)
+{
+	if(bInCastInsetShadow != bCastInsetShadow)
+	{
+		bCastInsetShadow = bInCastInsetShadow;
+		MarkRenderStateDirty();
+	}
+}
+
+void UPrimitiveComponent::SetLightAttachmentsAsGroup(bool bInLightAttachmentsAsGroup)
+{
+	if(bInLightAttachmentsAsGroup != bLightAttachmentsAsGroup)
+	{
+		bLightAttachmentsAsGroup = bInLightAttachmentsAsGroup;
+		MarkRenderStateDirty();
+	}
+}
+
+void UPrimitiveComponent::SetExcludeFromLightAttachmentGroup(bool bInExcludeFromLightAttachmentGroup)
+{
+	if (bExcludeFromLightAttachmentGroup != bInExcludeFromLightAttachmentGroup)
+	{
+		bExcludeFromLightAttachmentGroup = bInExcludeFromLightAttachmentGroup;
 		MarkRenderStateDirty();
 	}
 }
@@ -1834,10 +1855,10 @@ static bool ShouldIgnoreHitResult(const UWorld* InWorld, FHitResult const& TestH
 				if (CVarShowInitialOverlaps != 0)
 				{
 					UE_LOG(LogTemp, Log, TEXT("Overlapping %s Dir %s Dot %f Normal %s Depth %f"), *GetNameSafe(TestHit.Component.Get()), *MovementDir.ToString(), MoveDot, *TestHit.ImpactNormal.ToString(), TestHit.PenetrationDepth);
-					DrawDebugDirectionalArrow(InWorld, TestHit.TraceStart, TestHit.TraceStart + 30.f * TestHit.ImpactNormal, 5.f, bMovingOut ? FColor(64,128,255) : FColor(255,64,64), true, 4.f);
+					DrawDebugDirectionalArrow(InWorld, TestHit.TraceStart, TestHit.TraceStart + 30.f * TestHit.ImpactNormal, 5.f, bMovingOut ? FColor(64,128,255) : FColor(255,64,64), false, 4.f);
 					if (TestHit.PenetrationDepth > KINDA_SMALL_NUMBER)
 					{
-						DrawDebugDirectionalArrow(InWorld, TestHit.TraceStart, TestHit.TraceStart + TestHit.PenetrationDepth * TestHit.Normal, 5.f, FColor(64,255,64), true, 4.f);
+						DrawDebugDirectionalArrow(InWorld, TestHit.TraceStart, TestHit.TraceStart + TestHit.PenetrationDepth * TestHit.Normal, 5.f, FColor(64,255,64), false, 4.f);
 					}
 				}
 			}
@@ -1934,6 +1955,7 @@ FCollisionShape UPrimitiveComponent::GetCollisionShape(float Inflation) const
 bool UPrimitiveComponent::MoveComponentImpl( const FVector& Delta, const FQuat& NewRotationQuat, bool bSweep, FHitResult* OutHit, EMoveComponentFlags MoveFlags, ETeleportType Teleport)
 {
 	SCOPE_CYCLE_COUNTER(STAT_MoveComponentTime);
+	CSV_SCOPED_TIMING_STAT(PrimitiveComponent, MoveComponentTime);
 
 #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST) && PERF_MOVECOMPONENT_STATS
 	FScopedMoveCompTimer MoveTimer(this, Delta);
@@ -2027,11 +2049,13 @@ bool UPrimitiveComponent::MoveComponentImpl( const FVector& Delta, const FQuat& 
 #endif 
 			UWorld* const MyWorld = GetWorld();
 
+			static const FName TraceTagName = TEXT("MoveComponent");
 			const bool bForceGatherOverlaps = !ShouldCheckOverlapFlagToQueueOverlaps(*this);
 			FComponentQueryParams Params(SCENE_QUERY_STAT(MoveComponent), Actor);
 			FCollisionResponseParams ResponseParam;
 			InitSweepCollisionParams(Params, ResponseParam);
 			Params.bIgnoreTouches |= !(GetGenerateOverlapEvents() || bForceGatherOverlaps);
+			Params.TraceTag = TraceTagName;
 			bool const bHadBlockingHit = MyWorld->ComponentSweepMulti(Hits, this, TraceStart, TraceEnd, InitialRotationQuat, Params);
 
 			if (Hits.Num() > 0)
@@ -2548,13 +2572,15 @@ void UPrimitiveComponent::BeginComponentOverlap(const FOverlapInfo& OtherOverlap
 			AActor* const OtherActor = OtherComp->GetOwner();
 			AActor* const MyActor = GetOwner();
 
-			const bool bNotifyActorTouch = bDoNotifies && !AreActorsOverlapping(*MyActor, *OtherActor);
+			const bool bSameActor = (MyActor == OtherActor);
+			const bool bNotifyActorTouch = bDoNotifies && !bSameActor && !AreActorsOverlapping(*MyActor, *OtherActor);
 
 			// Perform reflexive touch.
 			OverlappingComponents.Add(OtherOverlap);												// already verified uniqueness above
 			AddUniqueOverlapFast(OtherComp->OverlappingComponents, FOverlapInfo(this, INDEX_NONE));	// uniqueness unverified, so addunique
 			
-			if (bDoNotifies)
+			const UWorld* World = GetWorld();
+			if (bDoNotifies && World && World->HasBegunPlay())
 			{
 				// first execute component delegates
 				if (!IsPendingKill())
@@ -2622,7 +2648,8 @@ void UPrimitiveComponent::EndComponentOverlap(const FOverlapInfo& OtherOverlap, 
 		GlobalOverlapEventsCounter++;
 		OverlappingComponents.RemoveAtSwap(OverlapIdx, 1, false);
 
-		if (bDoNotifies)
+		const UWorld* World = GetWorld();
+		if (bDoNotifies && World && World->HasBegunPlay())
 		{
 			AActor* const OtherActor = OtherComp->GetOwner();
 			AActor* const MyActor = GetOwner();
@@ -2639,7 +2666,8 @@ void UPrimitiveComponent::EndComponentOverlap(const FOverlapInfo& OtherOverlap, 
 				}
 	
 				// if this was the last touch on the other actor by this actor, notify that we've untouched the actor as well
-				if (MyActor && !AreActorsOverlapping(*MyActor, *OtherActor))
+				const bool bSameActor = (MyActor == OtherActor);
+				if (MyActor && !bSameActor && !AreActorsOverlapping(*MyActor, *OtherActor))
 				{			
 					if (IsActorValidToNotify(MyActor))
 					{
@@ -2871,7 +2899,7 @@ bool UPrimitiveComponent::AreAllCollideableDescendantsRelative(bool bAllowCached
 			if (CurrentComp)
 			{
 				// Is the component not using relative position?
-				if (CurrentComp->bAbsoluteLocation || CurrentComp->bAbsoluteRotation)
+				if (CurrentComp->IsUsingAbsoluteLocation() || CurrentComp->IsUsingAbsoluteRotation())
 				{
 					// Can we possibly collide with the component?
 					UPrimitiveComponent* const CurrentPrimitive = Cast<UPrimitiveComponent>(CurrentComp);
@@ -2983,16 +3011,21 @@ bool UPrimitiveComponent::UpdateOverlapsImpl(const TOverlapArrayView* NewPending
 	SCOPE_CYCLE_COUNTER(STAT_UpdateOverlaps); 
 	SCOPE_CYCLE_UOBJECT(ComponentScope, this);
 
+	// if we haven't begun play, we're still setting things up (e.g. we might be inside one of the construction scripts)
+	// so we don't want to generate overlaps yet. There is no need to update children yet either, they will update once we are allowed to as well.
+	const AActor* const MyActor = GetOwner();
+	if (MyActor && !MyActor->HasActorBegunPlay() && !MyActor->IsActorBeginningPlay())
+	{
+		return false;
+	}
+
 	bool bCanSkipUpdateOverlaps = true;
 
 	// first, dispatch any pending overlaps
 	if (GetGenerateOverlapEvents() && IsQueryCollisionEnabled())	//TODO: should modifying query collision remove from mayoverlapevents?
 	{
 		bCanSkipUpdateOverlaps = false;
-		// if we haven't begun play, we're still setting things up (e.g. we might be inside one of the construction scripts)
-		// so we don't want to generate overlaps yet.
-		AActor* const MyActor = GetOwner();
-		if ( MyActor && MyActor->IsActorInitialized() )
+		if (MyActor)
 		{
 			const FTransform PrevTransform = GetComponentTransform();
 			// If we are the root component we ignore child components. Those children will update their overlaps when we descend into the child tree.
@@ -3208,6 +3241,33 @@ bool UPrimitiveComponent::ComponentOverlapMultiImpl(TArray<struct FOverlapResult
 	ParamsWithSelf.AddIgnoredComponent_LikelyDuplicatedRoot(this);
 	OutOverlaps.Reset();
 	return BodyInstance.OverlapMulti(OutOverlaps, World, /*pWorldToComponent=*/ nullptr, Pos, Quat, TestChannel, ParamsWithSelf, FCollisionResponseParams(GetCollisionResponseToChannels()), ObjectQueryParams);
+}
+
+const UPrimitiveComponent* UPrimitiveComponent::GetLightingAttachmentRoot() const
+{
+	// Exclude  from light attachment group whatever the parent says
+	if (bExcludeFromLightAttachmentGroup)
+	{
+		return nullptr;
+	}
+
+	const USceneComponent* CurrentHead = this;
+
+	while (CurrentHead)
+	{
+		// If the component has been marked to light itself and child attachments as a group, return it as root
+		if (const UPrimitiveComponent* CurrentHeadPrim = Cast<UPrimitiveComponent>(CurrentHead))
+		{
+			if (CurrentHeadPrim->bLightAttachmentsAsGroup)
+			{
+				return CurrentHeadPrim;
+			}
+		}
+
+		CurrentHead = CurrentHead->GetAttachParent();
+	}
+
+	return nullptr;
 }
 
 #if WITH_EDITOR

@@ -16,6 +16,9 @@
 #include "PhysicsEngine/BodySetup.h"
 #include "Physics/PhysicsInterfaceCore.h"
 #include "PhysXSupportCore.h"
+#include "PhysicsSolver.h"
+#include "Chaos/PBDRigidsEvolutionGBF.h"
+#include "Chaos/ChaosArchive.h"
 
 /** Returns false if ModelToHulls operation should halt because of vertex count overflow. */
 static bool AddConvexPrim(FKAggregateGeom* OutGeom, TArray<FPlane> &Planes, UModel* InModel)
@@ -194,7 +197,7 @@ void FRigidBodyContactInfo::SwapOrder()
 /** Set the status of a particular channel in the structure. */
 bool FCollisionResponseContainer::SetResponse(ECollisionChannel Channel, ECollisionResponse NewResponse)
 {
-	if (Channel < ARRAY_COUNT(EnumArray))
+	if (Channel < UE_ARRAY_COUNT(EnumArray))
 	{
 		uint8& CurrentResponse = EnumArray[Channel];
 		if (CurrentResponse != NewResponse)
@@ -210,7 +213,7 @@ bool FCollisionResponseContainer::SetResponse(ECollisionChannel Channel, ECollis
 bool FCollisionResponseContainer::SetAllChannels(ECollisionResponse NewResponse)
 {
 	bool bHasChanged = false;
-	for(int32 i=0; i<ARRAY_COUNT(EnumArray); i++)
+	for(int32 i=0; i<UE_ARRAY_COUNT(EnumArray); i++)
 	{
 		uint8& CurrentResponse = EnumArray[i];
 		if (CurrentResponse != NewResponse)
@@ -225,7 +228,7 @@ bool FCollisionResponseContainer::SetAllChannels(ECollisionResponse NewResponse)
 bool FCollisionResponseContainer::ReplaceChannels(ECollisionResponse OldResponse, ECollisionResponse NewResponse)
 {
 	bool bHasChanged = false;
-	for (int32 i = 0; i < ARRAY_COUNT(EnumArray); i++)
+	for (int32 i = 0; i < UE_ARRAY_COUNT(EnumArray); i++)
 	{
 		uint8& CurrentResponse = EnumArray[i];
 		if(CurrentResponse == OldResponse)
@@ -240,7 +243,7 @@ bool FCollisionResponseContainer::ReplaceChannels(ECollisionResponse OldResponse
 FCollisionResponseContainer FCollisionResponseContainer::CreateMinContainer(const FCollisionResponseContainer& A, const FCollisionResponseContainer& B)
 {
 	FCollisionResponseContainer Result;
-	for(int32 i=0; i<ARRAY_COUNT(Result.EnumArray); i++)
+	for(int32 i=0; i<UE_ARRAY_COUNT(Result.EnumArray); i++)
 	{
 		Result.EnumArray[i] = FMath::Min(A.EnumArray[i], B.EnumArray[i]);
 	}
@@ -261,7 +264,7 @@ FCollisionResponseContainer::FCollisionResponseContainer(ECollisionResponse Defa
 	SetAllChannels(DefaultResponse);
 }
 
-#if WITH_CHAOS || PHYSICS_INTERFACE_LLIMMEDIATE
+#if WITH_CHAOS
 bool FPhysScene::ExecPxVis(uint32 SceneType, const TCHAR* Cmd, FOutputDevice* Ar)
 {
     return false;
@@ -302,7 +305,7 @@ bool FPhysScene::ExecPxVis(const TCHAR* Cmd, FOutputDevice* Ar)
 	if ( FParse::Command(&Cmd,TEXT("PHYSX_CLEAR_ALL")) )
 	{
 		Ar->Logf(TEXT("Clearing all PhysX Debug Flags."));
-		for (int32 i = 0; i < ARRAY_COUNT(Flags); i++)
+		for (int32 i = 0; i < UE_ARRAY_COUNT(Flags); i++)
 		{
 			PScene->setVisualizationParameter(Flags[i].Flag, 0.0f);
 			bFoundFlag = true;
@@ -310,7 +313,7 @@ bool FPhysScene::ExecPxVis(const TCHAR* Cmd, FOutputDevice* Ar)
 	}
 	else
 	{
-		for (int32 i = 0; i < ARRAY_COUNT(Flags); i++)
+		for (int32 i = 0; i < UE_ARRAY_COUNT(Flags); i++)
 		{
 			// Parse out the command sent in and set only those flags
 			if (FParse::Command(&Cmd, Flags[i].Name))
@@ -359,7 +362,7 @@ bool FPhysScene::ExecPxVis(const TCHAR* Cmd, FOutputDevice* Ar)
 }
 #endif
 
-#if WITH_CHAOS || PHYSICS_INTERFACE_LLIMMEDIATE
+#if WITH_CHAOS
 bool FPhysScene::ExecApexVis(uint32 SceneType, const TCHAR* Cmd, FOutputDevice* Ar)
 {
     return false;
@@ -467,9 +470,45 @@ bool FPhysScene::ExecApexVis(const TCHAR* Cmd, FOutputDevice* Ar)
 #endif
 
 
-#if WITH_CHAOS || PHYSICS_INTERFACE_LLIMMEDIATE
-bool FPhysicsInterface::ExecPhysCommands(const TCHAR* Cmd, FOutputDevice* Ar, UWorld* InWorld)
+#if WITH_CHAOS
+bool FPhysicsInterface::ExecPhysCommands(const TCHAR* Cmd, FOutputDevice* OutputDevice, UWorld* InWorld)
 {
+
+#if CHAOS_MEMORY_TRACKING
+	if (FParse::Command(&Cmd, TEXT("ChaosMemoryDistribution")))
+	{
+		//
+		// NOTE: This is an awful, awful way to do this.
+		//
+
+		// Make an archive and serialze the whole scene.
+		// TODO: Don't do this!
+		FArchive BaseAr;
+		BaseAr.SetIsLoading(false);
+		BaseAr.SetIsSaving(true);
+		Chaos::FChaosArchive Ar(BaseAr);
+		FPhysScene* PhysScene = InWorld->GetPhysicsScene();
+		Chaos::FPhysicsSolver* Solver = PhysScene->GetSolver();
+		Chaos::TPBDRigidsEvolutionGBF<float, 3>* Evolution = Solver->GetEvolution();
+		Evolution->Serialize(Ar);
+		TUniquePtr<Chaos::FChaosArchiveContext> ArchiveContext = Ar.StealContext();
+
+		// Grab the memory tracking map from the archive context
+		const TMap<FName, Chaos::FChaosArchiveSectionData>& MemoryMap = ArchiveContext->SectionMap;
+
+		OutputDevice->Logf(TEXT("Chaos serialized memory distribution:"));
+		int64 TotalBytes = 0;
+		for (auto It : MemoryMap)
+		{
+			const FName SectionName = It.Key;
+			const Chaos::FChaosArchiveSectionData SectionData = It.Value;
+			TotalBytes += SectionData.SizeExclusive;
+			OutputDevice->Logf(TEXT("%s ~ count: %d, bytes: %d, megabytes: %f"), *SectionName.ToString(), SectionData.Count, SectionData.SizeExclusive, (float)SectionData.SizeExclusive * 10e-7f);
+		}
+		OutputDevice->Logf(TEXT("Total bytes: %d, megabytes: %f"), TotalBytes, (float)TotalBytes * 10e-7f);
+	}
+#endif
+
     return false;
 }
 #else

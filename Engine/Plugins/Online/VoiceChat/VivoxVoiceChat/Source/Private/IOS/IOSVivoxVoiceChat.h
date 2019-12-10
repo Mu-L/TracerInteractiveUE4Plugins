@@ -13,13 +13,18 @@ public:
 	// ~Begin IVoiceChat Interface
 	virtual bool Initialize() override;
 	virtual bool Uninitialize() override;
+	virtual void SetSetting(const FString& Name, const FString& Value) override;
+	virtual FString GetSetting(const FString& Name) override;
+	virtual void JoinChannel(const FString& ChannelName, const FString& ChannelCredentials, EVoiceChatChannelType ChannelType, const FOnVoiceChatChannelJoinCompleteDelegate& Delegate, TOptional<FVoiceChatChannel3dProperties> Channel3dProperties = TOptional<FVoiceChatChannel3dProperties>()) override;
 	virtual FDelegateHandle StartRecording(const FOnVoiceChatRecordSamplesAvailableDelegate::FDelegate& Delegate) override;
 	virtual void StopRecording(FDelegateHandle Handle) override;
 	// ~End IVoiceChat Interface
 
 protected:
 	// ~Begin DebugClientApiEventHandler Interface
-	virtual void onConnectCompleted(const VivoxClientApi::Uri& Server) override;
+	virtual void InvokeOnUIThread(void (Func)(void* Arg0), void* Arg0) override;
+	virtual void onChannelJoined(const VivoxClientApi::AccountName& AccountName, const VivoxClientApi::Uri& ChannelUri) override;
+	virtual void onChannelExited(const VivoxClientApi::AccountName& AccountName, const VivoxClientApi::Uri& ChannelUri, const VivoxClientApi::VCSStatus& Status) override;
 	virtual void onDisconnected(const VivoxClientApi::Uri& Server, const VivoxClientApi::VCSStatus& Status) override;
 	// ~End DebugClientApiEventHandler Interface
 	
@@ -32,11 +37,13 @@ private:
 
 	void HandleApplicationWillEnterBackground();
 	void HandleApplicationHasEnteredForeground();
+	void HandleAudioRouteChanged(bool);
 
 	void Reconnect();
 
 	FDelegateHandle ApplicationWillEnterBackgroundHandle;
 	FDelegateHandle ApplicationDidEnterForegroundHandle;
+	FDelegateHandle AudioRouteChangedHandle;
 
 	UIBackgroundTaskIdentifier BGTask;
 	bool bDisconnectInBackground;
@@ -47,4 +54,20 @@ private:
 
 	float BackgroundDelayedDisconnectTime;
 	NSTimer* DelayedDisconnectTimer;
+
+	uint VoiceChatEnableCount = 0;
+
+	bool IsHardwareAECEnabled() const;
+	bool bEnableHardwareAEC = false;
+	TOptional<bool> OverrideEnableHardwareAEC;
+	bool bVoiceChatModeEnabled = false;
+
+	bool IsBluetoothMicrophoneEnabled() const;
+	bool bEnableBluetoothMicrophone = false;
+	TOptional<bool> OverrideEnableBluetoothMicrophone;
+	bool bBluetoothMicrophoneFeatureEnabled = false;
+
+	void EnableVoiceChat(bool bEnable);
+	void UpdateVoiceChatSettings();
+	bool IsUsingBuiltInSpeaker();
 };

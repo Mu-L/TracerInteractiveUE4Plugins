@@ -9,7 +9,6 @@
 
 
 static FName NAME_PCD3D_SM5(TEXT("PCD3D_SM5"));
-static FName NAME_PCD3D_SM4(TEXT("PCD3D_SM4"));
 static FName NAME_PCD3D_ES3_1(TEXT("PCD3D_ES31"));
 static FName NAME_PCD3D_ES2(TEXT("PCD3D_ES2"));
 
@@ -20,7 +19,6 @@ static FName NAME_GLSL_150_ES2_NOUB(TEXT("GLSL_150_ES2_NOUB"));
 static FName NAME_GLSL_150_ES31(TEXT("GLSL_150_ES31"));
 static FName NAME_GLSL_ES2(TEXT("GLSL_ES2"));
 static FName NAME_GLSL_ES2_WEBGL(TEXT("GLSL_ES2_WEBGL"));
-static FName NAME_GLSL_ES2_IOS(TEXT("GLSL_ES2_IOS"));
 static FName NAME_GLSL_310_ES_EXT(TEXT("GLSL_310_ES_EXT"));
 static FName NAME_GLSL_ES3_1_ANDROID(TEXT("GLSL_ES3_1_ANDROID"));
 
@@ -47,16 +45,10 @@ static FName NAME_VULKAN_ES3_1_LUMIN(TEXT("SF_VULKAN_ES31_LUMIN"));
 static FName NAME_VULKAN_ES3_1_LUMIN_NOUB(TEXT("SF_VULKAN_ES31_LUMIN_NOUB"));
 static FName NAME_VULKAN_ES3_1(TEXT("SF_VULKAN_ES31"));
 static FName NAME_VULKAN_ES3_1_NOUB(TEXT("SF_VULKAN_ES31_NOUB"));
-static FName NAME_VULKAN_SM4_NOUB(TEXT("SF_VULKAN_SM4_NOUB"));
-static FName NAME_VULKAN_SM4(TEXT("SF_VULKAN_SM4"));
 static FName NAME_VULKAN_SM5_NOUB(TEXT("SF_VULKAN_SM5_NOUB"));
 static FName NAME_VULKAN_SM5(TEXT("SF_VULKAN_SM5"));
 static FName NAME_VULKAN_SM5_LUMIN(TEXT("SF_VULKAN_SM5_LUMIN"));
 static FName NAME_VULKAN_SM5_LUMIN_NOUB(TEXT("SF_VULKAN_SM5_LUMIN_NOUB"));
-
-#ifdef DDPI_EXTRA_SHADERFORMATS
-	DDPI_EXTRA_SHADERFORMATS
-#endif
 
 
 static FName ShaderPlatformToShaderFormatName(EShaderPlatform Platform)
@@ -65,8 +57,6 @@ static FName ShaderPlatformToShaderFormatName(EShaderPlatform Platform)
 	{
 	case SP_PCD3D_SM5:
 		return NAME_PCD3D_SM5;
-	case SP_PCD3D_SM4:
-		return NAME_PCD3D_SM4;
 	case SP_PCD3D_ES3_1:
 		return NAME_PCD3D_ES3_1;
 	case SP_PCD3D_ES2:
@@ -87,8 +77,6 @@ static FName ShaderPlatformToShaderFormatName(EShaderPlatform Platform)
 		return NAME_GLSL_ES2;
 	case SP_OPENGL_ES2_WEBGL:
 		return NAME_GLSL_ES2_WEBGL;
-	case SP_OPENGL_ES2_IOS:
-		return NAME_GLSL_ES2_IOS;
 	case SP_OPENGL_ES31_EXT:
 		return NAME_GLSL_310_ES_EXT;
 	case SP_OPENGL_ES3_1_ANDROID:
@@ -139,11 +127,6 @@ static FName ShaderPlatformToShaderFormatName(EShaderPlatform Platform)
 		static auto* CVar = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.Vulkan.UseRealUBs"));
 		return (CVar && CVar->GetValueOnAnyThread() == 0) ? NAME_VULKAN_ES3_1_NOUB : NAME_VULKAN_ES3_1;
 	}
-	case SP_VULKAN_SM4:
-	{
-		static auto* CVar = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.Vulkan.UseRealUBs"));
-		return (CVar && CVar->GetValueOnAnyThread() == 0) ? NAME_VULKAN_SM4_NOUB : NAME_VULKAN_SM4;
-	}
 	case SP_VULKAN_SM5:
 	{
 		static auto* CVar = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.Vulkan.UseRealUBs"));
@@ -155,20 +138,22 @@ static FName ShaderPlatformToShaderFormatName(EShaderPlatform Platform)
 		return (CVar && CVar->GetValueOnAnyThread() == 0) ? NAME_VULKAN_SM5_LUMIN_NOUB : NAME_VULKAN_SM5_LUMIN;
 	}
 
-#ifdef DDPI_EXTRA_SHADERPLATFORM_TO_SHADERFORMAT
-	DDPI_EXTRA_SHADERPLATFORM_TO_SHADERFORMAT
-#endif
-
 	default:
-		checkf(0, TEXT("Unknown EShaderPlatform %d!"), (int32)Platform);
-		return NAME_PCD3D_SM5;
+		if (FStaticShaderPlatformNames::IsStaticPlatform(Platform))
+		{
+			return FStaticShaderPlatformNames::Get().GetShaderFormat(Platform);
+		}
+		else
+		{
+			checkf(0, TEXT("Unknown EShaderPlatform %d!"), (int32)Platform);
+			return NAME_PCD3D_SM5;
+		}
 	}
 }
 
 static EShaderPlatform ShaderFormatNameToShaderPlatform(FName ShaderFormat)
 {
 	if (ShaderFormat == NAME_PCD3D_SM5)					return SP_PCD3D_SM5;
-	if (ShaderFormat == NAME_PCD3D_SM4)					return SP_PCD3D_SM4;
 	if (ShaderFormat == NAME_PCD3D_ES3_1)				return SP_PCD3D_ES3_1;
 	if (ShaderFormat == NAME_PCD3D_ES2)					return SP_PCD3D_ES2;
 
@@ -179,7 +164,6 @@ static EShaderPlatform ShaderFormatNameToShaderPlatform(FName ShaderFormat)
 	if (ShaderFormat == NAME_GLSL_150_ES31)				return SP_OPENGL_PCES3_1;
 	if (ShaderFormat == NAME_GLSL_ES2)					return SP_OPENGL_ES2_ANDROID;
 	if (ShaderFormat == NAME_GLSL_ES2_WEBGL)			return SP_OPENGL_ES2_WEBGL;
-	if (ShaderFormat == NAME_GLSL_ES2_IOS)				return SP_OPENGL_ES2_IOS;
 	if (ShaderFormat == NAME_GLSL_310_ES_EXT)			return SP_OPENGL_ES31_EXT;
 	if (ShaderFormat == NAME_GLSL_ES3_1_ANDROID)		return SP_OPENGL_ES3_1_ANDROID;
 
@@ -206,16 +190,18 @@ static EShaderPlatform ShaderFormatNameToShaderPlatform(FName ShaderFormat)
 	if (ShaderFormat == NAME_VULKAN_ES3_1_LUMIN_NOUB)	return SP_VULKAN_ES3_1_LUMIN;
 	if (ShaderFormat == NAME_VULKAN_ES3_1)				return SP_VULKAN_PCES3_1;
 	if (ShaderFormat == NAME_VULKAN_ES3_1_NOUB)			return SP_VULKAN_PCES3_1;
-	if (ShaderFormat == NAME_VULKAN_SM4_NOUB)			return SP_VULKAN_SM4;
-	if (ShaderFormat == NAME_VULKAN_SM4)				return SP_VULKAN_SM4;
 	if (ShaderFormat == NAME_VULKAN_SM5_NOUB)			return SP_VULKAN_SM5;
 	if (ShaderFormat == NAME_VULKAN_SM5)				return SP_VULKAN_SM5;
 	if (ShaderFormat == NAME_VULKAN_SM5_LUMIN)			return SP_VULKAN_SM5_LUMIN;
 	if (ShaderFormat == NAME_VULKAN_SM5_LUMIN_NOUB)		return SP_VULKAN_SM5_LUMIN;
 
-#ifdef DDPI_EXTRA_SHADERFORMAT_TO_SHADERPLATFORM
-	DDPI_EXTRA_SHADERFORMAT_TO_SHADERPLATFORM
-#endif
+	for (int32 StaticPlatform = SP_StaticPlatform_First; StaticPlatform <= SP_StaticPlatform_Last; ++StaticPlatform)
+	{
+		if (ShaderFormat == FStaticShaderPlatformNames::Get().GetShaderFormat(EShaderPlatform(StaticPlatform)))
+		{
+			return EShaderPlatform(StaticPlatform);
+		}
+	}
 
 	return SP_NumPlatforms;
 }

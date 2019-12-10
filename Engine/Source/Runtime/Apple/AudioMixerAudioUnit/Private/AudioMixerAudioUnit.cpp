@@ -6,19 +6,18 @@
 */
 
 #include "AudioMixer.h"
-#include "AudioMixerDevice.h"
 #include "AudioMixerPlatformAudioUnit.h"
-
+#include "Modules/ModuleManager.h"
 
 class FAudioMixerModuleAudioUnit : public IAudioDeviceModule
 {
 public:
 	virtual bool IsAudioMixerModule() const override { return true; }
 
-	virtual FAudioDevice* CreateAudioDevice() override
-	{
-		return new Audio::FMixerDevice(new Audio::FMixerPlatformAudioUnit());
-	}
+    virtual Audio::IAudioMixerPlatformInterface* CreateAudioMixerPlatformInterface() override
+    {
+        return new Audio::FMixerPlatformAudioUnit();
+    }
 };
 
 IMPLEMENT_MODULE(FAudioMixerModuleAudioUnit, AudioMixerAudioUnit);

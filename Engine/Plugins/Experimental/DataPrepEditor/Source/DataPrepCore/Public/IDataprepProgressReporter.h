@@ -2,11 +2,14 @@
 
 #pragma once
 
+#include "CoreMinimal.h"
+
 class FText;
 class UObject;
+class FFeedbackContext;
 
 /**
- * This is the interface that a progress reporter must implement to work with FDataprepProgressTask
+ * This is the interface that a progress reporter must implement to work with FDataprepWorkReporter
  * 
  */
 class IDataprepProgressReporter
@@ -14,28 +17,37 @@ class IDataprepProgressReporter
 public:
 	virtual ~IDataprepProgressReporter() = default;
 
-protected:
 	/**
-	 * Push a new task on the stack of started tasks
-	 * @param InDescription		Text to be displayed for the new task
-	 * @param InAmountOfWork	Total amount of work for the new task
+	 * Indicates the beginning of a new work to report on
+	 * @param InDescription		Text describing the work about to begin
+	 * @param InAmountOfWork	Expected total amount of work
 	 */
-	virtual void PushTask( const FText& InDescription, float InAmountOfWork ) = 0;
+	virtual void BeginWork( const FText& InDescription, float InAmountOfWork, bool bInterruptible = true ) = 0;
 
-	/** Pop out the current task */
-	virtual void PopTask() = 0;
+	/** Indicates the end of the work */
+	virtual void EndWork() = 0;
 
 	/**
-	 * Report foreseen progress on the current task
+	 * Report foreseen progress on the current work
 	 * @param IncrementOfWork	Amount of progress foreseen until the next call
 	 * @param InMessage			Message to be displayed along side the reported progress
 	 */
 	virtual void ReportProgress( float IncrementOfWork, const FText& InMessage ) = 0;
 
-	friend class FDataprepProgressTask;
+	/** Returns true if the work has been cancelled */
+	virtual bool IsWorkCancelled() = 0;
+
+	/** Returns the feedback context used by this progress reporter */
+	virtual FFeedbackContext* GetFeedbackContext() const = 0;
+
+	friend class FDataprepWorkReporter;
 };
 
-class DATAPREPCORE_API FDataprepProgressTask
+/**
+ * Helper class to encapsulate the IDataprepProgressReporter interface
+ * 
+ */
+class DATAPREPCORE_API FDataprepWorkReporter
 {
 public:
 	/**
@@ -44,9 +56,9 @@ public:
 	 * @param InAmountOfWork		Total amount of work for the task
 	 * @param InIncrementOfWork		Amount of incremental work at each step within the task
 	 */
-	FDataprepProgressTask( IDataprepProgressReporter& InReporter, const FText& InDescription, float InAmountOfWork, float InIncrementOfWork = 1.0f );
+	FDataprepWorkReporter( const TSharedPtr<IDataprepProgressReporter>& InReporter, const FText& InDescription, float InAmountOfWork, float InIncrementOfWork = 1.0f, bool bInterruptible = true );
 
-	~FDataprepProgressTask();
+	~FDataprepWorkReporter();
 
 	/**
 	 * Report foreseen incremental amount of work until next call
@@ -64,9 +76,11 @@ public:
 		ReportNextStep( InMessage, DefaultIncrementOfWork );
 	}
 
+	bool IsWorkCancelled() const;
+
 private:
 	/** Dataprep progress reporter associated with the task */
-	IDataprepProgressReporter& Reporter;
+	TSharedPtr<IDataprepProgressReporter> Reporter;
 
 	/** Default incremental amount of work for each step constituting the task */
 	float DefaultIncrementOfWork;

@@ -264,9 +264,8 @@ class FVulkanSurface
 {
 public:
 
-	// Seperate method for creating image, this can be used to measure image size
-	// After VkImage is no longer needed, dont forget to destroy/release it 
-	static VkImage CreateImage(
+	// Seperate method for creating VkImageCreateInfo
+	static VkImageCreateInfo GenerateImageCreateInfo(
 		FVulkanDevice& InDevice,
 		VkImageViewType ResourceType,
 		EPixelFormat InFormat,
@@ -275,10 +274,8 @@ public:
 		uint32 NumMips,
 		uint32 NumSamples,
 		uint32 UEFlags,
-		VkMemoryRequirements& OutMemoryRequirements,
 		VkFormat* OutStorageFormat = nullptr,
 		VkFormat* OutViewFormat = nullptr,
-		VkImageCreateInfo* OutInfo = nullptr,
 		bool bForceLinearTexture = false);
 
 	FVulkanSurface(FVulkanDevice& Device, VkImageViewType ResourceType, EPixelFormat Format,
@@ -488,6 +485,9 @@ struct FVulkanTextureBase : public FVulkanBaseShaderResource
 	FVulkanTextureBase(FVulkanDevice& Device, VkImageViewType ResourceType, EPixelFormat Format, uint32 SizeX, uint32 SizeY, uint32 SizeZ, uint32 ArraySize, uint32 NumMips, uint32 NumSamples, VkImage InImage, VkDeviceMemory InMem, uint32 UEFlags, const FRHIResourceCreateInfo& CreateInfo = FRHIResourceCreateInfo());
 	FVulkanTextureBase(FVulkanDevice& Device, VkImageViewType ResourceType, EPixelFormat Format, uint32 SizeX, uint32 SizeY, uint32 SizeZ, uint32 ArraySize, uint32 NumMips, uint32 NumSamples, VkImage InImage, VkDeviceMemory InMem, FSamplerYcbcrConversionInitializer& ConversionInitializer, uint32 UEFlags, const FRHIResourceCreateInfo& CreateInfo = FRHIResourceCreateInfo());
 
+	// Aliasing constructor.
+	FVulkanTextureBase(const FVulkanTextureBase* SrcTexture, VkImageViewType ResourceType, uint32 SizeX, uint32 SizeY, uint32 sizeZ);
+
 	virtual ~FVulkanTextureBase();
 
 	void AliasTextureResources(const FVulkanTextureBase* SrcTexture);
@@ -513,6 +513,9 @@ public:
 	FVulkanTexture2D(FVulkanDevice& Device, EPixelFormat Format, uint32 SizeX, uint32 SizeY, uint32 NumMips, uint32 NumSamples, uint32 UEFlags, const FRHIResourceCreateInfo& CreateInfo);
 	FVulkanTexture2D(FVulkanDevice& Device, EPixelFormat Format, uint32 SizeX, uint32 SizeY, uint32 NumMips, uint32 NumSamples, VkImage Image, uint32 UEFlags, const FRHIResourceCreateInfo& CreateInfo);
 	FVulkanTexture2D(FVulkanDevice& Device, EPixelFormat Format, uint32 SizeX, uint32 SizeY, uint32 NumMips, uint32 NumSamples, VkImage Image, struct FSamplerYcbcrConversionInitializer& ConversionInitializer, uint32 UEFlags, const FRHIResourceCreateInfo& CreateInfo);
+
+	// Aliasing constructor
+	FVulkanTexture2D(const FVulkanTexture2D* SrcTexture);
 
 	virtual ~FVulkanTexture2D();
 
@@ -548,6 +551,10 @@ public:
 	// Constructor, just calls base and Surface constructor
 	FVulkanTexture2DArray(FVulkanDevice& Device, EPixelFormat Format, uint32 SizeX, uint32 SizeY, uint32 ArraySize, uint32 NumMips, uint32 NumSamples, uint32 Flags, FResourceBulkDataInterface* BulkData, const FClearValueBinding& InClearValue);
 	FVulkanTexture2DArray(FVulkanDevice& Device, EPixelFormat Format, uint32 SizeX, uint32 SizeY, uint32 ArraySize, uint32 NumMips, uint32 NumSamples, VkImage Image, uint32 Flags, FResourceBulkDataInterface* BulkData, const FClearValueBinding& InClearValue);
+
+	// Aliasing constructor
+	FVulkanTexture2DArray(const FVulkanTexture2DArray* SrcTexture);
+
 		
 	// IRefCountedObject interface.
 	virtual uint32 AddRef() const override final
@@ -612,6 +619,10 @@ class FVulkanTextureCube : public FRHITextureCube, public FVulkanTextureBase
 public:
 	FVulkanTextureCube(FVulkanDevice& Device, EPixelFormat Format, uint32 Size, bool bArray, uint32 ArraySize, uint32 NumMips, uint32 Flags, FResourceBulkDataInterface* BulkData, const FClearValueBinding& InClearValue);
 	FVulkanTextureCube(FVulkanDevice& Device, EPixelFormat Format, uint32 Size, bool bArray, uint32 ArraySize, uint32 NumMips, VkImage Image, uint32 Flags, FResourceBulkDataInterface* BulkData, const FClearValueBinding& InClearValue);
+
+	// Aliasing constructor
+	FVulkanTextureCube(const FVulkanTextureCube* SrcTexture);
+
 	virtual ~FVulkanTextureCube();
 
 	// IRefCountedObject interface.
@@ -1084,6 +1095,11 @@ public:
 		check(IsVolatile());
 		return VolatileLockInfo.LockCounter;
 	}
+	inline uint32 GetVolatileLockSize() const
+	{
+		check(IsVolatile());
+		return VolatileLockInfo.Size;
+	}
 
 	inline int32 GetNumBuffers() const
 	{
@@ -1407,11 +1423,10 @@ public:
 		uint32* RESTRICT RawSrcEnd = RawSrc + (NumBytes >> 2);
 
 		bool bChanged = false;
-		do
+		while (RawSrc != RawSrcEnd)
 		{
 			bChanged |= CopyAndReturnNotEqual(*RawDst++, *RawSrc++);
 		}
-		while (RawSrc != RawSrcEnd);
 
 		InOutPackedUniformBufferStagingDirty = InOutPackedUniformBufferStagingDirty | ((uint64)(bChanged ? 1 : 0) << (uint64)BufferIndex);
 	}

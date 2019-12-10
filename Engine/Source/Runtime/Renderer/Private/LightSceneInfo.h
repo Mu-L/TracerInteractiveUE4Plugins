@@ -8,7 +8,6 @@
 
 #include "CoreMinimal.h"
 #include "RenderResource.h"
-#include "Templates/ScopedPointer.h"
 #include "Math/GenericOctreePublic.h"
 #include "SceneManagement.h"
 #include "Math/GenericOctree.h"
@@ -204,6 +203,9 @@ public:
 
 	/** Scene color must be larger than this to create bloom in the light shafts. */
 	float BloomThreshold;
+
+	/** After exposure is applied, scene color brightness larger than BloomMaxBrightness will be rescaled down to BloomMaxBrightness. */
+	float BloomMaxBrightness;
 
 	/** Multiplies against scene color to create the bloom color. */
 	FColor BloomTint;

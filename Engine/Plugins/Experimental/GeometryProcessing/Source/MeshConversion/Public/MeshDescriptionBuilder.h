@@ -48,6 +48,12 @@ public:
 	/** Set the Normal of a vertex instance*/
 	void SetInstanceNormal(const FVertexInstanceID& InstanceID, const FVector& Normal);
 
+	/** Set the UV of a vertex instance */
+	void SetInstanceUV(const FVertexInstanceID& InstanceID, const FVector2D& InstanceUV, int32 UVLayerIndex = 0);
+
+	/** Set the number of UV layers */
+	void SetNumUVLayers(int32 NumUVLayers);
+
 	/** Set the Color of a vertex instance*/
 	void SetInstanceColor(const FVertexInstanceID& InstanceID, const FVector4& Color);
 
@@ -82,13 +88,6 @@ public:
 	FPolygonID AppendTriangle(const FVertexInstanceID& Instance0, const FVertexInstanceID& Instance1, const FVertexInstanceID& Instance2, const FPolygonGroupID& PolygonGroup);
 
 
-	/**
-	 * Append an entire mesh to this mesh. This will create a minimal set of shared vertex instances.
-	 * @param bSetPolyGroups if true, we transfer the input mesh triangle groups to the PolyTriGroups attribute
-	 */
-	void AppendMesh(const FDynamicMesh3* Mesh, bool bSetPolyGroups);
-
-
 
 	/** Set MeshAttribute::Edge::IsHard to true for all edges */
 	void SetAllEdgesHardness(bool bHard);
@@ -96,8 +95,6 @@ public:
 	/** Translate the MeshDescription vertex positions */
 	void Translate(const FVector& Translation);
 
-	/** Calculate normals on the MeshDescription vertex instances, using area-weighted face average */
-	void RecalculateInstanceNormals();
 
 	/** Return the current bounding box of the mesh */
 	FBox ComputeBoundingBox() const;

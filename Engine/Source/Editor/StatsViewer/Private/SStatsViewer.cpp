@@ -52,6 +52,8 @@ void SStatsViewer::Construct( const FArguments& InArgs )
 {
 	FPropertyEditorModule& PropertyEditorModule = FModuleManager::GetModuleChecked<FPropertyEditorModule>( "PropertyEditor" );
 
+	StatsPageManagerPtr = InArgs._StatsPageManager;
+
 	// create empty property table
 	PropertyTable = PropertyEditorModule.CreatePropertyTable();
 	PropertyTable->SetIsUserAllowedToChangeRoot( false );
@@ -61,10 +63,10 @@ void SStatsViewer::Construct( const FArguments& InArgs )
 
 	// we want to customize some columns
 	TArray< TSharedRef< IPropertyTableCustomColumn > > CustomColumns;
-	FStatsPageManager& StatsPageManager = FStatsPageManager::Get();
+	FStatsPageManager& StatsPageManager = GetStatsPageManager();
 	for( int32 PageIndex = 0; PageIndex < StatsPageManager.NumPages(); PageIndex++ )
 	{
-		TSharedRef<IStatsPage> StatsPage = StatsPageManager.GetPage( PageIndex );
+		TSharedRef<IStatsPage> StatsPage = StatsPageManager.GetPageByIndex( PageIndex );
 		TArray< TSharedRef< IPropertyTableCustomColumn > > PagesCustomColumns;
 		StatsPage->GetCustomColumns(PagesCustomColumns);
 		if(PagesCustomColumns.Num() > 0)
@@ -209,14 +211,20 @@ void SStatsViewer::Construct( const FArguments& InArgs )
 	{
 		TSharedPtr<IStatsPage> InitialStatsPage;
 		FString DisplayedStatsPageName;
-		if (GConfig->GetString(*StatsViewerConstants::ConfigSectionName, TEXT("DisplayedStatsPageName"), DisplayedStatsPageName, GEditorPerProjectIni))
+		FString ConfigKey = TEXT("DisplayedStatsPageName");
+		if (StatsPageManager.GetName() != NAME_None)
 		{
-			InitialStatsPage = FStatsPageManager::Get().GetPage(FName(*DisplayedStatsPageName));
+			ConfigKey += TEXT("_") + StatsPageManager.GetName().ToString();
+		}
+
+		if (GConfig->GetString(*StatsViewerConstants::ConfigSectionName, *ConfigKey, DisplayedStatsPageName, GEditorPerProjectIni))
+		{
+			InitialStatsPage = StatsPageManager.GetPage(FName(*DisplayedStatsPageName));
 		}
 		else
 		{
 			// Default to primitive stats if no config data exists yet
-			InitialStatsPage = FStatsPageManager::Get().GetPage(EStatsPage::PrimitiveStats);
+			InitialStatsPage = StatsPageManager.GetPage(EStatsPage::PrimitiveStats);
 		}
 
 		SetDisplayedStats(InitialStatsPage.ToSharedRef());
@@ -277,12 +285,11 @@ static FString GetCellString( const TSharedPtr<IPropertyTableCell> Cell, bool bG
 
 void SStatsViewer::Tick( const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime )
 {
-	FStatsPageManager& StatsPageManager = FStatsPageManager::Get();
-
 	// check if we need to switch pages - i.e. if a page wants to be shown
+	FStatsPageManager& StatsPageManager = GetStatsPageManager();
 	for( int32 PageIndex = 0; PageIndex < StatsPageManager.NumPages(); PageIndex++ )
 	{
-		TSharedRef<IStatsPage> StatsPage = StatsPageManager.GetPage( PageIndex );
+		TSharedRef<IStatsPage> StatsPage = StatsPageManager.GetPageByIndex( PageIndex );
 		if( StatsPage->IsShowPending() )
 		{
 			SetDisplayedStats( StatsPage );
@@ -572,6 +579,12 @@ FReply SStatsViewer::OnExportClicked()
 	return FReply::Handled();
 }
 
+FStatsPageManager& SStatsViewer::GetStatsPageManager() const
+{
+	// We can use either provided page manager or use the default (global) one.
+	return StatsPageManagerPtr.IsValid() ? *StatsPageManagerPtr : FStatsPageManager::Get();
+}
+
 int32 SStatsViewer::GetObjectSetIndex() const
 {
 	return CurrentObjectSetIndex;
@@ -606,10 +619,11 @@ FText SStatsViewer::OnGetObjectSetMenuLabel() const
 TSharedRef<SWidget> SStatsViewer::OnGetDisplayMenuContent() const
 {
 	FMenuBuilder MenuBuilder(true, NULL);
+	FStatsPageManager& StatsPageManager = GetStatsPageManager();
 
-	for( int32 PageIndex = 0; PageIndex < FStatsPageManager::Get().NumPages(); PageIndex++ )
+	for( int32 PageIndex = 0; PageIndex < StatsPageManager.NumPages(); PageIndex++ )
 	{
-		TSharedRef<IStatsPage> StatsPage = FStatsPageManager::Get().GetPage( PageIndex );
+		TSharedRef<IStatsPage> StatsPage = StatsPageManager.GetPageByIndex( PageIndex );
 		MenuBuilder.AddMenuEntry( 
 			StatsPage->GetDisplayName(), 
 			StatsPage->GetToolTip(), 

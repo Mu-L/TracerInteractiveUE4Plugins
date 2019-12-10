@@ -21,7 +21,7 @@ OVRPL_PUBLIC_FUNCTION(void) ovr_ResetInitAndContext();
 
 namespace FNetworkProtocolTypes
 {
-	const FName Oculus(TEXT("Oculus"));
+	const FLazyName Oculus(TEXT("Oculus"));
 }
 
 IOnlineSessionPtr FOnlineSubsystemOculus::GetSessionInterface() const
@@ -236,10 +236,7 @@ bool FOnlineSubsystemOculus::Init()
 		// Shutdown stops the ticker, but construction of the object starts the ticker.
 		// Since this hangs around, ensure that the ticker gets started in the editor when 
 		// we init.
-		if (!TickHandle.IsValid())
-		{
-			StartTicker();
-		}
+		StartTicker();
 #endif
 	}
 	else

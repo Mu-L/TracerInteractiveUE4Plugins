@@ -13,6 +13,7 @@
 #include "ScenePrivate.h"
 #include "HAL/LowLevelMemTracker.h"
 #include "RayTracing/RayTracingMaterialHitShaders.h"
+#include "VT/RuntimeVirtualTextureSceneProxy.h"
 #include "VT/VirtualTextureSystem.h"
 #include "GPUScene.h"
 
@@ -77,10 +78,15 @@ public:
 
 			const bool bSupportsCachingMeshDrawCommands = SupportsCachingMeshDrawCommands(PrimitiveSceneProxy, *StaticMesh, FeatureLevel);
 
+			bool bUseSkyMaterial = Mesh.MaterialRenderProxy->GetMaterial(FeatureLevel)->IsSky();
+			bool bUseSingleLayerWaterMaterial = Mesh.MaterialRenderProxy->GetMaterial(FeatureLevel)->GetShadingModels().HasShadingModel(MSM_SingleLayerWater);
 			FStaticMeshBatchRelevance* StaticMeshRelevance = new(PrimitiveSceneInfo->StaticMeshRelevances) FStaticMeshBatchRelevance(
 				*StaticMesh, 
 				ScreenSize, 
-				bSupportsCachingMeshDrawCommands
+				bSupportsCachingMeshDrawCommands,
+				bUseSkyMaterial,
+				bUseSingleLayerWaterMaterial,
+				FeatureLevel
 			);
 		}
 	}
@@ -144,7 +150,7 @@ FPrimitiveSceneInfo::FPrimitiveSceneInfo(UPrimitiveComponent* InComponent,FScene
 	check(PrimitiveComponentId.IsValid());
 	check(Proxy);
 
-	UPrimitiveComponent* SearchParentComponent = Cast<UPrimitiveComponent>(InComponent->GetAttachmentRoot());
+	const UPrimitiveComponent* SearchParentComponent = InComponent->GetLightingAttachmentRoot();
 
 	if (SearchParentComponent && SearchParentComponent != InComponent)
 	{
@@ -211,7 +217,7 @@ void FPrimitiveSceneInfo::CacheMeshDrawCommands(FRHICommandListImmediate& RHICmd
 	}
 
 #if RHI_RAYTRACING
-	if (IsRayTracingEnabled())
+	if (IsRayTracingEnabled() && Proxy->IsRayTracingStaticRelevant())
 	{
 		int MaxLOD = -1;
 
@@ -314,7 +320,7 @@ void FPrimitiveSceneInfo::CacheMeshDrawCommands(FRHICommandListImmediate& RHICmd
 				}
 
 			#if RHI_RAYTRACING
-				if (IsRayTracingEnabled())
+				if (IsRayTracingEnabled() && Proxy->IsRayTracingStaticRelevant())
 				{
 					FCachedRayTracingMeshCommandContext CommandContext(Scene->CachedRayTracingMeshCommands);
 					FRayTracingMeshProcessor RayTracingMeshProcessor(&CommandContext, Scene, nullptr);
@@ -505,7 +511,7 @@ void FPrimitiveSceneInfo::AddToScene(FRHICommandListImmediate& RHICmdList, bool 
 	// Create an indirect lighting cache uniform buffer if we attaching a primitive that may require it, as it may be stored inside a cached mesh command.
 	if (IsIndirectLightingCacheAllowed(Scene->GetFeatureLevel())
 		&& Proxy->WillEverBeLit()
-		&& ((Proxy->HasStaticLighting() && Proxy->NeedsUnbuiltPreviewLighting()) || (Proxy->IsMovable() && Proxy->GetIndirectLightingCacheQuality() != ILCQ_Off)))
+		&& ((Proxy->HasStaticLighting() && Proxy->NeedsUnbuiltPreviewLighting()) || (Proxy->IsMovable() && Proxy->GetIndirectLightingCacheQuality() != ILCQ_Off) || Proxy->GetLightmapType() == ELightmapType::ForceVolumetric))
 	{
 		if (!IndirectLightingCacheUniformBuffer)
 		{
@@ -636,20 +642,20 @@ void FPrimitiveSceneInfo::AddToScene(FRHICommandListImmediate& RHICmdList, bool 
 	// Store the component.
 	Scene->PrimitiveComponentIds[PackedIndex] = PrimitiveComponentId;
 
-	// Store the runtime virtual texture flags and lod info.
-	const bool bRenderToVirtualTexture = Proxy->WritesVirtualTexture();
-	Scene->PrimitiveVirtualTextureFlags[PackedIndex].bRenderToVirtualTexture = bRenderToVirtualTexture;
-	if (bRenderToVirtualTexture)
-	{
-		Scene->PrimitiveVirtualTextureFlags[PackedIndex].RuntimeVirtualTextureMask = Scene->GetRuntimeVirtualTextureMask(Proxy);
+	// Store the runtime virtual texture flags.
+	UpdateRuntimeVirtualTextureFlags();
+	Scene->PrimitiveVirtualTextureFlags[PackedIndex] = RuntimeVirtualTextureFlags;
 
+	// Store the runtime virtual texture Lod info.
+	if (RuntimeVirtualTextureFlags.bRenderToVirtualTexture)
+	{
 		int8 MinLod, MaxLod;
 		GetRuntimeVirtualTextureLODRange(StaticMeshRelevances, MinLod, MaxLod);
-
+		
 		FPrimitiveVirtualTextureLodInfo& LodInfo = Scene->PrimitiveVirtualTextureLod[PackedIndex];
-		LodInfo.MinLod = MinLod;
-		LodInfo.MaxLod = MaxLod;
-		LodInfo.LodBias = Proxy->GetVirtualTextureLodBias();
+		LodInfo.MinLod = FMath::Clamp((int32)MinLod, 0, 15);
+		LodInfo.MaxLod = FMath::Clamp((int32)MaxLod, 0, 15);
+		LodInfo.LodBias = FMath::Clamp(Proxy->GetVirtualTextureLodBias() + FPrimitiveVirtualTextureLodInfo::LodBiasOffset, 0, 15);
 		LodInfo.CullMethod = Proxy->GetVirtualTextureMinCoverage() == 0 ? 0 : 1;
 		LodInfo.CullValue = LodInfo.CullMethod == 0 ? Proxy->GetVirtualTextureCullMips() : Proxy->GetVirtualTextureMinCoverage();
 	}
@@ -740,6 +746,31 @@ void FPrimitiveSceneInfo::RemoveFromScene(bool bUpdateStaticDrawLists)
 	}
 }
 
+void FPrimitiveSceneInfo::UpdateRuntimeVirtualTextureFlags()
+{
+	const bool bRenderToVirtualTexture = Proxy->WritesVirtualTexture();
+
+	RuntimeVirtualTextureFlags.bRenderToVirtualTexture = bRenderToVirtualTexture;
+	RuntimeVirtualTextureFlags.RuntimeVirtualTextureMask = 0;
+
+	if (bRenderToVirtualTexture)
+	{
+		// Performance assumption: The arrays of runtime virtual textures are small (less that 5?) so that O(n^2) scan isn't expensive
+		for (TSparseArray<FRuntimeVirtualTextureSceneProxy*>::TConstIterator It(Scene->RuntimeVirtualTextures); It; ++It)
+		{
+			int32 SceneIndex = It.GetIndex();
+			if (SceneIndex < FPrimitiveVirtualTextureFlags::RuntimeVirtualTexture_BitCount)
+			{
+				URuntimeVirtualTexture* SceneVirtualTexture = (*It)->VirtualTexture;
+				if (Proxy->WritesVirtualTexture(SceneVirtualTexture))
+				{
+					RuntimeVirtualTextureFlags.RuntimeVirtualTextureMask |= 1 << SceneIndex;
+				}
+			}
+		}
+	}
+}
+
 bool FPrimitiveSceneInfo::NeedsUpdateStaticMeshes()
 {
 	return Scene->PrimitivesNeedingStaticMeshUpdate[PackedIndex];
@@ -788,6 +819,24 @@ void FPrimitiveSceneInfo::BeginDeferredUpdateStaticMeshesWithoutVisibilityCheck(
 		bNeedsStaticMeshUpdateWithoutVisibilityCheck = true;
 
 		Scene->PrimitivesNeedingStaticMeshUpdateWithoutVisibilityCheck.Add(this);
+	}
+}
+
+void FPrimitiveSceneInfo::FlushRuntimeVirtualTexture()
+{
+	if (RuntimeVirtualTextureFlags.bRenderToVirtualTexture)
+	{
+		uint32 RuntimeVirtualTextureIndex = 0;
+		uint32 Mask = RuntimeVirtualTextureFlags.RuntimeVirtualTextureMask;
+		while (Mask != 0)
+		{
+			if (Mask & 1)
+			{
+				Scene->RuntimeVirtualTextures[RuntimeVirtualTextureIndex]->Dirty(Proxy->GetBounds());
+			}
+			Mask >>= 1;
+			RuntimeVirtualTextureIndex++;
+		}
 	}
 }
 
@@ -1004,7 +1053,7 @@ void FPrimitiveSceneInfo::UpdateIndirectLightingCacheBuffer()
 	{
 		QUICK_SCOPE_CYCLE_COUNTER(STAT_UpdateIndirectLightingCacheBuffer);
 
-		if (!RHISupportsVolumeTextures(Scene->GetFeatureLevel())
+		if (Scene->GetFeatureLevel() < ERHIFeatureLevel::SM5
 			&& Scene->VolumetricLightmapSceneData.HasData()
 			&& (Proxy->IsMovable() || Proxy->NeedsUnbuiltPreviewLighting() || Proxy->GetLightmapType() == ELightmapType::ForceVolumetric)
 			&& Proxy->WillEverBeLit())

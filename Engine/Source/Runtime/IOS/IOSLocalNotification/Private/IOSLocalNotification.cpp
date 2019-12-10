@@ -82,7 +82,7 @@ public:
 		
 		return Content;
 	}
-	static UNCalendarNotificationTrigger* CreateCalendarNotificationTrigger(const FDateTime& FireDateTime)
+	static UNCalendarNotificationTrigger* CreateCalendarNotificationTrigger(const FDateTime& FireDateTime, bool LocalTime)
 	{
 		NSCalendar *calendar = [NSCalendar autoupdatingCurrentCalendar];
 		NSDateComponents *dateComps = [[NSDateComponents alloc] init];
@@ -92,6 +92,24 @@ public:
 		[dateComps setHour : FireDateTime.GetHour()];
 		[dateComps setMinute : FireDateTime.GetMinute()];
 		[dateComps setSecond : FireDateTime.GetSecond()];
+		if (!LocalTime)
+		{
+			// if not local time, convert from UTC to local time, UNCalendarNotificationTrigger misbehaves
+			// if the components have anything more than previously set (can't specify timeZone)
+            NSCalendar *utcCalendar = [NSCalendar calendarWithIdentifier:NSCalendarIdentifierISO8601];
+            utcCalendar.timeZone = [NSTimeZone timeZoneForSecondsFromGMT:0];
+            NSDate *utcDate = [utcCalendar dateFromComponents:dateComps];
+            NSDateComponents *utcDateComps = [utcCalendar componentsInTimeZone:calendar.timeZone fromDate:utcDate];
+
+			// now copy components back because utcDateComps has too many fields set for
+			// UNCalendarNotificationTrigger and will now work properly on all devices
+            dateComps.day = utcDateComps.day;
+            dateComps.month = utcDateComps.month;
+            dateComps.year = utcDateComps.year;
+            dateComps.hour = utcDateComps.hour;
+            dateComps.minute = utcDateComps.minute;
+            dateComps.second = utcDateComps.second;
+		}
 		
 		UNCalendarNotificationTrigger *trigger = [UNCalendarNotificationTrigger triggerWithDateMatchingComponents:dateComps repeats:NO];
 		
@@ -124,6 +142,11 @@ static int32 NotificationNumber = 0;
 int32 FIOSLocalNotificationService::ScheduleLocalNotificationAtTime(const FDateTime& FireDateTime, bool LocalTime, const FText& Title, const FText& Body, const FText& Action, const FString& ActivationEvent)
 {
 #if !PLATFORM_TVOS
+	if (FireDateTime < (LocalTime ? FDateTime::Now() : FDateTime::UtcNow()))
+	{
+		return -1;
+	}
+
     //Create local copies of these for the block to capture
     FDateTime FireDateTimeCopy = FireDateTime;
     FText TitleCopy = Title;
@@ -135,7 +158,7 @@ int32 FIOSLocalNotificationService::ScheduleLocalNotificationAtTime(const FDateT
 	//have to schedule notification on main thread queue
 	dispatch_async(dispatch_get_main_queue(), ^{
         UNMutableNotificationContent* Content = FIOSLocalNotificationModule::CreateNotificationContent(TitleCopy, BodyCopy, ActionCopy, ActivationEventCopy, 1);
-        UNCalendarNotificationTrigger* Trigger = FIOSLocalNotificationModule::CreateCalendarNotificationTrigger(FireDateTimeCopy);
+        UNCalendarNotificationTrigger* Trigger = FIOSLocalNotificationModule::CreateCalendarNotificationTrigger(FireDateTimeCopy, LocalTime);
         
         UNNotificationRequest *Request = [UNNotificationRequest requestWithIdentifier:@(CurrentNotificationId).stringValue content:Content trigger:Trigger];
 
@@ -155,6 +178,11 @@ int32 FIOSLocalNotificationService::ScheduleLocalNotificationAtTime(const FDateT
 int32 FIOSLocalNotificationService::ScheduleLocalNotificationBadgeAtTime(const FDateTime& FireDateTime, bool LocalTime, const FString& ActivationEvent)
 {
 #if !PLATFORM_TVOS
+	if (FireDateTime < (LocalTime ? FDateTime::Now() : FDateTime::UtcNow()))
+	{
+		return -1;
+	}
+
 	FDateTime FireDateTimeCopy = FireDateTime;
 	FString ActivationEventCopy = ActivationEvent;
 	int32 CurrentNotificationId = NotificationNumber++;
@@ -162,7 +190,7 @@ int32 FIOSLocalNotificationService::ScheduleLocalNotificationBadgeAtTime(const F
 	//have to schedule notification on main thread queue
 	dispatch_async(dispatch_get_main_queue(), ^{
 		UNMutableNotificationContent* Content = FIOSLocalNotificationModule::CreateNotificationContent(FText(), FText(), FText(), ActivationEventCopy, 1);
-		UNCalendarNotificationTrigger* Trigger = FIOSLocalNotificationModule::CreateCalendarNotificationTrigger(FireDateTime);
+		UNCalendarNotificationTrigger* Trigger = FIOSLocalNotificationModule::CreateCalendarNotificationTrigger(FireDateTime, LocalTime);
 		
 		UNNotificationRequest *Request = [UNNotificationRequest requestWithIdentifier:@(CurrentNotificationId).stringValue content:Content trigger:Trigger];
 
@@ -189,7 +217,9 @@ void FIOSLocalNotificationService::CancelLocalNotification(int32 NotificationId)
 {
 #if !PLATFORM_TVOS
 	UNUserNotificationCenter *Center = [UNUserNotificationCenter currentNotificationCenter];
-	[Center removePendingNotificationRequestsWithIdentifiers:@[@(NotificationId).stringValue]];
+	NSArray<NSString*> *Identifiers = @[@(NotificationId).stringValue];
+	[Center removePendingNotificationRequestsWithIdentifiers: Identifiers];
+	[Center removeDeliveredNotificationsWithIdentifiers: Identifiers];
 #endif
 }
 

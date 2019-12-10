@@ -11,6 +11,57 @@
 
 #include "DataPrepContentConsumer.generated.h"
 
+struct FDataprepConsumerContext
+{
+	FDataprepConsumerContext() {}
+
+	FDataprepConsumerContext& SetWorld( UWorld* InWorld )
+	{ 
+		WorldPtr = TWeakObjectPtr<UWorld>(InWorld);
+		return *this;
+	}
+
+	FDataprepConsumerContext& SetAssets( TArray< TWeakObjectPtr< UObject > >& InAssets )
+	{
+		Assets.Empty(InAssets.Num());
+		Assets.Append(InAssets);
+		return *this;
+	}
+
+	FDataprepConsumerContext& SetProgressReporter( const TSharedPtr< IDataprepProgressReporter >& InProgressReporter )
+	{
+		ProgressReporterPtr = InProgressReporter;
+		return *this;
+	}
+
+	FDataprepConsumerContext& SetLogger( const TSharedPtr< IDataprepLogger >& InLogger )
+	{
+		LoggerPtr = InLogger;
+		return *this;
+	}
+
+	FDataprepConsumerContext& SetTransientContentFolder( const FString& InTransientContentFolder )
+	{
+		TransientContentFolder = InTransientContentFolder;
+		return *this;
+	}
+
+	/** Hold onto the world the consumer will process */
+	TWeakObjectPtr< UWorld > WorldPtr;
+
+	/** Array of assets the consumer will process */
+	TArray< TWeakObjectPtr< UObject > > Assets;
+
+	/** Path to transient content folder where were created */
+	FString TransientContentFolder;
+
+	/** Hold onto the reporter that the consumer should use to report progress */
+	TSharedPtr< IDataprepProgressReporter > ProgressReporterPtr;
+
+	/** Hold onto the logger that the consumer should use to log messages */
+	TSharedPtr<  IDataprepLogger > LoggerPtr;
+};
+
 /**
  * Abstract class providing the minimal services required for a DataprepConsumer
  * 
@@ -23,81 +74,21 @@ class DATAPREPCORE_API UDataprepContentConsumer : public UObject
 
 public:
 
-	struct ConsumerContext
-	{
-		ConsumerContext() {}
-
-		ConsumerContext& SetWorld( UWorld* InWorld )
-		{ 
-			WorldPtr = TWeakObjectPtr<UWorld>(InWorld);
-			return *this;
-		}
-
-		ConsumerContext& SetAssets( TArray< TWeakObjectPtr< UObject > >& InAssets )
-		{
-			Assets.Empty(InAssets.Num());
-			Assets.Append(InAssets);
-			return *this;
-		}
-
-		ConsumerContext& SetProgressReporter( const TSharedPtr< IDataprepProgressReporter >& InProgressReporter )
-		{
-			ProgressReporterPtr = InProgressReporter;
-			return *this;
-		}
-
-		ConsumerContext& SetLogger( const TSharedPtr< IDataprepLogger >& InLogger )
-		{
-			LoggerPtr = InLogger;
-			return *this;
-		}
-
-		ConsumerContext& SetTransientContentFolder( const FString& InTransientContentFolder )
-		{
-			TransientContentFolder = InTransientContentFolder;
-			return *this;
-		}
-
-		/** Hold onto the world the consumer will process */
-		TWeakObjectPtr< UWorld > WorldPtr;
-
-		/** Array of assets the consumer will process */
-		TArray< TWeakObjectPtr< UObject > > Assets;
-
-		/** Path to transient content folder where were created */
-		FString TransientContentFolder;
-
-		/** Hold onto the reporter that the consumer should use to report progress */
-		TSharedPtr< IDataprepProgressReporter > ProgressReporterPtr;
-		
-		/** Hold onto the logger that the consumer should use to log messages */
-		TSharedPtr<  IDataprepLogger > LoggerPtr;
-	};
-
 	UDataprepContentConsumer();
 
+	// UObject interface
+	virtual void PostEditUndo() override;
+	// End of UObject interface
+
 	/**
-	 * Initialize the consumer to be ready for the next call to the Run method.
-	 * @param Context : The world the consumer must process on. This world must be assumed to be transient.
-	 * @param InAssets : Array of assets referenced or not by the given world. Those assets must be assumed to be transient.
-	 * @param OutReason : Text containing description of failure if the initialization failed
-	 * @return true if the initialization was successful, false otherwise
-	 * @remark A copy of the context is made by the consumer. The context is cleared by a call to Reset
+	 * Successively calls Initialize, Run and Reset.
+	 * @param InContext : The world the consumer must process on. This world must be assumed to be transient.
+	 * @return true if the calls were successful, false otherwise
+	 * @remark A copy of the incoming context is made by the consumer. The internal context is cleared by a call to Reset
 	 * @remark If TargetContentFolder member is empty, it is set to the package path of the consumer
 	 * @remark The consumer is expected to remove objects it has consumed from the world and/or assets' array
 	 */
-	virtual bool Initialize( const ConsumerContext& Context, FString& OutReason );
-
-	/**
-	 * Requests the consumer to perform its operation.
-	 */
-	virtual bool Run() { return Context.WorldPtr.IsValid() || Context.Assets.Num() > 0 ? true : false; }
-
-	/**
-	 * Clean up the objects used by the consumer. This call follows a call to Run.
-	 * Note: The consumer must assume that the world and assets it has not consumed are about to be deleted.
-	 */
-	virtual void Reset();
+	bool Consume(const FDataprepConsumerContext& InContext);
 
 	/** Name used by the UI to be displayed. */
 	virtual const FText& GetLabel() const { return FText::GetEmpty(); }
@@ -117,6 +108,8 @@ public:
 	 */
 	virtual bool SetLevelName(const FString& InLevelName, FText& OutReason );
 
+	const FString& GetLevelName() { return LevelName; }
+
 	/**
 	 * Sets the path of the package the consumer should move assets to if applicable.
 	 * Generally, this package path is substituted to the temporary path the assets are in
@@ -124,11 +117,15 @@ public:
 	 * @return true if the assignment has been successful, false otherwise
 	 * @remark if InPackagePath is empty the package path of the consumer is used
 	 */
-	virtual bool SetTargetContentFolder(const FString& InTargetContentFolder );
-
-	const FString& GetLevelName() { return LevelName; }
+	virtual bool SetTargetContentFolder(const FString& InTargetContentFolder, FText& OutReason );
 
 	const FString& GetTargetContentFolder() { return TargetContentFolder; }
+
+	/**
+	 * Returns a well-formed path to use when calling CreatePackage to create the target package.
+	 * @remark 
+	 */
+	FString GetTargetPackagePath() const;
 
 	/**
 	 * Allow an observer to be notified when one of the properties of the consumer changes
@@ -141,6 +138,21 @@ public:
 	}
 
 protected:
+
+	/**
+	 * Initialize the consumer to be ready for the next call to the Run method.
+	 * @return true if the initialization was successful, false otherwise
+	 */
+	virtual bool Initialize() { return false; }
+
+	/** Requests the consumer to perform its operation. */
+	virtual bool Run() { return false; }
+
+	/**
+	 * Clean up the objects used by the consumer. This call follows a call to Run.
+	 * @remark The consumer must assume that the world and assets it has not consumed are about to be deleted.
+	 */
+	virtual void Reset() {}
 
 	// Start of helper functions to log messages and report progress
 	void LogInfo(const FText& Message)
@@ -176,8 +188,12 @@ protected:
 	FString LevelName;
 
 	/** Context which the consumer will run with */
-	ConsumerContext Context;
+	FDataprepConsumerContext Context;
 
 	/** Delegate to broadcast changes to the consumer */
 	FDataprepConsumerChanged OnChanged;
+
+private:
+	/** Add a UDataprepAssetUserData object to each asset's and root component's AssetUserData */
+	void AddDataprepAssetUserData();
 };

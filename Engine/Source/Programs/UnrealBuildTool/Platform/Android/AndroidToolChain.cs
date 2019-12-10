@@ -75,8 +75,8 @@ namespace UnrealBuildTool
 		static private Dictionary<string, string[]> LibrariesToSkip = new Dictionary<string, string[]> {
 			{ "-armv7", new string[] { } },
 			{ "-arm64", new string[] { "nvToolsExt", "nvToolsExtStub", "vorbisenc", } },
-			{ "-x86",   new string[] { "nvToolsExt", "nvToolsExtStub", "oculus", "OVRPlugin", "vrapi", "vrintegrationloader", "ovrkernel", "systemutils", "openglloader", "ovrplatformloader", "opus", "speex_resampler", "vorbisenc", } },
-			{ "-x64",   new string[] { "nvToolsExt", "nvToolsExtStub", "oculus", "OVRPlugin", "vrapi", "vrintegrationloader", "ovrkernel", "systemutils", "openglloader", "ovrplatformloader", "gpg", "vorbisenc", } },
+			{ "-x86",   new string[] { "nvToolsExt", "nvToolsExtStub", "oculus", "OVRPlugin", "vrapi", "ovrkernel", "systemutils", "openglloader", "ovrplatformloader", "opus", "speex_resampler", "vorbisenc", } },
+			{ "-x64",   new string[] { "nvToolsExt", "nvToolsExtStub", "oculus", "OVRPlugin", "vrapi", "ovrkernel", "systemutils", "openglloader", "ovrplatformloader", "gpg", "vorbisenc", } },
 		};
 
 		static private Dictionary<string, string[]> ModulesToSkip = new Dictionary<string, string[]> {
@@ -629,9 +629,9 @@ namespace UnrealBuildTool
 				Result += " -fvisibility=hidden -fvisibility-inlines-hidden"; // Symbols default to hidden.
 			}
 
-			if (CompileEnvironment.bEnableShadowVariableWarnings)
+			if (CompileEnvironment.ShadowVariableWarningLevel != WarningLevel.Off)
 			{
-				Result += " -Wshadow -Wno-error=shadow";
+				Result += " -Wshadow" + ((CompileEnvironment.ShadowVariableWarningLevel == WarningLevel.Error) ? "" : " -Wno-error=shadow");
 			}
 
 			if (CompileEnvironment.bEnableUndefinedIdentifierWarnings)
@@ -987,8 +987,15 @@ namespace UnrealBuildTool
 			return false;
 		}
 
-		bool ShouldSkipLib(string Lib, string Arch, string GPUArchitecture)
+		bool ShouldSkipLib(string FullLib, string Arch, string GPUArchitecture)
 		{
+			// strip any absolute path
+			string Lib = Path.GetFileNameWithoutExtension(FullLib);
+			if (Lib.StartsWith("lib"))
+			{
+				Lib = Lib.Substring(3);
+			}
+
 			// reject any libs we outright don't want to link with
 			foreach (string LibName in LibrariesToSkip[Arch])
 			{
@@ -999,13 +1006,19 @@ namespace UnrealBuildTool
 			}
 
 			// deal with .so files with wrong architecture
-			if (Path.GetExtension(Lib) == ".so")
+			if (Path.GetExtension(FullLib) == ".so")
 			{
-				string ParentDirectory = Path.GetDirectoryName(Lib);
+				string ParentDirectory = Path.GetDirectoryName(FullLib);
 				if (!IsDirectoryForArch(ParentDirectory, Arch))
 				{
 					return true;
 				}
+			}
+
+			// apply the same directory filtering to libraries as we do to additional library paths
+			if (!IsDirectoryForArch(Path.GetDirectoryName(FullLib), Arch))
+			{
+				return true;
 			}
 
 			// if another architecture is in the filename, reject it
@@ -1013,7 +1026,7 @@ namespace UnrealBuildTool
 			{
 				if (ComboName != Arch + GPUArchitecture)
 				{
-					if (Path.GetFileNameWithoutExtension(Lib).EndsWith(ComboName))
+					if (Lib.EndsWith(ComboName))
 					{
 						return true;
 					}
@@ -1477,22 +1490,7 @@ namespace UnrealBuildTool
 						CompileAction.WorkingDirectory = UnrealBuildTool.EngineSourceDirectory;
 						if(bExecuteCompilerThroughShell)
 						{
-							string FixedClangPath = ClangPath;
-							if (FixedClangPath.Contains(' '))
-							{
-								FixedClangPath = "'" + FixedClangPath + "'";
-							}
-					
-							CompileAction.CommandPath = BuildHostPlatform.Current.Shell;
-							if (BuildHostPlatform.Current.ShellType == ShellType.Cmd)
-							{
-								CompileAction.CommandArguments = String.Format("/c \"{0} {1}\"", FixedClangPath, ResponseArgument);
-							}
-							else
-							{
-								CompileAction.CommandArguments = String.Format("-c \'{0} {1}\'", FixedClangPath, ResponseArgument);
-							}
-							CompileAction.CommandDescription = "Compile";
+							SetupActionToExecuteCompilerThroughShell(ref CompileAction, ClangPath, ResponseArgument, "Compile");
 						}
 						else
 						{
@@ -1648,7 +1646,11 @@ namespace UnrealBuildTool
 					// libs don't link in other libs
 					if (!LinkEnvironment.bIsBuildingLibrary)
 					{
-						// Add the library paths to the argument list.
+						// Make a list of library paths to search
+						List<string> AdditionalLibraryPaths = new List<string>();
+						List<string> AdditionalLibraries = new List<string>();
+
+						// Add the library paths to the additional path list
 						foreach (DirectoryReference LibraryPath in LinkEnvironment.LibraryPaths)
 						{
 							// LinkerPaths could be relative or absolute
@@ -1660,26 +1662,69 @@ namespace UnrealBuildTool
 								{
 									AbsoluteLibraryPath = Path.Combine(LinkerPath.FullName, AbsoluteLibraryPath);
 								}
-								LinkResponseArguments += string.Format(" -L\"{0}\"", Utils.CollapseRelativeDirectories(AbsoluteLibraryPath));
+								AbsoluteLibraryPath = Utils.CollapseRelativeDirectories(AbsoluteLibraryPath);
+								if (!AdditionalLibraryPaths.Contains(AbsoluteLibraryPath))
+								{
+									AdditionalLibraryPaths.Add(AbsoluteLibraryPath);
+								}
 							}
 						}
 
-						// add libraries in a library group
-						LinkResponseArguments += string.Format(" -Wl,--start-group");
+						// discover additional libraries and their paths
 						foreach (string AdditionalLibrary in LinkEnvironment.AdditionalLibraries)
 						{
 							if (!ShouldSkipLib(AdditionalLibrary, Arch, GPUArchitecture))
 							{
 								if (String.IsNullOrEmpty(Path.GetDirectoryName(AdditionalLibrary)))
 								{
-									LinkResponseArguments += string.Format(" \"-l{0}\"", AdditionalLibrary);
+									if (AdditionalLibrary.StartsWith("lib"))
+									{
+										AdditionalLibraries.Add(AdditionalLibrary);
+									}
+									else
+									{
+										AdditionalLibraries.Add("lib" + AdditionalLibrary);
+									}
 								}
 								else
 								{
-									// full pathed libs are compiled by us, so we depend on linking them
-									LinkResponseArguments += string.Format(" \"{0}\"", Path.GetFullPath(AdditionalLibrary));
+									string AbsoluteLibraryPath = Path.GetDirectoryName(Path.GetFullPath(AdditionalLibrary));
 									LinkAction.PrerequisiteItems.Add(FileItem.GetItemByPath(AdditionalLibrary));
+
+									string Lib = Path.GetFileNameWithoutExtension(AdditionalLibrary);
+									if (Lib.StartsWith("lib"))
+									{
+										AdditionalLibraries.Add(Lib);
+										if (!AdditionalLibraryPaths.Contains(AbsoluteLibraryPath))
+										{
+											AdditionalLibraryPaths.Add(AbsoluteLibraryPath);
+										}
+									}
+									else
+									{
+										AdditionalLibraries.Add(AbsoluteLibraryPath);
+									}
 								}
+							}
+						}
+
+						// add the library paths to response
+						foreach (string LibaryPath in AdditionalLibraryPaths)
+						{
+							LinkResponseArguments += string.Format(" -L\"{0}\"", LibaryPath);
+						}
+
+						// add libraries in a library group
+						LinkResponseArguments += string.Format(" -Wl,--start-group");
+						foreach (string AdditionalLibrary in AdditionalLibraries)
+						{
+							if (AdditionalLibrary.StartsWith("lib"))
+							{
+								LinkResponseArguments += string.Format(" \"-l{0}\"", AdditionalLibrary.Substring(3));
+							}
+							else
+							{
+								LinkResponseArguments += string.Format(" \"{0}\"", AdditionalLibrary);
 							}
 						}
 						LinkResponseArguments += string.Format(" -Wl,--end-group");
@@ -1717,22 +1762,7 @@ namespace UnrealBuildTool
 
 					if(bExecuteCompilerThroughShell)
 					{
-						string LinkCommandPath = LinkAction.CommandPath.FullName;
-						if (LinkCommandPath.Contains(' '))
-						{
-							LinkCommandPath = "'" + LinkCommandPath + "'";
-						}
-						
-						if (BuildHostPlatform.Current.ShellType == ShellType.Cmd)
-						{
-							LinkAction.CommandArguments = String.Format("/c \"{0} {1}\"", LinkCommandPath, LinkAction.CommandArguments);
-						}
-						else
-						{
-							LinkAction.CommandArguments = String.Format("-c \'{0} {1}\'", LinkCommandPath, LinkAction.CommandArguments);
-						}
-						LinkAction.CommandPath = BuildHostPlatform.Current.Shell;
-						LinkAction.CommandDescription = "Link";
+						SetupActionToExecuteCompilerThroughShell(ref LinkAction, LinkAction.CommandPath.FullName, LinkAction.CommandArguments, "Link");
 					}
 					Actions.Add(LinkAction);
 
@@ -1896,6 +1926,27 @@ namespace UnrealBuildTool
 			StartInfo.UseShellExecute = false;
 			StartInfo.CreateNoWindow = true;
 			Utils.RunLocalProcessAndLogOutput(StartInfo);
+		}
+
+		protected virtual void SetupActionToExecuteCompilerThroughShell(ref Action CompileOrLinkAction, string CommandPath, string CommandArguments, string CommandDescription)
+		{
+			string QuotedCommandPath = CommandPath;
+			if (CommandPath.Contains(' '))
+			{
+				QuotedCommandPath = "'" + CommandPath + "'";
+			}
+	
+			if (BuildHostPlatform.Current.ShellType == ShellType.Cmd)
+			{
+				CompileOrLinkAction.CommandArguments = String.Format("/c \"{0} {1}\"", QuotedCommandPath, CommandArguments);
+			}
+			else
+			{
+				CompileOrLinkAction.CommandArguments = String.Format("-c \'{0} {1}\'", QuotedCommandPath, CommandArguments);
+			}
+
+			CompileOrLinkAction.CommandPath = BuildHostPlatform.Current.Shell;
+			CompileOrLinkAction.CommandDescription = CommandDescription;
 		}
 	};
 }

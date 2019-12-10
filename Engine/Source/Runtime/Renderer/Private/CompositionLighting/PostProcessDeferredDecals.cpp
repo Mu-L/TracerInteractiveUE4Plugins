@@ -59,30 +59,7 @@ FRHIBlendState* GetDecalBlendState(const ERHIFeatureLevel::Type SMFeatureLevel, 
 	if (InDecalRenderStage == DRS_BeforeBasePass)
 	{
 		// before base pass (for DBuffer decals)
-
-		if (SMFeatureLevel == ERHIFeatureLevel::SM4)
 		{
-			// DX10 doesn't support masking/using different blend modes per MRT.
-			// We set the opacity in the shader to 0 so we can use the same frame buffer blend.
-
-			if (DecalBlendMode == DBM_DBuffer_AlphaComposite)
-			{
-				return TStaticBlendState<
-					CW_RGBA, BO_Add, BF_One, BF_InverseSourceAlpha, BO_Add, BF_Zero, BF_InverseSourceAlpha,
-					CW_RGBA, BO_Add, BF_One, BF_InverseSourceAlpha, BO_Add, BF_Zero, BF_InverseSourceAlpha,
-					CW_RGBA, BO_Add, BF_One, BF_InverseSourceAlpha, BO_Add, BF_Zero, BF_InverseSourceAlpha >::GetRHI();
-			}
-			else
-			{
-				return TStaticBlendState<
-					CW_RGBA, BO_Add, BF_SourceAlpha, BF_InverseSourceAlpha, BO_Add, BF_Zero, BF_InverseSourceAlpha,
-					CW_RGBA, BO_Add, BF_SourceAlpha, BF_InverseSourceAlpha, BO_Add, BF_Zero, BF_InverseSourceAlpha,
-					CW_RGBA, BO_Add, BF_SourceAlpha, BF_InverseSourceAlpha, BO_Add, BF_Zero, BF_InverseSourceAlpha >::GetRHI();
-			}
-		}
-		else
-		{
-			// see DX10 comment above
 			// As we set the opacity in the shader we don't need to set different frame buffer blend modes but we like to hint to the driver that we
 			// don't need to output there. We also could replace this with many SetRenderTarget calls but it might be slower (needs to be tested).
 
@@ -207,15 +184,6 @@ FRHIBlendState* GetDecalBlendState(const ERHIFeatureLevel::Type SMFeatureLevel, 
 					>::GetRHI();
 				}
 			}
-			else if (SMFeatureLevel == ERHIFeatureLevel::SM4)
-			{
-				return TStaticBlendState<
-					CW_RGB, BO_Add, BF_SourceAlpha, BF_One, BO_Add, BF_Zero, BF_One,	// Emissive
-					CW_RGB, BO_Add, BF_SourceAlpha, BF_One, BO_Add, BF_Zero, BF_One,	// Normal
-					CW_RGB, BO_Add, BF_SourceAlpha, BF_One, BO_Add, BF_Zero, BF_One,	// Metallic, Specular, Roughness
-					CW_RGB, BO_Add, BF_SourceAlpha, BF_One, BO_Add, BF_Zero, BF_One		// BaseColor
-				>::GetRHI();
-			}
 
 		case DBM_Stain:
 			if (GSupportsSeparateRenderTargetBlendState)
@@ -239,15 +207,6 @@ FRHIBlendState* GetDecalBlendState(const ERHIFeatureLevel::Type SMFeatureLevel, 
 					>::GetRHI();
 				}
 			}
-			else if (SMFeatureLevel == ERHIFeatureLevel::SM4)
-			{
-				return TStaticBlendState<
-					CW_RGB, BO_Add, BF_SourceAlpha, BF_InverseSourceAlpha, BO_Add, BF_Zero, BF_One,	// Emissive
-					CW_RGB, BO_Add, BF_SourceAlpha, BF_InverseSourceAlpha, BO_Add, BF_Zero, BF_One,	// Normal
-					CW_RGB, BO_Add, BF_SourceAlpha, BF_InverseSourceAlpha, BO_Add, BF_Zero, BF_One,	// Metallic, Specular, Roughness
-					CW_RGB, BO_Add, BF_SourceAlpha, BF_InverseSourceAlpha, BO_Add, BF_Zero, BF_One		// BaseColor
-				>::GetRHI();
-			}
 
 		case DBM_Normal:
 			return TStaticBlendState< CW_RGB, BO_Add, BF_SourceAlpha, BF_InverseSourceAlpha >::GetRHI();
@@ -266,15 +225,6 @@ FRHIBlendState* GetDecalBlendState(const ERHIFeatureLevel::Type SMFeatureLevel, 
 				return TStaticBlendState<
 					CW_RGB, BO_Add, BF_One, BF_InverseSourceAlpha, BO_Add, BF_Zero, BF_One,	// Emissive
 					CW_RGB, BO_Add, BF_Zero, BF_One, BO_Add, BF_Zero, BF_One,				// Normal
-					CW_RGB, BO_Add, BF_One, BF_InverseSourceAlpha, BO_Add, BF_Zero, BF_One,	// Metallic, Specular, Roughness
-					CW_RGB, BO_Add, BF_One, BF_InverseSourceAlpha, BO_Add, BF_Zero, BF_One	// BaseColor
-				>::GetRHI();
-			}
-			else if (SMFeatureLevel == ERHIFeatureLevel::SM4)
-			{
-				return TStaticBlendState<
-					CW_RGB, BO_Add, BF_One, BF_InverseSourceAlpha, BO_Add, BF_Zero, BF_One,	// Emissive
-					CW_RGB, BO_Add, BF_One, BF_InverseSourceAlpha, BO_Add, BF_Zero, BF_One,	// Normal
 					CW_RGB, BO_Add, BF_One, BF_InverseSourceAlpha, BO_Add, BF_Zero, BF_One,	// Metallic, Specular, Roughness
 					CW_RGB, BO_Add, BF_One, BF_InverseSourceAlpha, BO_Add, BF_Zero, BF_One	// BaseColor
 				>::GetRHI();
@@ -337,7 +287,7 @@ bool RenderPreStencil(FRenderingCompositePassContext& Context, const FMatrix& Co
 	Context.RHICmdList.SetStreamSource(0, GetUnitCubeVertexBuffer(), 0);
 
 	// Render decal mask
-	Context.RHICmdList.DrawIndexedPrimitive(GetUnitCubeIndexBuffer(), 0, 0, 8, 0, ARRAY_COUNT(GCubeIndices) / 3, 1);
+	Context.RHICmdList.DrawIndexedPrimitive(GetUnitCubeIndexBuffer(), 0, 0, 8, 0, UE_ARRAY_COUNT(GCubeIndices) / 3, 1);
 
 	return true;
 }
@@ -529,6 +479,8 @@ void FRCPassPostProcessDeferredDecals::Process(FRenderingCompositePassContext& C
 
 	SCOPED_DRAW_EVENTF(RHICmdList, DeferredDecals, TEXT("DeferredDecals %s"), GetStageName(CurrentStage));
 
+	RHICmdList.TransitionResource(FExclusiveDepthStencil::DepthNop_StencilWrite, SceneContext.GetSceneDepthSurface());
+
 	// this cast is safe as only the dedicated server implements this differently and this pass should not be executed on the dedicated server
 	const FViewInfo& View = Context.View;
 	const FSceneViewFamily& ViewFamily = *(View.Family);
@@ -560,7 +512,7 @@ void FRCPassPostProcessDeferredDecals::Process(FRenderingCompositePassContext& C
 			FPooledRenderTargetDesc GBufferADesc;
 			SceneContext.GetGBufferADesc(GBufferADesc);
 
-			uint32 BaseFlags = (GSupportsRenderTargetWriteMask) ? TexCreate_NoFastClearFinalize : TexCreate_None;
+			uint32 BaseFlags = RHISupportsRenderTargetWriteMask(GMaxRHIShaderPlatform) ? TexCreate_NoFastClearFinalize : TexCreate_None;
 
 			// DBuffer: Decal buffer
 			FPooledRenderTargetDesc Desc(FPooledRenderTargetDesc::Create2DDesc(GBufferADesc.Extent,
@@ -806,7 +758,7 @@ void FRCPassPostProcessDeferredDecals::Process(FRenderingCompositePassContext& C
 					FDecalRendering::SetShader(RHICmdList, GraphicsPSOInit, View, DecalData, CurrentStage, FrustumComponentToClip);
 					RHICmdList.SetStencilRef(StencilRef);
 
-					RHICmdList.DrawIndexedPrimitive(GetUnitCubeIndexBuffer(), 0, 0, 8, 0, ARRAY_COUNT(GCubeIndices) / 3, 1);
+					RHICmdList.DrawIndexedPrimitive(GetUnitCubeIndexBuffer(), 0, 0, 8, 0, UE_ARRAY_COUNT(GCubeIndices) / 3, 1);
 					RenderTargetManager.bGufferADirty |= (RenderTargetManager.TargetsToResolve[FDecalRenderTargetManager::GBufferAIndex] != nullptr);
 				}
 
@@ -835,9 +787,13 @@ void FRCPassPostProcessDeferredDecals::Process(FRenderingCompositePassContext& C
 
 				FRHIRenderPassInfo RPInfo;
 				RPInfo.DepthStencilRenderTarget.Action = MakeDepthStencilTargetActions(ERenderTargetActions::DontLoad_DontStore, ERenderTargetActions::Clear_Store);
-				RPInfo.DepthStencilRenderTarget.DepthStencilTarget = SceneContext.GetSceneDepthTexture();
+				RPInfo.DepthStencilRenderTarget.DepthStencilTarget = SceneContext.GetSceneDepthSurface();
 				RPInfo.DepthStencilRenderTarget.ExclusiveDepthStencil = FExclusiveDepthStencil::DepthNop_StencilWrite;
 				RPInfo.DepthStencilRenderTarget.ResolveTarget = nullptr;
+
+				RHICmdList.TransitionResource(
+					RPInfo.DepthStencilRenderTarget.ExclusiveDepthStencil,
+					RPInfo.DepthStencilRenderTarget.DepthStencilTarget);
 
 				RHICmdList.BeginRenderPass(RPInfo, TEXT("ClearStencil"));
 				RHICmdList.EndRenderPass();
@@ -845,21 +801,20 @@ void FRCPassPostProcessDeferredDecals::Process(FRenderingCompositePassContext& C
 
 			if (CurrentStage == DRS_BeforeBasePass)
 			{
-				// combine DBuffer RTWriteMasks; will end up in one texture we can load from in the base pass PS and decide whether to do the actual work or not
-				FRHITexture* Textures[3] =
-				{
-					SceneContext.DBufferA->GetRenderTargetItem().TargetableTexture,
-					SceneContext.DBufferB->GetRenderTargetItem().TargetableTexture,
-					SceneContext.DBufferC->GetRenderTargetItem().TargetableTexture
-				};
-				RenderTargetManager.FlushMetaData(Textures, 3);
-
 				if (bLastView)
 				{
-					if (GSupportsRenderTargetWriteMask)
+					if (RHISupportsRenderTargetWriteMask(GMaxRHIShaderPlatform))
 					{
 						SCOPED_DRAW_EVENTF(RHICmdList, DeferredDecals, TEXT("Combine DBuffer WriteMasks"));
-						FRenderTargetWriteMask::Decode(Context.RHICmdList, Context.GetShaderMap(), { SceneContext.DBufferA, SceneContext.DBufferB, SceneContext.DBufferC }, SceneContext.DBufferMask, GFastVRamConfig.DBufferMask, TEXT("DBufferMask"));
+
+						// combine DBuffer RTWriteMasks; will end up in one texture we can load from in the base pass PS and decide whether to do the actual work or not
+						IPooledRenderTarget* Textures[3] =
+						{
+							SceneContext.DBufferA,
+							SceneContext.DBufferB,
+							SceneContext.DBufferC
+						};
+						FRenderTargetWriteMask::Decode<3>(Context.RHICmdList, Context.GetShaderMap(), Textures, SceneContext.DBufferMask, GFastVRamConfig.DBufferMask, TEXT("DBufferMask"));
 					}
 
 					if (SceneContext.DBufferMask)
@@ -870,7 +825,7 @@ void FRCPassPostProcessDeferredDecals::Process(FRenderingCompositePassContext& C
 				}
 			}
 
-			if (bLastView || !GSupportsRenderTargetWriteMask)
+			if (bLastView || !RHISupportsRenderTargetWriteMask(GMaxRHIShaderPlatform))
 			{
 				bShouldResolveTargets = true;
 			}
@@ -1113,11 +1068,4 @@ void FDecalRenderTargetManager::SetRenderTargetMode(FDecalRenderingCommon::ERend
 	RHICmdList.BeginRenderPass(RPInfo, TEXT("DecalPass"));
 
 	TargetsToTransitionWritable[CurrentRenderTargetMode] = false;
-}
-
-
-
-void FDecalRenderTargetManager::FlushMetaData(FRHITexture** Textures, uint32 NumTextures)
-{
-	RHICmdList.TransitionResources(EResourceTransitionAccess::EMetaData, Textures, NumTextures);
 }

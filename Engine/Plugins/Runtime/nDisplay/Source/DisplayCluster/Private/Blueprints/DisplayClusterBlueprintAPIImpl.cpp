@@ -12,6 +12,8 @@
 #include "Input/IDisplayClusterInputManager.h"
 #include "Render/IDisplayClusterRenderManager.h"
 
+#include "DisplayClusterRootComponent.h"
+
 #include "Config/DisplayClusterConfigTypes.h"
 #include "Misc/DisplayClusterHelpers.h"
 
@@ -167,14 +169,27 @@ void UDisplayClusterBlueprintAPIImpl::GetLocalViewports(bool IsRTT, TArray<FStri
 // Game API
 //////////////////////////////////////////////////////////////////////////////////////////////
 // Root
-ADisplayClusterPawn* UDisplayClusterBlueprintAPIImpl::GetRoot()
+ADisplayClusterRootActor* UDisplayClusterBlueprintAPIImpl::GetRootActor()
 {
 	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterBlueprint);
 
 	IDisplayClusterGameManager* const Manager = IDisplayCluster::Get().GetGameMgr();
 	if (Manager)
 	{
-		return Manager->GetRoot();
+		return Manager->GetRootActor();
+	}
+
+	return nullptr;
+}
+
+UDisplayClusterRootComponent* UDisplayClusterBlueprintAPIImpl::GetRootComponent()
+{
+	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterBlueprint);
+
+	IDisplayClusterGameManager* const Manager = IDisplayCluster::Get().GetGameMgr();
+	if (Manager)
+	{
+		return Manager->GetRootComponent();
 	}
 
 	return nullptr;
@@ -273,17 +288,6 @@ UDisplayClusterCameraComponent* UDisplayClusterBlueprintAPIImpl::GetDefaultCamer
 	return nullptr;
 }
 
-void UDisplayClusterBlueprintAPIImpl::SetDefaultCameraByIndex(int32 Index)
-{
-	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterBlueprint);
-
-	IDisplayClusterGameManager* const Manager = IDisplayCluster::Get().GetGameMgr();
-	if (Manager)
-	{
-		return Manager->SetDefaultCamera(Index);
-	}
-}
-
 void UDisplayClusterBlueprintAPIImpl::SetDefaultCameraById(const FString& id)
 {
 	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterBlueprint);
@@ -321,77 +325,6 @@ TArray<UDisplayClusterSceneComponent*> UDisplayClusterBlueprintAPIImpl::GetAllNo
 	}
 
 	return TArray<UDisplayClusterSceneComponent*>();
-}
-
-// Navigation
-USceneComponent* UDisplayClusterBlueprintAPIImpl::GetTranslationDirectionComponent()
-{
-	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterBlueprint);
-
-	IDisplayClusterGameManager* const Manager = IDisplayCluster::Get().GetGameMgr();
-	if (Manager)
-	{
-		return Manager->GetTranslationDirectionComponent();
-	}
-
-	return nullptr;
-}
-
-void UDisplayClusterBlueprintAPIImpl::SetTranslationDirectionComponent(USceneComponent* const pComp)
-{
-	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterBlueprint);
-
-	IDisplayClusterGameManager* const Manager = IDisplayCluster::Get().GetGameMgr();
-	if (Manager)
-	{
-		Manager->SetTranslationDirectionComponent(pComp);
-	}
-}
-
-void UDisplayClusterBlueprintAPIImpl::SetTranslationDirectionComponentId(const FString& id)
-{
-	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterBlueprint);
-
-	IDisplayClusterGameManager* const Manager = IDisplayCluster::Get().GetGameMgr();
-	if (Manager)
-	{
-		Manager->SetTranslationDirectionComponent(id);
-	}
-}
-
-USceneComponent* UDisplayClusterBlueprintAPIImpl::GetRotateAroundComponent()
-{
-	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterBlueprint);
-
-	IDisplayClusterGameManager* const Manager = IDisplayCluster::Get().GetGameMgr();
-	if (Manager)
-	{
-		return Manager->GetRotateAroundComponent();
-	}
-
-	return nullptr;
-}
-
-void UDisplayClusterBlueprintAPIImpl::SetRotateAroundComponent(USceneComponent* const pComp)
-{
-	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterBlueprint);
-
-	IDisplayClusterGameManager* const Manager = IDisplayCluster::Get().GetGameMgr();
-	if (Manager)
-	{
-		Manager->SetRotateAroundComponent(pComp);
-	}
-}
-
-void UDisplayClusterBlueprintAPIImpl::SetRotateAroundComponentId(const FString& id)
-{
-	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterBlueprint);
-
-	IDisplayClusterGameManager* const Manager = IDisplayCluster::Get().GetGameMgr();
-	if (Manager)
-	{
-		Manager->SetRotateAroundComponent(id);
-	}
 }
 
 
@@ -586,6 +519,32 @@ void UDisplayClusterBlueprintAPIImpl::SetViewportCamera(const FString& InCameraI
 	return;
 }
 
+void UDisplayClusterBlueprintAPIImpl::GetBufferRatio(const FString& InViewportId, float &OutBufferRatio)
+{
+	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterBlueprint);
+
+	IDisplayClusterRenderManager* const Manager = IDisplayCluster::Get().GetRenderMgr();
+	if (Manager)
+	{
+		Manager->GetBufferRatio(InViewportId, OutBufferRatio);
+	}
+
+	return;
+}
+
+void UDisplayClusterBlueprintAPIImpl::SetBufferRatio(const FString& InViewportId, float InBufferRatio)
+{
+	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterBlueprint);
+
+	IDisplayClusterRenderManager* const Manager = IDisplayCluster::Get().GetRenderMgr();
+	if (Manager)
+	{
+		Manager->SetBufferRatio(InViewportId, InBufferRatio);
+	}
+
+	return;
+}
+
 void UDisplayClusterBlueprintAPIImpl::SetStartPostProcessingSettings(const FString& ViewportID, const FPostProcessSettings& StartPostProcessingSettings)
 {
 	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterBlueprint);
@@ -702,78 +661,4 @@ bool UDisplayClusterBlueprintAPIImpl::ToggleEyesSwap(const FString& CameraId)
 	}
 
 	return false;
-}
-
-float UDisplayClusterBlueprintAPIImpl::GetNearCullingDistance(const FString& CameraId) const
-{
-	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterBlueprint);
-
-	IDisplayClusterRenderManager* const Manager = IDisplayCluster::Get().GetRenderMgr();
-	if (Manager)
-	{
-		return Manager->GetNearCullingDistance(CameraId);
-	}
-
-	return 0.f;
-}
-
-void UDisplayClusterBlueprintAPIImpl::SetNearCullingDistance(const FString& CameraId, float NearDistance)
-{
-	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterBlueprint);
-
-	IDisplayClusterRenderManager* const Manager = IDisplayCluster::Get().GetRenderMgr();
-	if (Manager)
-	{
-		Manager->SetNearCullingDistance(CameraId, NearDistance);
-	}
-}
-
-float UDisplayClusterBlueprintAPIImpl::GetFarCullingDistance(const FString& CameraId) const
-{
-	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterBlueprint);
-
-	IDisplayClusterRenderManager* const Manager = IDisplayCluster::Get().GetRenderMgr();
-	if (Manager)
-	{
-		return Manager->GetFarCullingDistance(CameraId);
-	}
-
-	return 0.f;
-}
-
-void UDisplayClusterBlueprintAPIImpl::SetFarCullingDistance(const FString& CameraId, float FarDistance)
-{
-	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterBlueprint);
-
-	IDisplayClusterRenderManager* const Manager = IDisplayCluster::Get().GetRenderMgr();
-	if (Manager)
-	{
-		Manager->SetFarCullingDistance(CameraId, FarDistance);
-	}
-}
-
-void UDisplayClusterBlueprintAPIImpl::GetCullingDistance(const FString& CameraId, float& NearDistance, float& FarDistance)
-{
-	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterBlueprint);
-
-	IDisplayClusterRenderManager* const Manager = IDisplayCluster::Get().GetRenderMgr();
-	if (Manager)
-	{
-		return Manager->GetCullingDistance(CameraId, NearDistance, FarDistance);
-	}
-
-	return;
-}
-
-void UDisplayClusterBlueprintAPIImpl::SetCullingDistance(const FString& CameraId, float NearDistance, float FarDistance)
-{
-	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterBlueprint);
-
-	IDisplayClusterRenderManager* const Manager = IDisplayCluster::Get().GetRenderMgr();
-	if (Manager)
-	{
-		return Manager->SetCullingDistance(CameraId, NearDistance, FarDistance);
-	}
-
-	return;
 }

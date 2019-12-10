@@ -5,14 +5,19 @@ using System.IO;
 
 public class libOpus : ModuleRules
 {
+	protected virtual string OpusVersion	  { get { return "opus-1.1"; } }
+	protected virtual string IncRootDirectory { get { return Target.UEThirdPartySourceDirectory; } }
+	protected virtual string LibRootDirectory { get { return Target.UEThirdPartySourceDirectory; } }
+
+	protected virtual string OpusIncPath { get { return Path.Combine(IncRootDirectory, "libOpus", OpusVersion, "include"); } }
+	protected virtual string OpusLibPath { get { return Path.Combine(LibRootDirectory, "libOpus", OpusVersion); } }
+
 	public libOpus(ReadOnlyTargetRules Target) : base(Target)
 	{
-		/** Mark the current version of the library */
-		string OpusVersion = "1.1";
 		Type = ModuleType.External;
 
-		PublicIncludePaths.Add(Target.UEThirdPartySourceDirectory + "libOpus/opus-" + OpusVersion + "/include");
-		string LibraryPath = Target.UEThirdPartySourceDirectory + "libOpus/opus-" + OpusVersion + "/";
+		PublicIncludePaths.Add(OpusIncPath);
+		string LibraryPath = OpusLibPath + "/";
 
 		if ((Target.Platform == UnrealTargetPlatform.Win64) ||
 			(Target.Platform == UnrealTargetPlatform.Win32))
@@ -29,13 +34,11 @@ public class libOpus : ModuleRules
 
 			LibraryPath += "Release/";
 
-			PublicLibraryPaths.Add(LibraryPath);
-
- 			PublicAdditionalLibraries.Add("silk_common.lib");
- 			PublicAdditionalLibraries.Add("silk_float.lib");
- 			PublicAdditionalLibraries.Add("celt.lib");
-			PublicAdditionalLibraries.Add("opus.lib");
-			PublicAdditionalLibraries.Add("speex_resampler.lib");
+ 			PublicAdditionalLibraries.Add(LibraryPath + "silk_common.lib");
+ 			PublicAdditionalLibraries.Add(LibraryPath + "silk_float.lib");
+ 			PublicAdditionalLibraries.Add(LibraryPath + "celt.lib");
+			PublicAdditionalLibraries.Add(LibraryPath + "opus.lib");
+			PublicAdditionalLibraries.Add(LibraryPath + "speex_resampler.lib");
 		}
 		else if (Target.Platform == UnrealTargetPlatform.HoloLens)
 		{
@@ -63,13 +66,11 @@ public class libOpus : ModuleRules
 
 			LibraryPath += "Release/";
 
-			PublicLibraryPaths.Add(LibraryPath);
-
- 			PublicAdditionalLibraries.Add("silk_common.lib");
- 			PublicAdditionalLibraries.Add("silk_float.lib");
- 			PublicAdditionalLibraries.Add("celt.lib");
-			PublicAdditionalLibraries.Add("opus.lib");
-			PublicAdditionalLibraries.Add("speex_resampler.lib");
+ 			PublicAdditionalLibraries.Add(LibraryPath + "silk_common.lib");
+ 			PublicAdditionalLibraries.Add(LibraryPath + "silk_float.lib");
+ 			PublicAdditionalLibraries.Add(LibraryPath + "celt.lib");
+			PublicAdditionalLibraries.Add(LibraryPath + "opus.lib");
+			PublicAdditionalLibraries.Add(LibraryPath + "speex_resampler.lib");
 		}
 		else if (Target.Platform == UnrealTargetPlatform.Mac)
 		{
@@ -114,28 +115,27 @@ public class libOpus : ModuleRules
 		}
 		else if (Target.IsInPlatformGroup(UnrealPlatformGroup.Android))
 		{
-			PublicLibraryPaths.Add(LibraryPath + "Android/ARMv7/");
-			PublicLibraryPaths.Add(LibraryPath + "Android/ARM64/");
-			PublicLibraryPaths.Add(LibraryPath + "Android/x64/");
-			
-			PublicAdditionalLibraries.Add("opus");
-			PublicAdditionalLibraries.Add("speex_resampler");
+			string[] Architectures = new string[] {
+				"ARMv7",
+				"ARM64",
+				"x64",
+			};
+
+			foreach(string Architecture in Architectures)
+			{
+				PublicAdditionalLibraries.Add(LibraryPath + "Android/" + Architecture + "/libopus.a");
+				PublicAdditionalLibraries.Add(LibraryPath + "Android/" + Architecture + "/libspeex_resampler.a");
+			}
 		}
         else if (Target.Platform == UnrealTargetPlatform.XboxOne)
         {
             LibraryPath += "XboxOne/VS2015/Release/";
 
-            PublicLibraryPaths.Add(LibraryPath);
-
-            PublicAdditionalLibraries.Add("silk_common.lib");
-            PublicAdditionalLibraries.Add("silk_float.lib");
-            PublicAdditionalLibraries.Add("celt.lib");
-            PublicAdditionalLibraries.Add("opus.lib");
-            PublicAdditionalLibraries.Add("speex_resampler.lib");
-        }
-		else if (Target.Platform == UnrealTargetPlatform.PS4)
-        {
-            PublicAdditionalLibraries.Add(LibraryPath + "PS4/ORBIS_Release/" + "OpusLibrary.a");
+            PublicAdditionalLibraries.Add(LibraryPath + "silk_common.lib");
+            PublicAdditionalLibraries.Add(LibraryPath + "silk_float.lib");
+            PublicAdditionalLibraries.Add(LibraryPath + "celt.lib");
+            PublicAdditionalLibraries.Add(LibraryPath + "opus.lib");
+            PublicAdditionalLibraries.Add(LibraryPath + "speex_resampler.lib");
         }
         else if (Target.Platform == UnrealTargetPlatform.Switch)
         {

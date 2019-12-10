@@ -75,6 +75,37 @@ FUObjectAnnotationSparseBool GSelectedComponentAnnotation;
 /** Static var indicating activity of reregister context */
 int32 FGlobalComponentReregisterContext::ActiveGlobalReregisterContextCount = 0;
 
+void UpdateAllPrimitiveSceneInfosForSingleComponent(UActorComponent* InComponent, TSet<FSceneInterface*>* InScenesToUpdateAllPrimitiveSceneInfosForBatching /* = nullptr*/)
+{
+	if (FSceneInterface* Scene = InComponent->GetScene())
+	{
+		if (InScenesToUpdateAllPrimitiveSceneInfosForBatching == nullptr)
+		{
+			// If no batching is available (this ComponentReregisterContext is not created by a FGlobalComponentReregisterContext), issue one update per component
+			ENQUEUE_RENDER_COMMAND(UpdateAllPrimitiveSceneInfosCmd)([Scene](FRHICommandListImmediate& RHICmdList) {
+				Scene->UpdateAllPrimitiveSceneInfos(RHICmdList);
+			});
+		}
+		else
+		{
+			// Try to batch the updates inside FGlobalComponentReregisterContext
+			InScenesToUpdateAllPrimitiveSceneInfosForBatching->Add(Scene);
+		}
+	}
+}
+
+void UpdateAllPrimitiveSceneInfosForScenes(TSet<FSceneInterface*> ScenesToUpdateAllPrimitiveSceneInfos)
+{
+	ENQUEUE_RENDER_COMMAND(UpdateAllPrimitiveSceneInfosCmd)(
+		[ScenesToUpdateAllPrimitiveSceneInfos](FRHICommandListImmediate& RHICmdList)
+	{
+		for (FSceneInterface* Scene : ScenesToUpdateAllPrimitiveSceneInfos)
+		{
+			Scene->UpdateAllPrimitiveSceneInfos(RHICmdList);
+		}
+	});
+}
+
 FGlobalComponentReregisterContext::FGlobalComponentReregisterContext()
 {
 	ActiveGlobalReregisterContextCount++;
@@ -85,8 +116,10 @@ FGlobalComponentReregisterContext::FGlobalComponentReregisterContext()
 	// Detach all actor components.
 	for(UActorComponent* Component : TObjectRange<UActorComponent>())
 	{
-		ComponentContexts.Add(new FComponentReregisterContext(Component));
+		ComponentContexts.Add(new FComponentReregisterContext(Component, &ScenesToUpdateAllPrimitiveSceneInfos));
 	}
+
+	UpdateAllPrimitiveSceneInfos();
 }
 
 FGlobalComponentReregisterContext::FGlobalComponentReregisterContext(const TArray<UClass*>& ExcludeComponents)
@@ -111,9 +144,11 @@ FGlobalComponentReregisterContext::FGlobalComponentReregisterContext(const TArra
 		}
 		if( bShouldReregister )
 		{
-			ComponentContexts.Add(new FComponentReregisterContext(Component));
+			ComponentContexts.Add(new FComponentReregisterContext(Component, &ScenesToUpdateAllPrimitiveSceneInfos));
 		}
 	}
+
+	UpdateAllPrimitiveSceneInfos();
 }
 
 FGlobalComponentReregisterContext::~FGlobalComponentReregisterContext()
@@ -122,6 +157,15 @@ FGlobalComponentReregisterContext::~FGlobalComponentReregisterContext()
 	// We empty the array now, to ensure that the FComponentReregisterContext destructors are called while ActiveGlobalReregisterContextCount still indicates activity
 	ComponentContexts.Empty();
 	ActiveGlobalReregisterContextCount--;
+
+	UpdateAllPrimitiveSceneInfos();
+}
+
+void FGlobalComponentReregisterContext::UpdateAllPrimitiveSceneInfos()
+{
+	UpdateAllPrimitiveSceneInfosForScenes(MoveTemp(ScenesToUpdateAllPrimitiveSceneInfos));
+
+	check(ScenesToUpdateAllPrimitiveSceneInfos.Num() == 0);
 }
 
 FGlobalComponentRecreateRenderStateContext::FGlobalComponentRecreateRenderStateContext()
@@ -132,13 +176,24 @@ FGlobalComponentRecreateRenderStateContext::FGlobalComponentRecreateRenderStateC
 	// recreate render state for all components.
 	for (UActorComponent* Component : TObjectRange<UActorComponent>())
 	{
-		ComponentContexts.Add(new FComponentRecreateRenderStateContext(Component));
+		ComponentContexts.Add(new FComponentRecreateRenderStateContext(Component, &ScenesToUpdateAllPrimitiveSceneInfos));
 	}
+
+	UpdateAllPrimitiveSceneInfos();
 }
 
 FGlobalComponentRecreateRenderStateContext::~FGlobalComponentRecreateRenderStateContext()
 {
 	ComponentContexts.Empty();
+
+	UpdateAllPrimitiveSceneInfos();
+}
+
+void FGlobalComponentRecreateRenderStateContext::UpdateAllPrimitiveSceneInfos()
+{
+	UpdateAllPrimitiveSceneInfosForScenes(MoveTemp(ScenesToUpdateAllPrimitiveSceneInfos));
+
+	check(ScenesToUpdateAllPrimitiveSceneInfos.Num() == 0);
 }
 
 // Create Physics global delegate
@@ -804,7 +859,7 @@ void UActorComponent::BeginPlay()
 	check(!bHasBegunPlay);
 	checkSlow(bTickFunctionsRegistered); // If this fails, someone called BeginPlay() without first calling RegisterAllComponentTickFunctions().
 
-	if (GetClass()->HasAnyClassFlags(CLASS_CompiledFromBlueprint))
+	if (GetClass()->HasAnyClassFlags(CLASS_CompiledFromBlueprint) || !GetClass()->HasAnyClassFlags(CLASS_Native))
 	{
 		ReceiveBeginPlay();
 	}
@@ -817,7 +872,7 @@ void UActorComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	check(bHasBegunPlay);
 
 	// If we're in the process of being garbage collected it is unsafe to call out to blueprints
-	if (!HasAnyFlags(RF_BeginDestroyed) && !IsUnreachable() && GetClass()->HasAnyClassFlags(CLASS_CompiledFromBlueprint))
+	if (!HasAnyFlags(RF_BeginDestroyed) && !IsUnreachable() && (GetClass()->HasAnyClassFlags(CLASS_CompiledFromBlueprint) || !GetClass()->HasAnyClassFlags(CLASS_Native)))
 	{
 		ReceiveEndPlay(EndPlayReason);
 	}
@@ -957,7 +1012,7 @@ void UActorComponent::TickComponent(float DeltaTime, enum ELevelTick TickType, F
 {
 	check(bRegistered);
 
-	if (GetClass()->HasAnyClassFlags(CLASS_CompiledFromBlueprint))
+	if (GetClass()->HasAnyClassFlags(CLASS_CompiledFromBlueprint) || !GetClass()->HasAnyClassFlags(CLASS_Native))
 	{
 		ReceiveTick(DeltaTime);
 
@@ -1550,7 +1605,7 @@ void UActorComponent::Activate(bool bReset)
 	if (bReset || ShouldActivate()==true)
 	{
 		SetComponentTickEnabled(true);
-		bIsActive = true;
+		SetActiveFlag(true);
 
 		OnComponentActivated.Broadcast(this, bReset);
 	}
@@ -1561,7 +1616,7 @@ void UActorComponent::Deactivate()
 	if (ShouldActivate()==false)
 	{
 		SetComponentTickEnabled(false);
-		bIsActive = false;
+		SetActiveFlag(false);
 
 		OnComponentDeactivated.Broadcast(this);
 	}
@@ -1570,7 +1625,7 @@ void UActorComponent::Deactivate()
 bool UActorComponent::ShouldActivate() const
 {
 	// if not active, should activate
-	return !bIsActive;
+	return !IsActive();
 }
 
 void UActorComponent::SetActive(bool bNewActive, bool bReset)
@@ -1602,7 +1657,7 @@ void UActorComponent::SetAutoActivate(bool bNewAutoActivate)
 
 void UActorComponent::ToggleActive()
 {
-	SetActive(!bIsActive);
+	SetActive(!IsActive());
 }
 
 void UActorComponent::SetTickableWhenPaused(bool bTickableWhenPaused)
@@ -1679,13 +1734,18 @@ bool UActorComponent::IsSupportedForNetworking() const
 	return GetIsReplicated() || IsNameStableForNetworking();
 }
 
-void UActorComponent::SetIsReplicated(bool ShouldReplicate)
+void UActorComponent::SetIsReplicated(bool bShouldReplicate)
 {
-	if (bReplicates != ShouldReplicate)
+	if (GetIsReplicated() != bShouldReplicate)
 	{
+		ensureMsgf(!NeedsInitialization(), TEXT("SetReplicatedByDefault is preferred during Component Construction."));
+
 		if (GetComponentClassCanReplicate())
 		{
-			bReplicates = ShouldReplicate;
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
+			bReplicates = bShouldReplicate;
+			// MARK_PROPERTY_DIRTY_FROM_NAME(UActorComponent, bReplicates, this);
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
 
 			if (AActor* MyOwner = GetOwner())
 			{
@@ -1721,7 +1781,7 @@ bool UActorComponent::GetComponentClassCanReplicate() const
 ENetRole UActorComponent::GetOwnerRole() const
 {
 	AActor* MyOwner = GetOwner();
-	return (MyOwner ? MyOwner->Role.GetValue() : ROLE_None);
+	return (MyOwner ? MyOwner->GetLocalRole() : ROLE_None);
 }
 
 void UActorComponent::GetLifetimeReplicatedProps( TArray< FLifetimeProperty > & OutLifetimeProps ) const
@@ -1732,14 +1792,31 @@ void UActorComponent::GetLifetimeReplicatedProps( TArray< FLifetimeProperty > & 
 		BPClass->GetLifetimeBlueprintReplicationList(OutLifetimeProps);
 	}
 
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
 	DOREPLIFETIME( UActorComponent, bIsActive );
 	DOREPLIFETIME( UActorComponent, bReplicates );
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
 }
 
 void UActorComponent::OnRep_IsActive()
 {
-	SetComponentTickEnabled(bIsActive);
+	SetComponentTickEnabled(IsActive());
 }
+
+#if WITH_EDITOR
+bool UActorComponent::CanEditChange(const UProperty* InProperty) const
+{
+	if (Super::CanEditChange(InProperty))
+	{
+		UActorComponent* ComponentArchetype = Cast<UActorComponent>(GetArchetype());
+		if (ComponentArchetype == nullptr || ComponentArchetype->bEditableWhenInherited)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+#endif
 
 bool UActorComponent::IsEditableWhenInherited() const
 {
@@ -1875,6 +1952,42 @@ AActor* UActorComponent::GetActorOwnerNoninline() const
 	// This is defined out-of-line because AActor isn't defined where the inlined function is.
 
 	return GetTypedOuter<AActor>();
+}
+
+void UActorComponent::SetIsReplicatedByDefault(const bool bNewReplicates)
+{
+	// Don't bother checking parent here.
+	if (LIKELY(NeedsInitialization()))
+	{
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
+		bReplicates = bNewReplicates;
+		// MARK_PROPERTY_DIRTY_FROM_NAME(UActorComponent, bReplicates, this);
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
+	}
+	else
+	{
+		ensureMsgf(false, TEXT("SetIsReplicatedByDefault should only be called during Component Construction. Class=%s"), *GetPathNameSafe(GetClass()));
+		SetIsReplicated(bNewReplicates);
+	}
+}
+
+void UActorComponent::SetActiveFlag(const bool bNewIsActive)
+{
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
+	bIsActive = bNewIsActive;
+	// MARK_PROPERTY_DIRTY_FROM_NAME(UActorComponent, bIsActive, this);
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
+}
+
+bool UActorComponent::OwnerNeedsInitialization() const
+{
+	AActor* Owner = GetOwner();
+	return Owner && Owner->HasAnyFlags(RF_NeedInitialization);
+}
+
+bool UActorComponent::NeedsInitialization() const
+{
+	return HasAnyFlags(RF_NeedInitialization);
 }
 
 #undef LOCTEXT_NAMESPACE

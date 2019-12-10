@@ -9,11 +9,11 @@ public class TraceLog : ModuleRules
 	public TraceLog(ReadOnlyTargetRules Target) : base(Target)
 	{
 		bRequiresImplementModule = false;
-		PrivateIncludePathModuleNames.Add("Core");
+		PublicIncludePathModuleNames.Add("Core");
 
         if (Target.Platform == UnrealTargetPlatform.PS4)
         {
-            PublicAdditionalLibraries.Add("SceNet_stub_weak");
+            PublicSystemLibraries.Add("SceNet_stub_weak");
         }
     }
 }

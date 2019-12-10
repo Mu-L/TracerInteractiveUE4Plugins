@@ -14,7 +14,7 @@ class UMaterialExpressionVectorParameter : public UMaterialExpressionParameter
 {
 	GENERATED_UCLASS_BODY()
 
-	UPROPERTY(EditAnywhere, Category=MaterialExpressionVectorParameter)
+	UPROPERTY(EditAnywhere, Category=MaterialExpressionVectorParameter, meta=(OnlyUpdateOnInteractionEnd))
 	FLinearColor DefaultValue;
 
 	UPROPERTY(EditAnywhere, Category=CustomPrimitiveData)
@@ -22,6 +22,11 @@ class UMaterialExpressionVectorParameter : public UMaterialExpressionParameter
 
 	UPROPERTY(EditAnywhere, Category=CustomPrimitiveData, meta=(ClampMin="0"))
 	uint8 PrimitiveDataIndex = 0;
+
+#if WITH_EDITORONLY_DATA
+	UPROPERTY(EditAnywhere, Category = ParameterCustomization)
+	FParameterChannelNames ChannelNames;
+#endif
 
 	//~ Begin UMaterialExpression Interface
 #if WITH_EDITOR
@@ -37,6 +42,10 @@ class UMaterialExpressionVectorParameter : public UMaterialExpressionParameter
 	virtual bool SetParameterValue(FName InParameterName, FLinearColor InValue);
 
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;	
+
+	void ApplyChannelNames();
+	
+
 	virtual void ValidateParameterName(const bool bAllowDuplicateName) override;
 	virtual bool HasClassAndNameCollision(UMaterialExpression* OtherExpression) const override;
 	virtual void SetValueToMatchingExpression(UMaterialExpression* OtherExpression) override;
@@ -44,6 +53,14 @@ class UMaterialExpressionVectorParameter : public UMaterialExpressionParameter
 
 	virtual bool IsUsedAsChannelMask() const {return false;}
 
+#if WITH_EDITOR
+	FParameterChannelNames GetVectorChannelNames() const
+	{
+		return ChannelNames;
+	}
+#endif
+
 	virtual void GetAllParameterInfo(TArray<FMaterialParameterInfo> &OutParameterInfo, TArray<FGuid> &OutParameterIds, const FMaterialParameterInfo& InBaseParameterInfo) const override;
 };
+
 

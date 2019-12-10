@@ -42,6 +42,8 @@ struct FCrashOverrideParameters
 	/** Default this to true for backward compatibility before these bools were added. */
 	bool bSetCrashReportClientMessageText = true;
 	bool bSetGameNameSuffix = false;
+	TOptional<bool> SendUnattendedBugReports;
+	TOptional<bool> SendUsageData;
 
 	CORE_API ~FCrashOverrideParameters();
 };
@@ -335,13 +337,19 @@ public:
 	// terminated from the background state without any further warning.
 	static FApplicationLifetimeDelegate ApplicationWillEnterBackgroundDelegate; // for instance, hitting the home button
 
-																				// Called when the application is returning to the foreground (reverse any processing done in the EnterBackground delegate)
+	// Called when the application is returning to the foreground (reverse any processing done in the EnterBackground delegate)
 	static FApplicationLifetimeDelegate ApplicationHasEnteredForegroundDelegate;
 
 	// This *may* be called when the application is getting terminated by the OS.
 	// There is no guarantee that this will ever be called on a mobile device,
 	// save state when ApplicationWillEnterBackgroundDelegate is called instead.
 	static FApplicationLifetimeDelegate ApplicationWillTerminateDelegate;
+
+	// Called when in the background, if the OS is giving CPU time to the device. It is very likely
+	// this will never be called due to mobile OS backgrounded CPU restrictions. But if, for instance,
+	// VOIP is active on iOS, the will be getting called
+	DECLARE_MULTICAST_DELEGATE_OneParam(FBackgroundTickDelegate, float /*DeltaTime*/);
+	static FBackgroundTickDelegate MobileBackgroundTickDelegate;
 
 	// Called when the OS needs control of the music (parameter is true) or when the OS returns
 	// control of the music to the application (parameter is false). This can happen due to a
@@ -544,6 +552,10 @@ public:
 	// Return true for to launch the url
 	DECLARE_DELEGATE_RetVal_OneParam(bool, FShouldLaunchUrl, const TCHAR* /* URL */);
 	static FShouldLaunchUrl ShouldLaunchUrl;
+
+	/** Sent when GC finish destroy takes more time than expected */
+	DECLARE_MULTICAST_DELEGATE_OneParam(FOnGCFinishDestroyTimeExtended, const FString&);
+	static FOnGCFinishDestroyTimeExtended OnGCFinishDestroyTimeExtended;
 
 private:
 

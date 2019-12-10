@@ -2,9 +2,7 @@
 #pragma once
 
 #include "Chaos/ImplicitObject.h"
-
-#include <algorithm>
-#include <cmath>
+#include "ChaosArchive.h"
 
 namespace Chaos
 {
@@ -12,7 +10,9 @@ template<class T, int d>
 class TPlane final : public TImplicitObject<T, d>
 {
   public:
-	IMPLICIT_OBJECT_SERIALIZER(TPlane)
+	using TImplicitObject<T, d>::GetTypeName;
+
+
 	TPlane() : TImplicitObject<T, d>(0, ImplicitObjectType::Plane) {}	//needed for serialization
 	TPlane(const TVector<T, d>& InX, const TVector<T, d>& InNormal)
 	    : TImplicitObject<T, d>(0, ImplicitObjectType::Plane)
@@ -42,6 +42,14 @@ class TPlane final : public TImplicitObject<T, d>
 	/**
 	 * Phi is positive on the side of the normal, and negative otherwise.
 	 */
+	T SignedDistance(const TVector<T, d>& x) const
+	{
+		return TVector<T, d>::DotProduct(x - MX, MNormal);
+	}
+
+	/**
+	 * Phi is positive on the side of the normal, and negative otherwise.
+	 */
 	virtual T PhiWithNormal(const TVector<T, d>& x, TVector<T, d>& Normal) const override
 	{
 		Normal = MNormal;
@@ -54,10 +62,11 @@ class TPlane final : public TImplicitObject<T, d>
 		return x - TVector<T, d>(Dist * MNormal);
 	}
 
-	virtual bool Raycast(const TVector<T, d>& StartPoint, const TVector<T, d>& Dir, const T Length, const T Thickness, T& OutTime, TVector<T, d>& OutPosition, TVector<T, d>& OutNormal) const override
+	virtual bool Raycast(const TVector<T, d>& StartPoint, const TVector<T, d>& Dir, const T Length, const T Thickness, T& OutTime, TVector<T, d>& OutPosition, TVector<T, d>& OutNormal, int32& OutFaceIndex) const override
 	{
 		ensure(FMath::IsNearlyEqual(Dir.SizeSquared(),1, KINDA_SMALL_NUMBER));
 		ensure(Length > 0);
+		OutFaceIndex = INDEX_NONE;
 
 		const T SignedDist = TVector<T, d>::DotProduct(StartPoint - MX, MNormal);
 		if (FMath::Abs(SignedDist) < Thickness)
@@ -86,7 +95,7 @@ class TPlane final : public TImplicitObject<T, d>
 			return false;	//never reach
 		}
 
-		OutTime = LengthAlongRay / Length;
+		OutTime = LengthAlongRay;
 		OutPosition = StartPoint + (LengthAlongRay + Thickness) * Dir;
 		OutNormal = -DirTowardsPlane;
 		return true;
@@ -130,12 +139,18 @@ class TPlane final : public TImplicitObject<T, d>
 
 	virtual void Serialize(FChaosArchive& Ar) override
 	{
+		FChaosArchiveScopedMemory ScopedMemory(Ar, GetTypeName());
 		SerializeImp(Ar);
 	}
 
 	virtual void Serialize(FArchive& Ar) override
 	{
 		SerializeImp(Ar);
+	}
+
+	virtual uint32 GetTypeHash() const override
+	{
+		return HashCombine(::GetTypeHash(MX), ::GetTypeHash(MNormal));
 	}
 
   private:

@@ -194,53 +194,6 @@ struct ENGINE_API FRequestAnimCompressionParams
 	void InitFrameStrippingFromPlatform(const class ITargetPlatform* TargetPlatform);
 };
 
-#if WITH_EDITOR
-// Cache debugging data in editor for UE-49335
-struct FAnimLoadingDebugData
-{
-public:
-	//Single debug entry
-	struct Entry
-	{
-		FString Tag;
-		int32 RawDataCount;
-		int32 SourceDataCount;
-
-		Entry(const TCHAR* InTag, int32 InRawDataCount, int32 InSourceDataCount)
-			: Tag(InTag)
-			, RawDataCount(InRawDataCount)
-			, SourceDataCount(InSourceDataCount)
-		{}
-	};
-
-	template <typename... ArgsType>
-	void AddEntry(ArgsType&&... Args)
-	{
-		Entries.Emplace(Args...);
-	}
-
-	// Build a string of all the debug entries for output
-	FString GetEntries() const
-	{
-		FString Ret;
-		for (const Entry& E : Entries)
-		{
-			TArray<FStringFormatArg> Args;
-			Args.Add(LexToString(E.Tag));
-			Args.Add(LexToString(E.RawDataCount));
-			Args.Add(LexToString(E.SourceDataCount));
-			Ret += FString::Format(TEXT("\t{0}: Raw:{1} Source:{2}\n"), Args);
-		}
-		return Ret;
-	}
-
-private:
-
-	TArray<Entry> Entries;
-};
-
-#endif
-
 FArchive& operator<<(FArchive& Ar, FCompressedOffsetData& D);
 
 UCLASS(config=Engine, hidecategories=(UObject, Length), BlueprintType)
@@ -309,6 +262,14 @@ public:
 	 */
 	UPROPERTY(Category = Compression, EditAnywhere)
 	bool bAllowFrameStripping;
+
+	/**
+	 * Set a scale for error threshold on compression. This is useful if the animation will 
+	 * be played back at a different scale (e.g. if you know the animation will be played
+	 * on an actor/component that is scaled up by a factor of 10, set this value to 10)
+	 */
+	UPROPERTY(Category = Compression, EditAnywhere)
+	float CompressionErrorThresholdScale;
 
 #endif
 
@@ -412,6 +373,7 @@ public:
 	virtual void PostLoad() override;
 	virtual bool IsPostLoadThreadSafe() const override;
 	virtual void PreSave(const class ITargetPlatform* TargetPlatform) override;
+	virtual void GetPreloadDependencies(TArray<UObject*>& OutDeps) override;
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 	virtual void PostDuplicate(bool bDuplicateForPIE) override;
@@ -497,6 +459,9 @@ public:
 	
 	// Adds a new track (if no track of the supplied name is found) to the raw animation data, optionally setting it to TrackData.
 	int32 AddNewRawTrack(FName TrackName, FRawAnimSequenceTrack* TrackData = nullptr);
+
+	// Get the Alternate compression error threshold 
+	float GetAltCompressionErrorThreshold() const;
 #endif
 
 	const TArray<FTrackToSkeletonMap>& GetRawTrackToSkeletonMapTable() const { return TrackToSkeletonMapTable; }
@@ -891,20 +856,6 @@ public:
 
 	friend class UAnimationAsset;
 	friend struct FScopedAnimSequenceRawDataCache;
-
-#if WITH_EDITOR
-	// Cache debugging data in editor for UE-49335
-	FAnimLoadingDebugData AnimLoadingDebugData;
-#endif
-
-	// Cache debugging data in editor for UE-49335
-	void AddAnimLoadingDebugEntry(const TCHAR* Tag)
-	{
-#if WITH_EDITOR
-		AnimLoadingDebugData.AddEntry(Tag, RawAnimationData.Num(), SourceRawAnimationData.Num());
-#endif
-	}
-
 	friend class UAnimationBlueprintLibrary;
 };
 

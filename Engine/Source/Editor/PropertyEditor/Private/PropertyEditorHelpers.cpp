@@ -387,6 +387,24 @@ ECheckBoxState SEditConditionWidget::OnGetEditConditionCheckState() const
 
 namespace PropertyEditorHelpers
 {
+	bool ShouldBeVisible(const FPropertyNode& InParentNode, const UProperty* Property)
+	{
+		const bool bShouldShowHiddenProperties = !!InParentNode.HasNodeFlags(EPropertyNodeFlags::ShouldShowHiddenProperties);
+		if (bShouldShowHiddenProperties)
+		{
+			return true;
+		}
+
+		const bool bShouldShowDisableEditOnInstance = !!InParentNode.HasNodeFlags(EPropertyNodeFlags::ShouldShowDisableEditOnInstance);
+
+		static const FName Name_InlineEditConditionToggle("InlineEditConditionToggle");
+		const bool bOnlyShowAsInlineEditCondition = Property->HasMetaData(Name_InlineEditConditionToggle);
+		const bool bShowIfEditableProperty = Property->HasAnyPropertyFlags(CPF_Edit);
+		const bool bShowIfDisableEditOnInstance = bShouldShowDisableEditOnInstance || !Property->HasAnyPropertyFlags(CPF_DisableEditOnInstance);
+
+		return bShowIfEditableProperty && !bOnlyShowAsInlineEditCondition && bShowIfDisableEditOnInstance;
+	}
+
 	bool IsBuiltInStructProperty( const UProperty* Property )
 	{
 		bool bIsBuiltIn = false;
@@ -1031,7 +1049,7 @@ namespace PropertyEditorHelpers
 			}
 
 		case EPropertyButton::PickAsset:
-			NewButton = PropertyCustomizationHelpers::MakeAssetPickerAnchorButton( FOnGetAllowedClasses::CreateSP( PropertyEditor, &FPropertyEditor::OnGetClassesForAssetPicker ), FOnAssetSelected::CreateSP( PropertyEditor, &FPropertyEditor::OnAssetSelected ) );
+			NewButton = PropertyCustomizationHelpers::MakeAssetPickerAnchorButton( FOnGetAllowedClasses::CreateSP( PropertyEditor, &FPropertyEditor::OnGetClassesForAssetPicker ), FOnAssetSelected::CreateSP( PropertyEditor, &FPropertyEditor::OnAssetSelected ), PropertyEditor->GetPropertyHandle());
 			break;
 
 		case EPropertyButton::PickActor:

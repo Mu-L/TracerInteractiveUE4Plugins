@@ -23,7 +23,12 @@ namespace UnrealBuildTool
 			/// Is the platform a confidential ("console-style") platform
 			/// </summary>
 			public bool bIsConfidential;
-			
+
+			/// <summary>
+			/// Additional restricted folders for this platform.
+			/// </summary>
+			public string[] AdditionalRestrictedFolders = null;
+
 			/// <summary>
 			/// Entire ini parent chain, ending with this platform
 			/// </summary>
@@ -49,21 +54,23 @@ namespace UnrealBuildTool
 					// look through all config dirs looking for the data driven ini file
 					foreach (string FilePath in Directory.EnumerateFiles(EngineConfigDir.FullName, "DataDrivenPlatformInfo.ini", SearchOption.AllDirectories))
 					{
+						FileReference FileRef = new FileReference(FilePath);
+
 						// get the platform name from the path
 						string IniPlatformName;
-						// Foo/Engine/Config/<Platform>/DataDrivenPlatformInfo.ini
-						if (EngineConfigDir.IsUnderDirectory(UnrealBuildTool.EngineDirectory))
+						if (FileRef.IsUnderDirectory(DirectoryReference.Combine(UnrealBuildTool.EngineDirectory, "Config")))
 						{
+							// Foo/Engine/Config/<Platform>/DataDrivenPlatformInfo.ini
 							IniPlatformName = Path.GetFileName(Path.GetDirectoryName(FilePath));
 						}
-						// Foo/Platforms/<Platform>/Engine/Config/DataDrivenPlatformInfo.ini
 						else
 						{
-							IniPlatformName = Path.GetFileName(Path.GetDirectoryName(Path.GetDirectoryName(Path.GetDirectoryName(FilePath))));
+							// Foo/Engine/Platforms/<Platform>/Config/DataDrivenPlatformInfo.ini
+							IniPlatformName = Path.GetFileName(Path.GetDirectoryName(Path.GetDirectoryName(FilePath)));
 						}
 
 						// load the DataDrivenPlatformInfo from the path
-						ConfigFile Config = new ConfigFile(new FileReference(FilePath));
+						ConfigFile Config = new ConfigFile(FileRef);
 						ConfigDataDrivenPlatformInfo NewInfo = new ConfigDataDrivenPlatformInfo();
 
 
@@ -87,6 +94,13 @@ namespace UnrealBuildTool
 								NewInfo.bIsConfidential = false;
 							}
 
+							// get a list of additional restricted folders
+							IReadOnlyList<string> AdditionalRestrictedFolders;
+							if(ParsedSection.TryGetValues("AdditionalRestrictedFolders", out AdditionalRestrictedFolders) && AdditionalRestrictedFolders.Count > 0)
+							{
+								NewInfo.AdditionalRestrictedFolders = AdditionalRestrictedFolders.Select(x => x.Trim()).Where(x => x.Length > 0).ToArray();
+							}
+
 							// create cache it
 							PlatformInfos[IniPlatformName] = NewInfo;
 						}
@@ -94,7 +108,7 @@ namespace UnrealBuildTool
 				}
 
 				// now that all are read in, calculate the ini parent chain, starting with parent-most
-				foreach (var Pair in PlatformInfos)
+				foreach (KeyValuePair<string, ConfigDataDrivenPlatformInfo> Pair in PlatformInfos)
 				{
 					string CurrentPlatform;
 

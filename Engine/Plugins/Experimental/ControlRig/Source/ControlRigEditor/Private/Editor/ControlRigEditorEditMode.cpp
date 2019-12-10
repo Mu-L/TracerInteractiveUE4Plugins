@@ -3,6 +3,7 @@
 #include "ControlRigEditorEditMode.h"
 #include "IPersonaPreviewScene.h"
 #include "AssetEditorModeManager.h"
+#include "ControlRigGizmoActor.h"
 
 FName FControlRigEditorEditMode::ModeName("EditMode.ControlRigEditor");
 
@@ -10,28 +11,25 @@ bool FControlRigEditorEditMode::GetCameraTarget(FSphere& OutTarget) const
 {
 	FBox Box(ForceInit);
 
-	for(const FControlUnitProxy& UnitProxy : ControlUnits)
+	for (int32 Index = 0; Index < SelectedRigElements.Num(); ++Index)
 	{
-		if(UnitProxy.IsSelected() && UnitProxy.Control)
+		if (SelectedRigElements[Index].Type == ERigElementType::Bone || SelectedRigElements[Index].Type == ERigElementType::Space)
 		{
-			FBox ActorBox = UnitProxy.Control->GetComponentsBoundingBox(true);
-			Box += ActorBox;
-		}
-	}
-
-	if (AreBoneSelected())
-	{
-		for (int32 Index = 0; Index < SelectedBones.Num(); ++Index)
-		{
-			FTransform Transform = OnGetBoneTransformDelegate.Execute(SelectedBones[Index], false);
+			FTransform Transform = OnGetRigElementTransformDelegate.Execute(SelectedRigElements[Index], false);
 			Box += Transform.GetLocation();
+		}
+		else if (SelectedRigElements[Index].Type == ERigElementType::Control)
+		{
+			FTransform Transform = OnGetRigElementTransformDelegate.Execute(SelectedRigElements[Index], false);
+			Box += Transform.TransformPosition(FVector::OneVector * 50.f); // we assume 100cm as the base size for a control
+			Box += Transform.TransformPosition(FVector::OneVector * -50.f);
 		}
 	}
 
 	if(Box.IsValid)
 	{
 		OutTarget.Center = Box.GetCenter();
-		OutTarget.W = Box.GetExtent().GetAbsMax();
+		OutTarget.W = Box.GetExtent().GetAbsMax() * 1.25f;
 		return true;
 	}
 

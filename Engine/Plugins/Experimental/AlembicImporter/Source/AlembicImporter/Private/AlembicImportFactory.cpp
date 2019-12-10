@@ -7,7 +7,7 @@
 #include "EditorFramework/AssetImportData.h"
 #include "HAL/FileManager.h"
 #include "Framework/Application/SlateApplication.h"
-#include "Toolkits/AssetEditorManager.h"
+
 
 #include "Interfaces/IMainFrameModule.h"
 
@@ -20,6 +20,7 @@
 #include "AbcAssetImportData.h"
 
 #include "GeometryCache.h"
+#include "Subsystems/AssetEditorSubsystem.h"
 
 #define LOCTEXT_NAMESPACE "AlembicImportFactory"
 
@@ -59,6 +60,12 @@ bool UAlembicImportFactory::DoesSupportClass(UClass * Class)
 UClass* UAlembicImportFactory::ResolveSupportedClass()
 {
 	return UStaticMesh::StaticClass();
+}
+
+bool UAlembicImportFactory::FactoryCanImport(const FString& Filename)
+{
+	const FString Extension = FPaths::GetExtension(Filename);
+	return FPaths::GetExtension(Filename) == TEXT("abc");
 }
 
 UObject* UAlembicImportFactory::FactoryCreateFile(UClass* InClass, UObject* InParent, FName InName, EObjectFlags Flags, const FString& Filename, const TCHAR* Parms, FFeedbackContext* Warn, bool& bOutOperationCanceled)
@@ -380,7 +387,7 @@ EReimportResult::Type UAlembicImportFactory::Reimport(UObject* Obj)
 		CurrentFilename = Mesh->AssetImportData->GetFirstFilename();
 
 		// Close possible open editors using this asset	
-		FAssetEditorManager::Get().CloseAllEditorsForAsset(Mesh);
+		GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->CloseAllEditorsForAsset(Mesh);
 		
 		EReimportResult::Type Result = ReimportStaticMesh(Mesh);
 		FAbcImportLogger::OutputMessages(PageName);
@@ -409,7 +416,7 @@ EReimportResult::Type UAlembicImportFactory::Reimport(UObject* Obj)
 		}
 
 		// Close possible open editors using this asset	
-		FAssetEditorManager::Get().CloseAllEditorsForAsset(GeometryCache);
+		GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->CloseAllEditorsForAsset(GeometryCache);
 
 		FAbcImportLogger::OutputMessages(PageName);
 		return Result;
@@ -436,7 +443,7 @@ EReimportResult::Type UAlembicImportFactory::Reimport(UObject* Obj)
 		}
 
 		// Close possible open editors using this asset	
-		FAssetEditorManager::Get().CloseAllEditorsForAsset(SkeletalMesh);
+		GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->CloseAllEditorsForAsset(SkeletalMesh);
 
 		FAbcImportLogger::OutputMessages(PageName);
 		return Result;
@@ -467,7 +474,7 @@ EReimportResult::Type UAlembicImportFactory::Reimport(UObject* Obj)
 		}
 
 		// Close possible open editors using this asset	
-		FAssetEditorManager::Get().CloseAllEditorsForAsset(SkeletalMesh);
+		GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->CloseAllEditorsForAsset(AnimSequence);
 
 		EReimportResult::Type Result = ReimportSkeletalMesh(SkeletalMesh);
 

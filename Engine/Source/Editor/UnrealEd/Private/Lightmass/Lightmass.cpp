@@ -29,6 +29,7 @@
 #include "Components/DirectionalLightComponent.h"
 #include "Renderer/Private/AtmosphereRendering.h"
 #include "Components/SkyLightComponent.h"
+#include "Rendering/SkyAtmosphereCommonData.h"
 #include "Components/ModelComponent.h"
 #include "Materials/MaterialInstanceConstant.h"
 #include "EngineUtils.h"
@@ -57,7 +58,7 @@
 
 extern FSwarmDebugOptions GSwarmDebugOptions;
 
-DEFINE_LOG_CATEGORY_STATIC(LogLightmassSolver, Error, All);
+DEFINE_LOG_CATEGORY_STATIC(LogLightmassSolver, Warning, All);
 /**
  * If false (default behavior), Lightmass is launched automatically when a lighting build starts.
  * If true, it must be launched manually (e.g. through a debugger).
@@ -488,6 +489,7 @@ void FLightmassProcessor::SwarmCallback( NSwarm::FMessage* CallbackMessage, void
 FLightmassExporter::FLightmassExporter( UWorld* InWorld )
 	: Swarm( NSwarm::FSwarmInterface::Get() ) 
 	, AtmosphericFogComponent(nullptr)
+	, SkyAtmosphereComponent(nullptr)
 	, ExportStage(NotRunning)
 	, CurrentAmortizationIndex(0)
 	, OpenedMaterialExportChannels()
@@ -1025,24 +1027,45 @@ void FLightmassExporter::WriteLights( int32 Channel )
 {
 	// Search for the sun light component the same way as in FScene::RemoveLightSceneInfo_RenderThread.
 	// If found, we keep the pointer to apply atmosphere transmittance to it in the light loop.
-	const UDirectionalLightComponent* SunLight = nullptr;
-	FLinearColor SunLightAtmosphereTransmittance(FLinearColor::White);
-	if (AtmosphericFogComponent && AtmosphericFogComponent->bAtmosphereAffectsSunIlluminance)
+	const UDirectionalLightComponent* AtmosphereLights[NUM_ATMOSPHERE_LIGHTS];
+	float AtmosphereLightsBrightness[NUM_ATMOSPHERE_LIGHTS];
+	FLinearColor SunLightAtmosphereTransmittance[NUM_ATMOSPHERE_LIGHTS];
+	for (uint8 Index = 0; Index < NUM_ATMOSPHERE_LIGHTS; ++Index)
 	{
-		float SunLightEnergy = 0.0f;
+		AtmosphereLights[Index] = nullptr;
+		AtmosphereLightsBrightness[Index] = 0.0f;
+		SunLightAtmosphereTransmittance[Index] = FLinearColor::White;
+	}
+
+	// Compute a mapping between directional light and trnasmittance to apply. For each AtmosphereSunLightIndex, the brightest lights is kept.
+	if ((AtmosphericFogComponent && AtmosphericFogComponent->bAtmosphereAffectsSunIlluminance) || SkyAtmosphereComponent)
+	{
 		for (int32 LightIndex = 0; LightIndex < DirectionalLights.Num(); ++LightIndex)
 		{
 			const UDirectionalLightComponent* Light = DirectionalLights[LightIndex];
-			if (Light->IsUsedAsAtmosphereSunLight() && Light->GetColoredLightBrightness().ComputeLuminance() > SunLightEnergy)
+			if (Light->IsUsedAsAtmosphereSunLight() && Light->GetColoredLightBrightness().ComputeLuminance() > AtmosphereLightsBrightness[Light->GetAtmosphereSunLightIndex()])
 			{
-				SunLight = Light;
-				SunLightEnergy = SunLight->GetColoredLightBrightness().ComputeLuminance();
+				AtmosphereLights[Light->GetAtmosphereSunLightIndex()] = Light;
+				AtmosphereLightsBrightness[Light->GetAtmosphereSunLightIndex()] = Light->GetColoredLightBrightness().ComputeLuminance();
 			}
 		}
 
-		if (SunLight)
+		for (uint8 Index = 0; Index < NUM_ATMOSPHERE_LIGHTS; ++Index)
 		{
-			SunLightAtmosphereTransmittance = AtmosphericFogComponent->GetTransmittance(-SunLight->GetDirection()); 
+			if (AtmosphereLights[Index])
+			{
+				const FVector SunDirection = -AtmosphereLights[Index]->GetDirection();
+				if (SkyAtmosphereComponent)
+				{
+					FAtmosphereSetup AtmosphereSetup(*SkyAtmosphereComponent);
+					SunLightAtmosphereTransmittance[Index] = AtmosphereSetup.GetTransmittanceAtGroundLevel(SunDirection);
+				}
+				else if (AtmosphericFogComponent && Index==0)	// Legacy AtmosphericFogComponent only takes into account Index 0
+				{
+					SunLightAtmosphereTransmittance[Index] = AtmosphericFogComponent->GetTransmittance(SunDirection);
+				}
+				break;
+			}
 		}
 	}
 
@@ -1059,9 +1082,14 @@ void FLightmassExporter::WriteLights( int32 Channel )
 		LightData.LightSourceRadius = 0;
 		LightData.LightSourceLength = 0;
 
-		if (Light == SunLight)
+		// Apply atmosphere transmittance if needed.
+		for (uint8 Index = 0; Index < NUM_ATMOSPHERE_LIGHTS; ++Index)
 		{
-			LightData.Color *= SunLightAtmosphereTransmittance;
+			if (AtmosphereLights[Index] && AtmosphereLights[Index] == Light)
+			{
+				LightData.Color *= SunLightAtmosphereTransmittance[Index];
+				break;
+			}
 		}
 
 		TArray< uint8 > LightProfileTextureData;
@@ -2119,24 +2147,26 @@ void FLightmassExporter::SetVolumetricLightmapSettings(Lightmass::FVolumetricLig
 	const float TargetDetailCellSize = WorldInfoSettings.VolumetricLightmapDetailCellSize;
 
 	FIntVector FullGridSize(
-		FMath::TruncToInt(RequiredVolumeSize.X / TargetDetailCellSize) + 1,
-		FMath::TruncToInt(RequiredVolumeSize.Y / TargetDetailCellSize) + 1,
-		FMath::TruncToInt(RequiredVolumeSize.Z / TargetDetailCellSize) + 1);
+		FMath::TruncToInt(2 * ImportanceExtent.X / TargetDetailCellSize) + 1,
+		FMath::TruncToInt(2 * ImportanceExtent.Y / TargetDetailCellSize) + 1,
+		FMath::TruncToInt(2 * ImportanceExtent.Z / TargetDetailCellSize) + 1);
 
-	if (FullGridSize.GetMax() > 800)
+	// Make sure size of indirection texture does not exceed INT_MAX
+	const int32 MaxGridDimension = FMath::Pow(2048000000 / 4, 1.0f / 3) * OutSettings.BrickSize;
+	if (FullGridSize.GetMax() > MaxGridDimension)
 	{
 		UE_LOG(LogLightmassSolver, Warning, 
 			TEXT("Volumetric lightmap grid size is too large which can cause potential crashes or long build time, clamping from (%d, %d, %d) to (%d, %d, %d)"),
 			FullGridSize.X,
 			FullGridSize.Y,
 			FullGridSize.Z,
-			FMath::Min(FullGridSize.X, 800),
-			FMath::Min(FullGridSize.Y, 800),
-			FMath::Min(FullGridSize.Z, 800)
+			FMath::Min(FullGridSize.X, MaxGridDimension),
+			FMath::Min(FullGridSize.Y, MaxGridDimension),
+			FMath::Min(FullGridSize.Z, MaxGridDimension)
 			);
-		FullGridSize.X = FMath::Min(FullGridSize.X, 800);
-		FullGridSize.Y = FMath::Min(FullGridSize.Y, 800);
-		FullGridSize.Z = FMath::Min(FullGridSize.Z, 800);
+		FullGridSize.X = FMath::Min(FullGridSize.X, MaxGridDimension);
+		FullGridSize.Y = FMath::Min(FullGridSize.Y, MaxGridDimension);
+		FullGridSize.Z = FMath::Min(FullGridSize.Z, MaxGridDimension);
 	}
 
 	const int32 BrickSizeLog2 = FMath::FloorLog2(OutSettings.BrickSize);
@@ -2180,6 +2210,8 @@ void FLightmassExporter::WriteSceneSettings( Lightmass::FSceneFileHeader& Scene 
 		VERIFYLIGHTMASSINI(GConfig->GetBool(TEXT("DevOptions.StaticLighting"), TEXT("bVerifyEmbree"), bConfigBool, GLightmassIni));
 		Scene.GeneralSettings.bVerifyEmbree = Scene.GeneralSettings.bUseEmbree && bConfigBool;
 		VERIFYLIGHTMASSINI(GConfig->GetBool(TEXT("DevOptions.StaticLighting"), TEXT("bUseEmbreePacketTracing"), Scene.GeneralSettings.bUseEmbreePacketTracing, GLightmassIni));
+		VERIFYLIGHTMASSINI(GConfig->GetBool(TEXT("DevOptions.StaticLighting"), TEXT("bUseFastVoxelization"), Scene.GeneralSettings.bUseFastVoxelization, GLightmassIni));
+		VERIFYLIGHTMASSINI(GConfig->GetBool(TEXT("DevOptions.StaticLighting"), TEXT("bUseEmbreeInstancing"), Scene.GeneralSettings.bUseEmbreeInstancing, GLightmassIni));
 		VERIFYLIGHTMASSINI(GConfig->GetInt(TEXT("DevOptions.StaticLighting"), TEXT("MappingSurfaceCacheDownsampleFactor"), Scene.GeneralSettings.MappingSurfaceCacheDownsampleFactor, GLightmassIni));
 
 		int32 CheckQualityLevel;
@@ -3115,13 +3147,13 @@ bool FLightmassProcessor::BeginRun()
 	{
 		JobSpecification32 = NSwarm::FJobSpecification( *LightmassExecutable32, *CommandLineParameters, ( NSwarm::TJobTaskFlags )JobFlags );
 		JobSpecification32.AddDependencies( RequiredDependencyPaths32.GetArray(), RequiredDependencyPaths32.Num(), OptionalDependencyPaths32.GetArray(), OptionalDependencyPaths32.Num() );
-		JobSpecification32.AddDescription( DescriptionKeys, DescriptionValues, ARRAY_COUNT(DescriptionKeys) );
+		JobSpecification32.AddDescription( DescriptionKeys, DescriptionValues, UE_ARRAY_COUNT(DescriptionKeys) );
 	}
 	else
 	{
 		JobSpecification64 = NSwarm::FJobSpecification( *LightmassExecutable64, *CommandLineParameters, ( NSwarm::TJobTaskFlags )JobFlags );
 		JobSpecification64.AddDependencies( RequiredDependencyPaths64.GetArray(), RequiredDependencyPaths64.Num(), OptionalDependencyPaths64.GetArray(), OptionalDependencyPaths64.Num() );
-		JobSpecification64.AddDescription( DescriptionKeys, DescriptionValues, ARRAY_COUNT(DescriptionKeys) );
+		JobSpecification64.AddDescription( DescriptionKeys, DescriptionValues, UE_ARRAY_COUNT(DescriptionKeys) );
 	}
 	int32 ErrorCode = Swarm.BeginJobSpecification( JobSpecification32, JobSpecification64 );
 	if( ErrorCode < 0 )
@@ -4475,7 +4507,7 @@ UStaticMesh* FLightmassProcessor::FindStaticMesh(FGuid& Guid)
 	return NULL;
 }
 
-ULevel* FLightmassProcessor::FindLevel(FGuid& Guid)
+ULevel* FLightmassProcessor::FindLevel(const FGuid& Guid)
 {
 	if (Exporter)
 	{

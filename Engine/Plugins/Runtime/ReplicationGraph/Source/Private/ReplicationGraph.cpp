@@ -595,7 +595,7 @@ void UReplicationGraph::ForceNetUpdate(AActor* Actor)
 
 void UReplicationGraph::FlushNetDormancy(AActor* Actor, bool bWasDormInitial)
 {
-	RG_QUICK_SCOPE_CYCLE_COUNTER(UReplicationGraph_FlushNetDormancy);
+	QUICK_SCOPE_CYCLE_COUNTER(UReplicationGraph_FlushNetDormancy);
 
 	if (Actor->IsActorInitialized() == false)
 	{
@@ -1025,7 +1025,7 @@ int32 UReplicationGraph::ServerReplicateActors(float DeltaSeconds)
 				ConnectionManager->ReplicateDormantDestructionInfos();
 			}
 
-#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+#if DO_ENABLE_REPGRAPH_DEBUG_ACTOR
 			{
 				RG_QUICK_SCOPE_CYCLE_COUNTER(NET_ReplicateActors_ReplicateDebugActor);
 				if (ConnectionManager->DebugActor)
@@ -2153,6 +2153,7 @@ void UReplicationGraph::SetActorDiscoveryBudget(int32 ActorDiscoveryBudgetInKByt
 	if (ActorDiscoveryBudgetInKBytesPerSec <= 0)
 	{
 		ActorDiscoveryMaxBitsPerFrame = 0;
+		UE_LOG(LogReplicationGraph, Display, TEXT("SetActorDiscoveryBudget disabled the ActorDiscovery budget."));
 		return;
 	}
 
@@ -2209,7 +2210,7 @@ void UNetReplicationGraphConnection::Serialize(FArchive& Ar)
 
 void UNetReplicationGraphConnection::TearDown()
 {
-#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+#if DO_ENABLE_REPGRAPH_DEBUG_ACTOR
 	if (DebugActor)
 	{
 		DebugActor->Destroy();
@@ -2308,7 +2309,7 @@ void UNetReplicationGraphConnection::InitForConnection(UNetConnection* InConnect
 	NetConnection = InConnection;
 	InConnection->SetReplicationConnectionDriver(this);
 
-#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+#if DO_ENABLE_REPGRAPH_DEBUG_ACTOR
 	UReplicationGraph* Graph = Cast<UReplicationGraph>(GetOuter());
 	DebugActor = Graph->CreateDebugActor();
 	if (DebugActor)
@@ -2333,7 +2334,7 @@ void UNetReplicationGraphConnection::AddConnectionGraphNode(UReplicationGraphNod
 
 void UNetReplicationGraphConnection::RemoveConnectionGraphNode(UReplicationGraphNode* Node)
 {
-	ConnectionGraphNodes.Remove(Node);
+	ConnectionGraphNodes.RemoveSingleSwap(Node);
 }
 
 bool UNetReplicationGraphConnection::PrepareForReplication()
@@ -2462,7 +2463,7 @@ void UNetReplicationGraphConnection::NotifyClientVisibleLevelNamesAdd(FName Leve
 		TArray<AActor*>& Actors = StreamingWorld->PersistentLevel->Actors;
 		for (AActor* Actor : Actors)
 		{
-			if (Actor && Actor->GetIsReplicated() && (Actor->NetDormancy == DORM_DormantAll))
+			if (Actor && (Actor->NetDormancy == DORM_DormantAll || (Actor->NetDormancy == DORM_Initial && Actor->IsNetStartupActor() == false)))
 			{
 				if (FConnectionReplicationActorInfo* ActorInfo = ActorInfoMap.Find(Actor))
 				{
@@ -2567,15 +2568,43 @@ void UReplicationGraphNode::NotifyResetAllNetworkActors()
 	}
 }
 
-void UReplicationGraphNode::RemoveChildNode(UReplicationGraphNode* ChildNode)
+void UReplicationGraphNode::RemoveChildNode(UReplicationGraphNode* ChildNode, UReplicationGraphNode::NodeOrdering NodeOrder)
 {
 	ensure(ChildNode != nullptr);
 
-	int32 Removed = AllChildNodes.Remove(ChildNode);
+	int32 Removed(0);
+	
+	if (NodeOrder == NodeOrdering::IgnoreOrdering)
+	{
+		Removed = AllChildNodes.RemoveSingleSwap(ChildNode, false);
+	}
+	else
+	{
+		Removed = AllChildNodes.RemoveSingle(ChildNode);
+	}
+
 	if (Removed > 0)
 	{
 		ChildNode->TearDown();
 	}
+}
+
+void UReplicationGraphNode::CleanChildNodes(UReplicationGraphNode::NodeOrdering NodeOrder)
+{
+	auto RemoveFunc = [](UReplicationGraphNode* GridChildNode)
+	{
+		return (GridChildNode == nullptr) || GridChildNode->IsPendingKill();
+	};
+
+	if (NodeOrder == NodeOrdering::IgnoreOrdering)
+	{
+		AllChildNodes.RemoveAllSwap(RemoveFunc, false);
+	}
+	else
+	{
+		AllChildNodes.RemoveAll(RemoveFunc);
+	}
+
 }
 
 void UReplicationGraphNode::TearDown()
@@ -2584,6 +2613,8 @@ void UReplicationGraphNode::TearDown()
 	{
 		Node->TearDown();
 	}
+
+	AllChildNodes.Reset();
 
 	MarkPendingKill();
 }
@@ -2709,14 +2740,9 @@ bool UReplicationGraphNode_ActorList::NotifyRemoveNetworkActor(const FNewReplica
 
 	if (ActorInfo.StreamingLevelName == NAME_None)
 	{
-		if (!ReplicationActorList.Remove(ActorInfo.Actor) && bWarnIfNotFound)
-		{
-			UE_LOG(LogReplicationGraph, Warning, TEXT("Attempted to remove %s from list %s but it was not found. (StreamingLevelName == NAME_None)"), *GetActorRepListTypeDebugString(ActorInfo.Actor), *GetFullName());
-		}
-		else
-		{
-			bRemovedSomething = true;
-		}
+		bRemovedSomething = ReplicationActorList.Remove(ActorInfo.Actor);
+
+		UE_CLOG(!bRemovedSomething && bWarnIfNotFound, LogReplicationGraph, Warning, TEXT("Attempted to remove %s from list %s but it was not found. (StreamingLevelName == NAME_None)"), *GetActorRepListTypeDebugString(ActorInfo.Actor), *GetFullName());
 
 		if (CVar_RepGraph_Verify)
 		{
@@ -3357,7 +3383,7 @@ FORCEINLINE void UReplicationGraphNode_DynamicSpatialFrequency::CalcFrequencyFor
 	const FVector DirToActor = (GlobalInfo.WorldLocation - LowestDistanceViewer->ViewLocation);
 	const float DistanceToActor = FMath::Sqrt(SmallestDistanceToActorSq);
 	const FVector NormDirToActor = DistanceToActor > SMALL_NUMBER ? (DirToActor / DistanceToActor) : DirToActor;
-	const float DotP = FVector::DotProduct(NormDirToActor, ConnectionViewDir);
+	const float DotP = FMath::Clamp(FVector::DotProduct(NormDirToActor, ConnectionViewDir), -1.0f, 1.0f);
 
 	const bool ActorSupportsFastShared = (GlobalInfo.Settings.FastSharedReplicationFunc != nullptr);
 	TArrayView<FSpatializationZone>& ZoneList = ActorSupportsFastShared ? MySettings.ZoneSettings : MySettings.ZoneSettings_NonFastSharedActors;
@@ -4107,6 +4133,12 @@ void UReplicationGraphNode_GridSpatialization2D::RemoveActor_Dormancy(const FNew
 		{
 			RemoveActorInternal_Dynamic(ActorInfo);
 		}
+
+		// AddActorInternal_Static and AddActorInternal_Dynamic will both override Actor information if they are called repeatedly.
+		// This means that even if AddActor_Dormancy is called multiple times with the same Actor, a single call to RemoveActor_Dormancy
+		// will completely remove the Actor from either the Static or Dynamic list appropriately.
+		// Therefore, it should be safe to call RemoveAll and not worry about trying to track individual delegate handles.
+		ActorRepInfo.Events.DormancyChange.RemoveAll(this);
 	}
 }
 
@@ -4786,6 +4818,8 @@ void UReplicationGraphNode_GridSpatialization2D::PrepareForReplication()
 		{
 			GEngine->ForceGarbageCollection(true);
 		}
+
+		CleanChildNodes(NodeOrdering::IgnoreOrdering);
 		
 		for (auto& MapIt : DynamicSpatializedActors)
 		{
@@ -4864,19 +4898,24 @@ void UReplicationGraphNode_GridSpatialization2D::GatherActorListsForConnection(c
 		{
 			ClampedViewLoc = GridBounds.GetClosestPointTo(ClampedViewLoc);
 		}
+		else
+		{
+			// Prevent extreme locations from causing the Grid to grow too large
+			ClampedViewLoc = ClampedViewLoc.BoundToCube(HALF_WORLD_MAX);
+		}
 
 		// Find out what bucket the view is in
 		int32 CellX = (ClampedViewLoc.X - SpatialBias.X) / CellSize;
 		if (CellX < 0)
 		{
-			UE_LOG(LogReplicationGraph, Log, TEXT("Net view location.X %s is less than the spatial bias %s"), *ClampedViewLoc.ToString(), *SpatialBias.ToString());
+			UE_LOG(LogReplicationGraph, Log, TEXT("Net view location.X %s is less than the spatial bias %s for %s"), *ClampedViewLoc.ToString(), *SpatialBias.ToString(), *CurViewer.Connection->Describe());
 			CellX = 0;
 		}
 
 		int32 CellY = (ClampedViewLoc.Y - SpatialBias.Y) / CellSize;
 		if (CellY < 0)
 		{
-			UE_LOG(LogReplicationGraph, Log, TEXT("Net view location.Y %s is less than the spatial bias %s"), *ClampedViewLoc.ToString(), *SpatialBias.ToString());
+			UE_LOG(LogReplicationGraph, Log, TEXT("Net view location.Y %s is less than the spatial bias %s for %s"), *ClampedViewLoc.ToString(), *SpatialBias.ToString(), *CurViewer.Connection->Describe());
 			CellY = 0;
 		}
 
@@ -4890,11 +4929,16 @@ void UReplicationGraphNode_GridSpatialization2D::GatherActorListsForConnection(c
 			GatherInfoForConnection = &LastLocationArray[LastLocationArray.Add(FLastLocationGatherInfo(CurViewer.Connection, FVector(ForceInitToZero)))];
 		}
 
-		// Clean up the location data for this connection to be grid bound
 		FVector LastLocationForConnection = GatherInfoForConnection->LastLocation;
 		if (GridBounds.IsValid)
 		{
+			// Clean up the location data for this connection to be grid bound
 			LastLocationForConnection = GridBounds.GetClosestPointTo(LastLocationForConnection);
+		}
+		else
+		{
+			// Prevent extreme locations from causing the Grid to grow too large
+			LastLocationForConnection = LastLocationForConnection.BoundToCube(HALF_WORLD_MAX);
 		}
 
 		// Try to determine the previous location of the user.

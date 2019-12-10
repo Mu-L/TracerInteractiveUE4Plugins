@@ -121,6 +121,9 @@ FPrimaryCrashProperties::FPrimaryCrashProperties()
 	, CrashReporterMessage( FGenericCrashContext::RuntimePropertiesTag, TEXT( "CrashReporterMessage" ), this )
 	, PlatformCallbackResult(FGenericCrashContext::PlatformPropertiesTag, TEXT("PlatformCallbackResult"), this)
 	, CrashReportClientVersion(FGenericCrashContext::RuntimePropertiesTag, TEXT("CrashReportClientVersion"), this)
+	, CPUBrand(FGenericCrashContext::RuntimePropertiesTag, TEXT("CPUBrand"), this)
+	, bIsOOM(false)
+	, bLowMemoryWarning(false)
 	, XmlFile( nullptr )
 {
 	CrashVersion = ECrashDescVersions::VER_1_NewCrashFormat;
@@ -166,12 +169,22 @@ void FPrimaryCrashProperties::UpdateIDs()
 	LoginId = FPlatformMisc::GetLoginId();
 }
 
-void FPrimaryCrashProperties::ReadXML( const FString& CrashContextFilepath  )
+void FPrimaryCrashProperties::ReadXML( const FString& CrashContextFilepath, const TCHAR* Buffer  )
 {
 	XmlFilepath = CrashContextFilepath;
-	XmlFile = new FXmlFile( XmlFilepath );
-	TimeOfCrash = FDateTime::UtcNow().GetTicks();
-	UpdateIDs();
+	if (Buffer)
+	{
+		XmlFile = new FXmlFile(Buffer, EConstructMethod::ConstructFromBuffer);
+	}
+	else
+	{
+		XmlFile = new FXmlFile(XmlFilepath);
+	}
+	if (XmlFile->IsValid())
+	{
+		TimeOfCrash = FDateTime::UtcNow().GetTicks();
+		UpdateIDs();
+	}
 }
 
 void FPrimaryCrashProperties::SetCrashGUID( const FString& Filepath )
@@ -393,43 +406,67 @@ void FPrimaryCrashProperties::MakeCrashEventAttributes(TArray<FAnalyticsEventAtt
 	OutCrashAttributes.Add(FAnalyticsEventAttribute(TEXT("GameSessionID"), GameSessionID.AsString()));
 	OutCrashAttributes.Add(FAnalyticsEventAttribute(TEXT("DeploymentName"), DeploymentName));
 	OutCrashAttributes.Add(FAnalyticsEventAttribute(TEXT("PCallStackHash"), PCallStackHash));
+	OutCrashAttributes.Add(FAnalyticsEventAttribute(TEXT("CPUBrand"), CPUBrand.AsString()));
+	OutCrashAttributes.Add(FAnalyticsEventAttribute(TEXT("bIsOOM"), bIsOOM ? TEXT("true") : TEXT("false")));
+	OutCrashAttributes.Add(FAnalyticsEventAttribute(TEXT("bLowMemoryWarning"), bLowMemoryWarning ? TEXT("true") : TEXT("false")));
 
 	// Add arbitrary engine data
-	const FXmlNode* EngineNode = XmlFile->GetRootNode()->FindChildNode( FGenericCrashContext::EngineDataTag );
-	if (EngineNode)
+	if (XmlFile->IsValid())
 	{
-		for (const FXmlNode* ChildNode : EngineNode->GetChildrenNodes())
+		const FXmlNode* EngineNode = XmlFile->GetRootNode()->FindChildNode( FGenericCrashContext::EngineDataTag );
+		if (EngineNode)
 		{
-			FString KeyName = FString(TEXT("EngineData.")) + ChildNode->GetTag();
-			OutCrashAttributes.Add(FAnalyticsEventAttribute(*KeyName, ChildNode->GetContent()));
+			for (const FXmlNode* ChildNode : EngineNode->GetChildrenNodes())
+			{
+				FString KeyName = FString(TEXT("EngineData.")) + ChildNode->GetTag();
+				OutCrashAttributes.Add(FAnalyticsEventAttribute(*KeyName, ChildNode->GetContent()));
+			}
+		}
+
+		// Add arbitrary game data
+		const FXmlNode* GameNode = XmlFile->GetRootNode()->FindChildNode( FGenericCrashContext::GameDataTag );
+		if (GameNode)
+		{
+			for (const FXmlNode* ChildNode : GameNode->GetChildrenNodes())
+			{
+				FString KeyName = FString(TEXT("GameData.")) + ChildNode->GetTag();
+				OutCrashAttributes.Add(FAnalyticsEventAttribute(*KeyName, ChildNode->GetContent()));
+			}
 		}
 	}
-
-	// Add arbitrary game data
-	const FXmlNode* GameNode = XmlFile->GetRootNode()->FindChildNode( FGenericCrashContext::GameDataTag );
-	if (GameNode)
+	else
 	{
-		for (const FXmlNode* ChildNode : GameNode->GetChildrenNodes())
-		{
-			FString KeyName = FString(TEXT("GameData.")) + ChildNode->GetTag();
-			OutCrashAttributes.Add(FAnalyticsEventAttribute(*KeyName, ChildNode->GetContent()));
-		}
+		FString KeyName = FString(TEXT("EngineData.InvalidXML"));
+		OutCrashAttributes.Add(FAnalyticsEventAttribute(*KeyName, true));
 	}
 }
 
 void FPrimaryCrashProperties::Save()
 {
-	XmlFile->Save( XmlFilepath );
+	if (XmlFile->IsValid())
+	{
+		XmlFile->Save( XmlFilepath );
+	}
 }
 
 /*-----------------------------------------------------------------------------
 	FCrashContextReader
 -----------------------------------------------------------------------------*/
 
-FCrashContext::FCrashContext( const FString& CrashContextFilepath )
+FCrashContext::FCrashContext(const FString& CrashContextFilePath, const TCHAR* Buffer)
 {
-	ReadXML( CrashContextFilepath );
+	ReadXML(CrashContextFilePath, Buffer);
+	SetupPrimaryCrashProperties();
+}
 
+FCrashContext::FCrashContext(const FString& CrashContextFilepath)
+{
+	ReadXML(CrashContextFilepath);
+	SetupPrimaryCrashProperties();
+}
+
+void FCrashContext::SetupPrimaryCrashProperties() 
+{
 	const bool bIsValid = XmlFile->IsValid();
 	if (bIsValid)
 	{
@@ -473,7 +510,9 @@ FCrashContext::FCrashContext( const FString& CrashContextFilepath )
 		GetCrashProperty( CrashType, FGenericCrashContext::RuntimePropertiesTag, TEXT("CrashType"));
 		GetCrashProperty( NumMinidumpFramesToIgnore, FGenericCrashContext::RuntimePropertiesTag, TEXT("NumMinidumpFramesToIgnore"));
 		GetCrashProperty( PCallStackHash, FGenericCrashContext::RuntimePropertiesTag, TEXT("PCallStackHash"));
-
+		GetCrashProperty( bIsOOM, FGenericCrashContext::RuntimePropertiesTag, TEXT("MemoryStats.bIsOOM"));
+		GetCrashProperty( bLowMemoryWarning, FGenericCrashContext::GameDataTag, TEXT("bLowMemoryCalled"));
+		
 		if (CrashDumpMode == ECrashDumpMode::FullDump)
 		{
 			// Set the full dump crash location when we have a full dump.

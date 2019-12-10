@@ -4,13 +4,14 @@
 
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "Materials/MaterialInterface.h"
+#include "Materials/MaterialExpression.h"
 #include "SceneTypes.h"
 
 #include "MaterialEditingLibrary.generated.h"
 
 class UMaterialFunction;
 class UMaterialInstance;
-
+class UMaterialInstanceConstant;
 
 /** Blueprint library for creating/editing Materials */
 UCLASS()
@@ -134,6 +135,10 @@ public:
 	/** Get the default static switch parameter value from a Material */
 	UFUNCTION(BlueprintPure, Category = "MaterialEditing")
 	static bool GetMaterialDefaultStaticSwitchParameterValue(UMaterial* Material, FName ParameterName);
+
+	/** Get the set of selected nodes from an active material editor */
+	UFUNCTION(BlueprintPure, Category = "MaterialEditing")
+	static TSet<UObject*> GetMaterialSelectedNodes(UMaterial* Material);
 
 	//////// MATERIAL FUNCTION EDITING
 

@@ -14,7 +14,7 @@
 #include "GameFramework/WorldSettings.h"
 #include "PacketHandler.h"
 #include "Channel.h"
-#include "DDoSDetection.h"
+#include "Net/Core/Misc/DDoSDetection.h"
 #include "IPAddress.h"
 #include "Net/NetAnalyticsTypes.h"
 
@@ -328,6 +328,7 @@ struct FNetworkObjectInfo;
 class UChannel;
 class IAnalyticsProvider;
 class FNetAnalyticsAggregator;
+class UNetDriver;
 
 using FConnectionMap = TMap<TSharedRef<const FInternetAddr>, UNetConnection*, FDefaultSetAllocator, FInternetAddrConstKeyMapFuncs<UNetConnection*>>;
 
@@ -366,14 +367,14 @@ DECLARE_DELEGATE_SevenParams(FOnSendRPC, AActor* /*Actor*/, UFunction* /*Functio
 //
 // Whether to support net lag and packet loss testing.
 //
-#define DO_ENABLE_NET_TEST !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+#define DO_ENABLE_NET_TEST !(UE_BUILD_SHIPPING)
 
 
 /** Holds the packet simulation settings in one place */
 USTRUCT()
 struct ENGINE_API FPacketSimulationSettings
 {
-	GENERATED_USTRUCT_BODY()
+	GENERATED_BODY()
 
 	/**
 	 * When set, will cause calls to FlushNet to drop packets.
@@ -384,7 +385,7 @@ struct ENGINE_API FPacketSimulationSettings
 	 * Works with all other settings.
 	 */
 	UPROPERTY(EditAnywhere, Category="Simulation Settings")
-	int32	PktLoss;
+	int32	PktLoss = 0;
 
 	/**
 	* Sets the maximum size of packets in bytes that will be dropped
@@ -393,7 +394,7 @@ struct ENGINE_API FPacketSimulationSettings
 	* Works with all other settings.
 	*/
 	UPROPERTY(EditAnywhere, Category = "Simulation Settings")
-	int32	PktLossMaxSize;
+	int32	PktLossMaxSize = 0;
 
 	/**
 	* Sets the minimum size of packets in bytes that will be dropped
@@ -402,7 +403,7 @@ struct ENGINE_API FPacketSimulationSettings
 	* Works with all other settings.
 	*/
 	UPROPERTY(EditAnywhere, Category = "Simulation Settings")
-	int32	PktLossMinSize;
+	int32	PktLossMinSize = 0;
 
 	/**
 	 * When set, will cause calls to FlushNet to change ordering of packets at random.
@@ -412,7 +413,7 @@ struct ENGINE_API FPacketSimulationSettings
 	 * Takes precedence over PktDup and PktLag.
 	 */
 	UPROPERTY(EditAnywhere, Category="Simulation Settings")
-	int32	PktOrder;
+	int32	PktOrder = 0;
 
 	/**
 	 * When set, will cause calls to FlushNet to duplicate packets.
@@ -423,7 +424,7 @@ struct ENGINE_API FPacketSimulationSettings
 	 * Cannot be used with PktOrder or PktLag.
 	 */
 	UPROPERTY(EditAnywhere, Category="Simulation Settings")
-	int32	PktDup;
+	int32	PktDup = 0;
 	
 	/**
 	 * When set, will cause calls to FlushNet to delay packets.
@@ -432,44 +433,78 @@ struct ENGINE_API FPacketSimulationSettings
 	 * Cannot be used with PktOrder.
 	 */
 	UPROPERTY(EditAnywhere, Category="Simulation Settings")
-	int32	PktLag;
+	int32	PktLag = 0;
 	
 	/**
 	 * When set, will cause PktLag to use variable lag instead of constant.
 	 * Value is treated as millisecond lag range (e.g. -GivenVariance <= 0 <= GivenVariance).
-	 * Clamped between 0 and 100.
 	 *
 	 * Can only be used when PktLag is enabled.
 	 */
 	UPROPERTY(EditAnywhere, Category="Simulation Settings")
-	int32	PktLagVariance;
+	int32	PktLagVariance = 0;
 
-	/** Ctor. Zeroes the settings */
-	FPacketSimulationSettings() : 
-		PktLoss(0),
-		PktLossMaxSize(INT_MAX/8),
-		PktLossMinSize(0),
-		PktOrder(0),
-		PktDup(0),
-		PktLag(0),
-		PktLagVariance(0) 
-	{
-	}
+	/**
+	 * If set lag values will randomly fluctuate between Min and Max.
+	 * Ignored if PktLag value is set
+	 */
+	UPROPERTY(EditAnywhere, Category = "Simulation Settings")
+	int32	PktLagMin = 0;
+	UPROPERTY(EditAnywhere, Category = "Simulation Settings")
+	int32	PktLagMax = 0;
+
+	/**
+	 * Set a value to add a minimum delay in milliseconds to incoming
+	 * packets before they are processed.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Simulation Settings")
+	int32	PktIncomingLagMin = 0;
+	
+	/**
+	 * The maximum delay in milliseconds to add to incoming
+	 * packets before they are processed.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Simulation Settings")
+	int32	PktIncomingLagMax = 0;
+
+	/**
+	 * The ratio of incoming packets that will be dropped
+	 * to simulate packet loss
+	 */
+	UPROPERTY(EditAnywhere, Category = "Simulation Settings")
+	int32	PktIncomingLoss = 0;
 
 	/** reads in settings from the .ini file 
 	 * @note: overwrites all previous settings
 	 */
 	void LoadConfig(const TCHAR* OptionalQualifier = nullptr);
+	
+	/** 
+	 * Load a preconfigured emulation profile from the .ini
+	 * Returns true if the given profile existed
+	 */
+	bool LoadEmulationProfile(const TCHAR* ProfileName);
 
 	/**
-	 * Registers commands for auto-completion, etc.
+	 * Force new emulation settings and ignore config or cmdline values
 	 */
-	void RegisterCommands();
+	void ApplySettings(const FPacketSimulationSettings& NewSettings);
 
 	/**
-	 * Unregisters commands for auto-completion, etc.
+	 * Ensure that settings have proper values
 	 */
-	void UnregisterCommands();
+	void ValidateSettings();
+	void ResetSettings();
+
+	/**
+	* Tells if a packet fits the size settings to potentially be dropped
+	*/
+	bool ShouldDropPacketOfSize(int32 NumBits) const
+	{
+		const bool bIsBigEnough = NumBits > PktLossMinSize * 8;
+		const bool bIsSmallEnough = PktLossMaxSize == 0 || NumBits < PktLossMaxSize * 8;
+		return bIsBigEnough && bIsSmallEnough;
+	}
 
 	/**
 	 * Reads the settings from a string: command line or an exec
@@ -595,13 +630,6 @@ struct FDisconnectedClient
 		, DisconnectTime(InDisconnectTime)
 	{
 	}
-
-	UE_DEPRECATED(4.23, "This object does not update address information, and should have const addresses passed in")
-	FDisconnectedClient(TSharedRef<FInternetAddr>& InAddress, double InDisconnectTime)
-		: Address(InAddress)
-		, DisconnectTime(InDisconnectTime)
-	{
-	}
 };
 
 
@@ -689,6 +717,13 @@ public:
 	UPROPERTY(Config)
 	bool bNoTimeouts;
 
+	/**
+	 * If true this NetDriver will not apply the network emulation settings that simulate
+	 * latency and packet loss in non-shippable builds
+	 */
+	UPROPERTY(Config)
+	bool bNeverApplyNetworkEmulationSettings;
+
 	/** Connection to the server (this net driver is a client) */
 	UPROPERTY()
 	class UNetConnection* ServerConnection;
@@ -754,10 +789,6 @@ public:
 	UPROPERTY(Config)
 	FName NetDriverName;
 
-	/** The UChannel classes that should be used under this net driver */
-	UE_DEPRECATED(4.22, "Use ChannelDefinitions instead")
-	UClass* ChannelClasses[CHTYPE_MAX];
-
 	/** Used to specify available channel types and their associated UClass */
 	UPROPERTY(Config)
 	TArray<FChannelDefinition> ChannelDefinitions;
@@ -765,10 +796,6 @@ public:
 	/** Used for faster lookup of channel definitions by name. */
 	UPROPERTY()
 	TMap<FName, FChannelDefinition> ChannelDefinitionMap;
-
-	/** @return true if the specified channel type exists. */
-	UE_DEPRECATED(4.22, "Use IsKnownChannelName")
-	bool IsKnownChannelType(int32 Type);
 
 	/** @return true if the specified channel definition exists. */
 	FORCEINLINE bool IsKnownChannelName(const FName& ChName)
@@ -790,10 +817,6 @@ private:
 
 public:
 
-	/** Creates a new channel of the specified type. If the type is pooled, it will return a pre-created channel */
-	UE_DEPRECATED(4.22, "Use GetOrCreateChannelByName")
-	UChannel* GetOrCreateChannel(EChannelType ChType);
-
 	/** Creates a new channel of the specified type name. If the type is pooled, it will return a pre-created channel */
 	UChannel* GetOrCreateChannelByName(const FName& ChName);
 
@@ -806,7 +829,9 @@ public:
 	void InitPacketSimulationSettings();
 
 	/** Returns true during the duration of a packet loss burst triggered by the net.pktlossburst command. */
+#if DO_ENABLE_NET_TEST
 	bool IsSimulatingPacketLossBurst() const;
+#endif
 
 	/** Interface for communication network state to others (ie World usually, but anything that implements FNetworkNotify) */
 	class FNetworkNotify*		Notify;
@@ -1046,7 +1071,12 @@ public:
 #if DO_ENABLE_NET_TEST
 	FPacketSimulationSettings	PacketSimulationSettings;
 
-	ENGINE_API void SetPacketSimulationSettings(FPacketSimulationSettings NewSettings);
+	/**
+	 * Modify the current emulation settings
+	 */
+	ENGINE_API void SetPacketSimulationSettings(const FPacketSimulationSettings& NewSettings);
+
+	void OnPacketSimulationSettingsChanged();
 #endif
 
 	// Constructors.
@@ -1215,18 +1245,6 @@ public:
 	/** PostTick actions */
 	ENGINE_API virtual void PostTickFlush();
 
-	UE_DEPRECATED(4.21, "Please use the LowLevelSend that requires packet traits for analytics and packet modifiers.")
-	ENGINE_API virtual void LowLevelSend(FString Address, void* Data, int32 CountBits)
-	{
-		FOutPacketTraits EmptyTraits;
-		PRAGMA_DISABLE_DEPRECATION_WARNINGS
-		LowLevelSend(Address, Data, CountBits, EmptyTraits);
-		PRAGMA_ENABLE_DEPRECATION_WARNINGS
-	}
-
-	UE_DEPRECATED(4.22, "Change arguments to support FInternetAddr instead")
-	ENGINE_API virtual void LowLevelSend(FString Address, void* Data, int32 CountBits, FOutPacketTraits& Traits);
-
 	/**
 	 * Sends a 'connectionless' (not associated with a UNetConection) packet, to the specified address.
 	 * NOTE: Address is an abstract format defined by subclasses. Anything calling this, must use an address supplied by the net driver.
@@ -1283,6 +1301,8 @@ public:
 	// ---------------------------------------------------------------
 
 	ENGINE_API virtual void ForceNetUpdate(AActor* Actor);
+
+	ENGINE_API void ForceAllActorsNetUpdateTime(float NetUpdateTimeOffset, TFunctionRef<bool(const AActor* const)> ValidActorTestFunc);
 
 	/** Flushes actor from NetDriver's dormancy list, but does not change any state on the Actor itself */
 	ENGINE_API void FlushActorDormancy(AActor *Actor, bool bWasDormInitial=false);
@@ -1498,10 +1518,6 @@ protected:
 	/** Unregister all TickDispatch, TickFlush, PostTickFlush to tick in World */
 	ENGINE_API void UnregisterTickEvents(class UWorld* InWorld);
 
-	UE_DEPRECATED(4.22, "Use InternalCreateChannelByName")
-	/** Subclasses may override this to customize channel creation. Called by GetOrCreateChannel if the pool is exhausted and a new channel must be allocated. */
-	ENGINE_API virtual UChannel* InternalCreateChannel(EChannelType ChType);
-
 	/** Subclasses may override this to customize channel creation. Called by GetOrCreateChannel if the pool is exhausted and a new channel must be allocated. */
 	ENGINE_API virtual UChannel* InternalCreateChannelByName(const FName& ChName);
 
@@ -1588,4 +1604,10 @@ private:
 
 	/** Count the number of notified packets, i.e. packets that we know if they are delivered or not. Used to reliably measure outgoing packet loss */
 	uint32 OutTotalNotifiedPackets;
+
+#if DO_ENABLE_NET_TEST
+	/** Dont load packet settings from config or cmdline when true*/
+	bool bForcedPacketSettings;
+#endif 
+
 };

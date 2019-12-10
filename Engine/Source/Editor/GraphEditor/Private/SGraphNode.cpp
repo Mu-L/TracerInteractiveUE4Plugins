@@ -81,12 +81,17 @@ FText SNodeTitle::GetNodeTitle() const
 
 FText SNodeTitle::GetHeadTitle() const
 {
-	return (GraphNode.IsValid() && GraphNode->bCanRenameNode) ? GraphNode->GetNodeTitle(ENodeTitleType::EditableTitle) : CachedHeadTitle;
+	return (GraphNode.IsValid() && GraphNode->GetCanRenameNode()) ? GraphNode->GetNodeTitle(ENodeTitleType::EditableTitle) : CachedHeadTitle;
 }
 
 FVector2D SNodeTitle::GetTitleSize() const
 {
 	return CachedSize;
+}
+
+void SNodeTitle::MarkDirty()
+{
+	NodeTitleCache.MarkDirty();
 }
 
 void SNodeTitle::RebuildWidget()
@@ -1383,7 +1388,7 @@ FText SGraphNode::GetErrorMsgToolTip( ) const
 
 bool SGraphNode::IsNameReadOnly() const
 {
-	return (!GraphNode->bCanRenameNode || !IsNodeEditable());
+	return (!GraphNode->GetCanRenameNode() || !IsNodeEditable());
 }
 
 bool SGraphNode::OnVerifyNameTextChanged(const FText& InText, FText& OutErrorMessage)
@@ -1419,7 +1424,7 @@ void SGraphNode::OnNameTextCommited(const FText& InText, ETextCommit::Type Commi
 
 void SGraphNode::RequestRename()
 {
-	if ((GraphNode != NULL) && GraphNode->bCanRenameNode)
+	if ((GraphNode != nullptr) && GraphNode->GetCanRenameNode())
 	{
 		bRenameIsPending = true;
 	}

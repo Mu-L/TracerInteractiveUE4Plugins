@@ -267,7 +267,8 @@ TSharedRef<IMenu> FMenuStack::PushInternal(const TSharedPtr<IMenu>& InParentMenu
 
 	// Post-push stage
 	//   Updates the stack and content map member variables
-	PostPush(InParentMenu, OutMenu, ShouldThrottle);
+	const bool bInInsertAfterDismiss = ActiveMethod.GetPopupMethod() == EPopupMethod::CreateNewWindow;
+	PostPush(InParentMenu, OutMenu, ShouldThrottle, bInInsertAfterDismiss);
 
 	PendingNewMenu.Reset();
 
@@ -377,7 +378,7 @@ FMenuStack::FPrePushResults FMenuStack::PrePush(const FPrePushArgs& InArgs)
 	// Release the mouse so that context can be properly restored upon closing menus.  See CL 1411833 before changing this.
 	if (InArgs.bFocusImmediately)
 	{
-		FSlateApplication::Get().ReleaseMouseCapture();
+		FSlateApplication::Get().ReleaseAllPointerCapture();
 	}
 
 	return OutResults;
@@ -474,7 +475,7 @@ TSharedRef<FMenuBase> FMenuStack::PushPopup(TSharedPtr<IMenu> InParentMenu, cons
 	return Menu;
 }
 
-void FMenuStack::PostPush(TSharedPtr<IMenu> InParentMenu, TSharedRef<FMenuBase> InMenu, EShouldThrottle ShouldThrottle )
+void FMenuStack::PostPush(TSharedPtr<IMenu> InParentMenu, TSharedRef<FMenuBase> InMenu, EShouldThrottle ShouldThrottle, bool bInInsertAfterDismiss)
 {
 	// Determine at which index we insert this new menu in the stack
 	int32 InsertIndex = 0;
@@ -486,21 +487,37 @@ void FMenuStack::PostPush(TSharedPtr<IMenu> InParentMenu, TSharedRef<FMenuBase> 
 		InsertIndex = ParentIndex + 1;
 	}
 
-	// Insert before dismissing others to stop the stack accidentally emptying briefly mid-push and reseting some state
-	Stack.Insert(InMenu, InsertIndex);
-	CachedContentMap.Add(InMenu->GetContent(), InMenu);
+	// Do original behavior of insert before dismiss
+	// Note: This will often crash because DismissFrom() may trigger FMenuStack::OnWindowActivated() then DismissAll() that empties Stack
+	int32 RemovingAtIndex = InsertIndex;
+	if (!bInInsertAfterDismiss)
+	{
+		Stack.Insert(InMenu, InsertIndex);
+		CachedContentMap.Add(InMenu->GetContent(), InMenu);
+		RemovingAtIndex = InsertIndex + 1;
+	}
 
 	// Dismiss menus after the insert point
-	if (Stack.Num() > InsertIndex + 1)
+	if (Stack.Num() > RemovingAtIndex)
 	{
-		DismissFrom(Stack[InsertIndex + 1]);
+		// Note: DismissFrom() may trigger FMenuStack::OnWindowActivated() then DismissAll() that empties Stack
+		DismissFrom(Stack[RemovingAtIndex]);
 
 		// tidy the stack data now (it will happen via callbacks from the dismissed menus but that might be delayed)
-		for (int32 StackIndex = Stack.Num() - 1; StackIndex > InsertIndex; --StackIndex)
+		for (int32 StackIndex = Stack.Num() - 1; StackIndex >= RemovingAtIndex; --StackIndex)
 		{
 			CachedContentMap.Remove(Stack[StackIndex]->GetContent());
 			Stack.RemoveAt(StackIndex);
 		}
+	}
+
+	// Note: DismissFrom() above may trigger FMenuStack::OnWindowActivated() then DismissAll() that empties Stack
+	// Insert menu after the dismiss when possible to avoid menu being deleted
+	if (bInInsertAfterDismiss)
+	{
+		check(InsertIndex == Stack.Num());
+		Stack.Add(InMenu);
+		CachedContentMap.Add(InMenu->GetContent(), InMenu);
 	}
 
 	// When a new menu is pushed, if we are not already in responsive mode for Slate UI, enter it now
@@ -743,9 +760,10 @@ TSharedPtr<IMenu> FMenuStack::FindMenuFromWindow(TSharedRef<SWindow> InWindow) c
 	return TSharedPtr<IMenu>();
 }
 
-FSlateRect FMenuStack::GetToolTipForceFieldRect(TSharedRef<IMenu> InMenu, const FWidgetPath& PathContainingMenu) const
+bool FMenuStack::GetToolTipForceFieldRect(const TSharedRef<IMenu>& InMenu, const FWidgetPath& InPathContainingMenu, FSlateRect& OutSlateRect) const
 {
-	FSlateRect ForceFieldRect(0, 0, 0, 0);
+	bool bWasSolutionFound = false;
+	OutSlateRect = FSlateRect(0, 0, 0, 0);
 
 	int32 StackLevel = Stack.IndexOfByKey(InMenu);
 
@@ -756,7 +774,7 @@ FSlateRect FMenuStack::GetToolTipForceFieldRect(TSharedRef<IMenu> InMenu, const 
 			TSharedPtr<SWidget> MenuContent = Stack[StackLevelIndex]->GetContent();
 			if (MenuContent.IsValid())
 			{
-				FWidgetPath WidgetPath = PathContainingMenu.GetPathDownTo(MenuContent.ToSharedRef());
+				FWidgetPath WidgetPath = InPathContainingMenu.GetPathDownTo(MenuContent.ToSharedRef());
 				if (!WidgetPath.IsValid())
 				{
 					FSlateApplication::Get().GeneratePathToWidgetChecked(MenuContent.ToSharedRef(), WidgetPath);
@@ -764,12 +782,30 @@ FSlateRect FMenuStack::GetToolTipForceFieldRect(TSharedRef<IMenu> InMenu, const 
 				if (WidgetPath.IsValid())
 				{
 					const FGeometry& ContentGeometry = WidgetPath.Widgets.Last().Geometry;
-					ForceFieldRect = ForceFieldRect.Expand(ContentGeometry.GetLayoutBoundingRect());
+					// No first time: Expand
+					if (bWasSolutionFound)
+					{
+						OutSlateRect = OutSlateRect.Expand(ContentGeometry.GetLayoutBoundingRect());
+					}
+					// First time: assign it
+					// Otherwise, it would assume that the point [0,0,0,0] is part of the final rectangle, which is not the case in multiple scenarios.
+					// E.g., if the monitor where Slate is running is not the main one or if the Slate window is restored to the right half of the monitor.
+					else
+					{
+						OutSlateRect = ContentGeometry.GetLayoutBoundingRect();
+						bWasSolutionFound = true;
+					}
 				}
 			}
 		}
 	}
+	return bWasSolutionFound;
+}
 
+FSlateRect FMenuStack::GetToolTipForceFieldRect(TSharedRef<IMenu> InMenu, const FWidgetPath& PathContainingMenu) const
+{
+	FSlateRect ForceFieldRect(0, 0, 0, 0);
+	GetToolTipForceFieldRect(InMenu, PathContainingMenu, ForceFieldRect);
 	return ForceFieldRect;
 }
 

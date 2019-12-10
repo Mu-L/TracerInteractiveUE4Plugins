@@ -3,9 +3,8 @@
 
 #include "CoreMinimal.h"
 #include "UObject/ObjectMacros.h"
-#include "PBDRigidsSolver.h"
-#include "Chaos/ChaosSolver.h"
 #include "ChaosFilter.h"
+#include "EventsData.h"
 #include "ChaosBreakingEventFilter.generated.h"
 
 using namespace Chaos;
@@ -93,14 +92,12 @@ struct FChaosBreakingEventRequestSettings
 	{}
 };
 
-#if INCLUDE_CHAOS
-
-class GEOMETRYCOLLECTIONENGINE_API FChaosBreakingEventFilter : public IChaosEventFilter<FPBDRigidsSolver::FBreakingDataArray, TArray<FChaosBreakingEventData>, EChaosBreakingSortMethod>
+class GEOMETRYCOLLECTIONENGINE_API FChaosBreakingEventFilter : public IChaosEventFilter<Chaos::FBreakingDataArray, TArray<FChaosBreakingEventData>, EChaosBreakingSortMethod>
 {
 public:
 	FChaosBreakingEventFilter(FChaosBreakingEventRequestSettings* FilterSettingsIn) : BreakingEventRequestSettings(FilterSettingsIn) {}
 
-	virtual void FilterEvents(const FTransform& ChaosComponentTransform, const FPBDRigidsSolver::FBreakingDataArray& RawBreakingDataArray) override;
+	virtual void FilterEvents(const FTransform& ChaosComponentTransform, const Chaos::FBreakingDataArray& RawBreakingDataArray) override;
 
 	virtual void SortEvents(TArray<FChaosBreakingEventData>& InOutBreakingEvents, EChaosBreakingSortMethod SortMethod, const FTransform& InTransform) override;
 
@@ -108,5 +105,3 @@ private:
 	FChaosBreakingEventFilter() : BreakingEventRequestSettings(nullptr) {}
 	const FChaosBreakingEventRequestSettings* BreakingEventRequestSettings;
 };
-
-#endif

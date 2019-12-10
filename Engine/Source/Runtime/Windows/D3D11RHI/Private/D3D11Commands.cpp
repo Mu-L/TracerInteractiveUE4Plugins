@@ -165,21 +165,6 @@ void FD3D11DynamicRHI::RHISetStreamSource(uint32 StreamIndex, FRHIVertexBuffer* 
 	StateCache.SetStreamSource(D3DBuffer, StreamIndex, Offset);
 }
 
-void FD3D11DynamicRHI::RHISetStreamOutTargets(uint32 NumTargets, FRHIVertexBuffer* const* VertexBuffers, const uint32* Offsets)
-{
-	ID3D11Buffer* D3DVertexBuffers[D3D11_SO_BUFFER_SLOT_COUNT] = {0};
-
-	if (VertexBuffers)
-	{
-		for (uint32 BufferIndex = 0; BufferIndex < NumTargets; BufferIndex++)
-		{
-			D3DVertexBuffers[BufferIndex] = VertexBuffers[BufferIndex] ? ((FD3D11VertexBuffer*)VertexBuffers[BufferIndex])->Resource : NULL;
-		}
-	}
-
-	Direct3DDeviceIMContext->SOSetTargets(NumTargets, D3DVertexBuffers, Offsets);
-}
-
 // Rasterizer state.
 void FD3D11DynamicRHI::RHISetRasterizerState(FRHIRasterizerState* NewStateRHI)
 {
@@ -205,7 +190,7 @@ void FD3D11DynamicRHI::RHIDispatchComputeShader(uint32 ThreadGroupCountX, uint32
 
 	StateCache.SetComputeShader(ComputeShader->Resource);
 
-	GPUProfilingData.RegisterGPUWork(1);	
+	GPUProfilingData.RegisterGPUDispatch(FIntVector(ThreadGroupCountX, ThreadGroupCountY, ThreadGroupCountZ));	
 
 	if (ComputeShader->bShaderNeedsGlobalConstantBuffer)
 	{
@@ -223,7 +208,7 @@ void FD3D11DynamicRHI::RHIDispatchIndirectComputeShader(FRHIVertexBuffer* Argume
 	FD3D11ComputeShader* ComputeShader = ResourceCast(ComputeShaderRHI);
 	FD3D11VertexBuffer* ArgumentBuffer = ResourceCast(ArgumentBufferRHI);
 
-	GPUProfilingData.RegisterGPUWork(1);
+	GPUProfilingData.RegisterGPUDispatch(FIntVector(1, 1, 1));
 
 	StateCache.SetComputeShader(ComputeShader->Resource);
 	
@@ -1541,7 +1526,11 @@ void FD3D11DynamicRHI::SetResourcesFromTables(const ShaderType* RESTRICT Shader)
 				UE_LOG(LogD3D11RHI, Error, TEXT("Bound Layout='%s' Shader='%s', Layout CB Size %d %d"), *DebugName, *ShaderName, BufferLayout.ConstantBufferSize, BufferLayout.Resources.Num());
 #endif
 				// this might mean you are accessing a data you haven't bound e.g. GBuffer
-				check(BufferLayout.GetHash() == Shader->ShaderResourceTable.ResourceTableLayoutHashes[BufferIndex]);
+				checkf(BufferLayout.GetHash() == Shader->ShaderResourceTable.ResourceTableLayoutHashes[BufferIndex],
+					TEXT("Uniform buffer bound to slot %u is not what the shader expected:\n")
+					TEXT("\tBound:    Uniform Buffer[%s] with Hash[%u]\n")
+					TEXT("\tExpected: Uniform Buffer[%s] with Hash[%u]"),
+					BufferIndex, *DebugName, BufferLayout.GetHash(), *Shader->UniformBuffers[BufferIndex].GetPlainNameString(), Shader->ShaderResourceTable.ResourceTableLayoutHashes[BufferIndex]);
 			}
 		}
 #endif

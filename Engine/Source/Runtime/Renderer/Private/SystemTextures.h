@@ -6,9 +6,7 @@
 
 #pragma once
 
-#include "CoreMinimal.h"
-#include "RenderResource.h"
-#include "RendererInterface.h"
+#include "RenderGraph.h"
 
 /**
  * Encapsulates the system textures used for scene rendering.
@@ -67,8 +65,14 @@ public:
 	TRefCountPtr<IPooledRenderTarget> SobolSampling;
 	/** SSAO randomization */
 	TRefCountPtr<IPooledRenderTarget> SSAORandomization;
+	/** GTAO randomization */
+	TRefCountPtr<IPooledRenderTarget> GTAORandomization;
+
 	/** Preintegrated GF for single sample IBL */
 	TRefCountPtr<IPooledRenderTarget> PreintegratedGF;
+	/** Hair BSDF LUT texture */
+	TRefCountPtr<IPooledRenderTarget> HairLUT0;
+	TRefCountPtr<IPooledRenderTarget> HairLUT1;
 	/** Linearly Transformed Cosines LUTs */
 	TRefCountPtr<IPooledRenderTarget> LTCMat;
 	TRefCountPtr<IPooledRenderTarget> LTCAmp;
@@ -76,6 +80,8 @@ public:
 	TRefCountPtr<IPooledRenderTarget> MaxFP16Depth;
 	/** Depth texture that holds a single depth value */
 	TRefCountPtr<IPooledRenderTarget> DepthDummy;
+	/** Stencil texture that holds a single stencil value. */
+	TRefCountPtr<IPooledRenderTarget> StencilDummy;
 	// float4(0,1,0,1)
 	TRefCountPtr<IPooledRenderTarget> GreenDummy;
 	// float4(0.5,0.5,0.5,1)
@@ -88,6 +94,26 @@ public:
 
 	// SRV for WhiteDummy Texture.
 	TRefCountPtr<FRHIShaderResourceView> WhiteDummySRV;
+	// SRV for StencilDummy Texture.
+	TRefCountPtr<FRHIShaderResourceView> StencilDummySRV;
+
+	FRDGTextureRef GetWhiteDummy(FRDGBuilder& GraphBuilder) const;
+	FRDGTextureRef GetBlackDummy(FRDGBuilder& GraphBuilder) const;
+	FRDGTextureRef GetBlackAlphaOneDummy(FRDGBuilder& GraphBuilder) const;
+	FRDGTextureRef GetPerlinNoiseGradient(FRDGBuilder& GraphBuilder) const;
+	FRDGTextureRef GetPerlinNoise3D(FRDGBuilder& GraphBuilder) const;
+	FRDGTextureRef GetSobolSampling(FRDGBuilder& GraphBuilder) const;
+	FRDGTextureRef GetSSAORandomization(FRDGBuilder& GraphBuilder) const;
+	FRDGTextureRef GetPreintegratedGF(FRDGBuilder& GraphBuilder) const;
+	FRDGTextureRef GetLTCMat(FRDGBuilder& GraphBuilder) const;
+	FRDGTextureRef GetLTCAmp(FRDGBuilder& GraphBuilder) const;
+	FRDGTextureRef GetMaxFP16Depth(FRDGBuilder& GraphBuilder) const;
+	FRDGTextureRef GetDepthDummy(FRDGBuilder& GraphBuilder) const;
+	FRDGTextureRef GetStencilDummy(FRDGBuilder& GraphBuilder) const;
+	FRDGTextureRef GetGreenDummy(FRDGBuilder& GraphBuilder) const;
+	FRDGTextureRef GetDefaultNormal8Bit(FRDGBuilder& GraphBuilder) const;
+	FRDGTextureRef GetMidGreyDummy(FRDGBuilder& GraphBuilder) const;
+	FRDGTextureRef GetVolumetricBlackDummy(FRDGBuilder& GraphBuilder) const;
 
 protected:
 	/** Maximum feature level that the textures have been initialized up to */

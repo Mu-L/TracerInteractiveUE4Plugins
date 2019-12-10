@@ -4,8 +4,6 @@
 GeometryCollectionActor.cpp: AGeometryCollectionActor methods.
 =============================================================================*/
 
-#if INCLUDE_CHAOS
-
 #include "GeometryCollection/GeometryCollectionActor.h"
 
 #include "Chaos/Utilities.h"
@@ -20,7 +18,7 @@ GeometryCollectionActor.cpp: AGeometryCollectionActor methods.
 #include "GeometryCollection/GeometryCollectionUtility.h"
 #include "Math/Box.h"
 #include "Physics/PhysicsInterfaceCore.h"
-#include "PBDRigidsSolver.h"
+#include "PhysicsSolver.h"
 
 
 DEFINE_LOG_CATEGORY_STATIC(AGeometryCollectionActorLogging, Log, All);
@@ -55,9 +53,13 @@ void AGeometryCollectionActor::Tick(float DeltaTime)
 }
 
 
-const Chaos::FPBDRigidsSolver* GetSolver(const AGeometryCollectionActor& GeomCollectionActor)
+const Chaos::FPhysicsSolver* GetSolver(const AGeometryCollectionActor& GeomCollectionActor)
 {
+#if INCLUDE_CHAOS
 	return GeomCollectionActor.GetGeometryCollectionComponent()->ChaosSolverActor != nullptr ? GeomCollectionActor.GetGeometryCollectionComponent()->ChaosSolverActor->GetSolver() : GeomCollectionActor.GetWorld()->PhysicsScene_Chaos->GetSolver();
+#else
+	return nullptr;
+#endif
 }
 
 
@@ -65,13 +67,15 @@ bool LowLevelRaycastImp(const Chaos::TVector<float, 3>& Start, const Chaos::TVec
 {
 	using namespace Chaos;
 	//todo(ocohen): need to add thread safety / lock semantics
-	const TManagedArray<int32>& RigidBodyIdArray = GeomCollectionActor.GetGeometryCollectionComponent()->GetRigidBodyIdArray();
-	const TSharedPtr<FPhysScene_Chaos> Scene = GeomCollectionActor.GetGeometryCollectionComponent()->GetPhysicsScene();
+	//const TManagedArray<int32>& RigidBodyIdArray = GeomCollectionActor.GetGeometryCollectionComponent()->GetRigidBodyIdArray();
+	const TManagedArray<FGuid>& RigidBodyIdArray = GeomCollectionActor.GetGeometryCollectionComponent()->GetRigidBodyGuidArray();
+	FPhysScene_Chaos* Scene = GeomCollectionActor.GetGeometryCollectionComponent()->GetPhysicsScene();
 	ensure(Scene);
 
-	const Chaos::FPBDRigidsSolver* Solver = GetSolver(GeomCollectionActor);
+	const Chaos::FPhysicsSolver* Solver = GetSolver(GeomCollectionActor);
 	if(ensure(Solver))
 	{
+#if TODO_REIMPLEMENT_GET_RIGID_PARTICLES
 		const TPBDRigidParticles<float, 3>& Particles = Solver->GetRigidParticles();	//todo(ocohen): should these just get passed in instead of hopping through scene?
 		TBox<float, 3> RayBox(Start, Start);
 		RayBox.Thicken(Dir * DeltaMag);
@@ -105,6 +109,7 @@ bool LowLevelRaycastImp(const Chaos::TVector<float, 3>& Start, const Chaos::TVec
 				return true;
 			}
 		}
+#endif
 	}
 
 	return false;
@@ -143,6 +148,4 @@ bool AGeometryCollectionActor::GetReferencedContentObjects(TArray<UObject*>& Obj
 	}
 	return true;
 }
-#endif
-
 #endif

@@ -37,7 +37,7 @@
 #include "GameFramework/WorldSettings.h"
 #include "PacketHandler.h"
 #include "PacketHandlers/StatelessConnectHandlerComponent.h"
-#include "NetAnalytics.h"
+#include "Net/Core/Analytics/NetAnalytics.h"
 #include "Engine/NetDriver.h"
 #include "Engine/LocalPlayer.h"
 #include "Net/DataBunch.h"
@@ -64,6 +64,7 @@
 #include "Engine/ReplicationDriver.h"
 #include "ProfilingDebugging/CsvProfiler.h"
 #include "Engine/LevelScriptActor.h"
+#include "Engine/NetworkSettings.h"
 #include "Net/NetworkGranularMemoryLogging.h"
 #include "SocketSubsystem.h"
 #include "AddressInfoTypes.h"
@@ -155,6 +156,35 @@ int32 GNumSharedSerializationMiss;
 
 extern int32 GNetRPCDebug;
 
+namespace NetEmulationHelper
+{
+#if DO_ENABLE_NET_TEST
+	/** Global that stores the network emulation values outside the NetDriver lifetime */
+	static TOptional<FPacketSimulationSettings> PersistentPacketSimulationSettings;
+
+	void CreatePersistentSimulationSettings()
+	{
+		if (!PersistentPacketSimulationSettings.IsSet())
+		{
+			PersistentPacketSimulationSettings.Emplace(FPacketSimulationSettings());
+		}
+	}
+
+	void ApplySimulationSettingsOnNetDrivers(UWorld* World, const FPacketSimulationSettings& Settings)
+	{
+		// Execute on all active NetDrivers
+		FWorldContext& Context = GEngine->GetWorldContextFromWorldChecked(World);
+		for (const FNamedNetDriver& ActiveNetDriver : Context.ActiveNetDrivers)
+		{
+			if (ActiveNetDriver.NetDriver)
+			{
+				ActiveNetDriver.NetDriver->SetPacketSimulationSettings(Settings);
+			}
+		}
+	}
+#endif //#if DO_ENABLE_NET_TEST
+}
+
 #if UE_BUILD_SHIPPING
 #define DEBUG_REMOTEFUNCTION(Format, ...)
 #else
@@ -210,8 +240,8 @@ static TAutoConsoleVariable<int32> CVarActorChannelPool(
 static TAutoConsoleVariable<int32> CVarAllowReliableMulticastToNonRelevantChannels(
 	TEXT("net.AllowReliableMulticastToNonRelevantChannels"),
 	1,
-	TEXT("Allow Reliable Server Multicasts to be sent to non-Relevant Actors, as long as their is an existing ActorChannel.")
-);
+	TEXT("Allow Reliable Server Multicasts to be sent to non-Relevant Actors, as long as their is an existing ActorChannel."));
+
 
 /*-----------------------------------------------------------------------------
 	UNetDriver implementation.
@@ -277,34 +307,41 @@ UNetDriver::UNetDriver(const FObjectInitializer& ObjectInitializer)
 ,	PacketLossBurstEndTime(-1.0f)
 ,	OutTotalNotifiedPackets(0u)
 {
-PRAGMA_DISABLE_DEPRECATION_WARNINGS
-	ChannelClasses[CHTYPE_Control]	= UControlChannel::StaticClass();
-	ChannelClasses[CHTYPE_Actor]	= UActorChannel::StaticClass();
-	ChannelClasses[CHTYPE_Voice]	= UVoiceChannel::StaticClass();
-PRAGMA_ENABLE_DEPRECATION_WARNINGS
-
 	UpdateDelayRandomStream.Initialize(FApp::bUseFixedSeed ? GetFName() : NAME_None);
 }
 
 void UNetDriver::InitPacketSimulationSettings()
 {
 #if DO_ENABLE_NET_TEST
-	// read the settings from .ini and command line, with the command line taking precedence	
-	PacketSimulationSettings = FPacketSimulationSettings();
+	if (bNeverApplyNetworkEmulationSettings)
+	{
+		return;
+	}
+
+	if (bForcedPacketSettings)
+	{
+		return;
+	}
+
+	if (NetEmulationHelper::PersistentPacketSimulationSettings.IsSet())
+	{
+		SetPacketSimulationSettings(NetEmulationHelper::PersistentPacketSimulationSettings.GetValue());
+		return;
+	}
+
+	// Read the settings from .ini and command line, with the command line taking precedence	
+	PacketSimulationSettings.ResetSettings();
 	PacketSimulationSettings.LoadConfig(*NetDriverName.ToString());
-	PacketSimulationSettings.RegisterCommands();
 	PacketSimulationSettings.ParseSettings(FCommandLine::Get(), *NetDriverName.ToString());
 #endif
 }
 
+#if DO_ENABLE_NET_TEST
 bool UNetDriver::IsSimulatingPacketLossBurst() const
 {
-#if DO_ENABLE_NET_TEST
 	return PacketLossBurstEndTime > Time;
-#else
-	return false;
-#endif
 }
+#endif
 
 void UNetDriver::PostInitProperties()
 {
@@ -402,6 +439,8 @@ void UNetDriver::AssertValid()
 void UNetDriver::AddNetworkActor(AActor* Actor)
 {
 	LLM_SCOPE(ELLMTag::Networking);
+	ensureMsgf(Actor == nullptr || !(Actor->HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject)), TEXT("%s is a CDO or Archetype and should not be replicated."), *GetFullNameSafe(Actor));
+
 	GetNetworkObjectList().FindOrAdd(Actor, this);
 	if (ReplicationDriver)
 	{
@@ -411,6 +450,8 @@ void UNetDriver::AddNetworkActor(AActor* Actor)
 
 FNetworkObjectInfo* UNetDriver::FindOrAddNetworkObjectInfo(const AActor* InActor)
 {
+	ensureMsgf(InActor == nullptr || !(InActor->HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject)), TEXT("%s is a CDO or Archetype and should not be replicated."), *GetFullNameSafe(InActor));
+
 	bool bWasAdded = false;
 	if (TSharedPtr<FNetworkObjectInfo>* InfoPtr = GetNetworkObjectList().FindOrAdd(const_cast<AActor*>(InActor), this, &bWasAdded))
 	{
@@ -858,7 +899,7 @@ void UNetDriver::TickFlush(float DeltaSeconds)
 					PerfCounters->Set(TEXT("MinPing"), MinPing, IPerfCounters::Flags::Transient);
 
 					// update buckets
-					for (int BucketIdx = 0; BucketIdx < ARRAY_COUNT(Buckets); ++BucketIdx)
+					for (int BucketIdx = 0; BucketIdx < UE_ARRAY_COUNT(Buckets); ++BucketIdx)
 					{
 						PerfCountersIncrement(FString::Printf(TEXT("PingBucketInt%d"), BucketIdx), Buckets[BucketIdx], 0, IPerfCounters::Flags::Transient);
 					}
@@ -1325,22 +1366,6 @@ void UNetDriver::PostTickFlush()
 	}
 }
 
-PRAGMA_DISABLE_DEPRECATION_WARNINGS
-void UNetDriver::LowLevelSend(FString Address, void* Data, int32 CountBits, FOutPacketTraits& Traits)
-{
-	if (GetSocketSubsystem() != nullptr)
-	{
-		TSharedPtr<FInternetAddr> NetAddress = GetSocketSubsystem()->GetAddressFromString(*Address);
-		if (NetAddress.IsValid())
-		{
-			LowLevelSend(NetAddress, Data, CountBits, Traits);
-			return;
-		}
-	}
-	UE_LOG(LogNet, Warning, TEXT("Could not infer the address to use for LowLevelSend, please use the one that takes an FInternetAddr to avoid this problem"));
-}
-PRAGMA_ENABLE_DEPRECATION_WARNINGS
-
 bool UNetDriver::InitConnectionClass(void)
 {
 	if (NetConnectionClass == NULL && NetConnectionClassName != TEXT(""))
@@ -1412,6 +1437,21 @@ bool UNetDriver::InitBase(bool bInitAsClient, FNetworkNotify* InNotify, const FU
 			GEngine->BroadcastNetworkDDosSEscalation(this->GetWorld(), this, SeverityCategory);
 		});
 	}
+
+#if DO_ENABLE_NET_TEST
+	bool bSettingFound(false);
+	FPacketSimulationSettings PacketSettings;
+
+	for (const FString& URLOption : URL.Op)
+	{
+		bSettingFound |= PacketSettings.ParseSettings(*URLOption);
+	}
+
+	if( bSettingFound )
+	{
+		SetPacketSimulationSettings(PacketSettings);
+	}
+#endif //#if DO_ENABLE_NET_TEST
 
 	Notify = InNotify;
 
@@ -1563,10 +1603,6 @@ void UNetDriver::Shutdown()
 	ActorChannelPool.Empty();
 
 	ConnectionlessHandler.Reset(nullptr);
-
-#if DO_ENABLE_NET_TEST
-	PacketSimulationSettings.UnregisterCommands();
-#endif
 
 	SetReplicationDriver(nullptr);
 
@@ -1727,16 +1763,18 @@ void UNetDriver::PostTickDispatch()
 	// Flush out of order packet caches for connections that did not receive the missing packets during TickDispatch
 	if (ServerConnection != nullptr)
 	{
-		ServerConnection->FlushPacketOrderCache(true);
+		if (!ServerConnection->IsPendingKill())
+		{
+			ServerConnection->PostTickDispatch();
+		}
 	}
 
 	TArray<UNetConnection*> ClientConnCopy = ClientConnections;
-
 	for (UNetConnection* CurConn : ClientConnCopy)
 	{
 		if (!CurConn->IsPendingKill())
 		{
-			CurConn->FlushPacketOrderCache(true);
+			CurConn->PostTickDispatch();
 		}
 	}
 
@@ -2242,6 +2280,11 @@ void UNetDriver::SetAnalyticsProvider(TSharedPtr<IAnalyticsProvider> InProvider)
 	if (ConnectionlessHandler.IsValid())
 	{
 		ConnectionlessHandler->NotifyAnalyticsProvider(AnalyticsProvider, AnalyticsAggregator);
+	}
+
+	if (ServerConnection != nullptr)
+	{
+		ServerConnection->NotifyAnalyticsProvider();
 	}
 
 	for (UNetConnection* CurConn : ClientConnections)
@@ -2750,23 +2793,10 @@ bool UNetDriver::Exec( UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar )
 	}
 #if DO_ENABLE_NET_TEST
 	// This will allow changing the Pkt* options at runtime
-	else if (PacketSimulationSettings.ParseSettings(Cmd, *NetDriverName.ToString()))
+	else if (bNeverApplyNetworkEmulationSettings == false && 
+			 PacketSimulationSettings.ParseSettings(Cmd, *NetDriverName.ToString()))
 	{
-		if (ServerConnection)
-		{
-			// Notify the server connection of the change
-			ServerConnection->UpdatePacketSimulationSettings();
-		}
-#if WITH_SERVER_CODE
-		else
-		{
-			// Notify all client connections that the settings have changed
-			for (int32 Index = 0; Index < ClientConnections.Num(); Index++)
-			{
-				ClientConnections[Index]->UpdatePacketSimulationSettings();
-			}
-		}		
-#endif
+		OnPacketSimulationSettingsChanged();
 		return true;
 	}
 #endif
@@ -2930,6 +2960,15 @@ void UNetDriver::NotifyActorRenamed(AActor* ThisActor, FName PreviousName)
 	const bool bIsActorStatic = !GuidCache->IsDynamicObject(ThisActor);
 	const bool bActorHasRole = ThisActor->GetRemoteRole() != ROLE_None;
 
+#if WITH_EDITOR
+	// When recompiling and reinstancing a Blueprint, we rename the old actor out of the way, which would cause this code to emit a warning during PIE
+	// Since that old actor is about to die (on both client and server) in the reinstancing case, it's safe to skip
+	if (GCompilingBlueprint)
+	{
+		return;
+	}
+#endif
+
 	if (bIsActorStatic && bActorHasRole)
 	{
 		if (bIsServer)
@@ -3064,6 +3103,27 @@ void UNetDriver::ForceNetUpdate(AActor* Actor)
 	}
 }
 
+void UNetDriver::ForceAllActorsNetUpdateTime(float NetUpdateTimeOffset, TFunctionRef<bool(const AActor* const)> ValidActorTestFunc)
+{
+	for (auto It = GetNetworkObjectList().GetAllObjects().CreateConstIterator(); It; ++It)
+	{
+		FNetworkObjectInfo* NetActorInfo = (*It).Get();
+		if (NetActorInfo)
+		{
+			const AActor* const Actor = NetActorInfo->WeakActor.Get();
+			if (Actor)
+			{
+				if (ValidActorTestFunc(Actor))
+				{
+					// Only allow the next update to be sooner than the current one
+					const double NewUpdateTime = World->TimeSeconds + NetUpdateTimeOffset * FMath::FRand();
+					NetActorInfo->NextUpdateTime = FMath::Min(NetActorInfo->NextUpdateTime, NewUpdateTime);
+				}
+			}
+		}
+	}
+}
+
 /** UNetDriver::FlushActorDormancy(AActor* Actor)
  *	 Flushes the actor from the NetDriver's dormant list and/or cancels pending dormancy on the actor channel.
  *
@@ -3107,6 +3167,7 @@ void UNetDriver::NotifyActorDormancyChange(AActor* Actor, ENetDormancy OldDorman
 
 void UNetDriver::FlushActorDormancyInternal(AActor *Actor)
 {
+	QUICK_SCOPE_CYCLE_COUNTER(STAT_NetDriver_FlushActorDormancy);
 	// Go through each connection and remove the actor from the dormancy list
 	for (int32 i=0; i < ClientConnections.Num(); ++i)
 	{
@@ -3216,13 +3277,27 @@ void UNetDriver::AddReferencedObjects(UObject* InThis, FReferenceCollector& Coll
 
 #if DO_ENABLE_NET_TEST
 
-void UNetDriver::SetPacketSimulationSettings(FPacketSimulationSettings NewSettings)
+void UNetDriver::SetPacketSimulationSettings(const FPacketSimulationSettings& NewSettings)
 {
+	if (bNeverApplyNetworkEmulationSettings)
+	{
+		return;
+	}
+
+	// Once set this prevents driver changes from reloading the packet emulation settings
+	bForcedPacketSettings = true;
+
 	PacketSimulationSettings = NewSettings;
+	OnPacketSimulationSettingsChanged();
+}
+
+void UNetDriver::OnPacketSimulationSettingsChanged()
+{
 	if (ServerConnection)
 	{
 		ServerConnection->UpdatePacketSimulationSettings();
 	}
+#if WITH_SERVER_CODE
 	for (UNetConnection* ClientConnection : ClientConnections)
 	{
 		if (ClientConnection)
@@ -3230,6 +3305,7 @@ void UNetDriver::SetPacketSimulationSettings(FPacketSimulationSettings NewSettin
 			ClientConnection->UpdatePacketSimulationSettings();
 		}
 	}
+#endif
 }
 
 class FPacketSimulationConsoleCommandVisitor 
@@ -3246,10 +3322,7 @@ public:
  */
 void FPacketSimulationSettings::LoadConfig(const TCHAR* OptionalQualifier)
 {
-	if (ConfigHelperInt(TEXT("PktLoss"), PktLoss, OptionalQualifier))
-	{
-		PktLoss = FMath::Clamp<int32>(PktLoss, 0, 100);
-	}
+	ConfigHelperInt(TEXT("PktLoss"), PktLoss, OptionalQualifier);
 	
 	ConfigHelperInt(TEXT("PktLossMinSize"), PktLossMinSize, OptionalQualifier);
 	ConfigHelperInt(TEXT("PktLossMaxSize"), PktLossMaxSize, OptionalQualifier);
@@ -3259,16 +3332,82 @@ void FPacketSimulationSettings::LoadConfig(const TCHAR* OptionalQualifier)
 	PktOrder = int32(InPktOrder);
 	
 	ConfigHelperInt(TEXT("PktLag"), PktLag, OptionalQualifier);
+	ConfigHelperInt(TEXT("PktLagVariance"), PktLagVariance, OptionalQualifier);
+
+	ConfigHelperInt(TEXT("PktLagMin"), PktLagMin, OptionalQualifier);
+	ConfigHelperInt(TEXT("PktLagMax"), PktLagMax, OptionalQualifier);
 	
-	if (ConfigHelperInt(TEXT("PktDup"), PktDup, OptionalQualifier))
+	ConfigHelperInt(TEXT("PktDup"), PktDup, OptionalQualifier);
+
+	ConfigHelperInt(TEXT("PktIncomingLagMin"), PktIncomingLagMin, OptionalQualifier);
+	ConfigHelperInt(TEXT("PktIncomingLagMax"), PktIncomingLagMax, OptionalQualifier);
+	ConfigHelperInt(TEXT("PktIncomingLoss"), PktIncomingLoss, OptionalQualifier);
+
+	ValidateSettings();
+}
+
+bool FPacketSimulationSettings::LoadEmulationProfile(const TCHAR* ProfileName)
+{
+	const FString SectionName = FString::Printf(TEXT("%s.%s"), TEXT("PacketSimulationProfile"), ProfileName);
+
+	TArray<FString> SectionConfigs;
+	bool bSectionExists = GConfig->GetSection(*SectionName, SectionConfigs, GEngineIni);
+	if (!bSectionExists)
 	{
-		PktDup = FMath::Clamp<int32>(PktDup, 0, 100);
+		UE_LOG(LogNet, Log, TEXT("EmulationProfile [%s] was not found in %s. Packet settings were not changed"), *SectionName, *GEngineIni);
+		return false;
+	}
+
+	ResetSettings();
+
+	UScriptStruct* ThisStruct = FPacketSimulationSettings::StaticStruct();
+
+	for (const FString& ConfigVar : SectionConfigs)
+	{
+		FString VarName;
+		FString VarValue;
+		if (ConfigVar.Split(TEXT("="), &VarName, &VarValue))
+		{
+			// If using the one line struct definition
+			if (VarName.Equals(TEXT("PacketSimulationSettings"), ESearchCase::IgnoreCase))
+			{
+				ThisStruct->ImportText(*VarValue, this, nullptr, 0, (FOutputDevice*)GWarn, TEXT("FPacketSimulationSettings"));
+			}
+			else if (UProperty* StructProperty = ThisStruct->FindPropertyByName(FName(*VarName, FNAME_Find)))
+			{
+				StructProperty->ImportText(*VarValue, StructProperty->ContainerPtrToValuePtr<void>(this), 0, nullptr);
+			}
+			else
+			{
+				UE_LOG(LogNet, Warning, TEXT("FPacketSimulationSettings::LoadEmulationProfile could not find property named %s"), *VarName);
+			}
+		}
 	}
 	
-	if (ConfigHelperInt(TEXT("PktLagVariance"), PktLagVariance, OptionalQualifier))
-	{
-		PktLagVariance = FMath::Clamp<int32>(PktLagVariance, 0, 100);
-	}
+	ValidateSettings();
+
+	return true;
+}
+
+void FPacketSimulationSettings::ResetSettings()
+{
+	*this = FPacketSimulationSettings();
+}
+
+void FPacketSimulationSettings::ValidateSettings()
+{
+	PktLoss = FMath::Clamp<int32>(PktLoss, 0, 100);
+
+	PktOrder = FMath::Clamp<int32>(PktOrder, 0, 1);
+
+	PktLagMin = FMath::Max(PktLagMin, 0);
+	PktLagMax = FMath::Max(PktLagMin, PktLagMax);
+
+	PktDup = FMath::Clamp<int32>(PktDup, 0, 100);
+
+	PktIncomingLagMin = FMath::Max(PktIncomingLagMin, 0);
+	PktIncomingLagMax = FMath::Max(PktIncomingLagMin, PktIncomingLagMax);
+	PktIncomingLoss = FMath::Clamp<int32>(PktIncomingLoss, 0, 100);
 }
 
 bool FPacketSimulationSettings::ConfigHelperInt(const TCHAR* Name, int32& Value, const TCHAR* OptionalQualifier)
@@ -3307,44 +3446,6 @@ bool FPacketSimulationSettings::ConfigHelperBool(const TCHAR* Name, bool& Value,
 	return false;
 }
 
-void FPacketSimulationSettings::RegisterCommands()
-{
-	IConsoleManager& ConsoleManager = IConsoleManager::Get();
-	
-	// Register exec commands with the console manager for auto-completion if they havent been registered already by another net driver
-	if (!ConsoleManager.IsNameRegistered(TEXT("Net PktLoss=")))
-	{
-		ConsoleManager.RegisterConsoleCommand(TEXT("Net PktLoss="), TEXT("PktLoss=<n> (simulates network packet loss)"));
-		ConsoleManager.RegisterConsoleCommand(TEXT("Net PktOrder="), TEXT("PktOrder=<n> (simulates network packet received out of order)"));
-		ConsoleManager.RegisterConsoleCommand(TEXT("Net PktDup="), TEXT("PktDup=<n> (simulates sending/receiving duplicate network packets)"));
-		ConsoleManager.RegisterConsoleCommand(TEXT("Net PktLag="), TEXT("PktLag=<n> (simulates network packet lag)"));
-		ConsoleManager.RegisterConsoleCommand(TEXT("Net PktLagVariance="), TEXT("PktLagVariance=<n> (simulates variable network packet lag)"));
-	}
-}
-
-
-void FPacketSimulationSettings::UnregisterCommands()
-{
-	// Never unregister the console commands. Since net drivers come and go, and we can sometimes have more than 1, etc. 
-	// We could do better bookkeeping for this, but its not worth it right now. Just ensure the commands are always there for tab completion.
-#if 0
-	IConsoleManager& ConsoleManager = IConsoleManager::Get();
-
-	// Gather up all relevant console commands
-	TArray<IConsoleObject*> PacketSimulationConsoleCommands;
-	ConsoleManager.ForEachConsoleObjectThatStartsWith(
-		FConsoleObjectVisitor::CreateStatic< TArray<IConsoleObject*>& >(
-		&FPacketSimulationConsoleCommandVisitor::OnPacketSimulationConsoleCommand,
-		PacketSimulationConsoleCommands ), TEXT("Net Pkt"));
-
-	// Unregister them from the console manager
-	for(int32 i = 0; i < PacketSimulationConsoleCommands.Num(); ++i)
-	{
-		ConsoleManager.UnregisterConsoleObject(PacketSimulationConsoleCommands[i]);
-	}
-#endif
-}
-
 /**
  * Reads the settings from a string: command line or an exec
  *
@@ -3352,15 +3453,19 @@ void FPacketSimulationSettings::UnregisterCommands()
  */
 bool FPacketSimulationSettings::ParseSettings(const TCHAR* Cmd, const TCHAR* OptionalQualifier)
 {
-	UE_LOG(LogTemp, Display, TEXT("ParseSettings for %s"), OptionalQualifier);
 	// note that each setting is tested.
 	// this is because the same function will be used to parse the command line as well
 	bool bParsed = false;
 
+	FString EmulationProfileName;
+	if (FParse::Value(Cmd, TEXT("PktEmulationProfile="), EmulationProfileName))
+	{
+		UE_LOG(LogNet, Log, TEXT("Applying EmulationProfile %s"), *EmulationProfileName);
+		bParsed = LoadEmulationProfile(*EmulationProfileName);
+	}
 	if( ParseHelper(Cmd, TEXT("PktLoss="), PktLoss, OptionalQualifier) )
 	{
 		bParsed = true;
-		PktLoss = FMath::Clamp<int32>( PktLoss, 0, 100 );
 		UE_LOG(LogNet, Log, TEXT("PktLoss set to %d"), PktLoss);
 	}
 	if (ParseHelper(Cmd, TEXT("PktLossMinSize="), PktLossMinSize, OptionalQualifier))
@@ -3376,7 +3481,6 @@ bool FPacketSimulationSettings::ParseSettings(const TCHAR* Cmd, const TCHAR* Opt
 	if( ParseHelper(Cmd, TEXT("PktOrder="), PktOrder, OptionalQualifier) )
 	{
 		bParsed = true;
-		PktOrder = FMath::Clamp<int32>( PktOrder, 0, 1 );
 		UE_LOG(LogNet, Log, TEXT("PktOrder set to %d"), PktOrder);
 	}
 	if( ParseHelper(Cmd, TEXT("PktLag="), PktLag, OptionalQualifier) )
@@ -3387,15 +3491,40 @@ bool FPacketSimulationSettings::ParseSettings(const TCHAR* Cmd, const TCHAR* Opt
 	if( ParseHelper(Cmd, TEXT("PktDup="), PktDup, OptionalQualifier) )
 	{
 		bParsed = true;
-		PktDup = FMath::Clamp<int32>( PktDup, 0, 100 );
 		UE_LOG(LogNet, Log, TEXT("PktDup set to %d"), PktDup);
 	}	
 	if (ParseHelper(Cmd, TEXT("PktLagVariance="), PktLagVariance, OptionalQualifier))
 	{
 		bParsed = true;
-		PktLagVariance = FMath::Clamp<int32>( PktLagVariance, 0, 100 );
 		UE_LOG(LogNet, Log, TEXT("PktLagVariance set to %d"), PktLagVariance);
 	}
+	if (ParseHelper(Cmd, TEXT("PktLagMin="), PktLagMin, OptionalQualifier))
+	{
+		bParsed = true;
+		UE_LOG(LogNet, Log, TEXT("PktLagMin set to %d"), PktLagMin);
+	}
+	if (ParseHelper(Cmd, TEXT("PktLagMax="), PktLagMax, OptionalQualifier))
+	{
+		bParsed = true;
+		UE_LOG(LogNet, Log, TEXT("PktLagMax set to %d"), PktLagMax);
+	}
+	if (ParseHelper(Cmd, TEXT("PktIncomingLagMin="), PktIncomingLagMin, OptionalQualifier))
+	{
+		bParsed = true;
+		UE_LOG(LogNet, Log, TEXT("PktIncomingLagMin set to %d"), PktIncomingLagMin);
+	}
+	if (ParseHelper(Cmd, TEXT("PktIncomingLagMax="), PktIncomingLagMax, OptionalQualifier))
+	{
+		bParsed = true;
+		UE_LOG(LogNet, Log, TEXT("PktIncomingLagMax set to %d"), PktIncomingLagMax);
+	}
+	if (ParseHelper(Cmd, TEXT("PktIncomingLoss="), PktIncomingLoss, OptionalQualifier))
+	{
+		bParsed = true;
+		UE_LOG(LogNet, Log, TEXT("PktIncomingLoss set to %d"), PktIncomingLoss);
+	}
+
+	ValidateSettings();
 	return bParsed;
 }
 
@@ -3416,7 +3545,7 @@ bool FPacketSimulationSettings::ParseHelper(const TCHAR* Cmd, const TCHAR* Name,
 	return false;
 }
 
-#endif
+#endif //#if DO_ENABLE_NET_TEST
 
 FNetViewer::FNetViewer(UNetConnection* InConnection, float DeltaSeconds) :
 	Connection(InConnection),
@@ -4517,46 +4646,6 @@ int32 UNetDriver::ServerReplicateActors(float DeltaSeconds)
 #endif // WITH_SERVER_CODE
 }
 
-bool UNetDriver::IsKnownChannelType(int32 Type)
-{
-	FName ChName = NAME_None;
-
-	switch (Type)
-	{
-	case CHTYPE_Control:
-		ChName = NAME_Control;
-		break;
-	case CHTYPE_Actor:
-		ChName = NAME_Actor;
-		break;
-	case CHTYPE_Voice:
-		ChName = NAME_Voice;
-		break;
-	}
-
-	return IsKnownChannelName(ChName);
-}
-
-UChannel* UNetDriver::GetOrCreateChannel(EChannelType ChType)
-{
-	FName ChName = NAME_None;
-
-	switch (ChType)
-	{
-	case CHTYPE_Control:
-		ChName = NAME_Control;
-		break;
-	case CHTYPE_Actor:
-		ChName = NAME_Actor;
-		break;
-	case CHTYPE_Voice:
-		ChName = NAME_Voice;
-		break;
-	}
-
-	return GetOrCreateChannelByName(ChName);
-}
-
 UChannel* UNetDriver::GetOrCreateChannelByName(const FName& ChName)
 {
 	UChannel* RetVal = nullptr;
@@ -4586,26 +4675,6 @@ UChannel* UNetDriver::GetOrCreateChannelByName(const FName& ChName)
 	}
 
 	return RetVal;
-}
-
-UChannel* UNetDriver::InternalCreateChannel(EChannelType Type)
-{
-	FName ChName = NAME_None;
-
-	switch (Type)
-	{
-	case CHTYPE_Control:
-		ChName = NAME_Control;
-		break;
-	case CHTYPE_Actor:
-		ChName = NAME_Actor;
-		break;
-	case CHTYPE_Voice:
-		ChName = NAME_Voice;
-		break;
-	}
-
-	return InternalCreateChannelByName(ChName);
 }
 
 UChannel* UNetDriver::InternalCreateChannelByName(const FName& ChName)
@@ -5538,6 +5607,81 @@ FAutoConsoleCommandWithWorld	DumpRelevantActorsCommand(
 	FConsoleCommandWithWorldDelegate::CreateStatic(DumpRelevantActors)
 	);
 
+
+#if DO_ENABLE_NET_TEST
+
+FAutoConsoleCommandWithWorldArgsAndOutputDevice NetEmulationPktEmulationProfile(TEXT("NetEmulation.PktEmulationProfile"), TEXT("Apply a preconfigured emulation profile."),
+	FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic([](const TArray<FString>& Args, UWorld* World, FOutputDevice& Output)
+{
+	bool bProfileApplied(false);
+	if (Args.Num() > 0)
+	{
+		FString CmdParams = FString::Printf(TEXT("PktEmulationProfile=%s"), *(Args[0]));
+
+		NetEmulationHelper::CreatePersistentSimulationSettings();
+
+		bProfileApplied = NetEmulationHelper::PersistentPacketSimulationSettings.GetValue().ParseSettings(*CmdParams, nullptr);
+		
+		if (bProfileApplied)
+		{
+			NetEmulationHelper::ApplySimulationSettingsOnNetDrivers(World, NetEmulationHelper::PersistentPacketSimulationSettings.GetValue());
+		}
+		else
+		{
+			Output.Log(FString::Printf(TEXT("EmulationProfile: %s was not found in Engine.ini"), *(Args[0])));
+		}
+	}
+	else
+	{
+		Output.Log(FString::Printf(TEXT("Missing emulation profile name")));
+	}
+
+	if (!bProfileApplied)
+	{
+		if (const UNetworkSettings* NetworkSettings = GetDefault<UNetworkSettings>())
+		{
+			Output.Log(TEXT("List of some supported emulation profiles:"));
+			for (const FNetworkEmulationProfileDescription& ProfileDesc : NetworkSettings->NetworkEmulationProfiles)
+			{
+				Output.Log(FString::Printf(TEXT("%s"), *ProfileDesc.ProfileName));
+			}
+		}
+	}
+}));
+
+FAutoConsoleCommandWithWorld NetEmulationOff(TEXT("NetEmulation.Off"), TEXT("Turn off network emulation"),
+	FConsoleCommandWithWorldDelegate::CreateStatic([](UWorld* World)
+{
+	NetEmulationHelper::CreatePersistentSimulationSettings();
+	NetEmulationHelper::PersistentPacketSimulationSettings.GetValue().ResetSettings();
+	NetEmulationHelper::ApplySimulationSettingsOnNetDrivers(World, NetEmulationHelper::PersistentPacketSimulationSettings.GetValue());
+}));
+
+#define BUILD_NETEMULATION_CONSOLE_COMMAND(CommandName, CommandHelp) FAutoConsoleCommandWithWorldAndArgs NetEmulation##CommandName(TEXT("NetEmulation."#CommandName), TEXT(CommandHelp), \
+	FConsoleCommandWithWorldAndArgsDelegate::CreateStatic([](const TArray<FString>& Args, UWorld* World) \
+	{ \
+		if (Args.Num() > 0) \
+		{ \
+			NetEmulationHelper::CreatePersistentSimulationSettings(); \
+			FString CmdParams = FString::Printf(TEXT(#CommandName"=%s"), *(Args[0])); \
+			NetEmulationHelper::PersistentPacketSimulationSettings.GetValue().ParseSettings(*CmdParams, nullptr); \
+			NetEmulationHelper::ApplySimulationSettingsOnNetDrivers(World, NetEmulationHelper::PersistentPacketSimulationSettings.GetValue()); \
+		} \
+	}));
+
+BUILD_NETEMULATION_CONSOLE_COMMAND(PktLoss, "Simulates network packet loss");
+BUILD_NETEMULATION_CONSOLE_COMMAND(PktOrder, "Simulates network packets received out of order");
+BUILD_NETEMULATION_CONSOLE_COMMAND(PktDup, "Simulates sending/receiving duplicate network packets");
+BUILD_NETEMULATION_CONSOLE_COMMAND(PktLag, "Simulates network packet lag");
+BUILD_NETEMULATION_CONSOLE_COMMAND(PktLagVariance, "Simulates variable network packet lag");
+BUILD_NETEMULATION_CONSOLE_COMMAND(PktLagMin, "Sets minimum outgoing packet latency");
+BUILD_NETEMULATION_CONSOLE_COMMAND(PktLagMax, "Sets maximum outgoing packet latency)");
+BUILD_NETEMULATION_CONSOLE_COMMAND(PktIncomingLagMin, "Sets minimum incoming packet latency");
+BUILD_NETEMULATION_CONSOLE_COMMAND(PktIncomingLagMax, "Sets maximum incoming packet latency");
+BUILD_NETEMULATION_CONSOLE_COMMAND(PktIncomingLoss, "Simulates incoming packet loss");
+
+#endif //#if DO_ENABLE_NET_TEST
+
 /**
  * Exec handler that routes online specific execs to the proper subsystem
  *
@@ -5558,7 +5702,7 @@ static bool NetDriverExec(UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar)
 		TCHAR TokenStr[128];
 
 		// Route the command to a specific beacon if a name is specified or all of them otherwise
-		if (FParse::Token(Cmd, TokenStr, ARRAY_COUNT(TokenStr), true))
+		if (FParse::Token(Cmd, TokenStr, UE_ARRAY_COUNT(TokenStr), true))
 		{
 			NamedDriver = GEngine->FindNamedNetDriver(InWorld, FName(TokenStr));
 			if (NamedDriver != NULL)

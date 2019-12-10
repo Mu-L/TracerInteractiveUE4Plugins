@@ -147,6 +147,14 @@ struct FNiagaraScriptExecutionContext
 	bool CanExecute()const;
 };
 
+struct FNiagaraGpuSpawnInfo
+{
+	uint32		EventSpawnTotal = 0;
+	uint32		SpawnRateInstances = 0;
+	FVector4	SpawnInfoStartOffsets[NIAGARA_MAX_GPU_SPAWN_INFOS_V4];
+	FVector4	SpawnInfoParams[NIAGARA_MAX_GPU_SPAWN_INFOS];
+};
+
 struct FNiagaraComputeExecutionContext
 {
 	FNiagaraComputeExecutionContext();
@@ -154,7 +162,7 @@ struct FNiagaraComputeExecutionContext
 
 	void Reset(NiagaraEmitterInstanceBatcher* Batcher);
 
-	void InitParams(UNiagaraScript* InGPUComputeScript, ENiagaraSimTarget InSimTarget, const FString& InDebugSimName);
+	void InitParams(UNiagaraScript* InGPUComputeScript, ENiagaraSimTarget InSimTarget, const FString& InDebugSimName, const int32 InMaxUpdateIterations, const TSet<uint32> InSpawnStages);
 	void DirtyDataInterfaces();
 	bool Tick(FNiagaraSystemInstance* ParentSystemInstance);
 
@@ -177,8 +185,14 @@ private:
 public:
 	static uint32 TickCounter;
 
+#if !UE_BUILD_SHIPPING
 	//Persistent state 
 	FString DebugSimName;
+	FORCEINLINE const TCHAR* GetDebugSimName() const { return *DebugSimName; }
+#else
+	FORCEINLINE const TCHAR* GetDebugSimName() const { return TEXT(""); }
+#endif
+
 	class FNiagaraDataSet *MainDataSet;
 	UNiagaraScript* GPUScript;
 	class FNiagaraShaderScript*  GPUScript_RT;
@@ -196,8 +210,14 @@ public:
 	//Most current buffer that can be used for rendering.
 	FNiagaraDataBuffer* DataToRender;
 
-	uint32 EventSpawnTotal_GT;
-	uint32 SpawnRateInstances_GT;
+	// Game thread spawn info will be sent to the render thread inside FNiagaraComputeInstanceData
+	FNiagaraGpuSpawnInfo GpuSpawnInfo_GT;
+
+	uint32 MaxUpdateIterations;
+	TSet<uint32> SpawnStages;
+
+	/** Temp data used in NiagaraEmitterInstanceBatcher::ExecuteAll() to avoid creating a map per FNiagaraComputeExecutionContext */
+	mutable int32 ScratchIndex = INDEX_NONE;
 
 #if WITH_EDITORONLY_DATA
 	mutable FRHIGPUMemoryReadback *GPUDebugDataReadbackFloat;
@@ -228,8 +248,7 @@ struct FNiagaraDataInterfaceInstanceData
 
 struct FNiagaraComputeInstanceData
 {
-	uint32 EventSpawnTotal;
-	uint32 SpawnRateInstances;
+	FNiagaraGpuSpawnInfo SpawnInfo;
 	uint8* ParamData;
 	FNiagaraComputeExecutionContext* Context;
 	TArray<FNiagaraDataInterfaceProxy*> DataInterfaceProxies;
@@ -240,9 +259,7 @@ struct FNiagaraComputeInstanceData
 	FNiagaraDataBuffer* DestinationData;
 
 	FNiagaraComputeInstanceData()
-		: EventSpawnTotal(0)
-		, SpawnRateInstances(0)
-		, ParamData(nullptr)
+		: ParamData(nullptr)
 		, Context(nullptr)
 		, CurrentData(nullptr)
 		, DestinationData(nullptr)
@@ -280,7 +297,7 @@ public:
 	FORCEINLINE FNiagaraComputeInstanceData* GetInstanceData()const{ return reinterpret_cast<FNiagaraComputeInstanceData*>(InstanceData_ParamData_Packed); }
 
 	uint32 Count;
-	FGuid SystemInstanceID;
+	FNiagaraSystemInstanceID SystemInstanceID;
 	FNiagaraDataInterfaceInstanceData* DIInstanceData;
 	uint8* InstanceData_ParamData_Packed;
 	bool bRequiredDistanceFieldData = false;

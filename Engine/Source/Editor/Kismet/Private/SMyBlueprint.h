@@ -170,6 +170,7 @@ private:
 	TSharedRef<SWidget> OnGetFunctionListMenu();
 	void BuildOverridableFunctionsMenu(FMenuBuilder& MenuBuilder);
 	FReply OnAddButtonClickedOnSection(int32 InSectionID);
+	bool CanAddNewElementToSection(int32 InSectionID) const;
 
 	/** Support functions for checkbox to manage displaying user variables only */
 	bool IsShowingInheritedVariables() const;
@@ -183,8 +184,26 @@ private:
 	void OnToggleShowReplicatedVariablesOnly();
 	bool IsShowingReplicatedVariablesOnly() const;
 
+	/** Support functions for view options for bAlwaysShowInterfacesInOverrides blueprint editor setting */
+	void OnToggleAlwaysShowInterfacesInOverrides();
+	bool GetAlwaysShowInterfacesInOverrides() const;
+
+	/** Support functions for view options for bShowParentClassInOverrides blueprint editor setting*/
+	void OnToggleShowParentClassInOverrides();
+	bool GetShowParentClassInOverrides() const;
+
 	/** Helper function to open the selected graph */
 	void OpenGraph(FDocumentTracker::EOpenDocumentCause InCause);
+
+	/**
+	* Check if the override of a given function is most likely desired as a blueprint function 
+	* or as an event. 
+	* 
+	* @param OverrideFunc	Desired function to override
+	* 
+	* @return	True if the function is desired as a function, false if desired as an event
+	*/
+	bool IsImplementationDesiredAsFunction(const UFunction* OverrideFunc) const;
 
 	/** Callbacks for commands */
 	void OnOpenGraph();

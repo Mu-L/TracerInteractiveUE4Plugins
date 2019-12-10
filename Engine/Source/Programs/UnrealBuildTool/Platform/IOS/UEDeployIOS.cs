@@ -310,13 +310,8 @@ namespace UnrealBuildTool
 
 			ConfigHierarchy GameIni = ConfigCache.ReadHierarchy(ConfigHierarchyType.Game, DirRef, UnrealTargetPlatform.IOS);
 
-			Ini.GetBool("/Script/IOSRuntimeSettings.IOSRuntimeSettings", "bSupportsOpenGLES2", out bSupported);
-			RequiredCaps += bSupported ? "\t\t<string>opengles-2</string>\n" : "";
-			if (!bSupported)
-			{
-				Ini.GetBool("/Script/IOSRuntimeSettings.IOSRuntimeSettings", "bSupportsMetal", out bSupported);
-				RequiredCaps += bSupported ? "\t\t<string>metal</string>\n" : "";
-			}
+			Ini.GetBool("/Script/IOSRuntimeSettings.IOSRuntimeSettings", "bSupportsMetal", out bSupported);
+			RequiredCaps += bSupported ? "\t\t<string>metal</string>\n" : "";
 
 			// minimum iOS version
 			string MinVersion;
@@ -656,7 +651,7 @@ namespace UnrealBuildTool
 			Text.AppendLine("\t<key>ITSAppUsesNonExemptEncryption</key>");
 			Text.AppendLine("\t<false/>");
 			// add location services descriptions if used
-			Text.AppendLine("\t<key>NSLocationAlwaysUsageDescription</key>");
+			Text.AppendLine("\t<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>");
 			Text.AppendLine(string.Format("\t<string>{0}</string>", LocationAlwaysUsageDescription));
 			Text.AppendLine("\t<key>NSLocationWhenInUseUsageDescription</key>");
 			Text.AppendLine(string.Format("\t<string>{0}></string>", LocationWhenInUseDescription));
@@ -771,7 +766,7 @@ namespace UnrealBuildTool
 
 			File.WriteAllText(PListFile, Text.ToString());
 
-			if (BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Mac)
+            if (BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Mac && !ProjectFiles.Xcode.XcodeFrameworkWrapperUtils.GetBuildAsFramework(DirectoryReference.FromFile(ProjectFile)))
 			{
 				if (!Directory.Exists(AppDirectory))
 				{
@@ -839,7 +834,7 @@ namespace UnrealBuildTool
 			UnrealPluginLanguage UPL = new UnrealPluginLanguage(ProjectFile, UPLScripts, ProjectArches, "", "", UnrealTargetPlatform.IOS);
 
 			// Passing in true for distribution is not ideal here but given the way that ios packaging happens and this call chain it seems unavoidable for now, maybe there is a way to correctly pass it in that I can't find?
-			UPL.Init(ProjectArches, true, RelativeEnginePath, BundlePath, ProjectDirectory, Config.ToString());
+			UPL.Init(ProjectArches, true, RelativeEnginePath, BundlePath, ProjectDirectory, Config.ToString(), false);
 
 			return GenerateIOSPList(ProjectFile, Config, ProjectDirectory, bIsUE4Game, GameName, ProjectName, InEngineDir, AppDirectory, SdkVersion, UPL, BundleID, out bSupportsPortrait, out bSupportsLandscape, out bSkipIcons);
 		}
@@ -955,6 +950,11 @@ namespace UnrealBuildTool
 			{
 				throw new BuildException("UEDeployIOS.PrepForUATPackageOrDeploy only supports running on the Mac");
 			}
+
+			// If we are building as a framework, we don't need to do all of this.
+			if (IOSToolChain.GetBuildAsFramework(ProjectFile))
+				return false;
+
 
 			string SubDir = GetTargetPlatformName();
 

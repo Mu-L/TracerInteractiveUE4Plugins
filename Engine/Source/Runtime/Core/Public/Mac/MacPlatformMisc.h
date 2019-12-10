@@ -53,7 +53,7 @@ struct CORE_API FMacPlatformMisc : public FApplePlatformMisc
 	 */
 	FORCEINLINE static const TCHAR* GetNullRHIShaderFormat() 
 	{ 
-		return TEXT("GLSL_150"); 
+		return TEXT("SF_METAL"); 
 	}
 
 	/**
@@ -166,6 +166,13 @@ struct CORE_API FMacPlatformMisc : public FApplePlatformMisc
 	static void PostInitMacAppInfoUpdate();
 
 	static CGDisplayModeRef GetSupportedDisplayMode(CGDirectDisplayID DisplayID, uint32 Width, uint32 Height);
+
+	FORCEINLINE static void ChooseHDRDeviceAndColorGamut(uint32 DeviceId, uint32 DisplayNitLevel, int32& OutputDevice, int32& ColorGamut)
+	{
+		// ScRGB, 1000 or 2000 nits, DCI-P3
+		OutputDevice = DisplayNitLevel == 1000 ? 5 : 6;
+		ColorGamut = 1;
+	}
 };
 
 typedef FMacPlatformMisc FPlatformMisc;

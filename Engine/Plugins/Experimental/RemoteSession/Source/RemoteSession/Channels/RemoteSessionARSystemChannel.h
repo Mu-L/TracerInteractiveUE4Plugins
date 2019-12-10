@@ -4,6 +4,7 @@
 
 #include "RemoteSessionXRTrackingChannel.h"
 #include "ARSystem.h"
+#include "ARTraceResult.h"
 
 /**
  * This class acts as if there is a AR system present on the desktop that is receiving data from a remote device
@@ -23,7 +24,13 @@ public:
 	static void Destroy();
 
 	// ~IARSystemSupport
+	
+	/** Returns true/false based on whether AR features are available */
+	virtual bool IsARAvailable() const override;
+	
 	virtual EARTrackingQuality OnGetTrackingQuality() const override;
+	/** @return the reason of limited tracking quality; if the state is not limited, return EARTrackingQualityReason::None */
+	virtual EARTrackingQualityReason OnGetTrackingQualityReason() const override;
 	virtual FARSessionStatus OnGetARSessionStatus() const override;
 	virtual TArray<UARTrackedGeometry*> OnGetAllTrackedGeometries() const override;
 	virtual bool OnIsTrackingTypeSupported(EARSessionType SessionType) const override;
@@ -136,4 +143,11 @@ private:
 	FDelegateHandle OnTrackableAddedDelegateHandle;
 	FDelegateHandle OnTrackableUpdatedDelegateHandle;
 	FDelegateHandle OnTrackableRemovedDelegateHandle;
+};
+
+class REMOTESESSION_API FRemoteSessionARSystemChannelFactoryWorker : public IRemoteSessionChannelFactoryWorker
+{
+public:
+	virtual const TCHAR* GetType() const override { return FRemoteSessionARSystemChannel::StaticType(); }
+	virtual TSharedPtr<IRemoteSessionChannel> Construct(ERemoteSessionChannelMode InMode, TSharedPtr<FBackChannelOSCConnection, ESPMode::ThreadSafe> InConnection) const override;
 };

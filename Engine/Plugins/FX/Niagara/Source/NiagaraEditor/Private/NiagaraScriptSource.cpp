@@ -53,7 +53,7 @@ void UNiagaraScriptSource::ComputeVMCompilationId(FNiagaraVMExecutableDataId& Id
 		NodeGraph->RebuildCachedCompileIds(bForceRebuild);
 		Id.BaseScriptID = NodeGraph->GetBaseId(InUsage, InUsageId);
 		Id.BaseScriptCompileHash = FNiagaraCompileHash(NodeGraph->GetCompileDataHash(InUsage, InUsageId));
-		NodeGraph->GatherExternalDependencyIDs(InUsage, InUsageId, Id.ReferencedCompileHashes, Id.ReferencedDependencyIds, Id.ReferencedObjects);
+		NodeGraph->GatherExternalDependencyData(InUsage, InUsageId, Id.ReferencedCompileHashes, Id.ReferencedObjects);
 	}
 }
 
@@ -70,6 +70,21 @@ FNiagaraCompileHash UNiagaraScriptSource::GetCompileHash(ENiagaraScriptUsage InU
 void UNiagaraScriptSource::InvalidateCachedCompileIds() 
 {
 	NodeGraph->InvalidateCachedCompileIds();
+}
+
+void UNiagaraScriptSource::RefreshFromExternalChanges()
+{
+	if (NodeGraph)
+	{
+		for (UEdGraphNode* Node : NodeGraph->Nodes)
+		{
+			UNiagaraNode* NiagaraNode = Cast<UNiagaraNode>(Node);
+			if (NiagaraNode)
+			{
+				NiagaraNode->RefreshFromExternalChanges();
+			}
+		}
+	}
 }
 
 

@@ -88,10 +88,16 @@ public abstract class BaseLinuxPlatform : Platform
 							BootstrapExeName = SC.ShortProjectName;
 						}
 
+						string Extension = ".sh";
+						if (Target.Receipt.Platform == UnrealTargetPlatform.LinuxAArch64)
+						{
+								Extension = "-AArch64.sh";
+						}
+
 						List<StagedFileReference> StagePaths = SC.FilesToStage.NonUFSFiles.Where(x => x.Value == Executable.Path).Select(x => x.Key).ToList();
 						foreach (StagedFileReference StagePath in StagePaths)
 						{
-							StageBootstrapExecutable(SC, BootstrapExeName + ".sh", FullExecutablePath, StagePath.Name, BootstrapArguments);
+							StageBootstrapExecutable(SC, BootstrapExeName + Extension, FullExecutablePath, StagePath.Name, BootstrapArguments);
 						}
 					}
 				}
@@ -141,26 +147,30 @@ public abstract class BaseLinuxPlatform : Platform
 
 	public override string GetCookPlatform(bool bDedicatedServer, bool bIsClientOnly)
 	{
-		const string NoEditorCookPlatform = "LinuxNoEditor";
-		const string ServerCookPlatform = "LinuxServer";
-		const string ClientCookPlatform = "LinuxClient";
+		const string NoEditorCookPlatform = "NoEditor";
+		const string ServerCookPlatform = "Server";
+		const string ClientCookPlatform = "Client";
+		string PlatformStr = (TargetPlatformType == UnrealTargetPlatform.LinuxAArch64) ? "LinuxAArch64" : "Linux";
 
 		if (bDedicatedServer)
 		{
-			return ServerCookPlatform;
+			return PlatformStr + ServerCookPlatform;
 		}
 		else if (bIsClientOnly)
 		{
-			return ClientCookPlatform;
+			return PlatformStr + ClientCookPlatform;
 		}
-		else
-		{
-			return NoEditorCookPlatform;
-		}
+
+		return PlatformStr + NoEditorCookPlatform;
 	}
 
 	public override string GetEditorCookPlatform()
 	{
+		if (TargetPlatformType == UnrealTargetPlatform.LinuxAArch64)
+		{
+			return "LinuxAArch64";
+		}
+
 		return "Linux";
 	}
 
@@ -361,6 +371,14 @@ public class GenericLinuxPlatform : BaseLinuxPlatform
 {
 	public GenericLinuxPlatform()
 		: base(UnrealTargetPlatform.Linux)
+	{
+	}
+}
+
+public class GenericLinuxPlatformAArch64 : BaseLinuxPlatform
+{
+	public GenericLinuxPlatformAArch64()
+		: base(UnrealTargetPlatform.LinuxAArch64)
 	{
 	}
 }

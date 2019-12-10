@@ -3,9 +3,10 @@
 #include "Units/Highlevel/Hierarchy/RigUnit_AimBone.h"
 #include "Units/RigUnitContext.h"
 
-void FRigUnit_AimBone::Execute(const FRigUnitContext& Context)
+FRigUnit_AimBone_Execute()
 {
-	FRigHierarchy* Hierarchy = (FRigHierarchy*)(Context.HierarchyReference.Get());
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
+	FRigBoneHierarchy* Hierarchy = ExecuteContext.GetBones();
 	if (Hierarchy == nullptr)
 	{
 		return;
@@ -25,7 +26,6 @@ void FRigUnit_AimBone::Execute(const FRigUnitContext& Context)
 
 	if (Primary.Weight <= SMALL_NUMBER && Secondary.Weight <= SMALL_NUMBER)
 	{
-		UE_CONTROLRIG_RIGUNIT_REPORT_WARNING(TEXT("Weights are zero."));
 		return;
 	}
 	FTransform Transform = Hierarchy->GetGlobalTransform(BoneIndex);

@@ -2,6 +2,7 @@
 
 #include "Perception/AIPerceptionSystem.h"
 #include "EngineGlobals.h"
+#include "EngineUtils.h"
 #include "TimerManager.h"
 #include "Engine/Engine.h"
 #include "AISystem.h"
@@ -387,6 +388,15 @@ void UAIPerceptionSystem::UnregisterSource(AActor& SourceActor, const TSubclassO
 	{
 		UE_VLOG(this, LogAIPerception, Log, TEXT("UnregisterSource called for %s but it doesn't seem to be registered as a source"), *SourceActor.GetName());
 	}
+	// Remove this from any pending adds (add/remove same frame)
+	for (int32 RemoveIndex = SourcesToRegister.Num() - 1; RemoveIndex >= 0; RemoveIndex--)
+	{
+		if (SourcesToRegister[RemoveIndex].Source == &SourceActor &&
+			SourcesToRegister[RemoveIndex].SenseID == UAISense::GetSenseID(Sense))
+		{
+			SourcesToRegister.RemoveAt(RemoveIndex, 1, false);
+		}
+	}
 }
 
 void UAIPerceptionSystem::OnListenerRemoved(const FPerceptionListener& NewListener)
@@ -572,12 +582,9 @@ void UAIPerceptionSystem::StartPlay()
 void UAIPerceptionSystem::RegisterAllPawnsAsSourcesForSense(FAISenseID SenseID)
 {
 	UWorld* World = GetWorld();
-	for (auto PawnIt = World->GetPawnIterator(); PawnIt; ++PawnIt)
+	for (TActorIterator<APawn> PawnIt(World); PawnIt; ++PawnIt)
 	{
-		if (PawnIt->Get())
-		{
-			RegisterSource(SenseID, **PawnIt);
-		}
+		RegisterSource(SenseID, **PawnIt);
 	}
 }
 

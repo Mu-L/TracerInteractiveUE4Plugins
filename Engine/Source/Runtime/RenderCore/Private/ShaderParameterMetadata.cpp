@@ -8,6 +8,11 @@
 #include "RenderCore.h"
 #include "ShaderCore.h"
 
+#define VALIDATE_UNIFORM_BUFFER_UNIQUE_NAME (!UE_BUILD_SHIPPING && !UE_BUILD_TEST)
+
+#if VALIDATE_UNIFORM_BUFFER_UNIQUE_NAME
+static TMap<FName, FName> GlobalShaderVariableToStructMap;
+#endif
 
 static TLinkedList<FShaderParametersMetadata*>* GUniformStructList = nullptr;
 
@@ -83,6 +88,25 @@ FShaderParametersMetadata::FShaderParametersMetadata(
 		// Verify that during FName creation there's no case conversion
 		checkSlow(FCString::Strcmp(StructTypeName, *StructTypeFName.GetPlainNameString()) == 0);
 		GetNameStructMap().Add(FName(StructTypeFName), this);
+
+#if VALIDATE_UNIFORM_BUFFER_UNIQUE_NAME
+		FName ShaderVariableFName(ShaderVariableName);
+
+		// Verify that the global variable name is unique so that we can disambiguate when reflecting from shader source.
+		if (FName* StructFName = GlobalShaderVariableToStructMap.Find(ShaderVariableFName))
+		{
+			checkf(
+				false,
+				TEXT("Found duplicate Uniform Buffer shader variable name %s defined by struct %s. Previous definition ")
+				TEXT("found on struct %s. Uniform buffer shader names must be unique to support name-based reflection of ")
+				TEXT("shader source files."),
+				ShaderVariableName,
+				StructTypeName,
+				*StructFName->GetPlainNameString());
+		}
+
+		GlobalShaderVariableToStructMap.Add(ShaderVariableFName, StructTypeFName);
+#endif
 	}
 	else
 	{
@@ -93,11 +117,28 @@ FShaderParametersMetadata::FShaderParametersMetadata(
 	}
 }
 
+FShaderParametersMetadata::~FShaderParametersMetadata()
+{
+	if (UseCase == EUseCase::GlobalShaderParameterStruct)
+	{
+		GlobalListLink.Unlink();
+		GetNameStructMap().Remove(FName(StructTypeName, FNAME_Find));
+
+#if VALIDATE_UNIFORM_BUFFER_UNIQUE_NAME
+		GlobalShaderVariableToStructMap.Remove(FName(ShaderVariableName, FNAME_Find));
+#endif
+	}
+}
+
+
 void FShaderParametersMetadata::InitializeAllGlobalStructs()
 {
 	for (TLinkedList<FShaderParametersMetadata*>::TIterator StructIt(FShaderParametersMetadata::GetStructList()); StructIt; StructIt.Next())
 	{
-		StructIt->InitializeLayout();
+		if (!StructIt->bLayoutInitialized)
+		{
+			StructIt->InitializeLayout();
+		}
 	}
 }
 
@@ -108,7 +149,6 @@ void FShaderParametersMetadata::InitializeLayout()
 
 	TArray<FUniformBufferMemberAndOffset> MemberStack;
 	MemberStack.Reserve(Members.Num());
-
 	for (int32 MemberIndex = 0; MemberIndex < Members.Num(); MemberIndex++)
 	{
 		MemberStack.Push(FUniformBufferMemberAndOffset(*this, Members[MemberIndex], 0));
@@ -147,7 +187,6 @@ void FShaderParametersMetadata::InitializeLayout()
 			BaseType == UBMT_SAMPLER);
 		const bool bIsRDGResource = IsRDGResourceReferenceShaderParameterType(BaseType);
 		const bool bIsVariableNativeType = (
-			BaseType == UBMT_BOOL ||
 			BaseType == UBMT_INT32 ||
 			BaseType == UBMT_UINT32 ||
 			BaseType == UBMT_FLOAT32);
@@ -155,6 +194,15 @@ void FShaderParametersMetadata::InitializeLayout()
 		if (DO_CHECK)
 		{
 			const FString CppName = FString::Printf(TEXT("%s::%s"), CurrentStruct.GetStructTypeName(), CurrentMember.GetName());
+
+			if (BaseType == UBMT_BOOL)
+			{
+				UE_LOG(LogRendererCore, Fatal,
+					TEXT("Shader parameter %s error: bool are actually illegal in shader parameter structure, ")
+					TEXT("because bool type in HLSL means using scalar register to store binary information. ")
+					TEXT("Boolean information should always be packed explicitly in bitfield to reduce memory footprint, ")
+					TEXT("and use HLSL comparison operators to translate into clean SGPR, to have minimal VGPR footprint."), *CppName);
+			}
 
 			if (IsRDGResourceReferenceShaderParameterType(BaseType) || BaseType == UBMT_RENDER_TARGET_BINDING_SLOTS)
 			{
@@ -235,8 +283,48 @@ void FShaderParametersMetadata::InitializeLayout()
 #endif
 	});
 
+	// Compute the hash of the RHI layout.
 	Layout.ComputeHash();
+	
+	// Compute the hash about the entire layout of the structure.
+	{
+		uint32 RootStructureHash = 0;
+		RootStructureHash = HashCombine(RootStructureHash, GetTypeHash(int32(GetSize())));
 
+		for (const FMember& CurrentMember : Members)
+		{
+			EUniformBufferBaseType BaseType = CurrentMember.GetBaseType();
+			const FShaderParametersMetadata* ChildStruct = CurrentMember.GetStructMetadata();
+
+			uint32 MemberHash = 0;
+			MemberHash = HashCombine(MemberHash, GetTypeHash(int32(CurrentMember.GetOffset())));
+			MemberHash = HashCombine(MemberHash, GetTypeHash(uint8(BaseType)));
+			static_assert(EUniformBufferBaseType_NumBits <= 8, "Invalid EUniformBufferBaseType_NumBits");
+			MemberHash = HashCombine(MemberHash, GetTypeHash(CurrentMember.GetName()));
+			MemberHash = HashCombine(MemberHash, GetTypeHash(int32(CurrentMember.GetNumElements())));
+
+			if (BaseType == UBMT_INT32 ||
+				BaseType == UBMT_UINT32 ||
+				BaseType == UBMT_FLOAT32)
+			{
+				MemberHash = HashCombine(MemberHash, GetTypeHash(uint8(CurrentMember.GetNumRows())));
+				MemberHash = HashCombine(MemberHash, GetTypeHash(uint8(CurrentMember.GetNumColumns())));
+			}
+			else if (BaseType == UBMT_INCLUDED_STRUCT || BaseType == UBMT_NESTED_STRUCT)
+			{
+				if (!ChildStruct->bLayoutInitialized)
+				{
+					const_cast<FShaderParametersMetadata*>(ChildStruct)->InitializeLayout();
+				}
+
+				MemberHash = HashCombine(MemberHash, ChildStruct->GetLayoutHash());
+			}
+
+			RootStructureHash = HashCombine(RootStructureHash, MemberHash);
+		}
+
+		LayoutHash = RootStructureHash;
+	}
 	bLayoutInitialized = true;
 }
 
@@ -379,4 +467,21 @@ void FShaderParametersMetadata::FindMemberFromOffset(uint16 MemberOffset, const 
 	}
 
 	checkf(0, TEXT("Looks like this offset is invalid."));
+}
+
+FString FShaderParametersMetadata::GetFullMemberCodeName(uint16 MemberOffset) const
+{
+	const FShaderParametersMetadata* MemberContainingStruct = nullptr;
+	const FShaderParametersMetadata::FMember* Member = nullptr;
+	int32 ArrayElementId = 0;
+	FString NamePrefix;
+	FindMemberFromOffset(MemberOffset, &MemberContainingStruct, &Member, &ArrayElementId, &NamePrefix);
+
+	FString MemberName = FString::Printf(TEXT("%s%s"), *NamePrefix, Member->GetName());
+	if (Member->GetNumElements() > 0)
+	{
+		MemberName = FString::Printf(TEXT("%s%s[%d]"), *NamePrefix, Member->GetName(), ArrayElementId);
+	}
+
+	return MemberName;
 }

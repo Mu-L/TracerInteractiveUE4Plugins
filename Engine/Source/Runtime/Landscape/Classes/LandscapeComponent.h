@@ -62,7 +62,8 @@ public:
 		DebugChannelG(INDEX_NONE),
 		DebugChannelB(INDEX_NONE),
 		DataTexture(NULL),
-		LayerContributionTexture(NULL)
+		LayerContributionTexture(NULL),
+		DirtyTexture(NULL)
 	{}
 
 	// Material used to render the tool.
@@ -91,6 +92,9 @@ public:
 
 	UPROPERTY(NonTransactional)
 	UTexture2D* LayerContributionTexture; // Data texture used to represent layer contribution
+
+	UPROPERTY(NonTransactional)
+	UTexture2D* DirtyTexture; // Data texture used to represent layer blend dirtied area
 
 #if WITH_EDITOR
 	void UpdateDebugColorMaterial(const ULandscapeComponent* const Component);
@@ -315,12 +319,16 @@ enum ELandscapeComponentUpdateFlag : uint32
 
 enum ELandscapeLayerUpdateMode : uint32
 { 
+	// No Update
+	Update_None = 0,
+	// Update types
 	Update_Heightmap_All = 1 << 0,
 	Update_Heightmap_Editing = 1 << 1,
 	Update_Heightmap_Editing_NoCollision = 1 << 2,
 	Update_Weightmap_All = 1 << 3,
 	Update_Weightmap_Editing = 1 << 4,
 	Update_Weightmap_Editing_NoCollision = 1 << 5,
+	// Combinations
 	Update_All = Update_Weightmap_All | Update_Heightmap_All,
 	Update_All_Editing = Update_Weightmap_Editing | Update_Heightmap_Editing,
 	Update_All_Editing_NoCollision = Update_Weightmap_Editing_NoCollision | Update_Heightmap_Editing_NoCollision,
@@ -329,6 +337,8 @@ enum ELandscapeLayerUpdateMode : uint32
 	// Update landscape component clients while editing
 	Update_Client_Editing = 1 << 5
 };
+
+static const uint32 DefaultSplineHash = 0xFFFFFFFF;
 
 #endif
 
@@ -528,6 +538,9 @@ public:
 
 	/** Represents hash of last weightmap usage update */
 	uint32 WeightmapsHash;
+
+	UPROPERTY()
+	uint32 SplineHash;
 #endif
 
 	/** For ES2 */
@@ -614,9 +627,12 @@ public:
 
 	LANDSCAPE_API TArray<FWeightmapLayerAllocationInfo>& GetWeightmapLayerAllocations(bool InReturnEditingWeightmap = false);
 	LANDSCAPE_API const TArray<FWeightmapLayerAllocationInfo>& GetWeightmapLayerAllocations(bool InReturnEditingWeightmap = false) const;
+	LANDSCAPE_API TArray<FWeightmapLayerAllocationInfo>& GetWeightmapLayerAllocations(const FGuid& InLayerGuid);
 	LANDSCAPE_API const TArray<FWeightmapLayerAllocationInfo>& GetWeightmapLayerAllocations(const FGuid& InLayerGuid) const;
 
 #if WITH_EDITOR
+	LANDSCAPE_API uint32 ComputeLayerHash() const;
+
 	LANDSCAPE_API void SetHeightmap(UTexture2D* NewHeightmap);
 
 	LANDSCAPE_API void SetWeightmapTextures(const TArray<UTexture2D*>& InNewWeightmapTextures, bool InApplyToEditingWeightmap = false);
@@ -638,6 +654,8 @@ public:
 	FLandscapeLayerComponentData* GetEditingLayer();
 	const FLandscapeLayerComponentData* GetEditingLayer() const;
 	FGuid GetEditingLayerGUID() const;
+
+	void CopyFinalLayerIntoEditingLayer(FLandscapeEditDataInterface& DataInterface, TSet<UTexture2D*>& ProcessedHeightmaps);
 #endif 
 
 #if WITH_EDITOR
@@ -664,10 +682,10 @@ public:
 	virtual void PropagateLightingScenarioChange() override;
 	//~ End UActorComponent Interface.
 
-
-#if WITH_EDITOR
 	/** Gets the landscape info object for this landscape */
 	LANDSCAPE_API ULandscapeInfo* GetLandscapeInfo() const;
+
+#if WITH_EDITOR
 
 	/** Deletes a layer from this component, removing all its data */
 	LANDSCAPE_API void DeleteLayer(ULandscapeLayerInfoObject* LayerInfo, FLandscapeEditDataInterface& LandscapeEdit);
@@ -716,6 +734,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Landscape|Runtime|Material")
 	class UMaterialInstanceDynamic* GetMaterialInstanceDynamic(int32 InIndex) const;
 
+	/** Gets the landscape paint layer weight value at the given position using LandscapeLayerInfo . Returns 0 in case it fails. */
+	UFUNCTION(BlueprintCallable, Category = "Landscape|Editor")
+	LANDSCAPE_API float EditorGetPaintLayerWeightAtLocation(const FVector& InLocation, ULandscapeLayerInfoObject* PaintLayer);
+
+	/** Gets the landscape paint layer weight value at the given position using layer name. Returns 0 in case it fails. */
+	UFUNCTION(BlueprintCallable, Category = "Landscape|Editor")
+	LANDSCAPE_API float EditorGetPaintLayerWeightByNameAtLocation(const FVector& InLocation, const FName InPaintLayerName);
+		
 	/** Get the landscape actor associated with this component. */
 	ALandscape* GetLandscapeActor() const;
 
@@ -921,6 +947,7 @@ public:
 	LANDSCAPE_API void RequestHeightmapUpdate(bool bUpdateAll = false, bool bUpdateCollision = true);
 	LANDSCAPE_API void RequestEditingClientUpdate();
 	LANDSCAPE_API void RequestDeferredClientUpdate();
+	LANDSCAPE_API uint32 GetLayerUpdateFlagPerMode() const { return LayerUpdateFlagPerMode; }
 	LANDSCAPE_API uint32 ComputeWeightmapsHash();
 #endif
 

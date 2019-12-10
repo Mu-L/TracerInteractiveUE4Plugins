@@ -7,10 +7,14 @@
 #include "GeometryCollection/GeometryCollection.h"
 #include "GeometryCollection/GeometryCollectionUtility.h"
 #include "GeometryCollection/GeometryCollectionAlgo.h"
+#include "GeometryCollection/GeometryCollectionSimulationCoreTypes.h"
 
 #include "PBDRigidsSolver.h"
-#include "SolverObjects/SolverObjects.h"
+#include "PhysicsProxy/PhysicsProxies.h"
+#include "PhysicsProxy/GeometryCollectionPhysicsProxy.h"
 #include "../Resource/FracturedGeometry.h"
+
+#include "Chaos/ErrorReporter.h"
 
 
 namespace GeometryCollectionExample {
@@ -36,16 +40,12 @@ namespace GeometryCollectionExample {
 
 	void FinalizeSolver(Chaos::FPBDRigidsSolver& InSolver)
 	{
-#if INCLUDE_CHAOS
-		FSolverObjectStorage& Objects = InSolver.GetObjectStorage();
-
-		Objects.ForEachSolverObject([](auto* Object)
+		InSolver.ForEachPhysicsProxy([](auto* Object)
 		{
-			Object->CacheResults();
-			Object->FlipCache();
-			Object->SyncToCache();
+			Object->BufferPhysicsResults();
+			Object->FlipBuffer();
+			Object->PullFromPhysicsState();
 		});
-#endif
 	}
 
 
@@ -54,7 +54,6 @@ namespace GeometryCollectionExample {
 	TSharedPtr<FGeometryCollection>	CreateClusteredBody(FVector Position)
 	{
 		TSharedPtr<FGeometryCollection> RestCollection;
-#if INCLUDE_CHAOS
 		RestCollection = GeometryCollection::MakeCubeElement(FTransform(FQuat::MakeFromEuler(FVector(0.f)), Position), FVector(1.0));
 		RestCollection->AppendGeometry(*GeometryCollection::MakeCubeElement(FTransform(FQuat::MakeFromEuler(FVector(0.f)), FVector(30.f)), FVector(1.0)));
 
@@ -64,14 +63,12 @@ namespace GeometryCollectionExample {
 
 		GeometryCollectionAlgo::ParentTransforms(RestCollection.Get(), 2, { 0,1 });
 
-#endif
 		return RestCollection;
 	}
 
 	TSharedPtr<FGeometryCollection>	CreateClusteredBody_TwoParents_TwoBodies(FVector Position)
 	{
 		TSharedPtr<FGeometryCollection> RestCollection;
-#if INCLUDE_CHAOS
 		RestCollection = GeometryCollection::MakeCubeElement(FTransform(FQuat::MakeFromEuler(FVector(0.f)), Position), FVector(1.0));
 		RestCollection->AppendGeometry(*GeometryCollection::MakeCubeElement(FTransform(FQuat::MakeFromEuler(FVector(0.f)), FVector(30.f)), FVector(1.0)));
 
@@ -84,14 +81,12 @@ namespace GeometryCollectionExample {
 		GeometryCollectionAlgo::ParentTransforms(RestCollection.Get(), 2, { 0,1 });
 		GeometryCollectionAlgo::ParentTransforms(RestCollection.Get(), 3, { 2 });
 
-#endif
 		return RestCollection;
 	}
 
 	TSharedPtr<FGeometryCollection>	CreateClusteredBody_FourParents_OneBody(FVector Position)
 	{
 		TSharedPtr<FGeometryCollection> RestCollection;
-#if INCLUDE_CHAOS
 		RestCollection = GeometryCollection::MakeCubeElement(FTransform(FQuat::MakeFromEuler(FVector(0.f)), Position), FVector(1.0));
 
 		RestCollection->AddElements(4, FGeometryCollection::TransformGroup);
@@ -107,7 +102,6 @@ namespace GeometryCollectionExample {
 		GeometryCollectionAlgo::ParentTransforms(RestCollection.Get(), 3, { 2 });
 		GeometryCollectionAlgo::ParentTransforms(RestCollection.Get(), 4, { 3 });
 
-#endif
 		return RestCollection;
 	}
 
@@ -116,7 +110,6 @@ namespace GeometryCollectionExample {
 	TSharedPtr<FGeometryCollection>	CreateClusteredBody_TwoByTwo_ThreeTransform(FVector Position)
 	{
 		TSharedPtr<FGeometryCollection> RestCollection;
-#if INCLUDE_CHAOS
 		RestCollection = GeometryCollection::MakeCubeElement(FTransform(FQuat::MakeFromEuler(FVector(0.f)), FVector(0,0,0)), FVector(1.0));
 		RestCollection->AppendGeometry(*GeometryCollection::MakeCubeElement(FTransform(FQuat::MakeFromEuler(FVector(0.f)), FVector(100,0,0)), FVector(1.0)));
 		RestCollection->AppendGeometry(*GeometryCollection::MakeCubeElement(FTransform(FQuat::MakeFromEuler(FVector(0.f)), FVector(200,0,0)), FVector(1.0)));
@@ -138,7 +131,6 @@ namespace GeometryCollectionExample {
 		GeometryCollectionAlgo::ParentTransforms(RestCollection.Get(), 5, { 2,3 });
 		GeometryCollectionAlgo::ParentTransforms(RestCollection.Get(), 6, { 4,5 });
 
-#endif
 		return RestCollection;
 	}
 
@@ -147,7 +139,6 @@ namespace GeometryCollectionExample {
 	TSharedPtr<FGeometryCollection>	CreateClusteredBody_ThreeByTwo_ThreeTransform(FVector Position)
 	{
 		TSharedPtr<FGeometryCollection> RestCollection;
-#if INCLUDE_CHAOS
 		RestCollection = GeometryCollection::MakeCubeElement(FTransform(FQuat::MakeFromEuler(FVector(0.f)), FVector(0, 0, 0)), FVector(1.0));
 		RestCollection->AppendGeometry(*GeometryCollection::MakeCubeElement(FTransform(FQuat::MakeFromEuler(FVector(0.f)), FVector(100, 0, 0)), FVector(1.0)));
 		RestCollection->AppendGeometry(*GeometryCollection::MakeCubeElement(FTransform(FQuat::MakeFromEuler(FVector(0.f)), FVector(200, 0, 0)), FVector(1.0)));
@@ -173,7 +164,6 @@ namespace GeometryCollectionExample {
 		GeometryCollectionAlgo::ParentTransforms(RestCollection.Get(), 7, { 3,4,5 });
 		GeometryCollectionAlgo::ParentTransforms(RestCollection.Get(), 8, { 6,7 });
 
-#endif
 		return RestCollection;
 	}
 
@@ -181,7 +171,6 @@ namespace GeometryCollectionExample {
 	TSharedPtr<FGeometryCollection>	CreateClusteredBody_FracturedGeometry(FVector Position)
 	{
 		TSharedPtr<FGeometryCollection> RestCollection;
-#if INCLUDE_CHAOS
 
 		RestCollection = TSharedPtr<FGeometryCollection>(FGeometryCollection::NewGeometryCollection(
 			FracturedGeometry::RawVertexArray,
@@ -211,9 +200,98 @@ namespace GeometryCollectionExample {
 		RestCollection->SimulationType[12] = FGeometryCollection::ESimulationTypes::FST_Clustered;
 		RestCollection->SimulationType[0] = FGeometryCollection::ESimulationTypes::FST_Clustered;
 
-#endif
 		return RestCollection;
 	}
 
-}
+	template<class T>
+	void InitMaterialToZero(TUniquePtr<Chaos::TChaosPhysicsMaterial<T>> const &PhysicalMaterial)
+	{
+		PhysicalMaterial->Friction = 0;
+		PhysicalMaterial->Restitution = 0;
+		PhysicalMaterial->SleepingLinearThreshold = 0;
+		PhysicalMaterial->SleepingAngularThreshold = 0;
+		PhysicalMaterial->DisabledLinearThreshold = 0;
+		PhysicalMaterial->DisabledAngularThreshold = 0;
+	}
+	template void InitMaterialToZero(TUniquePtr<Chaos::TChaosPhysicsMaterial<float>> const &PhysicalMaterial);
+
+
+	template<class T>
+	void InitCollections(
+		TUniquePtr<Chaos::TChaosPhysicsMaterial<T>> &PhysicalMaterial,
+		TSharedPtr<FGeometryCollection>& RestCollection,
+		TSharedPtr<FGeometryDynamicCollection>& DynamicCollection,
+		InitCollectionsParameters& InitParams
+	)
+	{
+		// Allow for customized initialization of these objects in the calling function. 
+		if (PhysicalMaterial == nullptr)
+		{
+			PhysicalMaterial = MakeUnique<Chaos::TChaosPhysicsMaterial<T>>();
+			InitMaterialToZero(PhysicalMaterial);
+		}
+
+		if (RestCollection == nullptr)
+		{
+			//Default initialization is a cube of the specified center and size. 
+			RestCollection = GeometryCollection::MakeCubeElement(InitParams.RestCenter, InitParams.RestScale);
+			if (InitParams.RestInitFunc != nullptr)
+			{
+				InitParams.RestInitFunc(RestCollection);
+			}
+		}
+
+		if (DynamicCollection == nullptr)
+		{
+			DynamicCollection = GeometryCollectionToGeometryDynamicCollection(RestCollection.Get(), InitParams.DynamicStateDefault);
+		}
+	}
+	template void InitCollections(
+		TUniquePtr<Chaos::TChaosPhysicsMaterial<float>> &PhysicalMaterial,
+		TSharedPtr<FGeometryCollection>& RestCollection,
+		TSharedPtr<FGeometryDynamicCollection>& DynamicCollection,
+		InitCollectionsParameters& InitParams
+	);
+
+	template<class T>
+	FGeometryCollectionPhysicsProxy* RigidBodySetup(
+		TUniquePtr<Chaos::TChaosPhysicsMaterial<T>> &PhysicalMaterial,
+		TSharedPtr<FGeometryCollection>& RestCollection,
+		TSharedPtr<FGeometryDynamicCollection>& DynamicCollection,
+		FInitFunc CustomFunc
+	)
+	{
+#if INCLUDE_CHAOS
+		auto InitFunc = [&RestCollection, &DynamicCollection, &PhysicalMaterial, &CustomFunc](FSimulationParameters& InParams)
+		{
+			InParams.RestCollection = RestCollection.Get();
+			InParams.DynamicCollection = DynamicCollection.Get();
+			InParams.PhysicalMaterial = MakeSerializable(PhysicalMaterial);
+			InParams.Shared.SizeSpecificData[0].CollisionType = ECollisionTypeEnum::Chaos_Volumetric;
+
+			if (CustomFunc != nullptr)
+			{
+				CustomFunc(InParams);
+			}
+
+			InParams.Simulating = true;
+			Chaos::FErrorReporter ErrorReporter;
+			BuildSimulationData(ErrorReporter, *RestCollection, InParams.Shared);
+		};
+
+		FGeometryCollectionPhysicsProxy* PhysObject = new FGeometryCollectionPhysicsProxy(nullptr, DynamicCollection.Get(), InitFunc, nullptr, nullptr);;
+		PhysObject->Initialize();
+		return PhysObject;
+#else
+		return nullptr;
+#endif
+	}
+	template FGeometryCollectionPhysicsProxy* RigidBodySetup(
+		TUniquePtr<Chaos::TChaosPhysicsMaterial<float>> & PhysicalMaterial,
+		TSharedPtr<FGeometryCollection>& RestCollection,
+		TSharedPtr<FGeometryDynamicCollection>& DynamicCollection,
+		FInitFunc CustomFunc
+	);
+
+} // end namespace GeometryCollectionExample
 

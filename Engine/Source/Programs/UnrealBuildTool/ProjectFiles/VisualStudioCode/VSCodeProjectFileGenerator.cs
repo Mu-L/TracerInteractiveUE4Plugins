@@ -40,6 +40,12 @@ namespace UnrealBuildTool
 		private string FrameworkExecutableExtension;
 		private string FrameworkLibraryExtension = ".dll";
 
+		/// <summary>
+		/// Includes all files in the generated workspace.
+		/// </summary>
+		[XmlConfigFile(Name = "IncludeAllFiles")]
+		private bool IncludeAllFiles = false;
+
 		private enum EPathType
 		{
 			Absolute,
@@ -1200,15 +1206,18 @@ namespace UnrealBuildTool
 
 			OutFile.BeginRootObject();
 			{
-				OutFile.BeginObject("files.exclude");
+				if (!IncludeAllFiles)
 				{
-					string WorkspaceRoot = UnrealBuildTool.RootDirectory.ToString().Replace('\\', '/') + "/";
-					foreach (string PathToExclude in PathsToExclude)
+					OutFile.BeginObject("files.exclude");
 					{
-						OutFile.AddField(PathToExclude.Replace('\\', '/').Replace(WorkspaceRoot, ""), true);
+						string WorkspaceRoot = UnrealBuildTool.RootDirectory.ToString().Replace('\\', '/') + "/";
+						foreach (string PathToExclude in PathsToExclude)
+						{
+							OutFile.AddField(PathToExclude.Replace('\\', '/').Replace(WorkspaceRoot, ""), true);
+						}
 					}
+					OutFile.EndObject();
 				}
-				OutFile.EndObject();
 			}
 			OutFile.EndRootObject();
 

@@ -81,6 +81,23 @@ static FAutoConsoleVariableRef CVarParallelVVMChunksPerBatch(
 	ECVF_Default
 );
 
+//These are possibly too granular to enable for everyone.
+static int32 GbDetailedVMScriptStats = 0;
+static FAutoConsoleVariableRef CVarDetailedVMScriptStats(
+	TEXT("vm.DetailedVMScriptStats"),
+	GbDetailedVMScriptStats,
+	TEXT("If > 0 the vector VM will emit stats for it's internal module calls. \n"),
+	ECVF_Default
+);
+
+static int32 GParallelVVMInstancesPerChunk = 128;
+static FAutoConsoleVariableRef CVarParallelVVMInstancesPerChunk(
+	TEXT("vm.InstancesPerChunk"),
+	GParallelVVMInstancesPerChunk,
+	TEXT("Number of instances per VM chunk. (default=128) \n"),
+	ECVF_ReadOnly
+);
+
 //////////////////////////////////////////////////////////////////////////
 //  Constant Handlers
 
@@ -194,34 +211,31 @@ FVectorVMContext::FVectorVMContext()
 	, StatScopes(nullptr)
 #endif
 {
-	uint32 TempRegisterSize = Align((VectorVM::InstancesPerChunk) * VectorVM::MaxInstanceSizeBytes, VECTOR_WIDTH_BYTES) + VECTOR_WIDTH_BYTES;
-	TempRegTable.SetNumUninitialized(TempRegisterSize * VectorVM::NumTempRegisters);
-	// Map temporary registers.
-	for (int32 i = 0; i < VectorVM::NumTempRegisters; ++i)
-	{
-		RegisterTable[i] = TempRegTable.GetData() + TempRegisterSize * i;
-	}
-
 	RandStream.GenerateNewSeed();
 }
 
 void FVectorVMContext::PrepareForExec(
 	uint8*RESTRICT*RESTRICT InputRegisters,
 	uint8*RESTRICT*RESTRICT OutputRegisters,
-	int32 NumInputRegisters,
-	int32 NumOutputRegisters,
+	int32 InNumTempRegisters,
+	int32 InNumInputRegisters,
+	int32 InNumOutputRegisters,
 	const uint8* InConstantTable,
 	int32 *InDataSetIndexTable,
 	int32 *InDataSetOffsetTable,
 	int32 InNumSecondaryDatasets,
 	FVMExternalFunction* InExternalFunctionTable,
 	void** InUserPtrTable,
-	TArray<FDataSetMeta>& RESTRICT InDataSetMetaTable
+	TArray<FDataSetMeta>& RESTRICT InDataSetMetaTable,
+	int32 MaxNumInstances
 #if STATS
 	, const TArray<TStatId>* InStatScopes
 #endif
 )
 {
+	NumTempRegisters = InNumTempRegisters;
+	NumInputRegisters = InNumInputRegisters;
+	NumOutputRegisters = InNumOutputRegisters;
 	ConstantTable = InConstantTable;
 	DataSetIndexTable = InDataSetIndexTable;
 	DataSetOffsetTable = InDataSetOffsetTable;
@@ -233,6 +247,15 @@ void FVectorVMContext::PrepareForExec(
 	StatScopes = InStatScopes;
 	StatCounterStack.Reserve(StatScopes->Num());
 #endif
+
+	int32 TempRegisterSize = Align(MaxNumInstances * VectorVM::MaxInstanceSizeBytes, PLATFORM_CACHE_LINE_SIZE);
+	int32 TempBufferSize = TempRegisterSize * NumTempRegisters;
+	TempRegTable.SetNumUninitialized(TempBufferSize, false);
+	// Attempt to map temp registers more tightly packed for low instance counts to reduce cache misses.
+	for (int32 i = 0; i < NumTempRegisters; ++i)
+	{
+		RegisterTable[i] = TempRegTable.GetData() + TempRegisterSize * i;
+	}
 
 	//Map IO Registers
 	for (int32 i = 0; i < NumInputRegisters; ++i)
@@ -781,8 +804,11 @@ struct FVectorKernelEnterStatScope
 	{
 		FConstantHandler<int32> ScopeIdx(Context);
 #if STATS
-		//int32 CounterIdx = Context.StatCounterStack.AddDefaulted(1);
-		//Context.StatCounterStack[CounterIdx].Start((*Context.StatScopes)[ScopeIdx.Get()]);
+		if (GbDetailedVMScriptStats)
+		{
+			int32 CounterIdx = Context.StatCounterStack.AddDefaulted(1);
+			Context.StatCounterStack[CounterIdx].Start((*Context.StatScopes)[ScopeIdx.Get()]);
+		}
 #endif
 	}
 };
@@ -791,9 +817,13 @@ struct FVectorKernelExitStatScope
 {
 	static VM_FORCEINLINE void Exec(FVectorVMContext& Context)
 	{
+
 #if STATS
-		//Context.StatCounterStack.Last().Stop();
-		//Context.StatCounterStack.Pop(false);
+		if (GbDetailedVMScriptStats)
+		{
+			Context.StatCounterStack.Last().Stop();
+			Context.StatCounterStack.Pop(false);
+		}
 #endif
 	}
 };
@@ -1137,8 +1167,7 @@ struct FScalarKernelUpdateID
 			else
 			{
 				//Update the actual index for this ID. No thread safety is needed as this ID slot can only ever be written by this instance and so a single thread.
-				int32 RealIdx = InstanceOffset + Index;	
-				IDTable[InstanceId] = RealIdx;
+				IDTable[InstanceId] = Index;
 
 				//Update thread local max ID seen. We push this to the real value at the end of execution.
 				DataSetTempData.MaxID = FMath::Max(DataSetTempData.MaxID, InstanceId);
@@ -1790,6 +1819,7 @@ void VectorVM::Init()
 
 void VectorVM::Exec(
 	uint8 const* Code,
+	int32 NumTempRegisters,
 	uint8** InputRegisters,
 	int32 NumInputRegisters,
 	uint8** OutputRegisters,
@@ -1804,6 +1834,7 @@ void VectorVM::Exec(
 #endif
 	)
 {
+	//TRACE_CPUPROFILER_EVENT_SCOPE("VMExec");
 	SCOPE_CYCLE_COUNTER(STAT_VVMExec);
 
 	// table of index counters, one for each data set
@@ -1819,18 +1850,19 @@ void VectorVM::Exec(
 		DataSetIndexTable.Add(DataSetMetaTable[Idx].DataSetAccessIndex);	// prime counter index table with the data set offset; will be incremented with every write for each instance
 	}
 
-	int32 NumChunks = (NumInstances / InstancesPerChunk) + 1;
+	int32 MaxInstances = FMath::Min(GParallelVVMInstancesPerChunk, NumInstances);
+	int32 NumChunks = (NumInstances / GParallelVVMInstancesPerChunk) + 1;
 	int32 ChunksPerBatch = (GbParallelVVM != 0 && FApp::ShouldUseThreadingForPerformance()) ? GParallelVVMChunksPerBatch : NumChunks;
 	int32 NumBatches = FMath::DivideAndRoundUp(NumChunks, ChunksPerBatch);
 	bool bParallel = NumBatches > 1;
 
 	auto ExecChunkBatch = [&](int32 BatchIdx)
 	{
-		SCOPE_CYCLE_COUNTER(STAT_VVMExecChunk);
+		//SCOPE_CYCLE_COUNTER(STAT_VVMExecChunk);
 
 		FVectorVMContext& Context = FVectorVMContext::Get();
-		Context.PrepareForExec(InputRegisters, OutputRegisters, NumInputRegisters, NumOutputRegisters, ConstantTable, DataSetIndexTable.GetData(), DataSetOffsetTable.GetData(), DataSetOffsetTable.Num(),
-			ExternalFunctionTable, UserPtrTable, DataSetMetaTable
+		Context.PrepareForExec(InputRegisters, OutputRegisters, NumTempRegisters, NumInputRegisters, NumOutputRegisters, ConstantTable, DataSetIndexTable.GetData(), DataSetOffsetTable.GetData(), DataSetOffsetTable.Num(),
+			ExternalFunctionTable, UserPtrTable, DataSetMetaTable, MaxInstances
 #if STATS
 			, &StatScopes
 #endif
@@ -1838,13 +1870,13 @@ void VectorVM::Exec(
 
 		// Process one chunk at a time.
 		int32 ChunkIdx = BatchIdx * ChunksPerBatch;
-		int32 FirstInstance = ChunkIdx * InstancesPerChunk;
-		int32 FinalInstance = FMath::Min(NumInstances, FirstInstance + (ChunksPerBatch * InstancesPerChunk));
+		int32 FirstInstance = ChunkIdx * GParallelVVMInstancesPerChunk;
+		int32 FinalInstance = FMath::Min(NumInstances, FirstInstance + (ChunksPerBatch * GParallelVVMInstancesPerChunk));
 		int32 InstancesLeft = FinalInstance - FirstInstance;
 		while (InstancesLeft > 0)
 		{
-			int32 NumInstancesThisChunk = FMath::Min(InstancesLeft, (int32)InstancesPerChunk);
-			int32 StartInstance = InstancesPerChunk * ChunkIdx;
+			int32 NumInstancesThisChunk = FMath::Min(InstancesLeft, (int32)GParallelVVMInstancesPerChunk);
+			int32 StartInstance = GParallelVVMInstancesPerChunk * ChunkIdx;
 			// Setup execution context.
 			Context.PrepareForChunk(Code, NumInstancesThisChunk, StartInstance);
 
@@ -1976,7 +2008,7 @@ void VectorVM::Exec(
 				}
 			} while (Op != EVectorVMOp::done);
 
-			InstancesLeft -= InstancesPerChunk;
+			InstancesLeft -= GParallelVVMInstancesPerChunk;
 			++ChunkIdx;
 		}
 

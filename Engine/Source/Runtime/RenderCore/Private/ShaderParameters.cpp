@@ -190,7 +190,6 @@ static void CreateHLSLUniformBufferStructMembersDeclaration(
 			FString BaseTypeName;
 			switch(Member.GetBaseType())
 			{
-			case UBMT_BOOL:    BaseTypeName = TEXT("bool"); break;
 			case UBMT_INT32:   BaseTypeName = TEXT("int"); break;
 			case UBMT_UINT32:  BaseTypeName = TEXT("uint"); break;
 			case UBMT_FLOAT32: 
@@ -263,7 +262,7 @@ static void CreateHLSLUniformBufferStructMembersDeclaration(
 		if (IsShaderParameterTypeForUniformBufferLayout(Member.GetBaseType()))
 		{
 			check(Member.GetBaseType() != UBMT_RDG_TEXTURE_SRV && Member.GetBaseType() != UBMT_RDG_TEXTURE_UAV);
-			checkf(Member.GetNumElements() == 0, TEXT("Resources array are not supported in uniform buffers yet."));
+			checkf(Member.GetBaseType() != UBMT_RDG_TEXTURE_COPY_DEST && Member.GetBaseType() != UBMT_RDG_BUFFER_COPY_DEST, TEXT("Copy destination usage is not supported in uniform buffers."));
 			if (Member.GetBaseType() == UBMT_SRV)
 			{
 				// TODO: handle arrays?

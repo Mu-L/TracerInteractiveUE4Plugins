@@ -1,6 +1,6 @@
 // Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
 
-#if !WITH_CHAOS && !WITH_IMMEDIATE_PHYSX && !PHYSICS_INTERFACE_LLIMMEDIATE
+#if !WITH_CHAOS && !WITH_IMMEDIATE_PHYSX
 
 #include "Physics/PhysScene_PhysX.h"
 #include "Misc/CommandLine.h"
@@ -23,6 +23,7 @@
 
 #include "PhysicsInterfaceDeclaresCore.h"
 #if !WITH_CHAOS_NEEDS_TO_BE_FIXED
+
 #include "SQAccelerator.h"
 
 #if WITH_PHYSX
@@ -1296,13 +1297,7 @@ void FPhysScene_PhysX::SyncComponentsToBodies_AssumesLocked()
 	for (PxU32 TransformIdx = 0; TransformIdx < NumActors; ++TransformIdx)
 	{
 		PxActor* PActiveActor = PActiveActors[TransformIdx];
-#ifdef __EMSCRIPTEN__
-		// emscripten doesn't seem to know how to look at <PxRigidActor> from the PxActor class...
-		PxRigidActor* XRigidActor = static_cast<PxRigidActor*>(PActiveActor); // is()
-		PxRigidActor* RigidActor = XRigidActor->PxRigidActor::isKindOf(PxTypeInfo<PxRigidActor>::name()) ? XRigidActor : NULL; // typeMatch<T>()
-#else
 		PxRigidActor* RigidActor = PActiveActor->is<PxRigidActor>();
-#endif
 
 		ensure(!RigidActor->userData || !FPhysxUserData::IsGarbage(RigidActor->userData));
 
@@ -2252,8 +2247,9 @@ void ListAwakeRigidBodiesFromScene(bool bIncludeKinematic, PxScene* PhysXScene, 
 void FPhysScene_PhysX::SerializeForTesting(FArchive& Ar)
 {
 	FPhysTestSerializer Serializer;
+	Chaos::FChaosArchive ChaosAr(Ar);
 	Serializer.SetPhysicsData(*GetPxScene());
-	Serializer.Serialize(Ar);
+	Serializer.Serialize(ChaosAr);
 }
 #endif // WITH_PHYSX
 
@@ -2298,4 +2294,4 @@ int32 FPhysScene::GetNumAwakeBodies()
 
 #endif // !WITH_CHAOS_NEEDS_TO_BE_FIXED
 
-#endif //  !WITH_CHAOS && !WITH_IMMEDIATE_PHYSX && !PHYSICS_INTERFACE_LLIMMEDIATE
+#endif //  !WITH_CHAOS && !WITH_IMMEDIATE_PHYSX

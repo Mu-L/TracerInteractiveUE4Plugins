@@ -13,6 +13,9 @@
 class IOnlinePartyJoinInfo;
 class FOnlineUserPresence;
 class UPartyMember;
+enum class EPlatformIconDisplayRule : uint8;
+
+struct FOnlineError;
 
 namespace EOnlinePresenceState { enum Type : uint8; }
 
@@ -43,6 +46,8 @@ public:
 	FUniqueNetIdRepl GetUserId(ESocialSubsystem SubsystemType) const;
 	FString GetDisplayName() const;
 	FString GetDisplayName(ESocialSubsystem SubsystemType) const;
+	FString GetNickname() const;
+	void SetNickname(const FString& InNickName);
 
 	EInviteStatus::Type GetFriendInviteStatus(ESocialSubsystem SubsystemType) const;
 	bool IsFriend() const;
@@ -51,7 +56,10 @@ public:
 	const FOnlineUserPresence* GetFriendPresenceInfo(ESocialSubsystem SubsystemType) const;
 	FDateTime GetFriendshipCreationDate() const;
 	FText GetSocialName() const;
-	FUserPlatform GetCurrentPlatform() const;
+	virtual FUserPlatform GetCurrentPlatform() const;
+
+	FString GetPlatformIconMarkupTag(EPlatformIconDisplayRule DisplayRule) const;
+	virtual FString GetPlatformIconMarkupTag(EPlatformIconDisplayRule DisplayRule, FString& OutLegacyString) const;
 
 	virtual void GetRichPresenceText(FText& OutRichPresence) const;
 
@@ -96,6 +104,9 @@ public:
 	virtual bool UnblockUser(ESocialSubsystem Subsystem) const;
 
 	UPartyMember* GetPartyMember(const FOnlinePartyTypeId& PartyTypeId) const;
+
+	DECLARE_EVENT(USocialUser, FOnNicknameChanged);
+	FOnNicknameChanged& OnNicknameChanged() const { return OnNicknameChangedEvent; }
 
 	DECLARE_EVENT(USocialUser, FPartyInviteResponseEvent);
 	FPartyInviteResponseEvent& OnPartyInviteAccepted() const { return OnPartyInviteAcceptedEvent; }
@@ -148,6 +159,9 @@ private:
 	
 	void SetUserInfo(ESocialSubsystem SubsystemType, const TSharedRef<FOnlineUser>& UserInfo);
 	void HandleQueryUserInfoComplete(ESocialSubsystem SubsystemType, bool bWasSuccessful, const TSharedPtr<FOnlineUser>& UserInfo);
+	void HandleSetNicknameComplete(int32 LocalUserNum, const FUniqueNetId& FriendId, const FString& ListName, const FOnlineError& Error);
+
+	virtual FString SanitizePresenceString(FString InString) const;
 	
 private:
 
@@ -184,6 +198,7 @@ private:
 	// Initialization delegates that fire only when a specific user has finishing initializing
 	static TMap<TWeakObjectPtr<USocialUser>, FOnNewSocialUserInitialized> InitEventsByUser;
 
+	mutable FOnNicknameChanged OnNicknameChangedEvent;
 	mutable FPartyInviteResponseEvent OnPartyInviteAcceptedEvent;
 	mutable FPartyInviteResponseEvent OnPartyInviteRejectedEvent;
 	mutable FOnUserPresenceChanged OnUserPresenceChangedEvent;

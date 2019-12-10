@@ -399,6 +399,49 @@ FString USocialUser::GetDisplayName(ESocialSubsystem SubsystemType) const
 	return FString();
 }
 
+FString USocialUser::GetNickname() const
+{
+	if (IsFriend())
+	{
+#if WITH_EDITOR
+		bool bRandomNickname = FParse::Param(FCommandLine::Get(), TEXT("RandomNickname"));
+		if (bRandomNickname && !IsLocalUser())
+		{
+			if (GetTypeHash(GetUserId(ESocialSubsystem::Primary)) % 2)
+			{
+				FString RandomNickname = GetDisplayName(ESocialSubsystem::Primary);
+				for (int i = 1; i < RandomNickname.Len(); i += 2)
+				{
+					RandomNickname.RemoveAt(i);
+				}
+				return RandomNickname;
+			}
+		}
+#endif
+
+		if (const FSubsystemUserInfo* SubsystemInfo = SubsystemInfoByType.Find(ESocialSubsystem::Primary))
+		{
+			if (SubsystemInfo->FriendInfo.IsValid())
+			{
+				TSharedPtr<FOnlineFriend> OnlineFriend = SubsystemInfo->FriendInfo.Pin();
+				FString Nickname;
+				OnlineFriend->GetUserAttribute(USER_ATTR_ALIAS, Nickname);
+				return Nickname;
+			}
+		}
+	}
+	return TEXT("");
+}
+
+void USocialUser::SetNickname(const FString& InNickname)
+{
+	// @note StephanJ: Nickname for now only applies to primary/MCP subsystem.
+	IOnlineFriendsPtr FriendsInterface = GetOwningToolkit().GetSocialOss(ESocialSubsystem::Primary)->GetFriendsInterface();
+	check(FriendsInterface.IsValid());
+
+	FriendsInterface->SetFriendAlias(GetOwningToolkit().GetLocalUserNum(), *GetUserId(ESocialSubsystem::Primary), EFriendsLists::ToString(EFriendsLists::Default), InNickname, FOnSetFriendAliasComplete::CreateUObject(const_cast<USocialUser*>(this), &USocialUser::HandleSetNicknameComplete));
+}
+
 EInviteStatus::Type USocialUser::GetFriendInviteStatus(ESocialSubsystem SubsystemType) const
 {
 	if (const FSubsystemUserInfo* SubsystemInfo = SubsystemInfoByType.Find(SubsystemType))
@@ -544,9 +587,82 @@ FUserPlatform USocialUser::GetCurrentPlatform() const
 		// We have no platform presence, but we do have primary, so get the platform from that
 		return FUserPlatform(PrimaryPresence->GetPlatform());
 	}
-	
+
+	UE_LOG(LogOnline, VeryVerbose, TEXT("*!* %s - No Presence found for user, searching Party..."), ANSI_TO_TCHAR(__FUNCTION__));
+	if (USocialParty* Party = GetOwningToolkit().GetSocialManager().GetPersistentParty())
+	{
+		if (UPartyMember* PartyMember = Party->GetPartyMember(GetUserId(ESocialSubsystem::Primary)))
+		{
+			FUserPlatform Platform = PartyMember->GetRepData().GetPlatform();
+			UE_LOG(LogOnline, VeryVerbose, TEXT("*!* %s - Party Member Found for user! RepDataPlatform: %s"), ANSI_TO_TCHAR(__FUNCTION__), *Platform.ToString());
+			if (Platform.IsValid())
+			{
+				return Platform;
+			}
+		}
+	}
+
 	// We don't have any presence for this user (or we do and they're offline) and they aren't the local player, so we really don't have any idea what their current platform is
 	return FUserPlatform();
+}
+
+FString USocialUser::GetPlatformIconMarkupTag(EPlatformIconDisplayRule DisplayRule) const
+{
+	FString DummyString;
+	return GetPlatformIconMarkupTag(DisplayRule, DummyString);
+}
+
+FString USocialUser::GetPlatformIconMarkupTag(EPlatformIconDisplayRule DisplayRule, FString& OutLegacyString) const
+{
+	const FUserPlatform UserPlatform = GetCurrentPlatform();
+	const FUserPlatform LocalPlatform = FUserPlatform(IOnlineSubsystem::GetLocalPlatformName());
+
+	OutLegacyString = UserPlatform;
+	switch (DisplayRule)
+	{
+	case EPlatformIconDisplayRule::Always:
+		UE_LOG(LogOnline, VeryVerbose, TEXT("*!*    %s - User: %s - Returning TypeName %s due to ALWAYS"), ANSI_TO_TCHAR(__FUNCTION__), *GetDisplayName(), *UserPlatform.GetTypeName());
+		return UserPlatform.GetTypeName();
+	case EPlatformIconDisplayRule::AlwaysIfDifferent:
+		UE_LOG(LogOnline, VeryVerbose, TEXT("*!*    %s - User: %s - CrossplayLocalPlatform? %d Returning %s due to ALWAYSIFDIFFERENT"), ANSI_TO_TCHAR(__FUNCTION__), *GetDisplayName(), UserPlatform.IsCrossplayWithLocalPlatform(), UserPlatform.IsCrossplayWithLocalPlatform() ? *UserPlatform.GetTypeName() : TEXT(""));
+		if (!UserPlatform.IsCrossplayWithLocalPlatform())
+		{
+			OutLegacyString = TEXT("");
+			return TEXT("");
+		}
+		return UserPlatform.GetTypeName();
+	case EPlatformIconDisplayRule::Never:
+		UE_LOG(LogOnline, VeryVerbose, TEXT("*!*    %s - User: %s - Returning nothing due to NEVER"), ANSI_TO_TCHAR(__FUNCTION__), *GetDisplayName());
+		OutLegacyString = TEXT("");
+		return TEXT("");
+	}
+
+	if (DisplayRule == EPlatformIconDisplayRule::AlwaysWhenInCrossplayParty ||
+		DisplayRule == EPlatformIconDisplayRule::AlwaysIfDifferentWhenInCrossplayParty)
+	{
+		if (USocialParty* Party = GetOwningToolkit().GetSocialManager().GetPersistentParty())
+		{
+			if (!Party->IsCurrentlyCrossplaying())
+			{
+				UE_LOG(LogOnline, VeryVerbose, TEXT("*!*    %s - User: %s - Returning nothing due to Not Being In Crossplay with WHENINCROSSPLAYPARTY specified"), ANSI_TO_TCHAR(__FUNCTION__), *GetDisplayName());
+				OutLegacyString = TEXT("");
+				return TEXT("");
+			}
+		}
+	}
+
+	const bool bIsCrossplayWithMe = UserPlatform.IsCrossplayWithLocalPlatform();
+	if (DisplayRule == EPlatformIconDisplayRule::AlwaysWhenInCrossplayParty ||
+		(DisplayRule == EPlatformIconDisplayRule::AlwaysIfDifferentWhenInCrossplayParty && bIsCrossplayWithMe))
+	{
+		FString TypeName = UserPlatform.GetTypeName();
+		UE_LOG(LogOnline, VeryVerbose, TEXT("*!*    %s - User: %s - Returning TypeName %s, DisplayRule: %d, bIsCrossplayWithMe: %d"), ANSI_TO_TCHAR(__FUNCTION__), *GetDisplayName(), *TypeName, (int32)DisplayRule, bIsCrossplayWithMe);
+		return TypeName;
+	}
+
+	UE_LOG(LogOnline, VeryVerbose, TEXT("*!*    %s - User: %s - Returning nothing, likely due to AlwaysIfDifferentWhenInCrossplayParty and not being different, being in a Crossplay Party, and not being Different"), ANSI_TO_TCHAR(__FUNCTION__), *GetDisplayName());
+	OutLegacyString = TEXT("");
+	return TEXT("");
 }
 
 void USocialUser::GetRichPresenceText(FText& OutRichPresence) const
@@ -560,14 +676,14 @@ void USocialUser::GetRichPresenceText(FText& OutRichPresence) const
 		const FOnlineUserPresence* PrimaryPresence = GetFriendPresenceInfo(ESocialSubsystem::Primary);
 		if (PrimaryPresence && !PrimaryPresence->Status.StatusStr.IsEmpty())
 		{
-			OutRichPresence = FText::FromString(PrimaryPresence->Status.StatusStr);
+			OutRichPresence = FText::FromString(SanitizePresenceString(PrimaryPresence->Status.StatusStr));
 		}
 		else
 		{
 			const FOnlineUserPresence* PlatformPresence = GetFriendPresenceInfo(ESocialSubsystem::Platform);
 			if (PlatformPresence && !PlatformPresence->Status.StatusStr.IsEmpty())
 			{
-				OutRichPresence = FText::FromString(PlatformPresence->Status.StatusStr);
+				OutRichPresence = FText::FromString(SanitizePresenceString(PlatformPresence->Status.StatusStr)); 
 			}
 			else
 			{
@@ -1164,6 +1280,23 @@ void USocialUser::HandleQueryUserInfoComplete(ESocialSubsystem SubsystemType, bo
 
 	UE_LOG(LogParty, VeryVerbose, TEXT("User [%s] finished querying user info on subsystem [%s] with result [%d]. [%d] queries still pending."), *ToDebugString(), ToString(SubsystemType), UserInfo.IsValid(), NumPendingQueries);
 	TryBroadcastInitializationComplete();
+}
+
+void USocialUser::HandleSetNicknameComplete(int32 LocalUserNum, const FUniqueNetId& FriendId, const FString& ListName, const FOnlineError& Error)
+{
+	if (!Error.WasSuccessful())
+	{
+		UE_LOG(LogOnline, Warning, TEXT("Set nickname request failed for user: %s"), *FriendId.ToDebugString());
+	}
+	else
+	{
+		OnNicknameChanged().Broadcast();
+	}
+}
+
+FString USocialUser::SanitizePresenceString(FString InString) const
+{
+	return InString;
 }
 
 #undef LOCTEXT_NAMESPACE

@@ -57,6 +57,101 @@ namespace Gauntlet
 			Flags = BuildFlags.CanReplaceCommandLine | BuildFlags.CanReplaceExecutable | BuildFlags.Loose;
 		}
 
+		enum InstallStatus
+		{
+			Error,
+			Installing,
+			Installed
+		}
+
+		static Dictionary<StagedBuild, InstallStatus> LocalInstalls = new Dictionary<StagedBuild, InstallStatus>();
+
+		/// <summary>
+		/// When running parallel tests using staged builds, local desktop devices only need one copy of client/server 
+		/// this method is used to coordinate the copy across multiple local devices
+		/// </summary>
+		public static void InstallBuildParallel(UnrealAppConfig AppConfig, StagedBuild InBuild, string BuildPath, string DestPath, string Desc)
+		{
+			// In parallel tests, we only want to copy the client/server once
+			bool Install = false;
+			InstallStatus Status = InstallStatus.Error;
+
+			lock (Globals.MainLock)
+			{
+				if (!LocalInstalls.ContainsKey(InBuild))
+				{
+					Install = true;
+					LocalInstalls[InBuild] = Status = InstallStatus.Installing;
+				}
+				else
+				{
+					Status = LocalInstalls[InBuild];
+				}
+			}
+
+			// check if we've already errored in another thread
+			if (Status == InstallStatus.Error)
+			{
+				throw new AutomationException("Parallel build error installing {0} to {1}", BuildPath, DestPath);
+			}
+
+			if (Install)
+			{
+				try
+				{
+					Log.Info("Installing {0} to {1}", AppConfig.Name, Desc);
+					Log.Verbose("\tCopying {0} to {1}", BuildPath, DestPath);
+					Utils.SystemHelpers.CopyDirectory(BuildPath, DestPath, Utils.SystemHelpers.CopyOptions.Mirror);
+				}
+				catch (Exception Ex)
+				{
+					lock (Globals.MainLock)
+					{
+						LocalInstalls[InBuild] = InstallStatus.Error;
+					}
+
+					throw Ex;
+				}
+
+				lock (Globals.MainLock)
+				{
+					LocalInstalls[InBuild] = InstallStatus.Installed;
+				}
+
+			}
+			else
+			{
+				DateTime StartTime = DateTime.Now;
+				while (true)
+				{
+					if ((DateTime.Now - StartTime).TotalMinutes > 60)
+					{
+						throw new AutomationException("Parallel build error installing {0} to {1}, timed out after an hour", BuildPath, DestPath);
+					}
+
+					Thread.Sleep(1000);
+
+					lock (Globals.MainLock)
+					{
+						Status = LocalInstalls[InBuild];
+					}
+
+					// install process failed in other thread, disk full, etc
+					if (Status == InstallStatus.Error)
+					{
+						throw new AutomationException("Error installing parallel build from {0} to {1}", BuildPath, DestPath);
+					}
+
+					if (Status == InstallStatus.Installed)
+					{
+						Log.Verbose("Parallel build successfully installed from {0} to {1}", BuildPath, DestPath);
+						break;
+					}
+				}
+			}
+
+		}
+
 		public static IEnumerable<T> CreateFromPath<T>(UnrealTargetPlatform InPlatform, string InProjectName, string InPath, string InExecutableExtension)
 			where T : StagedBuild
 		{
@@ -158,55 +253,58 @@ namespace Gauntlet
 		{
 			List<DirectoryInfo> AllDirs = new List<DirectoryInfo>();
 
+			List<IBuild> Builds = new List<IBuild>();
+
 			// c:\path\to\build
 			DirectoryInfo PathDI = new DirectoryInfo(InPath);
 
-			// If the path is directly to a platform folder, add us
-			if (PathDI.Name.IndexOf(PlatformFolderPrefix, StringComparison.OrdinalIgnoreCase) >= 0)
+			if (PathDI.Exists)
 			{
-				AllDirs.Add(PathDI);
-			}
-
-			// Assume it's a folder of all build types so find all sub directories that begin with the foldername for this platform
-			IEnumerable<DirectoryInfo> MatchingDirs = PathDI.GetDirectories("*", SearchOption.TopDirectoryOnly);
-
-			MatchingDirs = MatchingDirs.Where(D => D.Name.StartsWith(PlatformFolderPrefix, StringComparison.OrdinalIgnoreCase)).ToArray();
-
-			AllDirs.AddRange(MatchingDirs);
-
-			List<DirectoryInfo> DirsToRecurse = AllDirs;
-
-			// now get subdirs
-			while (MaxRecursion-- > 0)
-			{
-				List<DirectoryInfo> DiscoveredDirs = new List<DirectoryInfo>();
-
-				DirsToRecurse.ToList().ForEach((D) =>
+				// If the path is directly to a platform folder, add us
+				if (PathDI.Name.IndexOf(PlatformFolderPrefix, StringComparison.OrdinalIgnoreCase) >= 0)
 				{
-					DiscoveredDirs.AddRange(D.GetDirectories("*", SearchOption.TopDirectoryOnly));
-				});
+					AllDirs.Add(PathDI);
+				}
 
-				AllDirs.AddRange(DiscoveredDirs);
-				DirsToRecurse = DiscoveredDirs;
-			}
+				// Assume it's a folder of all build types so find all sub directories that begin with the foldername for this platform
+				IEnumerable<DirectoryInfo> MatchingDirs = PathDI.GetDirectories("*", SearchOption.TopDirectoryOnly);
 
-			// every directory that contains a valid build should have at least a ProjectName folder
-			AllDirs = AllDirs.Where(D =>
-			{
-				var SubDirs = D.GetDirectories();
-				return SubDirs.Any(SD => SD.Name.Equals(InProjectName, StringComparison.OrdinalIgnoreCase));
+				MatchingDirs = MatchingDirs.Where(D => D.Name.StartsWith(PlatformFolderPrefix, StringComparison.OrdinalIgnoreCase)).ToArray();
 
-			}).ToList();
+				AllDirs.AddRange(MatchingDirs);
 
-			List<IBuild> Builds = new List<IBuild>();
+				List<DirectoryInfo> DirsToRecurse = AllDirs;
 
-			foreach (DirectoryInfo Di in AllDirs)
-			{
-				IEnumerable<IBuild> FoundBuilds = StagedBuild.CreateFromPath<T>(Platform, InProjectName, Di.FullName, ExecutableExtension);
-
-				if (FoundBuilds != null)
+				// now get subdirs
+				while (MaxRecursion-- > 0)
 				{
-					Builds.AddRange(FoundBuilds);
+					List<DirectoryInfo> DiscoveredDirs = new List<DirectoryInfo>();
+
+					DirsToRecurse.ToList().ForEach((D) =>
+					{
+						DiscoveredDirs.AddRange(D.GetDirectories("*", SearchOption.TopDirectoryOnly));
+					});
+
+					AllDirs.AddRange(DiscoveredDirs);
+					DirsToRecurse = DiscoveredDirs;
+				}
+
+				// every directory that contains a valid build should have at least a ProjectName folder
+				AllDirs = AllDirs.Where(D =>
+				{
+					var SubDirs = D.GetDirectories();
+					return SubDirs.Any(SD => SD.Name.Equals(InProjectName, StringComparison.OrdinalIgnoreCase));
+
+				}).ToList();
+
+				foreach (DirectoryInfo Di in AllDirs)
+				{
+					IEnumerable<IBuild> FoundBuilds = StagedBuild.CreateFromPath<T>(Platform, InProjectName, Di.FullName, ExecutableExtension);
+
+					if (FoundBuilds != null)
+					{
+						Builds.AddRange(FoundBuilds);
+					}
 				}
 			}
 

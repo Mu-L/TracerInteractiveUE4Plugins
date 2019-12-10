@@ -9,6 +9,7 @@
 #include "EngineDefines.h"
 #include "PhysicsPublic.h"
 #include "PhysXIncludes.h"
+#include "Chaos/ImplicitObject.h"
 
 #if WITH_PHYSX
 /** Draw PhysX geom with overlaps */
@@ -16,3 +17,6 @@ void DrawGeomOverlaps(const UWorld* InWorld, const PxGeometry& PGeom, const PxTr
 /** Draw PhysX geom being swept with hits */
 void DrawGeomSweeps(const UWorld* InWorld, const FVector& Start, const FVector& End, const PxGeometry& PGeom, const PxQuat& Rotation, const TArray<FHitResult>& Hits, float Lifetime);
 #endif
+
+void DrawGeomOverlaps(const UWorld* InWorld, const Chaos::TImplicitObject<float, 3>& Geom, const FTransform& GeomPose, TArray<struct FOverlapResult>& Overlaps, float Lifetime);
+void DrawGeomSweeps(const UWorld* InWorld, const FVector& Start, const FVector& End, const Chaos::TImplicitObject<float,3>& Geom, const FQuat& Rotation, const TArray<FHitResult>& Hits, float Lifetime);

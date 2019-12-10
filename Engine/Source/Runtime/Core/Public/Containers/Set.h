@@ -55,7 +55,8 @@ struct DefaultKeyFuncs : BaseKeyFuncs<ElementType,ElementType,bInAllowDuplicateK
 	/**
 	 * @return True if the keys match.
 	 */
-	static FORCEINLINE bool Matches(KeyInitType A,KeyInitType B)
+	template<typename ComparableKey>
+	static FORCEINLINE bool Matches(KeyInitType A, ComparableKey B)
 	{
 		return A == B;
 	}
@@ -197,6 +198,14 @@ public:
  * E.g. You can specify a mapping from elements to keys if you want to find elements by specifying a subset of 
  * the element type.  It uses a TSparseArray of the elements, and also links the elements into a hash with a 
  * number of buckets proportional to the number of elements.  Addition, removal, and finding are O(1).
+ *
+ * The ByHash() functions are somewhat dangerous but particularly useful in two scenarios:
+ * -- Heterogeneous lookup to avoid creating expensive keys like FString when looking up by const TCHAR*.
+ *	  You must ensure the hash is calculated in the same way as ElementType is hashed.
+ *    If possible put both ComparableKey and ElementType hash functions next to each other in the same header
+ *    to avoid bugs when the ElementType hash function is changed.
+ * -- Reducing contention around hash tables protected by a lock. It is often important to incur
+ *    the cache misses of reading key data and doing the hashing *before* acquiring the lock.
  *
  **/
 template<
@@ -417,7 +426,19 @@ public:
 		// does any work only if that's the case
 		if (Number > Elements.Num())
 		{
+			// Preallocates memory for array of elements
 			Elements.Reserve(Number);
+
+			// Calculate the corresponding hash size for the specified number of elements.
+			const int32 NewHashSize = Allocator::GetNumberOfHashBuckets(Number);
+
+			// If the hash hasn't been created yet, or is smaller than the corresponding hash size, rehash
+			// to force a preallocation of the hash table
+			if(!HashSize || HashSize < NewHashSize)
+			{
+				HashSize = NewHashSize;
+				Rehash();
+			}
 		}
 	}
 
@@ -487,24 +508,29 @@ public:
 	 * @param	bIsAlreadyInSetPtr	[out]	Optional pointer to bool that will be set depending on whether element is already in set
 	 * @return	A pointer to the element stored in the set.
 	 */
-	FORCEINLINE FSetElementId Add(const InElementType&  InElement, bool* bIsAlreadyInSetPtr = NULL) { return Emplace(                   InElement , bIsAlreadyInSetPtr); }
-	FORCEINLINE FSetElementId Add(      InElementType&& InElement, bool* bIsAlreadyInSetPtr = NULL) { return Emplace(MoveTempIfPossible(InElement), bIsAlreadyInSetPtr); }
+	FORCEINLINE FSetElementId Add(const InElementType&  InElement, bool* bIsAlreadyInSetPtr = nullptr) { return Emplace(                   InElement , bIsAlreadyInSetPtr); }
+	FORCEINLINE FSetElementId Add(      InElementType&& InElement, bool* bIsAlreadyInSetPtr = nullptr) { return Emplace(MoveTempIfPossible(InElement), bIsAlreadyInSetPtr); }
 
 	/**
 	 * Adds an element to the set.
 	 *
-	 * @param	Args						The argument(s) to be forwarded to the set element's constructor.
+	 * @see		Class documentation section on ByHash() functions
+	 * @param	InElement					Element to add to set
 	 * @param	bIsAlreadyInSetPtr	[out]	Optional pointer to bool that will be set depending on whether element is already in set
-	 * @return	A pointer to the element stored in the set.
-	 */
-	template <typename ArgsType>
-	FSetElementId Emplace(ArgsType&& Args,bool* bIsAlreadyInSetPtr = NULL)
+     * @return  A handle to the element stored in the set
+     */
+	FORCEINLINE FSetElementId AddByHash(uint32 KeyHash, const InElementType& InElement, bool* bIsAlreadyInSetPtr = nullptr)
 	{
-		// Create a new element.
-		FSparseArrayAllocationInfo ElementAllocation = Elements.AddUninitialized();
-		FSetElementId ElementId(ElementAllocation.Index);
-		auto& Element = *new(ElementAllocation) SetElementType(Forward<ArgsType>(Args));
+		return EmplaceByHash(KeyHash, InElement, bIsAlreadyInSetPtr);
+	}
+	FORCEINLINE FSetElementId AddByHash(uint32 KeyHash,		 InElementType&& InElement, bool* bIsAlreadyInSetPtr = nullptr)
+	{
+		return EmplaceByHash(KeyHash, MoveTempIfPossible(InElement), bIsAlreadyInSetPtr);
+	}
 
+private:
+	FSetElementId EmplaceImpl(uint32 KeyHash, SetElementType& Element, FSetElementId ElementId, bool* bIsAlreadyInSetPtr)
+	{
 		bool bIsAlreadyInSet = false;
 		if (!KeyFuncs::bAllowDuplicateKeys)
 		{
@@ -513,7 +539,7 @@ public:
 			// Don't bother searching for a duplicate if this is the first element we're adding
 			if (Elements.Num() != 1)
 			{
-				FSetElementId ExistingId = FindId(KeyFuncs::GetSetKey(Element.Value));
+				FSetElementId ExistingId = FindIdByHash(KeyHash, KeyFuncs::GetSetKey(Element.Value));
 				bIsAlreadyInSet = ExistingId.IsValidId();
 				if (bIsAlreadyInSet)
 				{
@@ -532,10 +558,10 @@ public:
 		if (!bIsAlreadyInSet)
 		{
 			// Check if the hash needs to be resized.
-			if(!ConditionalRehash(Elements.Num()))
+			if (!ConditionalRehash(Elements.Num()))
 			{
 				// If the rehash didn't add the new element to the hash, add it.
-				HashElement(ElementId,Element);
+				LinkElement(ElementId, Element, KeyHash);
 			}
 		}
 
@@ -545,6 +571,43 @@ public:
 		}
 
 		return ElementId;
+	}
+
+public:
+	/**
+	 * Adds an element to the set.
+	 *
+	 * @param	Args						The argument(s) to be forwarded to the set element's constructor.
+	 * @param	bIsAlreadyInSetPtr	[out]	Optional pointer to bool that will be set depending on whether element is already in set
+	 * @return	A handle to the element stored in the set.
+	 */
+	template <typename ArgsType>
+	FSetElementId Emplace(ArgsType&& Args, bool* bIsAlreadyInSetPtr = nullptr)
+	{
+		// Create a new element.
+		FSparseArrayAllocationInfo ElementAllocation = Elements.AddUninitialized();
+		SetElementType& Element = *new (ElementAllocation) SetElementType(Forward<ArgsType>(Args));
+
+		uint32 KeyHash = KeyFuncs::GetKeyHash(KeyFuncs::GetSetKey(Element.Value));
+		return EmplaceImpl(KeyHash, Element, ElementAllocation.Index, bIsAlreadyInSetPtr);
+	}
+	
+	/**
+	 * Adds an element to the set.
+	 *
+	 * @see		Class documentation section on ByHash() functions
+	 * @param	Args						The argument(s) to be forwarded to the set element's constructor.
+	 * @param	bIsAlreadyInSetPtr	[out]	Optional pointer to bool that will be set depending on whether element is already in set
+	 * @return	A handle to the element stored in the set.
+	 */
+	template <typename ArgsType>
+	FSetElementId EmplaceByHash(uint32 KeyHash, ArgsType&& Args, bool* bIsAlreadyInSetPtr = nullptr)
+	{
+		// Create a new element.
+		FSparseArrayAllocationInfo ElementAllocation = Elements.AddUninitialized();
+		SetElementType& Element = *new (ElementAllocation) SetElementType(Forward<ArgsType>(Args));
+
+		return EmplaceImpl(KeyHash, Element, ElementAllocation.Index, bIsAlreadyInSetPtr);
 	}
 
 	template<typename ArrayAllocator>
@@ -653,6 +716,32 @@ public:
 	}
 
 	/**
+	 * Finds an element with a pre-calculated hash and a key that can be compared to KeyType
+	 * @see	Class documentation section on ByHash() functions
+	 * @return The element id that matches the key and hash or an invalid element id
+	 */
+	template<typename ComparableKey>
+	FSetElementId FindIdByHash(uint32 KeyHash, const ComparableKey& Key) const
+	{
+		if (Elements.Num())
+		{
+			checkSlow(KeyHash == KeyFuncs::GetKeyHash(Key));
+
+			for (FSetElementId ElementId = GetTypedHash(KeyHash);
+				ElementId.IsValidId();
+				ElementId = Elements[ElementId].HashNextId)
+			{
+				if (KeyFuncs::Matches(KeyFuncs::GetSetKey(Elements[ElementId].Value), Key))
+				{
+					// Return the first match, regardless of whether the set has multiple matches for the key or not.
+					return ElementId;
+				}
+			}
+		}
+		return FSetElementId();
+	}
+
+	/**
 	 * Finds an element with the given key in the set.
 	 * @param Key - The key to search for.
 	 * @return A pointer to an element with the given key.  If no element in the set has the given key, this will return NULL.
@@ -666,7 +755,7 @@ public:
 		}
 		else
 		{
-			return NULL;
+			return nullptr;
 		}
 	}
 	
@@ -677,17 +766,67 @@ public:
 	 */
 	FORCEINLINE const ElementType* Find(KeyInitType Key) const
 	{
-		FSetElementId ElementId = FindId(Key);
-		if(ElementId.IsValidId())
+		return const_cast<TSet*>(this)->Find(Key);
+	}
+
+	/**
+	 * Finds an element with a pre-calculated hash and a key that can be compared to KeyType.
+	 * @see	Class documentation section on ByHash() functions
+	 * @return A pointer to the contained element or nullptr.
+	 */
+	template<typename ComparableKey>
+	ElementType* FindByHash(uint32 KeyHash, const ComparableKey& Key)
+	{
+		FSetElementId ElementId = FindIdByHash(KeyHash, Key);
+		if (ElementId.IsValidId())
 		{
 			return &Elements[ElementId].Value;
 		}
 		else
 		{
-			return NULL;
+			return nullptr;
 		}
 	}
 
+	template<typename ComparableKey>
+	const ElementType* FindByHash(uint32 KeyHash, const ComparableKey& Key) const
+	{
+		return const_cast<TSet*>(this)->FindByHash(KeyHash, Key);
+	}
+
+private:
+	template<typename ComparableKey>
+	FORCEINLINE int32 RemoveImpl(uint32 KeyHash, const ComparableKey& Key)
+	{
+		int32 NumRemovedElements = 0;
+
+		FSetElementId* NextElementId = &GetTypedHash(KeyHash);
+		while (NextElementId->IsValidId())
+		{
+			auto& Element = Elements[*NextElementId];
+			if (KeyFuncs::Matches(KeyFuncs::GetSetKey(Element.Value), Key))
+			{
+				// This element matches the key, remove it from the set.  Note that Remove sets *NextElementId to point to the next
+				// element after the removed element in the hash bucket.
+				Remove(*NextElementId);
+				NumRemovedElements++;
+
+				if (!KeyFuncs::bAllowDuplicateKeys)
+				{
+					// If the hash disallows duplicate keys, we're done removing after the first matched key.
+					break;
+				}
+			}
+			else
+			{
+				NextElementId = &Element.HashNextId;
+			}
+		}
+
+		return NumRemovedElements;
+	}
+
+public:
 	/**
 	 * Removes all elements from the set matching the specified key.
 	 * @param Key - The key to match elements against.
@@ -695,35 +834,32 @@ public:
 	 */
 	int32 Remove(KeyInitType Key)
 	{
-		int32 NumRemovedElements = 0;
+		if (Elements.Num())
+		{
+			return RemoveImpl(KeyFuncs::GetKeyHash(Key), Key);
+		}
+
+		return 0;
+	}
+
+	/**
+	 * Removes all elements from the set matching the specified key.
+	 *
+	 * @see		Class documentation section on ByHash() functions
+	 * @param	Key - The key to match elements against.
+	 * @return	The number of elements removed.
+	 */
+	template<typename ComparableKey>
+	int32 RemoveByHash(uint32 KeyHash, const ComparableKey& Key)
+	{
+		checkSlow(KeyHash == KeyFuncs::GetKeyHash(Key));
 
 		if (Elements.Num())
 		{
-			FSetElementId* NextElementId = &GetTypedHash(KeyFuncs::GetKeyHash(Key));
-			while(NextElementId->IsValidId())
-			{
-				auto& Element = Elements[*NextElementId];
-				if(KeyFuncs::Matches(KeyFuncs::GetSetKey(Element.Value),Key))
-				{
-					// This element matches the key, remove it from the set.  Note that Remove sets *NextElementId to point to the next
-					// element after the removed element in the hash bucket.
-					Remove(*NextElementId);
-					NumRemovedElements++;
-
-					if(!KeyFuncs::bAllowDuplicateKeys)
-					{
-						// If the hash disallows duplicate keys, we're done removing after the first matched key.
-						break;
-					}
-				}
-				else
-				{
-					NextElementId = &Element.HashNextId;
-				}
-			}
+			return RemoveImpl(KeyHash, Key);
 		}
 
-		return NumRemovedElements;
+		return 0;
 	}
 
 	/**
@@ -737,6 +873,17 @@ public:
 	}
 
 	/**
+	 * Checks if the element contains an element with the given key.
+	 *
+	 * @see	Class documentation section on ByHash() functions
+	 */
+	template<typename ComparableKey>
+	FORCEINLINE bool ContainsByHash(uint32 KeyHash, const ComparableKey& Key) const
+	{
+		return FindIdByHash(KeyHash, Key).IsValidId();
+	}
+
+	/**
 	 * Sorts the set's elements using the provided comparison class.
 	 */
 	template <typename PREDICATE_CLASS>
@@ -744,6 +891,19 @@ public:
 	{
 		// Sort the elements according to the provided comparison class.
 		Elements.Sort( FElementCompareClass< PREDICATE_CLASS >( Predicate ) );
+
+		// Rehash.
+		Rehash();
+	}
+
+	/**
+	 * Stable sorts the set's elements using the provided comparison class.
+	 */
+	template <typename PREDICATE_CLASS>
+	void StableSort(const PREDICATE_CLASS& Predicate)
+	{
+		// Sort the elements according to the provided comparison class.
+		Elements.StableSort(FElementCompareClass< PREDICATE_CLASS >(Predicate));
 
 		// Rehash.
 		Rehash();
@@ -990,7 +1150,7 @@ private:
 	ElementArrayType Elements;
 
 	mutable HashType Hash;
-	mutable int32    HashSize;
+	mutable int32	 HashSize;
 
 	FORCEINLINE FSetElementId& GetTypedHash(int32 HashIndex) const
 	{
@@ -1019,15 +1179,21 @@ private:
 		return FSetElementId(Index);
 	}
 
-	/** Adds an element to the hash. */
-	FORCEINLINE void HashElement(FSetElementId ElementId,const SetElementType& Element) const
+	/** Links an added element to the hash chain. */
+	FORCEINLINE void LinkElement(FSetElementId ElementId, const SetElementType& Element, uint32 KeyHash) const
 	{
 		// Compute the hash bucket the element goes in.
-		Element.HashIndex = KeyFuncs::GetKeyHash(KeyFuncs::GetSetKey(Element.Value)) & (HashSize-1);
+		Element.HashIndex = KeyHash & (HashSize - 1);
 
 		// Link the element into the hash bucket.
 		Element.HashNextId = GetTypedHash(Element.HashIndex);
 		GetTypedHash(Element.HashIndex) = ElementId;
+	}
+
+	/** Hashes and links an added element to the hash chain. */
+	FORCEINLINE void HashElement(FSetElementId ElementId, const SetElementType& Element) const
+	{
+		LinkElement(ElementId, Element, KeyFuncs::GetKeyHash(KeyFuncs::GetSetKey(Element.Value)));
 	}
 
 	/**
@@ -1463,9 +1629,9 @@ public:
 					void* Element = (uint8*)Elements.GetData(Index, Layout.SparseArrayLayout);
 
 					// Compute the hash bucket the element goes in.
-					uint32 ElementHash = GetKeyHash(Element);
-					int32  HashIndex   = ElementHash & (HashSize - 1);
-					GetHashIndexRef(Element, Layout) = ElementHash & (HashSize - 1);
+					uint32 KeyHash = GetKeyHash(Element);
+					int32  HashIndex   = KeyHash & (HashSize - 1);
+					GetHashIndexRef(Element, Layout) = KeyHash & (HashSize - 1);
 
 					// Link the element into the hash bucket.
 					GetHashNextIdRef(Element, Layout) = GetTypedHash(HashIndex);
@@ -1479,72 +1645,108 @@ public:
 		}
 	}
 
+private:
+	int32 FindIndexImpl(const void* Element, const FScriptSetLayout& Layout, uint32 KeyHash, TFunctionRef<bool (const void*, const void*)> EqualityFn)
+	{
+		const int32  HashIndex = KeyHash & (HashSize - 1);
+
+		uint8* CurrentElement = nullptr;
+		for (FSetElementId ElementId = GetTypedHash(HashIndex);
+			ElementId.IsValidId();
+			ElementId = GetHashNextIdRef(CurrentElement, Layout))
+		{
+			CurrentElement = (uint8*)Elements.GetData(ElementId, Layout.SparseArrayLayout);
+			if (EqualityFn(Element, CurrentElement))
+			{
+				return ElementId;
+			}
+		}
+	
+		return INDEX_NONE;
+	}
+
+public:
 	int32 FindIndex(const void* Element, const FScriptSetLayout& Layout, TFunctionRef<uint32 (const void*)> GetKeyHash, TFunctionRef<bool (const void*, const void*)> EqualityFn)
 	{
 		if (Elements.Num())
 		{
-			const uint32 ElementHash = GetKeyHash(Element);
-			const int32  HashIndex = ElementHash & (HashSize - 1);
-
-			uint8* CurrentElement = nullptr;
-			for (FSetElementId ElementId = GetTypedHash(HashIndex);
-				ElementId.IsValidId();
-				ElementId = GetHashNextIdRef(CurrentElement, Layout))
-			{
-				CurrentElement = (uint8*)Elements.GetData(ElementId, Layout.SparseArrayLayout);
-				if (EqualityFn(Element, CurrentElement))
-				{
-					return ElementId;
-				}
-			}
+			return FindIndexImpl(Element, Layout, GetKeyHash(Element), EqualityFn);
 		}
 
 		return INDEX_NONE;
 	}
 
+
+	int32 FindIndexByHash(const void* Element, const FScriptSetLayout& Layout, uint32 KeyHash, TFunctionRef<bool (const void*, const void*)> EqualityFn)
+	{
+		if (Elements.Num())
+		{
+			return FindIndexImpl(Element, Layout, KeyHash, EqualityFn);
+		}
+
+		return INDEX_NONE;
+	}
+
+	int32 FindOrAdd(const void* Element, const FScriptSetLayout& Layout, TFunctionRef<uint32(const void*)> GetKeyHash, TFunctionRef<bool(const void*, const void*)> EqualityFn, TFunctionRef<void(void*)> ConstructFn)
+	{
+		uint32 KeyHash = GetKeyHash(Element);
+		int32 OldElementIndex = FindIndexByHash(Element, Layout, KeyHash, EqualityFn);
+		if (OldElementIndex != INDEX_NONE)
+		{
+			return OldElementIndex;
+		}
+
+		return AddNewElement(Layout, GetKeyHash, KeyHash, ConstructFn);
+	}
+
 	void Add(const void* Element, const FScriptSetLayout& Layout, TFunctionRef<uint32(const void*)> GetKeyHash, TFunctionRef<bool(const void*, const void*)> EqualityFn, TFunctionRef<void(void*)> ConstructFn, TFunctionRef<void(void*)> DestructFn)
 	{
-		// Minor efficiency concern: we hash the element both here and in the FindIndex() call
-		uint32 ElementHash = GetKeyHash(Element);
-
-		int32 NewElementIndex = FindIndex(Element, Layout, GetKeyHash, EqualityFn);
-		if (NewElementIndex != INDEX_NONE)
+		uint32 KeyHash = GetKeyHash(Element);
+		int32 OldElementIndex = FindIndexByHash(Element, Layout, KeyHash, EqualityFn);
+		if (OldElementIndex != INDEX_NONE)
 		{
-			void* ElementPtr = Elements.GetData(NewElementIndex, Layout.SparseArrayLayout);
+			void* ElementPtr = Elements.GetData(OldElementIndex, Layout.SparseArrayLayout);
 
 			DestructFn(ElementPtr);
 			ConstructFn(ElementPtr);
 
 			// We don't update the hash because we don't need to - the new element
 			// should have the same hash, but let's just check.
-			check(ElementHash == GetKeyHash(ElementPtr));
+			checkSlow(KeyHash == GetKeyHash(ElementPtr));
 		}
 		else
 		{
-			NewElementIndex = Elements.AddUninitialized(Layout.SparseArrayLayout);
-
-			void* ElementPtr = Elements.GetData(NewElementIndex, Layout.SparseArrayLayout);
-			ConstructFn(ElementPtr);
-
-			const int32 DesiredHashSize = FDefaultSetAllocator::GetNumberOfHashBuckets(Num());
-			if (!HashSize || HashSize < DesiredHashSize)
-			{
-				// rehash, this will link in our new element if needed:
-				Rehash(Layout, GetKeyHash);
-			}
-			else
-			{
-				// link the new element into the set:
-				int32 HashIndex = ElementHash & (HashSize - 1);
-				FSetElementId& TypedHash = GetTypedHash(HashIndex);
-				GetHashIndexRef(ElementPtr, Layout) = HashIndex;
-				GetHashNextIdRef(ElementPtr, Layout) = TypedHash;
-				TypedHash = FSetElementId(NewElementIndex);
-			}
+			AddNewElement(Layout, GetKeyHash, KeyHash, ConstructFn);
 		}
 	}
 
 private:
+	int32 AddNewElement(const FScriptSetLayout& Layout, TFunctionRef<uint32(const void*)> GetKeyHash, uint32 KeyHash, TFunctionRef<void(void*)> ConstructFn)
+	{
+		int32 NewElementIndex = Elements.AddUninitialized(Layout.SparseArrayLayout);
+
+		void* ElementPtr = Elements.GetData(NewElementIndex, Layout.SparseArrayLayout);
+		ConstructFn(ElementPtr);
+
+		const int32 DesiredHashSize = FDefaultSetAllocator::GetNumberOfHashBuckets(Num());
+		if (!HashSize || HashSize < DesiredHashSize)
+		{
+			// rehash, this will link in our new element if needed:
+			Rehash(Layout, GetKeyHash);
+		}
+		else
+		{
+			// link the new element into the set:
+			int32 HashIndex = KeyHash & (HashSize - 1);
+			FSetElementId& TypedHash = GetTypedHash(HashIndex);
+			GetHashIndexRef(ElementPtr, Layout) = HashIndex;
+			GetHashNextIdRef(ElementPtr, Layout) = TypedHash;
+			TypedHash = FSetElementId(NewElementIndex);
+		}
+
+		return NewElementIndex;
+	}
+
 	typedef FDefaultSetAllocator Allocator;
 	typedef Allocator::HashAllocator::ForElementType<FSetElementId> HashType;
 

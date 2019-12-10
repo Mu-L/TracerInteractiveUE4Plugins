@@ -6,7 +6,7 @@
 #include "CategoryPropertyNode.h"
 #include "ItemPropertyNode.h"
 #include "ObjectPropertyNode.h"
-#include "Toolkits/AssetEditorManager.h"
+
 #include "Editor/SceneOutliner/Public/SceneOutlinerFilters.h"
 #include "IDetailPropertyRow.h"
 #include "PropertyCustomizationHelpers.h"
@@ -19,6 +19,7 @@
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "EditConditionParser.h"
 #include "EditConditionContext.h"
+#include "Subsystems/AssetEditorSubsystem.h"
 
 #define LOCTEXT_NAMESPACE "PropertyEditor"
 
@@ -297,7 +298,7 @@ void FPropertyEditor::MakeNewBlueprint()
 			
 			PropertyHandle->SetValueFromFormattedString(Blueprint->GeneratedClass->GetPathName());
 
-			FAssetEditorManager::Get().OpenEditorForAsset(Blueprint);
+			GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(Blueprint);
 		}
 	}
 }
@@ -468,8 +469,13 @@ void FPropertyEditor::ToggleEditConditionState()
 		// ParentNode can point to a struct inside that object (which is stored as an FItemPropertyNode)
 		// We need all three pointers to get the value pointer
 		uint8* BaseAddress = ComplexParentNode->GetMemoryOfInstance(Index);
-		uint8* ParentOffset = ParentNode->GetValueAddress(BaseAddress);
-		uint8* ValuePtr = EditConditionProperty->ContainerPtrToValuePtr<uint8>(ParentOffset);
+		uint8* ParentOffset = ParentNode->GetValueAddress(BaseAddress, PropertyNode->HasNodeFlags(EPropertyNodeFlags::IsSparseClassData) != 0);
+
+		uint8* ValuePtr = ComplexParentNode->GetValuePtrOfInstance(Index, EditConditionProperty, ParentNode);
+
+		// SPARSEDATA_TODO: these two lines should go away once we're really confident the pointer math is all correct
+		uint8* OldValuePtr = EditConditionProperty->ContainerPtrToValuePtr<uint8>(ParentOffset);
+		check(OldValuePtr == ValuePtr || PropertyNode->HasNodeFlags(EPropertyNodeFlags::IsSparseClassData));
 
 		OldValue &= EditConditionProperty->GetPropertyValue(ValuePtr);
 		EditConditionProperty->SetPropertyValue(ValuePtr, !OldValue);
@@ -489,8 +495,8 @@ void FPropertyEditor::ToggleEditConditionState()
 				Object->GetArchetypeInstances(ArchetypeInstances);
 				for (int32 InstanceIndex = 0; InstanceIndex < ArchetypeInstances.Num(); ++InstanceIndex)
 				{
-					uint8* ArchetypeBaseOffset = ComplexParentNode->GetValueAddress((uint8*) ArchetypeInstances[InstanceIndex]);
-					uint8* ArchetypeParentOffset = ParentNode->GetValueAddress(ArchetypeBaseOffset);
+					uint8* ArchetypeBaseOffset = ComplexParentNode->GetValueAddressFromObject(ArchetypeInstances[InstanceIndex]);
+					uint8* ArchetypeParentOffset = ParentNode->GetValueAddress(ArchetypeBaseOffset, PropertyNode->HasNodeFlags(EPropertyNodeFlags::IsSparseClassData) != 0);
 					uint8* ArchetypeValueAddr = EditConditionProperty->ContainerPtrToValuePtr<uint8>(ArchetypeParentOffset);
 
 					// Only propagate if the current value on the instance matches the previous value on the template.
@@ -566,6 +572,18 @@ void FPropertyEditor::ForceRefresh()
 void FPropertyEditor::RequestRefresh()
 {
 	PropertyUtilities->RequestRefresh();
+}
+
+bool FPropertyEditor::IsOnlyVisibleWhenEditConditionMet() const
+{
+	static const FName Name_EditConditionHides("EditConditionHides");
+	UProperty* Property = PropertyNode->GetProperty();
+	if (Property && Property->HasMetaData(Name_EditConditionHides))
+	{
+		return HasEditCondition();
+	}
+
+	return false;
 }
 
 bool FPropertyEditor::HasEditCondition() const 

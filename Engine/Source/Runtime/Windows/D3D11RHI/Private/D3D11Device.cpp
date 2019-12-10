@@ -15,6 +15,8 @@
 	#endif
 #include "Windows/HideWindowsPlatformTypes.h"
 
+#include "dxgi1_5.h"
+
 
 bool D3D11RHI_ShouldCreateWithD3DDebug()
 {
@@ -89,11 +91,18 @@ FD3D11DynamicRHI::FD3D11DynamicRHI(IDXGIFactory1* InDXGIFactory1,D3D_FEATURE_LEV
 	GConfig->GetInt( TEXT( "TextureStreaming" ), TEXT( "PoolSizeVRAMPercentage" ), GPoolSizeVRAMPercentage, GEngineIni );	
 
 	// Initialize the RHI capabilities.
-	check(FeatureLevel == D3D_FEATURE_LEVEL_11_1 || FeatureLevel == D3D_FEATURE_LEVEL_11_0 || FeatureLevel == D3D_FEATURE_LEVEL_10_0 );
+	check(FeatureLevel == D3D_FEATURE_LEVEL_11_1 || FeatureLevel == D3D_FEATURE_LEVEL_11_0);
 
-	if(FeatureLevel == D3D_FEATURE_LEVEL_10_0)
+   	
+	TRefCountPtr<IDXGIFactory5> Factory5;
+	HRESULT HResult = DXGIFactory1->QueryInterface(IID_PPV_ARGS(Factory5.GetInitReference()));
+	if (SUCCEEDED(HResult))
 	{
-		GSupportsDepthFetchDuringDepthTest = false;
+		bDXGISupportsHDR = true;
+	}
+	else
+	{
+		bDXGISupportsHDR = false;
 	}
 
 	ERHIFeatureLevel::Type PreviewFeatureLevel;
@@ -114,11 +123,6 @@ FD3D11DynamicRHI::FD3D11DynamicRHI(IDXGIFactory1* InDXGIFactory1,D3D_FEATURE_LEV
 	{
 		GMaxRHIFeatureLevel = ERHIFeatureLevel::SM5;
 		GMaxRHIShaderPlatform = SP_PCD3D_SM5;
-	}
-	else if(FeatureLevel == D3D_FEATURE_LEVEL_10_0)
-	{
-		GMaxRHIFeatureLevel = ERHIFeatureLevel::SM4;
-		GMaxRHIShaderPlatform = SP_PCD3D_SM4;
 	}
 
 	// Initialize the platform pixel format map.
@@ -146,8 +150,11 @@ FD3D11DynamicRHI::FD3D11DynamicRHI(IDXGIFactory1* InDXGIFactory1,D3D_FEATURE_LEV
 		GPixelFormats[PF_X24_G8].PlatformFormat = DXGI_FORMAT_X32_TYPELESS_G8X24_UINT;
 		GPixelFormats[PF_X24_G8].BlockBytes = 5;
 	}
+	GPixelFormats[ PF_DepthStencil	].Supported = true;
+	GPixelFormats[ PF_X24_G8		].Supported = true;
 	GPixelFormats[ PF_ShadowDepth	].PlatformFormat	= DXGI_FORMAT_R16_TYPELESS;
 	GPixelFormats[ PF_ShadowDepth	].BlockBytes		= 2;
+	GPixelFormats[ PF_ShadowDepth	].Supported			= true;
 	GPixelFormats[ PF_R32_FLOAT		].PlatformFormat	= DXGI_FORMAT_R32_FLOAT;
 	GPixelFormats[ PF_G16R16		].PlatformFormat	= DXGI_FORMAT_R16G16_UNORM;
 	GPixelFormats[ PF_G16R16F		].PlatformFormat	= DXGI_FORMAT_R16G16_FLOAT;
@@ -208,12 +215,6 @@ FD3D11DynamicRHI::FD3D11DynamicRHI(IDXGIFactory1* InDXGIFactory1,D3D_FEATURE_LEV
 		GRHISupportsMSAADepthSampleAccess = true;
 		GRHISupportsRHIThread = !!EXPERIMENTAL_D3D11_RHITHREAD;
 	}
-	else if (FeatureLevel >= D3D_FEATURE_LEVEL_10_0)
-	{
-		GMaxTextureDimensions = D3D10_REQ_TEXTURE2D_U_OR_V_DIMENSION;
-		GMaxCubeTextureDimensions = D3D10_REQ_TEXTURECUBE_DIMENSION;
-		GMaxTextureArrayLayers = D3D10_REQ_TEXTURE2D_ARRAY_AXIS_DIMENSION;
-	}
 
 	GMaxTextureMipCount = FMath::CeilLogTwo( GMaxTextureDimensions ) + 1;
 	GMaxTextureMipCount = FMath::Min<int32>( MAX_TEXTURE_MIP_COUNT, GMaxTextureMipCount );
@@ -226,12 +227,6 @@ FD3D11DynamicRHI::FD3D11DynamicRHI(IDXGIFactory1* InDXGIFactory1,D3D_FEATURE_LEV
 	// Initialize the constant buffers.
 	InitConstantBuffers();
 
-	// Create the dynamic vertex and index buffers used for Draw[Indexed]PrimitiveUP.
-	uint32 DynamicVBSizes[] = {128,1024,64*1024,1024*1024,0};
-	DynamicVB = new FD3D11DynamicBuffer(this,D3D11_BIND_VERTEX_BUFFER,DynamicVBSizes);
-	uint32 DynamicIBSizes[] = {128,1024,64*1024,1024*1024,0};
-	DynamicIB = new FD3D11DynamicBuffer(this,D3D11_BIND_INDEX_BUFFER,DynamicIBSizes);
-
 	for (int32 Frequency = 0; Frequency < SF_NumStandardFrequencies; ++Frequency)
 	{
 		DirtyUniformBuffers[Frequency] = 0;
@@ -240,8 +235,6 @@ FD3D11DynamicRHI::FD3D11DynamicRHI(IDXGIFactory1* InDXGIFactory1,D3D_FEATURE_LEV
 
 FD3D11DynamicRHI::~FD3D11DynamicRHI()
 {
-	UE_LOG(LogD3D11RHI, Log, TEXT("~FD3D11DynamicRHI"));
-
 	// Removed until shutdown crashes in exception handler are fixed.
 	//check(Direct3DDeviceIMContext == nullptr);
 	//check(Direct3DDevice == nullptr);
@@ -364,14 +357,6 @@ void FD3D11DynamicRHI::RHIGetSupportedResolution( uint32 &Width, uint32 &Height 
 
 void FD3D11DynamicRHI::GetBestSupportedMSAASetting( DXGI_FORMAT PlatformFormat, uint32 MSAACount, uint32& OutBestMSAACount, uint32& OutMSAAQualityLevels )
 {
-	//  We disable MSAA for Feature level 10
-	if (GMaxRHIFeatureLevel == ERHIFeatureLevel::SM4)
-	{
-		OutBestMSAACount = 1;
-		OutMSAAQualityLevels = 0;
-		return;
-	}
-
 	// start counting down from current setting (indicated the current "best" count) and move down looking for support
 	for(uint32 IndexCount = MSAACount;IndexCount > 0;IndexCount--)
 	{
@@ -510,10 +495,6 @@ void FD3D11DynamicRHI::CleanupD3DDevice()
 		extern void EmptyD3DSamplerStateCache();
 		EmptyD3DSamplerStateCache();
 
-		// release our dynamic VB and IB buffers
-		DynamicVB = NULL;
-		DynamicIB = NULL;
-
 		// Release references to bound uniform buffers.
 		for (int32 Frequency = 0; Frequency < SF_NumStandardFrequencies; ++Frequency)
 		{
@@ -622,6 +603,11 @@ void FD3D11DynamicRHI::RHIReleaseThreadOwnership()
 void* FD3D11DynamicRHI::RHIGetNativeDevice()
 {
 	return (void*)Direct3DDevice.GetReference();
+}
+
+void* FD3D11DynamicRHI::RHIGetNativeInstance()
+{
+	return nullptr;
 }
 
 

@@ -15,7 +15,6 @@ static FName NAME_GLSL_ES2_WEBGL(TEXT("GLSL_ES2_WEBGL"));
 static FName NAME_GLSL_150_ES2(TEXT("GLSL_150_ES2"));
 static FName NAME_GLSL_150_ES2_NOUB(TEXT("GLSL_150_ES2_NOUB"));
 static FName NAME_GLSL_150_ES3_1(TEXT("GLSL_150_ES31"));
-static FName NAME_GLSL_ES2_IOS(TEXT("GLSL_ES2_IOS"));
 static FName NAME_GLSL_310_ES_EXT(TEXT("GLSL_310_ES_EXT"));
 static FName NAME_GLSL_ES3_1_ANDROID(TEXT("GLSL_ES3_1_ANDROID"));
  
@@ -24,8 +23,8 @@ class FShaderFormatGLSL : public IShaderFormat
 	enum
 	{
 		/** Version for shader format, this becomes part of the DDC key. */
-		UE_SHADER_GLSL_VER = 82,
-		UE_SHADER_GLSL_ANDROID_VER = 81,
+		UE_SHADER_GLSL_VER = 83,
+		UE_SHADER_GLSL_ANDROID_VER = 83,
 	};
 
 	void CheckFormat(FName Format) const
@@ -37,7 +36,6 @@ class FShaderFormatGLSL : public IShaderFormat
 				Format == NAME_GLSL_150_ES2_NOUB ||
 				Format == NAME_GLSL_150_ES3_1 ||
                 Format == NAME_GLSL_ES2_WEBGL ||
-				Format == NAME_GLSL_ES2_IOS ||
 				Format == NAME_GLSL_310_ES_EXT ||
 				Format == NAME_GLSL_ES3_1_ANDROID
 			);
@@ -76,10 +74,6 @@ public:
 		{
 			GLSLVersion = UE_SHADER_GLSL_ANDROID_VER;
 		}
-		else if (Format == NAME_GLSL_ES2_IOS)
-		{
-			GLSLVersion = UE_SHADER_GLSL_ANDROID_VER;
-		}
 		else if (Format == NAME_GLSL_310_ES_EXT)
 		{
 			GLSLVersion = UE_SHADER_GLSL_ANDROID_VER;
@@ -103,7 +97,6 @@ public:
 		OutFormats.Add(NAME_GLSL_ES2_WEBGL);
 		OutFormats.Add(NAME_GLSL_150_ES2);
 		OutFormats.Add(NAME_GLSL_150_ES3_1);
-		OutFormats.Add(NAME_GLSL_ES2_IOS);
 		OutFormats.Add(NAME_GLSL_310_ES_EXT);
 		OutFormats.Add(NAME_GLSL_150_ES2_NOUB);
 		OutFormats.Add(NAME_GLSL_ES3_1_ANDROID);
@@ -126,10 +119,6 @@ public:
 		else if (Format == NAME_GLSL_ES2_WEBGL )
 		{
 			return GLSL_ES2_WEBGL;
-		}
-		else if (Format == NAME_GLSL_ES2_IOS )
-		{
-			return GLSL_ES2_IOS;
 		}
 		else if (Format == NAME_GLSL_150_ES3_1)
 		{

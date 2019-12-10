@@ -6,78 +6,17 @@
 #include "IConcertServer.h"
 #include "IConcertTransportModule.h"
 #include "ConcertSettings.h"
-
+#include "ConcertServerSessionRepositories.h"
 #include "UObject/StrongObjectPtr.h"
 
 class FConcertServerSession;
 class IConcertServerEventSink;
 
-class FConcertServerPaths
-{
-public:
-	/**
-	 * Constructs paths usable by the server.
-	 * @param InRole The context in which the server exist (Disaster Recovery, MultiUsers, etc).
-	 * @param InBaseWorkingDir The base directory path where the live session data will be stored. If empty, use a default one.
-	 * @param InBaseSavedDir The base directory path where the archived session will be stored. If empty, use a default one.
-	 */
-	explicit FConcertServerPaths(const FString& InRole, const FString& InBaseWorkingDir, const FString& InBaseSavedDir);
-
-	/** Get the working directory. This is were the live sessions store their files */
-	const FString& GetWorkingDir() const
-	{
-		return WorkingDir;
-	}
-
-	/** Return the working directory for a specific session */
-	FString GetSessionWorkingDir(const FGuid& InSessionId) const
-	{
-		return WorkingDir / InSessionId.ToString();
-	}
-
-	/** Get the saved directory. This is were the archived sessions store their files */
-	const FString& GetSavedDir() const
-	{
-		return SavedDir;
-	}
-
-	/** Return the saved directory for a specific session */
-	FString GetSessionSavedDir(const FGuid& InSessionId) const
-	{
-		return SavedDir / InSessionId.ToString();
-	}
-
-	/** Returns the 'base' working directory as passed to the constructor.*/
-	FString GetBaseWorkingDir() const
-	{
-		return BaseWorkingDir;
-	}
-
-	/** Returns the 'base' saved directory as passed to the constructor.*/
-	FString GetBaseSavedDir() const
-	{
-		return BaseSavedDir;
-	}
-
-private:
-	/** Get the working directory (BaseWorkingDir/Concert/Role). This is were the active sessions store their files */
-	const FString WorkingDir;
-
-	/** Get the directory where the sessions are saved (BaseSavedDir/Concert/Role). */
-	const FString SavedDir;
-
-	/** The base working directory as passed to the constructor. */
-	const FString BaseWorkingDir;
-
-	/** The base saved directory as passed to the constructor. */
-	const FString BaseSavedDir;
-};
-
 /** Implements Concert interface */
 class FConcertServer : public IConcertServer
 {
 public: 
-	FConcertServer(const FString& InRole, IConcertServerEventSink* InEventSink, const TSharedPtr<IConcertEndpointProvider>& InEndpointProvider);
+	FConcertServer(const FString& InRole, const FConcertSessionFilter& InAutoArchiveSessionFilter, IConcertServerEventSink* InEventSink, const TSharedPtr<IConcertEndpointProvider>& InEndpointProvider);
 	virtual ~FConcertServer();
 
 	virtual const FString& GetRole() const override;
@@ -101,13 +40,33 @@ public:
 	virtual TSharedPtr<IConcertServerSession> CreateSession(const FConcertSessionInfo& SessionInfo, FText& OutFailureReason) override;
 	virtual TSharedPtr<IConcertServerSession> RestoreSession(const FGuid& SessionId, const FConcertSessionInfo& SessionInfo, const FConcertSessionFilter& SessionFilter, FText& OutFailureReason) override;
 	virtual FGuid ArchiveSession(const FGuid& SessionId, const FString& ArchiveNameOverride, const FConcertSessionFilter& SessionFilter, FText& OutFailureReason) override;
+	virtual bool ExportSession(const FGuid& SessionId, const FConcertSessionFilter& SessionFilter, const FString& DestDir, bool bAnonymizeData, FText& OutFailureReason) override;
 	virtual bool RenameSession(const FGuid& SessionId, const FString& NewName, FText& OutFailureReason) override;
 	virtual bool DestroySession(const FGuid& SessionId, FText& OutFailureReason) override;
 	virtual TArray<FConcertSessionClientInfo> GetSessionClients(const FGuid& SessionId) const override;
 
 private:
+	/** Returns the root dir where the servers keeps the its internally created repositories (When the caller doesn't provide the paths). */
+	const FString& GetSessionRepositoriesRootDir() const;
+
+	const FConcertServerSessionRepository& GetSessionRepository(const FGuid& SessionId) const;
+	FString GetSessionSavedDir(const FGuid& SessionId) const;
+	FString GetSessionWorkingDir(const FGuid& SessionId) const;
+
+	EConcertSessionRepositoryMountResponseCode MountSessionRepository(FConcertServerSessionRepository& Repository, bool bCreateIfNotExist, bool bCleanWorkingDir, bool bCleanExpiredSessions, bool bSearchByPaths);
+	bool UnmountSessionRepository(FConcertServerSessionRepository& InOutRepository, bool bDropped);
+
 	/**  */
 	void HandleDiscoverServersEvent(const FConcertMessageContext& Context);
+
+	/**  */
+	TFuture<FConcertAdmin_MountSessionRepositoryResponse> HandleMountSessionRepositoryRequest(const FConcertMessageContext& Context);
+
+	/**  */
+	TFuture<FConcertAdmin_GetSessionRepositoriesResponse> HandleGetSessionRepositoriesRequest(const FConcertMessageContext& Context);
+
+	/**  */
+	TFuture<FConcertAdmin_DropSessionRepositoriesResponse> HandleDropSessionRepositoriesRequest(const FConcertMessageContext& Context);
 
 	/**  */
 	TFuture<FConcertAdmin_SessionInfoResponse> HandleCreateSessionRequest(const FConcertMessageContext& Context);
@@ -149,13 +108,13 @@ private:
 	TFuture<FConcertAdmin_GetSessionActivitiesResponse> HandleGetSessionActivitiesRequest(const FConcertMessageContext& Context);
 
 	/** Recover the sessions found in the working directory into live session, build the list of archived sessions and rotate them, keeping only the N most recent. */
-	void RecoverSessions();
+	void RecoverSessions(const FConcertServerSessionRepository& InRepository, bool bCleanupExpiredSessions);
 
 	/**
 	 * Migrate the live sessions from the working directory (before sessions being recovered into live one) to the archived directory.
 	 * Expected to happen at start up, before RecoverSessions(), if UConcertServerConfig::bAutoArchiveOnReboot is true.
 	 */
-	void ArchiveOfflineSessions();
+	void ArchiveOfflineSessions(const FConcertServerSessionRepository& InRepository);
 
 	/** */
 	bool CanJoinSession(const TSharedPtr<IConcertServerSession>& ServerSession, const FConcertSessionSettings& SessionSettings, const FConcertSessionVersionInfo& SessionVersionInfo, FText* OutFailureReason = nullptr);
@@ -166,7 +125,7 @@ private:
 	bool IsRequestFromSessionOwner(const TSharedPtr<IConcertServerSession>& Session, const FString& FromUserName, const FString& FromDeviceName);
 
 	/**  */
-	TSharedPtr<IConcertServerSession> CreateLiveSession(const FConcertSessionInfo& SessionInfo);
+	TSharedPtr<IConcertServerSession> CreateLiveSession(const FConcertSessionInfo& SessionInfo, const FConcertServerSessionRepository& InRepository);
 
 	/**  */
 	bool DestroyLiveSession(const FGuid& LiveSessionId, const bool bDeleteSessionData);
@@ -186,8 +145,14 @@ private:
 	/** The role of this server (eg, MultiUser, DisasterRecovery, etc) */
 	FString Role;
 
-	/** Cached root paths used by this server */
-	TUniquePtr<const FConcertServerPaths> Paths;
+	/** All session repositories used by this server. */
+	TArray<FConcertServerSessionRepository> MountedSessionRepositories;
+
+	/** The server default repository created from the server settings. */
+	TOptional<FConcertServerSessionRepository> DefaultSessionRepository;
+
+	/** The session filter to apply when auto-archiving sessions */
+	FConcertSessionFilter AutoArchiveSessionFilter;
 
 	/** Sink functions for events that this server can emit */
 	IConcertServerEventSink* EventSink;
@@ -209,4 +174,7 @@ private:
 
 	/** Server settings object we were configured with */
 	TStrongObjectPtr<const UConcertServerConfig> Settings;
+
+	/** The root directory containing the session repositories. */
+	FString SessionRepositoryRootDir;
 };

@@ -1,4 +1,4 @@
-﻿// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
 
 using IncludeTool.Support;
 using System;
@@ -41,6 +41,7 @@ namespace IncludeTool
 	enum BuildModulePCHUsage
 	{
 		Default,
+		NoPCHs,
 		NoSharedPCHs,
 		UseSharedPCHs,
 		UseExplicitOrSharedPCHs
@@ -107,7 +108,7 @@ namespace IncludeTool
 			}
 
 			JsonObject Modules = Object.GetObjectField("Modules");
-			Target.NameToModule = Modules.KeyNames.ToDictionary(x => x, x => new BuildModule { Name = x }, StringComparer.InvariantCultureIgnoreCase);
+			Target.NameToModule = Modules.KeyNames.ToDictionary(x => x, x => new BuildModule { Name = x }, StringComparer.OrdinalIgnoreCase);
 			Target.Modules.AddRange(Target.NameToModule.Values);
 
 			foreach (BuildModule Module in Target.Modules)

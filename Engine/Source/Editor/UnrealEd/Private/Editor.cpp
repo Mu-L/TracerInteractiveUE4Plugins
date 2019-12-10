@@ -23,6 +23,7 @@
 #include "UObject/UObjectIterator.h"
 #include "EngineUtils.h"
 #include "Dialogs/Dialogs.h"
+#include "UnrealEngine.h"
 
 // needed for the RemotePropagator
 
@@ -89,6 +90,8 @@ FSimpleMulticastDelegate								FEditorDelegates::LoadSelectedAssetsIfNeeded;
 FSimpleMulticastDelegate								FEditorDelegates::DisplayLoadErrors;
 FEditorDelegates::FOnEditorModeTransitioned				FEditorDelegates::EditorModeEnter;
 FEditorDelegates::FOnEditorModeTransitioned				FEditorDelegates::EditorModeExit;
+FEditorDelegates::FOnEditorModeIDTransitioned			FEditorDelegates::EditorModeIDEnter;
+FEditorDelegates::FOnEditorModeIDTransitioned			FEditorDelegates::EditorModeIDExit;
 FEditorDelegates::FOnPIEEvent							FEditorDelegates::PreBeginPIE;
 FEditorDelegates::FOnPIEEvent							FEditorDelegates::BeginPIE;
 FEditorDelegates::FOnPIEEvent							FEditorDelegates::PrePIEEnded;
@@ -138,7 +141,7 @@ FEditorDelegates::FOnDuplicateActorsBegin				FEditorDelegates::OnDuplicateActors
 FEditorDelegates::FOnDuplicateActorsEnd					FEditorDelegates::OnDuplicateActorsEnd;
 FEditorDelegates::FOnDeleteActorsBegin					FEditorDelegates::OnDeleteActorsBegin;
 FEditorDelegates::FOnDeleteActorsEnd					FEditorDelegates::OnDeleteActorsEnd;
-FEditorDelegates::FOnViewAssetIdentifiers				FEditorDelegates::OnOpenReferenceViewer;
+FEditorDelegates::FOnOpenReferenceViewer				FEditorDelegates::OnOpenReferenceViewer;
 FEditorDelegates::FOnViewAssetIdentifiers				FEditorDelegates::OnOpenSizeMap;
 FEditorDelegates::FOnViewAssetIdentifiers				FEditorDelegates::OnOpenAssetAudit;
 FEditorDelegates::FOnViewAssetIdentifiers				FEditorDelegates::OnEditAssetIdentifiers;
@@ -547,7 +550,7 @@ void FReimportManager::ValidateAllSourceFileAndReimport(TArray<UObject*> &ToImpo
 				{
 					TArray<FString> SourceFilenames;
 					this->GetNewReimportPath(Asset, SourceFilenames, FileIndex);
-					if (SourceFilenames.Num() == 0)
+					if (SourceFilenames.Num() == 0 || SourceFilenames[0].IsEmpty())
 					{
 						continue;
 					}
@@ -804,6 +807,7 @@ UWorld* SetPlayInEditorWorld( UWorld* PlayInEditorWorld )
 	if (FWorldContext* WorldContext = GEngine->GetWorldContextFromWorld(PlayInEditorWorld))
 	{
 		GPlayInEditorID = WorldContext->PIEInstance;
+		UpdatePlayInEditorWorldDebugString(WorldContext);
 	}
 
 	return SavedWorld;
@@ -820,7 +824,8 @@ void RestoreEditorWorld( UWorld* EditorWorld )
 	check(GIsPlayInEditorWorld);
 	GIsPlayInEditorWorld = false;
 	GWorld = EditorWorld;
-	GPlayInEditorID = -1;
+	GPlayInEditorID = INDEX_NONE;
+	UpdatePlayInEditorWorldDebugString(nullptr);
 }
 
 /**
@@ -1385,9 +1390,9 @@ namespace EditorUtilities
 					const bool bIsIdentical = Property->Identical_InContainer( SourceComponent, TargetComponent );
 					const bool bIsComponent = !!( Property->PropertyFlags & ( CPF_InstancedReference | CPF_ContainsInstancedReference ) );
 					const bool bIsTransform =
-						Property->GetFName() == GET_MEMBER_NAME_CHECKED(USceneComponent, RelativeScale3D) ||
-						Property->GetFName() == GET_MEMBER_NAME_CHECKED(USceneComponent, RelativeLocation) ||
-						Property->GetFName() == GET_MEMBER_NAME_CHECKED(USceneComponent, RelativeRotation);
+						Property->GetFName() == USceneComponent::GetRelativeScale3DPropertyName() ||
+						Property->GetFName() == USceneComponent::GetRelativeLocationPropertyName() ||
+						Property->GetFName() == USceneComponent::GetRelativeRotationPropertyName();
 
 					if( !bIsTransient && !bIsIdentical && !bIsComponent && !SourceUCSModifiedProperties.Contains(Property)
 						&& ( !bIsTransform || SourceComponent != SourceActor->GetRootComponent() || ( !SourceActor->HasAnyFlags( RF_ClassDefaultObject | RF_ArchetypeObject ) && !TargetActor->HasAnyFlags( RF_ClassDefaultObject | RF_ArchetypeObject ) ) ) )

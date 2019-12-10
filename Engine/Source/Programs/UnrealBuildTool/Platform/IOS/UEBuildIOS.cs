@@ -18,7 +18,7 @@ namespace UnrealBuildTool
 	public partial class IOSTargetRules
 	{
 		/// <summary>
-		/// Whether to strip iOS symbols or not (implied by Shipping config)
+		/// Whether to strip iOS symbols or not (implied by Shipping config).
 		/// </summary>
 		[XmlConfigFile(Category = "BuildConfiguration")]
 		[CommandLine("-stripsymbols", Value = "true")]
@@ -29,6 +29,16 @@ namespace UnrealBuildTool
 		/// </summary>
 		[CommandLine("-CreateStub", Value = "true")]
 		public bool bCreateStubIPA = false;
+
+		/// <summary>
+		/// Whether to build the iOS project as a framework.
+		/// </summary>
+		public bool bBuildAsFramework = false;
+
+		/// <summary>
+		/// Whether to generate a native Xcode project as a wrapper for the framework.
+		/// </summary>
+		public bool bGenerateFrameworkWrapperProject = false;
 
 		/// <summary>
 		/// Don't generate crashlytics data
@@ -103,6 +113,16 @@ namespace UnrealBuildTool
 			get { return Inner.bStripSymbols; }
 		}
 			
+		public bool bBuildAsFramework
+		{
+			get { return Inner.bBuildAsFramework; }
+		}
+
+		public bool bGenerateFrameworkWrapperProject
+		{
+			get { return Inner.bGenerateFrameworkWrapperProject; }
+		}
+
 		public bool bGeneratedSYM
 		{
 			get { return Inner.bGeneratedSYM; }
@@ -140,7 +160,7 @@ namespace UnrealBuildTool
 
 		public float RuntimeVersion
 		{
-			get { return float.Parse(Inner.ProjectSettings.RuntimeVersion); }
+			get { return float.Parse(Inner.ProjectSettings.RuntimeVersion, System.Globalization.CultureInfo.InvariantCulture); }
 		}
 		
 #if !__MonoCS__
@@ -160,11 +180,25 @@ namespace UnrealBuildTool
 		public readonly FileReference ProjectFile;
 
 		/// <summary>
+		/// Whether to build the iOS project as a framework.
+		/// </summary>
+		[ConfigFile(ConfigHierarchyType.Engine, "/Script/IOSRuntimeSettings.IOSRuntimeSettings", "bBuildAsFramework")]
+		[CommandLine("-build-as-framework")]
+		public readonly bool bBuildAsFramework = false;
+
+		/// <summary>
+		/// Whether to generate a native Xcode project as a wrapper for the framework.
+		/// </summary>
+		[ConfigFile(ConfigHierarchyType.Engine, "/Script/IOSRuntimeSettings.IOSRuntimeSettings", "bGenerateFrameworkWrapperProject")]
+		public readonly bool bGenerateFrameworkWrapperProject = false;
+
+		/// <summary>
 		/// Whether to generate a dSYM file or not.
 		/// </summary>
 		[ConfigFile(ConfigHierarchyType.Engine, "/Script/IOSRuntimeSettings.IOSRuntimeSettings", "bGeneratedSYMFile")]
 		[CommandLine("-generatedsymfile")]
 		public readonly bool bGeneratedSYMFile = false;
+		
 		/// <summary>
 		/// Whether to generate a dSYM bundle (as opposed to single file dSYM)
 		/// </summary>
@@ -674,6 +708,7 @@ namespace UnrealBuildTool
 	{
 		IOSPlatformSDK SDK;
 		List<IOSProjectSettings> CachedProjectSettings = new List<IOSProjectSettings>();
+		List<IOSProjectSettings> CachedProjectSettingsByBundle = new List<IOSProjectSettings>();
 		Dictionary<string, IOSProvisioningData> ProvisionCache = new Dictionary<string, IOSProvisioningData>();
 
 		// by default, use an empty architecture (which is really just a modifer to the platform for some paths/names)
@@ -710,8 +745,6 @@ namespace UnrealBuildTool
 			return BinaryPaths;
 		}
 
-
-
 		public override void ResetTarget(TargetRules Target)
 		{
 			// we currently don't have any simulator libs for PhysX
@@ -738,6 +771,8 @@ namespace UnrealBuildTool
 			{
 				Target.IOSPlatform.bGeneratedSYM = true;
 			}
+
+			Target.IOSPlatform.bBuildAsFramework = Target.IOSPlatform.ProjectSettings.bBuildAsFramework;
 		}
 
 		public override void ValidateTarget(TargetRules Target)
@@ -752,6 +787,27 @@ namespace UnrealBuildTool
 			{
 				Target.GlobalDefinitions.Add("HAS_METAL=0");
 			}
+
+
+			bool bBuildAsFramework = IOSToolChain.GetBuildAsFramework(Target.ProjectFile);
+
+			if (bBuildAsFramework)
+			{
+				Target.bShouldCompileAsDLL = true;
+				int PreviousDefinition = Target.GlobalDefinitions.FindIndex(s => s.Contains("BUILD_EMBEDDED_APP"));
+				if (PreviousDefinition >= 0)
+				{
+					Target.GlobalDefinitions.RemoveAt(PreviousDefinition);
+				}
+
+				Target.GlobalDefinitions.Add("BUILD_EMBEDDED_APP=1");
+				
+				if (Target.Platform == UnrealTargetPlatform.IOS)
+				{
+					Target.ExportPublicHeader = "Headers/PreIOSEmbeddedView.h";
+				}
+			}
+
 
 			Target.bCheckSystemHeadersForModification = false;
 		}
@@ -799,11 +855,30 @@ namespace UnrealBuildTool
 
 		public IOSProjectSettings ReadProjectSettings(FileReference ProjectFile, string Bundle = "")
 		{
-			IOSProjectSettings ProjectSettings = CachedProjectSettings.FirstOrDefault(x => x.ProjectFile == ProjectFile);
+			IOSProjectSettings ProjectSettings = null;
+
+			// Use separate lists to prevent an overridden Bundle id polluting the standard project file. 
+			bool bCacheByBundle = !string.IsNullOrEmpty(Bundle);
+			if (bCacheByBundle)
+			{
+				ProjectSettings = CachedProjectSettingsByBundle.FirstOrDefault(x => x.ProjectFile == ProjectFile && x.BundleIdentifier == Bundle);
+			}
+			else
+			{
+				ProjectSettings = CachedProjectSettings.FirstOrDefault(x => x.ProjectFile == ProjectFile);
+			}
+
 			if(ProjectSettings == null)
 			{
 				ProjectSettings = CreateProjectSettings(ProjectFile, Bundle);
-				CachedProjectSettings.Add(ProjectSettings);
+				if (bCacheByBundle)
+				{
+					CachedProjectSettingsByBundle.Add(ProjectSettings);
+				}
+				else
+				{
+					CachedProjectSettings.Add(ProjectSettings);
+				}
 			}
 			return ProjectSettings;
 		}
@@ -1059,12 +1134,6 @@ namespace UnrealBuildTool
 				CompileEnvironment.Definitions.Add("ENABLE_ADVERTISING_IDENTIFIER=1");
 			}
 
-			// For 4.23 the version check fails for binary builds, re-enabling along with deprecation warning suppression for all builds UE-77520
-			// ES support will be fully removed in 4.24
-			CompileEnvironment.Definitions.Add("HAS_OPENGL_ES=1");
-			CompileEnvironment.Definitions.Add("GLES_SILENCE_DEPRECATION=1"); 
-			//CompileEnvironment.Definitions.Add("HAS_OPENGL_ES=" + ((Target.IOSPlatform.RuntimeVersion < 12.0) ? "1" : "0"));
-
 			// if the project has an Oodle compression Dll, enable the decompressor on IOS
 			if (Target.ProjectFile != null)
 			{
@@ -1097,7 +1166,10 @@ namespace UnrealBuildTool
 		/// <param name="ExtraModuleNames"></param>
 		public override void AddExtraModules(ReadOnlyTargetRules Target, List<string> ExtraModuleNames)
 		{
-			ExtraModuleNames.Add("IOSPlatformFeatures");
+			if (Target.Type != TargetType.Program)
+			{
+				ExtraModuleNames.Add("IOSPlatformFeatures");
+			}
 		}
 
 		/// <summary>

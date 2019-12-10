@@ -126,10 +126,10 @@ void UMotionControllerComponent::TickComponent(float DeltaTime, enum ELevelTick 
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-	if (bIsActive)
+	if (IsActive())
 	{
-		FVector Position;
-		FRotator Orientation;
+		FVector Position = GetRelativeTransform().GetTranslation();
+		FRotator Orientation = GetRelativeTransform().GetRotation().Rotator();
 		float WorldToMeters = GetWorld() ? GetWorld()->GetWorldSettings()->WorldToMeters : 100.0f;
 		const bool bNewTrackedState = PollControllerState(Position, Orientation, WorldToMeters);
 		if (bNewTrackedState)
@@ -469,7 +469,7 @@ void UMotionControllerComponent::RefreshDisplayComponent(const bool bForceDestro
 				}
 
 				DisplayComponent->SetHiddenInGame(bHiddenInGame);
-				DisplayComponent->SetVisibility(bVisible);
+				DisplayComponent->SetVisibility(GetVisibleFlag());
 			}
 		}
 		else if (DisplayComponent)
@@ -582,8 +582,8 @@ void UMotionControllerComponent::FViewExtension::PreRenderViewFamily_RenderThrea
 		}
 
 		// Poll state for the most recent controller transform
-		FVector Position;
-		FRotator Orientation;
+		FVector Position = MotionControllerComponent->RenderThreadRelativeTransform.GetTranslation();
+		FRotator Orientation = MotionControllerComponent->RenderThreadRelativeTransform.GetRotation().Rotator();
 		if (!MotionControllerComponent->PollControllerState(Position, Orientation, WorldToMetersScale))
 		{
 			return;

@@ -1,17 +1,16 @@
 // Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
 
-#if INCLUDE_CHAOS
-
 #include "GeometryCollection/GeometryCollectionCollisionStructureManager.h"
 #include "ChaosLog.h"
 #include "Chaos/Box.h"
 #include "Chaos/ErrorReporter.h"
 #include "Chaos/Levelset.h"
 #include "Chaos/Particles.h"
-#include "Chaos/PBDRigidClustering.h"
 #include "Chaos/Sphere.h"
 #include "Chaos/Vector.h"
 #include "HAL/IConsoleManager.h"
+#include "Chaos/TriangleMesh.h"
+#include "Chaos/PBDRigidClustering.h"
 
 DEFINE_LOG_CATEGORY_STATIC(GCS_Log, NoLogging, All);
 
@@ -98,7 +97,7 @@ FCollisionStructureManager::NewSimplicial(
 		if (NumParticles)
 		{
 			int32 VertexCounter = 0;
-			Simplicial->AddElements(NumParticles);
+			Simplicial->AddParticles(NumParticles);
 			for (int32 i = 0; i<NumParticles;i++)
 			{
 				if (!OutsideVertices[i].ContainsNaN())
@@ -112,7 +111,7 @@ FCollisionStructureManager::NewSimplicial(
 
 		if(!Simplicial->Size())
 		{
-			Simplicial->AddElements(1);
+			Simplicial->AddParticles(1);
 			Simplicial->X(0) = Chaos::TVector<float, 3>(0);
 		}
 
@@ -148,7 +147,7 @@ FCollisionStructureManager::NewSimplicial(
 		if (Result.Num())
 		{
 			int32 VertexCounter = 0;
-			Simplicial->AddElements(Result.Num());
+			Simplicial->AddParticles(Result.Num());
 			for (int Index = Result.Num() - 1; 0 <= Index; Index--)
 			{
 				if (!Result[Index].ContainsNaN())
@@ -162,7 +161,7 @@ FCollisionStructureManager::NewSimplicial(
 
 		if (!Simplicial->Size())
 		{
-			Simplicial->AddElements(1);
+			Simplicial->AddParticles(1);
 			Simplicial->X(0) = Chaos::TVector<float, 3>(0);
 		}
 
@@ -323,6 +322,3 @@ FCollisionStructureManager::CalculateVolume(
 	ensureMsgf(Volume != 0.f, TEXT("Rigid volume check failure."));
 	return Volume;
 }
-
-
-#endif

@@ -2,10 +2,14 @@
 
 #include "Chaos/PBDConstraintColor.h"
 
+#include "Chaos/PBDConstraintGraph.h"
+#include "Chaos/ConstraintHandle.h"
+#include "Chaos/Framework/Parallel.h"
+#include "Chaos/ParticleHandle.h"
+#include "Chaos/PBDRigidParticles.h"
+
 #include "ProfilingDebugging/ScopedTimers.h"
 #include "ChaosStats.h"
-#include "Chaos/Framework/Parallel.h"
-#include "Chaos/PBDRigidParticles.h"
 #include "Containers/Queue.h"
 
 #include <memory>
@@ -15,9 +19,9 @@
 using namespace Chaos;
 
 template<typename T, int d>
-void TPBDConstraintColor<T, d>::ComputeIslandColoring(const TPBDRigidParticles<T, d>& InParticles, const TArray<int32>& InIndices, const int32 Island, const FConstraintGraph& ConstraintGraph, uint32 ContainerId)
+void TPBDConstraintColor<T, d>::ComputeIslandColoring(const int32 Island, const FConstraintGraph& ConstraintGraph, uint32 ContainerId)
 {
-	const TArray<int32>& IslandParticleIndices = ConstraintGraph.GetIslandParticles(Island);
+	const TArray<TGeometryParticleHandle<T,d>*>& IslandParticles = ConstraintGraph.GetIslandParticles(Island);
 	FLevelToColorToConstraintListMap& LevelToColorToConstraintListMap = IslandData[Island].LevelToColorToConstraintListMap;
 	int32& MaxColor = IslandData[Island].MaxColor;
 
@@ -34,16 +38,16 @@ void TPBDConstraintColor<T, d>::ComputeIslandColoring(const TPBDRigidParticles<T
 	TSet<int32> ProcessedNodes;
 	TArray<int32> NodesToProcess;
 
-	for (const int32 ParticleIndex : IslandParticleIndices)
+	for (const TGeometryParticleHandle<T,d>* Particle :IslandParticles)
 	{
-		if (!ConstraintGraph.ParticleToNodeIndex.Find(ParticleIndex))
+		if (!ConstraintGraph.ParticleToNodeIndex.Find(Particle))
 		{
 			continue;
 		}
 
-		const int32 ParticleNodeIndex = ConstraintGraph.ParticleToNodeIndex[ParticleIndex];
+		const int32 ParticleNodeIndex = ConstraintGraph.ParticleToNodeIndex[Particle];
 
-		if (ProcessedNodes.Contains(ParticleNodeIndex) || !InParticles.InvM(ConstraintGraph.Nodes[ParticleNodeIndex].BodyIndex))
+		if (ProcessedNodes.Contains(ParticleNodeIndex) || Particle->AsDynamic() == nullptr)
 		{
 			continue;
 		}
@@ -98,9 +102,12 @@ void TPBDConstraintColor<T, d>::ComputeIslandColoring(const TPBDRigidParticles<T
 				if (OtherNodeIndex != INDEX_NONE)
 				{
 					FGraphNodeColor& OtherColorNode = Nodes[OtherNodeIndex];
-					while (OtherColorNode.UsedColors.Contains(ColorToUse) || ColorNode.UsedColors.Contains(ColorToUse))
+					if (ConstraintGraph.Nodes[OtherNodeIndex].Particle->AsDynamic() != nullptr)
 					{
-						ColorToUse++;
+						while (OtherColorNode.UsedColors.Contains(ColorToUse) || ColorNode.UsedColors.Contains(ColorToUse))
+						{
+							ColorToUse++;
+						}
 					}
 				}
 
@@ -110,7 +117,7 @@ void TPBDConstraintColor<T, d>::ComputeIslandColoring(const TPBDRigidParticles<T
 				ColorEdge.Color = ColorToUse;
 
 				// Bump color to use next time, but only if we weren't forced to use a different color by the other node
-				if ((ColorToUse == ColorNode.NextColor) && InParticles.InvM(GraphNode.BodyIndex))
+				if ((ColorToUse == ColorNode.NextColor) && Particle->AsDynamic() != nullptr)
 				{
 					ColorNode.NextColor++;
 				}
@@ -132,25 +139,28 @@ void TPBDConstraintColor<T, d>::ComputeIslandColoring(const TPBDRigidParticles<T
 					LevelToColorToConstraintListMap[Level].Add(ColorEdge.Color, {});
 				}
 
-				LevelToColorToConstraintListMap[Level][ColorEdge.Color].Add(GraphEdge.Data.ConstraintIndex);
+				LevelToColorToConstraintListMap[Level][ColorEdge.Color].Add(GraphEdge.Data.ConstraintHandle);
 
 				if (OtherNodeIndex != INDEX_NONE)
 				{
 					const typename FConstraintGraph::FGraphNode& OtherGraphNode = ConstraintGraph.Nodes[OtherNodeIndex];
-					FGraphNodeColor& OtherColorNode = Nodes[OtherNodeIndex];
-
-					// Mark other node as not allowing use of this color
-					if (InParticles.InvM(OtherGraphNode.BodyIndex))
+					if (OtherGraphNode.Particle->AsDynamic() != nullptr)
 					{
-						OtherColorNode.UsedColors.Add(ColorEdge.Color);
-					}
+						FGraphNodeColor& OtherColorNode = Nodes[OtherNodeIndex];
 
-					// Queue other node for processing
-					if (!ProcessedNodes.Contains(OtherNodeIndex) && InParticles.InvM(OtherGraphNode.BodyIndex))
-					{
-						ensure(OtherGraphNode.Island == GraphNode.Island);
-						checkSlow(IslandParticleIndices.Find(OtherGraphNode.BodyIndex) != INDEX_NONE);
-						NodesToProcess.Add(OtherNodeIndex);
+						// Mark other node as not allowing use of this color
+						if (Particle->AsDynamic() != nullptr)
+						{
+							OtherColorNode.UsedColors.Add(ColorEdge.Color);
+						}
+
+						// Queue other node for processing
+						if (!ProcessedNodes.Contains(OtherNodeIndex))
+						{
+							ensure(OtherGraphNode.Island == GraphNode.Island);
+							checkSlow(IslandParticles.Find(OtherGraphNode.Particle) != INDEX_NONE);
+							NodesToProcess.Add(OtherNodeIndex);
+						}
 					}
 				}
 			}
@@ -160,17 +170,17 @@ void TPBDConstraintColor<T, d>::ComputeIslandColoring(const TPBDRigidParticles<T
 
 #ifdef USE_CONTACT_LEVELS
 template<typename T, int d>
-void TPBDConstraintColor<T, d>::ComputeContactGraph(const TPBDRigidParticles<T, d>& InParticles, const TArray<int32>& InIndices, const int32 Island, const FConstraintGraph& ConstraintGraph, uint32 ContainerId)
+void TPBDConstraintColor<T, d>::ComputeContactGraph(const int32 Island, const FConstraintGraph& ConstraintGraph, uint32 ContainerId)
 {
 	const TArray<int32>& ConstraintDataIndices = ConstraintGraph.GetIslandConstraintData(Island);
 
 	IslandData[Island].MaxLevel = ConstraintDataIndices.Num() ? 0 : -1;
 
 	std::queue<std::pair<int32, int32>> QueueToProcess;
-	for (const int32 Index : InIndices)
+	for (const TGeometryParticleHandle<T,d>* Particle : ConstraintGraph.GetIslandParticles(Island))
 	{
-		const int32* NodeIndexPtr = ConstraintGraph.ParticleToNodeIndex.Find(Index);
-		if (!InParticles.InvM(Index) && NodeIndexPtr)
+		const int32* NodeIndexPtr = ConstraintGraph.ParticleToNodeIndex.Find(Particle);
+		if (Particle->AsDynamic() == nullptr && NodeIndexPtr)
 		{
 			const int32 NodeIndex = *NodeIndexPtr;
 			QueueToProcess.push(std::make_pair(0, NodeIndex));
@@ -250,22 +260,29 @@ void TPBDConstraintColor<T, d>::ComputeContactGraph(const TPBDRigidParticles<T, 
 template<typename T, int d>
 void TPBDConstraintColor<T, d>::InitializeColor(const FConstraintGraph& ConstraintGraph)
 {
-	Nodes.Reset();
+
+	// The Number of nodes is large and fairly constant so persist rather than resetting every frame
+	if (Nodes.Num() != ConstraintGraph.Nodes.Num())
+	{
+		// Nodes need to grow when the nodes of the constraint graph grows
+		Nodes.AddDefaulted(ConstraintGraph.Nodes.Num() - Nodes.Num());
+	}
+	
+	// edges are not persistent right now so we still reset them
 	Edges.Reset();
 	IslandData.Reset();
 
-	Nodes.SetNum(ConstraintGraph.Nodes.Num());
 	Edges.SetNum(ConstraintGraph.Edges.Num());
-	IslandData.SetNum(ConstraintGraph.IslandData.Num());
+	IslandData.SetNum(ConstraintGraph.IslandToData.Num());
 }
 
 template<typename T, int d>
-void TPBDConstraintColor<T, d>::ComputeColor(const TPBDRigidParticles<T, d>& InParticles, const TArray<int32>& InIndices, const int32 Island, const FConstraintGraph& ConstraintGraph, uint32 ContainerId)
+void TPBDConstraintColor<T, d>::ComputeColor(const int32 Island, const FConstraintGraph& ConstraintGraph, uint32 ContainerId)
 {
 #ifdef USE_CONTACT_LEVELS
-	ComputeContactGraph(InParticles, InIndices, Island, ConstraintGraph, ContainerId);
+	ComputeContactGraph(Island, ConstraintGraph, ContainerId);
 #endif
-	ComputeIslandColoring(InParticles, InIndices, Island, ConstraintGraph, ContainerId);
+	ComputeIslandColoring(Island, ConstraintGraph, ContainerId);
 }
 
 template<typename T, int d>

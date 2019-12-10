@@ -15,8 +15,10 @@
 #include "EditorSubsystem.h"
 #include "Subsystems/SubsystemBlueprintLibrary.h"
 #include "Subsystems/EditorSubsystemBlueprintLibrary.h"
+#include "Subsystems/WorldSubsystem.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet2/BlueprintEditorUtils.h"
+#include "Subsystems/WorldSubsystem.h"
 
 
 // ************************************************************************************
@@ -131,6 +133,10 @@ void UK2Node_GetSubsystem::ExpandNode(class FKismetCompilerContext& CompilerCont
 	{
 		Get_FunctionName = GET_FUNCTION_NAME_CHECKED(USubsystemBlueprintLibrary, GetGameInstanceSubsystem);
 	}
+	else if (CustomClass->IsChildOf<UWorldSubsystem>())
+	{
+		Get_FunctionName = GET_FUNCTION_NAME_CHECKED(USubsystemBlueprintLibrary, GetWorldSubsystem);
+	}
 	else if (CustomClass->IsChildOf<ULocalPlayerSubsystem>())
 	{
 		Get_FunctionName = GET_FUNCTION_NAME_CHECKED(USubsystemBlueprintLibrary, GetLocalPlayerSubsystem);
@@ -208,6 +214,7 @@ void UK2Node_GetSubsystem::GetMenuActions(FBlueprintActionDatabaseRegistrar& Act
 	static TArray<UClass*> Subclasses;
 	Subclasses.Reset();
 	GetDerivedClasses(UGameInstanceSubsystem::StaticClass(), Subclasses);
+	GetDerivedClasses(UWorldSubsystem::StaticClass(), Subclasses);
 	GetDerivedClasses(ULocalPlayerSubsystem::StaticClass(), Subclasses);
 
 	auto CustomizeCallback = [](UEdGraphNode* Node, bool bIsTemplateNode, UClass* Subclass)
@@ -240,6 +247,10 @@ FText UK2Node_GetSubsystem::GetMenuCategory() const
 	{
 		return NSLOCTEXT("K2Node", "GetSubsystem_LocalPlayerSubsystemsMenuCategory", "LocalPlayer Subsystems");
 	}
+	else if (CustomClass->IsChildOf<UWorldSubsystem>())
+	{
+		return NSLOCTEXT("K2Node", "GetSubsystem_WorldSubsystemsMenuCategory", "World Subsystems");
+	}
 
 	return NSLOCTEXT("K2Node", "GetSubsystem_InvalidSubsystemTypeMenuCategory", "Invalid Subsystem Type");
 }
@@ -252,6 +263,10 @@ FText UK2Node_GetSubsystem::GetTooltipText() const
 		if (CustomClass->IsChildOf<UGameInstanceSubsystem>())
 		{
 			SubsystemTypeText =  NSLOCTEXT("K2Node", "GetSubsystem_GameInstanceSubsystemTooltip", "GameInstance Subsystem");
+		}
+		else if (CustomClass->IsChildOf<UWorldSubsystem>())
+		{
+			SubsystemTypeText = NSLOCTEXT("K2Node", "GetSubsystem_WorldSubsystemTooltip", "World Subsystem");
 		}
 		else
 		{
@@ -612,9 +627,9 @@ void UK2Node_GetEditorSubsystem::ExpandNode(class FKismetCompilerContext& Compil
 	}
 
 	//////////////////////////////////////////////////////////////////////////
-	// create 'USubsystemBlueprintLibrary::GetEditorSubsystem' call node
+	// create 'UEditorSubsystemBlueprintLibrary::GetEditorSubsystem' call node
 	UK2Node_CallFunction* CallGetNode = CompilerContext.SpawnIntermediateNode<UK2Node_CallFunction>(GetEditorSubsystemNode, SourceGraph);
-	CallGetNode->FunctionReference.SetExternalMember(Get_FunctionName, USubsystemBlueprintLibrary::StaticClass());
+	CallGetNode->FunctionReference.SetExternalMember(Get_FunctionName, UEditorSubsystemBlueprintLibrary::StaticClass());
 	CallGetNode->AllocateDefaultPins();
 
 	UEdGraphPin* CallCreateClassTypePin = CallGetNode->FindPinChecked(Class_ParamName);
@@ -622,16 +637,16 @@ void UK2Node_GetEditorSubsystem::ExpandNode(class FKismetCompilerContext& Compil
 
 	if (SpawnClassPin && SpawnClassPin->LinkedTo.Num() > 0)
 	{
-		// Copy the 'class' connection from the spawn node to 'USubsystemBlueprintLibrary::GetLocalPlayerSubSystemFromPlayerController'
+		// Copy the 'class' connection from the spawn node to 'USubsystemUEditorSubsystemBlueprintLibraryBlueprintLibrary::GetLocalPlayerSubSystemFromPlayerController'
 		CompilerContext.MovePinLinksToIntermediate(*SpawnClassPin, *CallCreateClassTypePin);
 	}
 	else
 	{
-		// Copy class literal onto 'USubsystemBlueprintLibrary::GetLocalPlayerSubSystemFromPlayerController' call
+		// Copy class literal onto 'UEditorSubsystemBlueprintLibrary::GetLocalPlayerSubSystemFromPlayerController' call
 		CallCreateClassTypePin->DefaultObject = *CustomClass;
 	}
 
-	// Move result connection from spawn node to 'USubsystemBlueprintLibrary::Get[something]Subsystem'
+	// Move result connection from spawn node to 'UEditorSubsystemBlueprintLibrary::Get[something]Subsystem'
 	CallCreateResult->PinType = SpawnNodeResult->PinType;
 	CompilerContext.MovePinLinksToIntermediate(*SpawnNodeResult, *CallCreateResult);
 

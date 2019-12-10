@@ -366,6 +366,7 @@ void BuildMeshDrawCommandPrimitiveIdBuffer(
 	int32& MaxInstances,
 	int32& VisibleMeshDrawCommandsNum,
 	int32& NewPassVisibleMeshDrawCommandsNum,
+	EShaderPlatform ShaderPlatform,
 	uint32 InstanceFactor = 1
 	)
 {
@@ -451,7 +452,16 @@ void BuildMeshDrawCommandPrimitiveIdBuffer(
 			{
 				//@todo - refactor into memcpy
 				checkSlow(PrimitiveIdIndex < MaxPrimitiveId);
-				PrimitiveIds[PrimitiveIdIndex] = VisibleMeshDrawCommand.DrawPrimitiveId;
+				if (!GPUSceneUseTexture2D(ShaderPlatform))
+				{
+					PrimitiveIds[PrimitiveIdIndex] = VisibleMeshDrawCommand.DrawPrimitiveId;
+				}
+				else
+				{
+					//Packing for mobile texture2D GPUScene. Must be in sync with SceneData.ush
+					uint16 PrimitivesPerTextureLine = FPrimitiveSceneShaderData::GetPrimitivesPerTextureLine();
+					PrimitiveIds[PrimitiveIdIndex] = ((VisibleMeshDrawCommand.DrawPrimitiveId / PrimitivesPerTextureLine) << 16) | (VisibleMeshDrawCommand.DrawPrimitiveId % PrimitivesPerTextureLine);
+				}
 			}
 		}
 
@@ -845,6 +855,7 @@ public:
 					Context.MaxInstances,
 					Context.VisibleMeshDrawCommandsNum,
 					Context.NewPassVisibleMeshDrawCommandsNum,
+					Context.ShaderPlatform,
 					Context.InstanceFactor
 				);
 			}
@@ -905,6 +916,7 @@ void SortAndMergeDynamicPassMeshDrawCommands(
 				MaxInstances,
 				VisibleMeshDrawCommandsNum,
 				NewPassVisibleMeshDrawCommandsNum,
+				GShaderPlatformForFeatureLevel[FeatureLevel],
 				InstanceFactor
 			);
 
@@ -942,6 +954,7 @@ void FParallelMeshDrawCommandPass::DispatchPassSetup(
 
 	TaskContext.View = &View;
 	TaskContext.ShadingPath = Scene->GetShadingPath();
+	TaskContext.ShaderPlatform = Scene->GetShaderPlatform();
 	TaskContext.PassType = PassType;
 	TaskContext.bUseGPUScene = UseGPUScene(GMaxRHIShaderPlatform, View.GetFeatureLevel());
 	TaskContext.bDynamicInstancing = IsDynamicInstancingEnabled(View.GetFeatureLevel());
@@ -1128,38 +1141,6 @@ public:
 	}
 };
 
-/*
- * Copies provided vertex data (assumed to be on MemStack) to a vertex buffer.
- */
-struct FRHICommandUpdatePrimitiveIdBuffer : public FRHICommand<FRHICommandUpdatePrimitiveIdBuffer>
-{
-	FRHIVertexBuffer* VertexBuffer;
-	void* VertexBufferData;
-	int32 VertexBufferDataSize;
-
-	virtual ~FRHICommandUpdatePrimitiveIdBuffer() {}
-
-	FORCEINLINE_DEBUGGABLE FRHICommandUpdatePrimitiveIdBuffer(
-		FRHIVertexBuffer* InVertexBuffer,
-		void* InVertexBufferData,
-		int32 InVertexBufferDataSize)
-		: VertexBuffer(InVertexBuffer)
-		, VertexBufferData(InVertexBufferData)
-		, VertexBufferDataSize(InVertexBufferDataSize)
-	{
-	}
-
-	void Execute(FRHICommandListBase& CmdList)
-	{
-		// Upload vertex buffer data.
-		void* RESTRICT Data = (void* RESTRICT)GDynamicRHI->RHILockVertexBuffer(VertexBuffer, 0, VertexBufferDataSize, RLM_WriteOnly);
-		FMemory::Memcpy(Data, VertexBufferData, VertexBufferDataSize);
-		GDynamicRHI->RHIUnlockVertexBuffer(VertexBuffer);
-
-		FMemory::Free(VertexBufferData);
-	}
-};
-
 void FParallelMeshDrawCommandPass::DispatchDraw(FParallelCommandListSet* ParallelCommandListSet, FRHICommandList& RHICmdList) const
 {
 	if (MaxNumDraws <= 0)
@@ -1182,11 +1163,18 @@ void FParallelMeshDrawCommandPass::DispatchDraw(FParallelCommandListSet* Paralle
 				RHICommandList.AddDispatchPrerequisite(TaskEventRef);
 			}
 
-			new (RHICommandList.AllocCommand<FRHICommandUpdatePrimitiveIdBuffer>())FRHICommandUpdatePrimitiveIdBuffer(
-				PrimitiveIdVertexBufferRHI,
-				TaskContext.PrimitiveIdBufferData,
-				TaskContext.PrimitiveIdBufferDataSize
-			);
+			RHICommandList.EnqueueLambda([
+				VertexBuffer = PrimitiveIdsBuffer,
+				VertexBufferData = TaskContext.PrimitiveIdBufferData, 
+				VertexBufferDataSize = TaskContext.PrimitiveIdBufferDataSize](FRHICommandListImmediate& CmdList)
+			{
+				// Upload vertex buffer data.
+				void* RESTRICT Data = (void* RESTRICT)CmdList.LockVertexBuffer(VertexBuffer, 0, VertexBufferDataSize, RLM_WriteOnly);
+				FMemory::Memcpy(Data, VertexBufferData, VertexBufferDataSize);
+				CmdList.UnlockVertexBuffer(VertexBuffer);
+
+				FMemory::Free(VertexBufferData);
+			});
 
 			RHICommandList.RHIThreadFence(true);
 

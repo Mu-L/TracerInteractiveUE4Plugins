@@ -112,7 +112,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Audio|OSC")
 	void BindEventToOnOSCAddressPatternMatchesPath(const FOSCAddress& OSCAddressPattern, const FOSCDispatchMessageEventBP& Event);
 
-	/** Unbinds specific event from OSCAddress patter */
+	/** Unbinds specific event from OSCAddress pattern. */
 	UFUNCTION(BlueprintCallable, Category = "Audio|OSC")
 	void UnbindEventFromOnOSCAddressPatternMatchesPath(const FOSCAddress& OSCAddressPattern, const FOSCDispatchMessageEventBP& Event);
 
@@ -134,8 +134,8 @@ public:
 	/** Enqueues packet to be processed */
 	void EnqueuePacket(TSharedPtr<IOSCPacket>);
 
-	/** Callback for when message is received by server */
-	void OnMessageReceived(const FString& InIPAddress);
+	/** Callback for when packet is received by server */
+	void OnPacketReceived(const FString& InIPAddress);
 
 protected:
 	void BeginDestroy() override;

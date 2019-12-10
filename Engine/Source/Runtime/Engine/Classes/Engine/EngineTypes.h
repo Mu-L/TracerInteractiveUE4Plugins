@@ -472,6 +472,7 @@ enum EMaterialShadingModel
 	MSM_Hair					UMETA(DisplayName="Hair"),
 	MSM_Cloth					UMETA(DisplayName="Cloth"),
 	MSM_Eye						UMETA(DisplayName="Eye"),
+	MSM_SingleLayerWater		UMETA(DisplayName="SingleLayerWater"),
 	/** Number of unique shading models. */
 	MSM_NUM						UMETA(Hidden),
 	/** Shading model will be determined by the Material Expression Graph,
@@ -497,7 +498,7 @@ public:
 	void ClearShadingModels()												{ ShadingModelField = 0; }
 
 	// Check if any of the given shading models are present
-	bool HasAnyShadingModel(TArray<EMaterialShadingModel> InShadingModels) const	
+	bool HasAnyShadingModel(const TArray<EMaterialShadingModel>& InShadingModels) const	
 	{ 
 		for (EMaterialShadingModel ShadingModel : InShadingModels)
 		{
@@ -1980,7 +1981,7 @@ struct ENGINE_API FHitResult
 
 	/**
 	 * Normal of the hit in world space, for the object that was hit by the sweep, if any.
-	 * For example if a box hits a flat plane, this is a normalized vector pointing out from the plane.
+	 * For example if a sphere hits a flat plane, this is a normalized vector pointing out from the plane.
 	 * In the case of impact with a corner or edge of a surface, usually the "most opposing" normal (opposed to the query direction) is chosen.
 	 */
 	UPROPERTY()
@@ -2555,6 +2556,10 @@ struct FMeshBuildSettings
 	UPROPERTY(EditAnywhere, Category=BuildSettings)
 	uint8 bRecomputeTangents:1;
 
+	/** If true, we will use the surface area and the corner angle of the triangle as a ratio when computing the normals. */
+	UPROPERTY(EditAnywhere, Category = BuildSettings)
+	uint8 bComputeWeightedNormals : 1;
+
 	/** If true, degenerate triangles will be removed. */
 	UPROPERTY(EditAnywhere, Category=BuildSettings)
 	uint8 bRemoveDegenerates:1;
@@ -2621,6 +2626,7 @@ struct FMeshBuildSettings
 		: bUseMikkTSpace(true)
 		, bRecomputeNormals(true)
 		, bRecomputeTangents(true)
+		, bComputeWeightedNormals(false)
 		, bRemoveDegenerates(true)
 		, bBuildAdjacencyBuffer(true)
 		, bBuildReversedIndexBuffer(true)
@@ -2645,6 +2651,7 @@ struct FMeshBuildSettings
 	{
 		return bRecomputeNormals == Other.bRecomputeNormals
 			&& bRecomputeTangents == Other.bRecomputeTangents
+			&& bComputeWeightedNormals == Other.bComputeWeightedNormals
 			&& bUseMikkTSpace == Other.bUseMikkTSpace
 			&& bRemoveDegenerates == Other.bRemoveDegenerates
 			&& bBuildAdjacencyBuffer == Other.bBuildAdjacencyBuffer
@@ -2663,6 +2670,96 @@ struct FMeshBuildSettings
 
 	/** Inequality. */
 	bool operator!=(const FMeshBuildSettings& Other) const
+	{
+		return !(*this == Other);
+	}
+};
+
+/**
+ * Settings applied when building a mesh.
+ */
+USTRUCT()
+struct FSkeletalMeshBuildSettings
+{
+	GENERATED_BODY()
+
+	/** If true, normals in the raw mesh are ignored and recomputed. */
+	UPROPERTY(EditAnywhere, Category=BuildSettings)
+	uint8 bRecomputeNormals:1;
+
+	/** If true, tangents in the raw mesh are ignored and recomputed. */
+	UPROPERTY(EditAnywhere, Category=BuildSettings)
+	uint8 bRecomputeTangents:1;
+	
+	/** If true, degenerate triangles will be removed. */
+	UPROPERTY(EditAnywhere, Category=BuildSettings)
+	uint8 bUseMikkTSpace:1;
+	
+	/** If true, we will use the surface area and the corner angle of the triangle as a ratio when computing the normals. */
+	UPROPERTY(EditAnywhere, Category = BuildSettings)
+	uint8 bComputeWeightedNormals : 1;
+
+	/** If true, degenerate triangles will be removed. */
+	UPROPERTY(EditAnywhere, Category=BuildSettings)
+	uint8 bRemoveDegenerates:1;
+	
+	/** If true, Tangents will be stored at 16 bit vs 8 bit precision. */
+	UPROPERTY(EditAnywhere, Category = BuildSettings)
+	uint8 bUseHighPrecisionTangentBasis:1;
+
+	/** If true, UVs will be stored at full floating point precision. */
+	UPROPERTY(EditAnywhere, Category=BuildSettings)
+	uint8 bUseFullPrecisionUVs:1;
+	
+	/** Required for PNT tessellation but can be slow. Recommend disabling for larger meshes. */
+	UPROPERTY(EditAnywhere, Category=BuildSettings)
+	uint8 bBuildAdjacencyBuffer:1;
+
+	/** Threshold use to decide if two vertex position are equal. */
+	UPROPERTY(EditAnywhere, Category = BuildSettings)
+	float ThresholdPosition;
+
+	/** Threshold use to decide if two normal, tangents or bi-normals are equal. */
+	UPROPERTY(EditAnywhere, Category = BuildSettings)
+	float ThresholdTangentNormal;
+
+	/** Threshold use to decide if two UVs are equal. */
+	UPROPERTY(EditAnywhere, Category = BuildSettings)
+	float ThresholdUV;
+
+	/** Default settings. */
+	FSkeletalMeshBuildSettings()
+		: bRecomputeNormals(true)
+		, bRecomputeTangents(true)
+		, bUseMikkTSpace(true)
+		, bComputeWeightedNormals(false)
+		, bRemoveDegenerates(true)
+		, bUseHighPrecisionTangentBasis(false)
+		, bUseFullPrecisionUVs(false)
+		, bBuildAdjacencyBuffer(true)
+		, ThresholdPosition(0.00002)
+		, ThresholdTangentNormal(0.00002)
+		, ThresholdUV(0.0009765625)
+	{}
+
+	/** Equality operator. */
+	bool operator==(const FSkeletalMeshBuildSettings& Other) const
+	{
+		return bRecomputeNormals == Other.bRecomputeNormals
+			&& bRecomputeTangents == Other.bRecomputeTangents
+			&& bUseMikkTSpace == Other.bUseMikkTSpace
+			&& bComputeWeightedNormals == Other.bComputeWeightedNormals
+			&& bRemoveDegenerates == Other.bRemoveDegenerates
+			&& bUseHighPrecisionTangentBasis == Other.bUseHighPrecisionTangentBasis
+			&& bUseFullPrecisionUVs == Other.bUseFullPrecisionUVs
+			&& bBuildAdjacencyBuffer == Other.bBuildAdjacencyBuffer
+			&& ThresholdPosition == Other.ThresholdPosition
+			&& ThresholdTangentNormal == Other.ThresholdTangentNormal
+			&& ThresholdUV == Other.ThresholdUV;
+	}
+
+	/** Inequality. */
+	bool operator!=(const FSkeletalMeshBuildSettings& Other) const
 	{
 		return !(*this == Other);
 	}
@@ -3120,7 +3217,7 @@ struct ENGINE_API FRepMovement
 		bRepPhysics = true;
 	}
 
-	void CopyTo(struct FRigidBodyState& RBState, const AActor* const Actor = nullptr)
+	void CopyTo(struct FRigidBodyState& RBState, const AActor* const Actor = nullptr) const
 	{
 		RBState.Position = RebaseOntoLocalOrigin(Location, Actor);
 		RBState.Quaternion = Rotation.Quaternion();

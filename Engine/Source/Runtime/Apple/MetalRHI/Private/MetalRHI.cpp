@@ -13,6 +13,7 @@
 #elif PLATFORM_MAC
 #include "Mac/MacApplication.h"
 #include "HAL/PlatformApplicationMisc.h"
+#include "GenericPlatform/GenericPlatformFile.h"
 #endif
 #include "MetalProfiler.h"
 #include "GenericPlatform/GenericPlatformDriver.h"
@@ -35,6 +36,17 @@ static TAutoConsoleVariable<int32> CVarUseRHIThread(
 													TEXT("Default is 0."),
 													ECVF_Default | ECVF_RenderThreadSafe
 													);
+
+static TAutoConsoleVariable<int32> CVarIntelUseRHIThread(
+													TEXT("r.Metal.IntelRHIThread"),
+													0,
+													TEXT("Controls RHIThread usage for Mac Intel HW:\n")
+													TEXT("\t0: No RHIThread.\n")
+													TEXT("\t1: Use RHIThread.\n")
+													TEXT("Default is 0."),
+													ECVF_Default | ECVF_RenderThreadSafe
+													);
+
 
 static void ValidateTargetedRHIFeatureLevelExists(EShaderPlatform Platform)
 {
@@ -155,7 +167,7 @@ FMetalDynamicRHI::FMetalDynamicRHI(ERHIFeatureLevel::Type RequestedFeatureLevel)
     bool bProjectSupportsMRTs = false;
     GConfig->GetBool(TEXT("/Script/IOSRuntimeSettings.IOSRuntimeSettings"), TEXT("bSupportsMetalMRT"), bProjectSupportsMRTs, GEngineIni);
 
-	bool const bRequestedMetalMRT = ((RequestedFeatureLevel >= ERHIFeatureLevel::SM4) || (!bRequestedFeatureLevel && FParse::Param(FCommandLine::Get(),TEXT("metalmrt"))));
+	bool const bRequestedMetalMRT = ((RequestedFeatureLevel >= ERHIFeatureLevel::SM5) || (!bRequestedFeatureLevel && FParse::Param(FCommandLine::Get(),TEXT("metalmrt"))));
 	bSupportsRHIThread = FParse::Param(FCommandLine::Get(),TEXT("rhithread"));
 
     // only allow GBuffers, etc on A8s (A7s are just not going to cut it)
@@ -201,8 +213,8 @@ FMetalDynamicRHI::FMetalDynamicRHI(ERHIFeatureLevel::Type RequestedFeatureLevel)
 	GShaderPlatformForFeatureLevel[ERHIFeatureLevel::ES2] = SP_METAL;
 	GShaderPlatformForFeatureLevel[ERHIFeatureLevel::ES3_1] = SP_METAL;
 #endif
-	GShaderPlatformForFeatureLevel[ERHIFeatureLevel::SM4] = (GMaxRHIFeatureLevel >= ERHIFeatureLevel::SM4) ? GMaxRHIShaderPlatform : SP_NumPlatforms;
-	GShaderPlatformForFeatureLevel[ERHIFeatureLevel::SM5] = (GMaxRHIFeatureLevel >= ERHIFeatureLevel::SM4) ? GMaxRHIShaderPlatform : SP_NumPlatforms;
+	GShaderPlatformForFeatureLevel[ERHIFeatureLevel::SM4_REMOVED] = SP_NumPlatforms;
+	GShaderPlatformForFeatureLevel[ERHIFeatureLevel::SM5] = (GMaxRHIFeatureLevel >= ERHIFeatureLevel::SM5) ? GMaxRHIShaderPlatform : SP_NumPlatforms;
 
 #else // @todo zebra
 	uint32 DeviceIndex = ((FMetalDeviceContext*)ImmediateContext.Context)->GetDeviceIndex();
@@ -252,9 +264,10 @@ FMetalDynamicRHI::FMetalDynamicRHI(ERHIFeatureLevel::Type RequestedFeatureLevel)
 	else if(GRHIAdapterName.Contains("Intel"))
 	{
 		bSupportsTiledReflections = false;
-		bSupportsPointLights = (FPlatformMisc::MacOSXVersionCompare(10,11,4) >= 0);
+		bSupportsPointLights = (FPlatformMisc::MacOSXVersionCompare(10,14,6) > 0);
 		GRHIVendorId = 0x8086;
-		bSupportsRHIThread = true;
+		// HACK: Meshes jump around in Infiltrator with RHI thread on. Needs further investigation and a real fix.
+		bSupportsRHIThread = false || CVarIntelUseRHIThread.GetValueOnAnyThread() > 0;
 		bSupportsDistanceFields = (FPlatformMisc::MacOSXVersionCompare(10,12,2) >= 0);
 		bIsIntelHaswell = (GRHIAdapterName == TEXT("Intel HD Graphics 5000") || GRHIAdapterName == TEXT("Intel Iris Graphics") || GRHIAdapterName == TEXT("Intel Iris Pro Graphics"));
 	}
@@ -304,7 +317,7 @@ FMetalDynamicRHI::FMetalDynamicRHI(ERHIFeatureLevel::Type RequestedFeatureLevel)
 	
 	GShaderPlatformForFeatureLevel[ERHIFeatureLevel::ES2] = SP_METAL_MACES2;
 	GShaderPlatformForFeatureLevel[ERHIFeatureLevel::ES3_1] = (GMaxRHIFeatureLevel >= ERHIFeatureLevel::ES3_1) ? SP_METAL_MACES3_1 : SP_NumPlatforms;
-	GShaderPlatformForFeatureLevel[ERHIFeatureLevel::SM4] = SP_NumPlatforms;
+	GShaderPlatformForFeatureLevel[ERHIFeatureLevel::SM4_REMOVED] = SP_NumPlatforms;
 	GShaderPlatformForFeatureLevel[ERHIFeatureLevel::SM5] = (GMaxRHIFeatureLevel >= ERHIFeatureLevel::SM5) ? GMaxRHIShaderPlatform : SP_NumPlatforms;
 	
 	// Mac GPUs support layer indexing.
@@ -476,7 +489,7 @@ FMetalDynamicRHI::FMetalDynamicRHI(ERHIFeatureLevel::Type RequestedFeatureLevel)
 	GRHISupportsTextureStreaming = true;
 	GSupportsWideMRT = bCanUseWideMRTs;
 	// GSupportsTransientResourceAliasing = FMetalCommandQueue::SupportsFeature(EMetalFeaturesHeaps) && FMetalCommandQueue::SupportsFeature(EMetalFeaturesFences);
-	GSupportsSeparateRenderTargetBlendState = (GMaxRHIFeatureLevel >= ERHIFeatureLevel::SM4);
+	GSupportsSeparateRenderTargetBlendState = (GMaxRHIFeatureLevel >= ERHIFeatureLevel::SM5);
 
 #if PLATFORM_MAC
 	check(Device.SupportsFeatureSet(mtlpp::FeatureSet::macOS_GPUFamily1_v1));
@@ -527,75 +540,75 @@ FMetalDynamicRHI::FMetalDynamicRHI(ERHIFeatureLevel::Type RequestedFeatureLevel)
 #if METAL_DEBUG_OPTIONS
 	FMemory::Memset(GMetalBufferFormats, 255);
 #endif
-	GMetalBufferFormats[PF_Unknown              ] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_A32B32G32R32F        ] = { mtlpp::PixelFormat::RGBA32Float, EMetalBufferFormat::RGBA32Float };
-	GMetalBufferFormats[PF_B8G8R8A8             ] = { mtlpp::PixelFormat::RGBA8Unorm, EMetalBufferFormat::RGBA8Unorm }; // mtlpp::PixelFormat::BGRA8Unorm/EMetalBufferFormat::BGRA8Unorm,  < We don't support this as a vertex-format so we have code to swizzle in the shader
-	GMetalBufferFormats[PF_G8                   ] = { mtlpp::PixelFormat::R8Unorm, EMetalBufferFormat::R8Unorm };
-	GMetalBufferFormats[PF_G16                  ] = { mtlpp::PixelFormat::R16Unorm, EMetalBufferFormat::R16Unorm };
-	GMetalBufferFormats[PF_DXT1                 ] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_DXT3                 ] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_DXT5                 ] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_UYVY                 ] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_FloatRGB             ] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::RGB16Half };
-	GMetalBufferFormats[PF_FloatRGBA            ] = { mtlpp::PixelFormat::RGBA16Float, EMetalBufferFormat::RGBA16Half };
-	GMetalBufferFormats[PF_DepthStencil         ] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_ShadowDepth          ] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_R32_FLOAT            ] = { mtlpp::PixelFormat::R32Float, EMetalBufferFormat::R32Float };
-	GMetalBufferFormats[PF_G16R16               ] = { mtlpp::PixelFormat::RG16Unorm, EMetalBufferFormat::RG16Unorm };
-	GMetalBufferFormats[PF_G16R16F              ] = { mtlpp::PixelFormat::RG16Float, EMetalBufferFormat::RG16Half };
-	GMetalBufferFormats[PF_G16R16F_FILTER       ] = { mtlpp::PixelFormat::RG16Float, EMetalBufferFormat::RG16Half };
-	GMetalBufferFormats[PF_G32R32F              ] = { mtlpp::PixelFormat::RG32Float, EMetalBufferFormat::RG32Float };
-	GMetalBufferFormats[PF_A2B10G10R10          ] = { mtlpp::PixelFormat::RGB10A2Unorm, EMetalBufferFormat::RGB10A2Unorm };
-	GMetalBufferFormats[PF_A16B16G16R16         ] = { mtlpp::PixelFormat::RGBA16Unorm, EMetalBufferFormat::RGBA16Half };
-	GMetalBufferFormats[PF_D24                  ] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_R16F                 ] = { mtlpp::PixelFormat::R16Float, EMetalBufferFormat::RG16Half };
-	GMetalBufferFormats[PF_R16F_FILTER          ] = { mtlpp::PixelFormat::R16Float, EMetalBufferFormat::RG16Half };
-	GMetalBufferFormats[PF_BC5                  ] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_V8U8                 ] = { mtlpp::PixelFormat::RG8Snorm, EMetalBufferFormat::RG8Unorm };
-	GMetalBufferFormats[PF_A1                   ] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_FloatR11G11B10       ] = { mtlpp::PixelFormat::RG11B10Float, EMetalBufferFormat::RG11B10Half }; // < May not work on tvOS
-	GMetalBufferFormats[PF_A8                   ] = { mtlpp::PixelFormat::A8Unorm, EMetalBufferFormat::R8Unorm };
-	GMetalBufferFormats[PF_R32_UINT             ] = { mtlpp::PixelFormat::R32Uint, EMetalBufferFormat::R32Uint };
-	GMetalBufferFormats[PF_R32_SINT             ] = { mtlpp::PixelFormat::R32Sint, EMetalBufferFormat::R32Sint };
-	GMetalBufferFormats[PF_PVRTC2               ] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_PVRTC4               ] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_R16_UINT             ] = { mtlpp::PixelFormat::R16Uint, EMetalBufferFormat::R16Uint };
-	GMetalBufferFormats[PF_R16_SINT             ] = { mtlpp::PixelFormat::R16Sint, EMetalBufferFormat::R16Sint };
-	GMetalBufferFormats[PF_R16G16B16A16_UINT    ] = { mtlpp::PixelFormat::RGBA16Uint, EMetalBufferFormat::RGBA16Uint };
-	GMetalBufferFormats[PF_R16G16B16A16_SINT    ] = { mtlpp::PixelFormat::RGBA16Sint, EMetalBufferFormat::RGBA16Sint };
-	GMetalBufferFormats[PF_R5G6B5_UNORM         ] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::R5G6B5Unorm };
-	GMetalBufferFormats[PF_R8G8B8A8             ] = { mtlpp::PixelFormat::RGBA8Unorm, EMetalBufferFormat::RGBA8Unorm };
-	GMetalBufferFormats[PF_A8R8G8B8				] = { mtlpp::PixelFormat::RGBA8Unorm, EMetalBufferFormat::RGBA8Unorm }; // mtlpp::PixelFormat::BGRA8Unorm/EMetalBufferFormat::BGRA8Unorm,  < We don't support this as a vertex-format so we have code to swizzle in the shader
-	GMetalBufferFormats[PF_BC4					] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_R8G8                 ] = { mtlpp::PixelFormat::RG8Unorm, EMetalBufferFormat::RG8Unorm };
-	GMetalBufferFormats[PF_ATC_RGB				] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_ATC_RGBA_E			] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_ATC_RGBA_I			] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_X24_G8				] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_ETC1					] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_ETC2_RGB				] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_ETC2_RGBA			] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_R32G32B32A32_UINT	] = { mtlpp::PixelFormat::RGBA32Uint, EMetalBufferFormat::RGBA32Uint };
-	GMetalBufferFormats[PF_R16G16_UINT			] = { mtlpp::PixelFormat::RG16Uint, EMetalBufferFormat::RG16Uint };
-	GMetalBufferFormats[PF_R32G32_UINT			] = { mtlpp::PixelFormat::RG32Uint, EMetalBufferFormat::RG32Uint };
-	GMetalBufferFormats[PF_ASTC_4x4             ] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_ASTC_6x6             ] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_ASTC_8x8             ] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_ASTC_10x10           ] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_ASTC_12x12           ] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_BC6H					] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_BC7					] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_R8_UINT				] = { mtlpp::PixelFormat::R8Uint, EMetalBufferFormat::R8Uint };
-	GMetalBufferFormats[PF_L8					] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::R8Unorm };
-	GMetalBufferFormats[PF_XGXR8				] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_R8G8B8A8_UINT		] = { mtlpp::PixelFormat::RGBA8Uint, EMetalBufferFormat::RGBA8Uint };
-	GMetalBufferFormats[PF_R8G8B8A8_SNORM		] = { mtlpp::PixelFormat::RGBA8Snorm, EMetalBufferFormat::RGBA8Snorm };
-	GMetalBufferFormats[PF_R16G16B16A16_UNORM	] = { mtlpp::PixelFormat::RGBA16Unorm, EMetalBufferFormat::RGBA16Unorm };
-	GMetalBufferFormats[PF_R16G16B16A16_SNORM	] = { mtlpp::PixelFormat::RGBA16Snorm, EMetalBufferFormat::RGBA16Snorm };
-	GMetalBufferFormats[PF_PLATFORM_HDR_0		] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_PLATFORM_HDR_1		] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_PLATFORM_HDR_2		] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
-	GMetalBufferFormats[PF_NV12					] = { mtlpp::PixelFormat::Invalid, EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_Unknown              ] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_A32B32G32R32F        ] = { mtlpp::PixelFormat::RGBA32Float, (uint8)EMetalBufferFormat::RGBA32Float };
+	GMetalBufferFormats[PF_B8G8R8A8             ] = { mtlpp::PixelFormat::RGBA8Unorm, (uint8)EMetalBufferFormat::RGBA8Unorm }; // mtlpp::PixelFormat::BGRA8Unorm/EMetalBufferFormat::BGRA8Unorm,  < We don't support this as a vertex-format so we have code to swizzle in the shader
+	GMetalBufferFormats[PF_G8                   ] = { mtlpp::PixelFormat::R8Unorm, (uint8)EMetalBufferFormat::R8Unorm };
+	GMetalBufferFormats[PF_G16                  ] = { mtlpp::PixelFormat::R16Unorm, (uint8)EMetalBufferFormat::R16Unorm };
+	GMetalBufferFormats[PF_DXT1                 ] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_DXT3                 ] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_DXT5                 ] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_UYVY                 ] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_FloatRGB             ] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::RGB16Half };
+	GMetalBufferFormats[PF_FloatRGBA            ] = { mtlpp::PixelFormat::RGBA16Float, (uint8)EMetalBufferFormat::RGBA16Half };
+	GMetalBufferFormats[PF_DepthStencil         ] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_ShadowDepth          ] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_R32_FLOAT            ] = { mtlpp::PixelFormat::R32Float, (uint8)EMetalBufferFormat::R32Float };
+	GMetalBufferFormats[PF_G16R16               ] = { mtlpp::PixelFormat::RG16Unorm, (uint8)EMetalBufferFormat::RG16Unorm };
+	GMetalBufferFormats[PF_G16R16F              ] = { mtlpp::PixelFormat::RG16Float, (uint8)EMetalBufferFormat::RG16Half };
+	GMetalBufferFormats[PF_G16R16F_FILTER       ] = { mtlpp::PixelFormat::RG16Float, (uint8)EMetalBufferFormat::RG16Half };
+	GMetalBufferFormats[PF_G32R32F              ] = { mtlpp::PixelFormat::RG32Float, (uint8)EMetalBufferFormat::RG32Float };
+	GMetalBufferFormats[PF_A2B10G10R10          ] = { mtlpp::PixelFormat::RGB10A2Unorm, (uint8)EMetalBufferFormat::RGB10A2Unorm };
+	GMetalBufferFormats[PF_A16B16G16R16         ] = { mtlpp::PixelFormat::RGBA16Unorm, (uint8)EMetalBufferFormat::RGBA16Half };
+	GMetalBufferFormats[PF_D24                  ] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_R16F                 ] = { mtlpp::PixelFormat::R16Float, (uint8)EMetalBufferFormat::RG16Half };
+	GMetalBufferFormats[PF_R16F_FILTER          ] = { mtlpp::PixelFormat::R16Float, (uint8)EMetalBufferFormat::RG16Half };
+	GMetalBufferFormats[PF_BC5                  ] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_V8U8                 ] = { mtlpp::PixelFormat::RG8Snorm, (uint8)EMetalBufferFormat::RG8Unorm };
+	GMetalBufferFormats[PF_A1                   ] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_FloatR11G11B10       ] = { mtlpp::PixelFormat::RG11B10Float, (uint8)EMetalBufferFormat::RG11B10Half }; // < May not work on tvOS
+	GMetalBufferFormats[PF_A8                   ] = { mtlpp::PixelFormat::A8Unorm, (uint8)EMetalBufferFormat::R8Unorm };
+	GMetalBufferFormats[PF_R32_UINT             ] = { mtlpp::PixelFormat::R32Uint, (uint8)EMetalBufferFormat::R32Uint };
+	GMetalBufferFormats[PF_R32_SINT             ] = { mtlpp::PixelFormat::R32Sint, (uint8)EMetalBufferFormat::R32Sint };
+	GMetalBufferFormats[PF_PVRTC2               ] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_PVRTC4               ] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_R16_UINT             ] = { mtlpp::PixelFormat::R16Uint, (uint8)EMetalBufferFormat::R16Uint };
+	GMetalBufferFormats[PF_R16_SINT             ] = { mtlpp::PixelFormat::R16Sint, (uint8)EMetalBufferFormat::R16Sint };
+	GMetalBufferFormats[PF_R16G16B16A16_UINT    ] = { mtlpp::PixelFormat::RGBA16Uint, (uint8)EMetalBufferFormat::RGBA16Uint };
+	GMetalBufferFormats[PF_R16G16B16A16_SINT    ] = { mtlpp::PixelFormat::RGBA16Sint, (uint8)EMetalBufferFormat::RGBA16Sint };
+	GMetalBufferFormats[PF_R5G6B5_UNORM         ] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::R5G6B5Unorm };
+	GMetalBufferFormats[PF_R8G8B8A8             ] = { mtlpp::PixelFormat::RGBA8Unorm, (uint8)EMetalBufferFormat::RGBA8Unorm };
+	GMetalBufferFormats[PF_A8R8G8B8				] = { mtlpp::PixelFormat::RGBA8Unorm, (uint8)EMetalBufferFormat::RGBA8Unorm }; // mtlpp::PixelFormat::BGRA8Unorm/EMetalBufferFormat::BGRA8Unorm,  < We don't support this as a vertex-format so we have code to swizzle in the shader
+	GMetalBufferFormats[PF_BC4					] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_R8G8                 ] = { mtlpp::PixelFormat::RG8Unorm, (uint8)EMetalBufferFormat::RG8Unorm };
+	GMetalBufferFormats[PF_ATC_RGB				] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_ATC_RGBA_E			] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_ATC_RGBA_I			] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_X24_G8				] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_ETC1					] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_ETC2_RGB				] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_ETC2_RGBA			] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_R32G32B32A32_UINT	] = { mtlpp::PixelFormat::RGBA32Uint, (uint8)EMetalBufferFormat::RGBA32Uint };
+	GMetalBufferFormats[PF_R16G16_UINT			] = { mtlpp::PixelFormat::RG16Uint, (uint8)EMetalBufferFormat::RG16Uint };
+	GMetalBufferFormats[PF_R32G32_UINT			] = { mtlpp::PixelFormat::RG32Uint, (uint8)EMetalBufferFormat::RG32Uint };
+	GMetalBufferFormats[PF_ASTC_4x4             ] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_ASTC_6x6             ] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_ASTC_8x8             ] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_ASTC_10x10           ] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_ASTC_12x12           ] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_BC6H					] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_BC7					] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_R8_UINT				] = { mtlpp::PixelFormat::R8Uint, (uint8)EMetalBufferFormat::R8Uint };
+	GMetalBufferFormats[PF_L8					] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::R8Unorm };
+	GMetalBufferFormats[PF_XGXR8				] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_R8G8B8A8_UINT		] = { mtlpp::PixelFormat::RGBA8Uint, (uint8)EMetalBufferFormat::RGBA8Uint };
+	GMetalBufferFormats[PF_R8G8B8A8_SNORM		] = { mtlpp::PixelFormat::RGBA8Snorm, (uint8)EMetalBufferFormat::RGBA8Snorm };
+	GMetalBufferFormats[PF_R16G16B16A16_UNORM	] = { mtlpp::PixelFormat::RGBA16Unorm, (uint8)EMetalBufferFormat::RGBA16Unorm };
+	GMetalBufferFormats[PF_R16G16B16A16_SNORM	] = { mtlpp::PixelFormat::RGBA16Snorm, (uint8)EMetalBufferFormat::RGBA16Snorm };
+	GMetalBufferFormats[PF_PLATFORM_HDR_0		] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_PLATFORM_HDR_1		] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_PLATFORM_HDR_2		] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
+	GMetalBufferFormats[PF_NV12					] = { mtlpp::PixelFormat::Invalid, (uint8)EMetalBufferFormat::Unknown };
 		
 	// Initialize the platform pixel format map.
 	GPixelFormats[PF_Unknown			].PlatformFormat	= (uint32)mtlpp::PixelFormat::Invalid;
@@ -646,6 +659,7 @@ FMetalDynamicRHI::FMetalDynamicRHI(ERHIFeatureLevel::Type RequestedFeatureLevel)
 		GPixelFormats[PF_FloatRGBA			].BlockBytes		= 8;
 		GPixelFormats[PF_FloatR11G11B10		].PlatformFormat	= (uint32)mtlpp::PixelFormat::RGBA16Float;
 		GPixelFormats[PF_FloatR11G11B10		].BlockBytes		= 8;
+		GPixelFormats[PF_FloatR11G11B10		].Supported			= true;
 	}
 	else
 	{
@@ -798,48 +812,11 @@ FMetalDynamicRHI::FMetalDynamicRHI(ERHIFeatureLevel::Type RequestedFeatureLevel)
 	}
 
 #if PLATFORM_MAC
-	if(!FPlatformProcess::IsSandboxedApplication())
+	if (!FPlatformProcess::IsSandboxedApplication())
 	{
-		FString Version;
-		if (GRHIAdapterUserDriverVersion.Len())	
-		{
-			Version = GRHIAdapterUserDriverVersion;
-		}
-		else
-		{
-			auto OSVersion = [[NSProcessInfo processInfo] operatingSystemVersion];
-			Version = FString::Printf(TEXT("%ld.%ld.%ld"), OSVersion.majorVersion, OSVersion.minorVersion, OSVersion.patchVersion);
-		}
-
-		NSString* DstPath = [NSString stringWithFormat:@"%@/BinaryPSOs/%@/com.apple.metal", FPaths::ProjectSavedDir().GetNSString(), Version.GetNSString()];
-		if([[NSFileManager defaultManager] fileExistsAtPath:DstPath])
-		{
-			NSString* TempDir = [NSString stringWithFormat:@"%@/../C/%@/com.apple.metal", NSTemporaryDirectory(), [NSBundle mainBundle].bundleIdentifier];
-
-			NSError* Err = nil;
-			if(![[NSFileManager defaultManager] fileExistsAtPath:TempDir])
-			{
-				[[NSFileManager defaultManager] createDirectoryAtPath:TempDir
-											withIntermediateDirectories:YES
-															 attributes:nil
-																  error:&Err];
-			}
-			
-			NSDirectoryEnumerator<NSString *> * Enum = [[NSFileManager defaultManager] enumeratorAtPath:DstPath];
-			for (NSString* Path in Enum)
-			{
-				[Enum skipDescendents];
-
-				NSString* Dest = [NSString stringWithFormat:@"%@/%@", TempDir, Path];
-				if(![[NSFileManager defaultManager] fileExistsAtPath:Dest])
-				{
-					NSString* Src = [NSString stringWithFormat:@"%@/%@", DstPath, Path];
-					[[NSFileManager defaultManager] copyItemAtPath:Src
-																   toPath:Dest
-																	error:&Err];
-				}
-			}
-		}
+		// Cleanup local BinaryPSOs folder as it's not used anymore.
+		const FString BinaryPSOsDir = FPaths::ProjectSavedDir() / TEXT("BinaryPSOs");
+		IPlatformFile::GetPlatformPhysical().DeleteDirectoryRecursively(*BinaryPSOsDir);
 	}
 #endif
 
@@ -871,39 +848,6 @@ FMetalDynamicRHI::~FMetalDynamicRHI()
 {
 	check(IsInGameThread() && IsInRenderingThread());
 	
-#if PLATFORM_MAC
-	if(!FPlatformProcess::IsSandboxedApplication())
-	{
-		NSString* TempDir = [NSString stringWithFormat:@"%@/../C/%@/com.apple.metal", NSTemporaryDirectory(), [NSBundle mainBundle].bundleIdentifier];
-
-		FString Version;
-		if (GRHIAdapterUserDriverVersion.Len())	
-		{
-			Version = GRHIAdapterUserDriverVersion;
-		}
-		else
-		{
-			auto OSVersion = [[NSProcessInfo processInfo] operatingSystemVersion];
-			Version = FString::Printf(TEXT("%ld.%ld.%ld"), OSVersion.majorVersion, OSVersion.minorVersion, OSVersion.patchVersion);
-		}
-
-		NSString* DstPath = [NSString stringWithFormat:@"%@/BinaryPSOs/%@/com.apple.metal", FPaths::ProjectSavedDir().GetNSString(), Version.GetNSString()];
-
-		NSError* Err = nil;
-		BOOL bOK = [[NSFileManager defaultManager] removeItemAtPath:[NSString stringWithFormat:@"%@/BinaryPSOs", FPaths::ProjectSavedDir().GetNSString()]
-					error:&Err];
-
-		bOK = [[NSFileManager defaultManager] createDirectoryAtPath:[NSString stringWithFormat:@"%@/BinaryPSOs/%@", FPaths::ProjectSavedDir().GetNSString(), Version.GetNSString()]
-					withIntermediateDirectories:YES
-					attributes:nil
-							error:&Err];
-
-		bOK = [[NSFileManager defaultManager] copyItemAtPath:TempDir
-					toPath:DstPath 
-					error:&Err];
-	}
-#endif
-
 	// Ask all initialized FRenderResources to release their RHI resources.
 	for (TLinkedList<FRenderResource*>::TIterator ResourceIt(FRenderResource::GetResourceList()); ResourceIt; ResourceIt.Next())
 	{
@@ -925,7 +869,7 @@ FMetalDynamicRHI::~FMetalDynamicRHI()
 #endif
 }
 
-uint64 FMetalDynamicRHI::RHICalcTexture2DPlatformSize(uint32 SizeX, uint32 SizeY, uint8 Format, uint32 NumMips, uint32 NumSamples, uint32 Flags, uint32& OutAlign)
+uint64 FMetalDynamicRHI::RHICalcTexture2DPlatformSize(uint32 SizeX, uint32 SizeY, uint8 Format, uint32 NumMips, uint32 NumSamples, uint32 Flags, const FRHIResourceCreateInfo& CreateInfo, uint32& OutAlign)
 {
 	@autoreleasepool {
 	OutAlign = 0;
@@ -933,7 +877,7 @@ uint64 FMetalDynamicRHI::RHICalcTexture2DPlatformSize(uint32 SizeX, uint32 SizeY
 	}
 }
 
-uint64 FMetalDynamicRHI::RHICalcTexture3DPlatformSize(uint32 SizeX, uint32 SizeY, uint32 SizeZ, uint8 Format, uint32 NumMips, uint32 Flags, uint32& OutAlign)
+uint64 FMetalDynamicRHI::RHICalcTexture3DPlatformSize(uint32 SizeX, uint32 SizeY, uint32 SizeZ, uint8 Format, uint32 NumMips, uint32 Flags, const FRHIResourceCreateInfo& CreateInfo, uint32& OutAlign)
 {
 	@autoreleasepool {
 	OutAlign = 0;
@@ -941,7 +885,7 @@ uint64 FMetalDynamicRHI::RHICalcTexture3DPlatformSize(uint32 SizeX, uint32 SizeY
 	}
 }
 
-uint64 FMetalDynamicRHI::RHICalcTextureCubePlatformSize(uint32 Size, uint8 Format, uint32 NumMips, uint32 Flags,	uint32& OutAlign)
+uint64 FMetalDynamicRHI::RHICalcTextureCubePlatformSize(uint32 Size, uint8 Format, uint32 NumMips, uint32 Flags, const FRHIResourceCreateInfo& CreateInfo, uint32& OutAlign)
 {
 	@autoreleasepool {
 	OutAlign = 0;
@@ -1148,6 +1092,12 @@ void* FMetalDynamicRHI::RHIGetNativeDevice()
 {
 	return (void*)ImmediateContext.Context->GetDevice().GetPtr();
 }
+
+void* FMetalDynamicRHI::RHIGetNativeInstance()
+{
+	return nullptr;
+}
+
 
 uint16 FMetalDynamicRHI::RHIGetPlatformTextureMaxSampleCount()
 {

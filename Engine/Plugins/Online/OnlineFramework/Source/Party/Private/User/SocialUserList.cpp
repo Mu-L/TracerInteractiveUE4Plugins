@@ -80,10 +80,8 @@ void FSocialUserList::InitializeList()
 		}
 	}
 
-	if (ListConfig.bAutoUpdate)
-	{
-		SetAutoUpdatePeriod(USocialSettings::GetUserListAutoUpdateRate());
-	}
+	AutoUpdatePeriod = USocialSettings::GetUserListAutoUpdateRate();
+	SetAllowAutoUpdate(ListConfig.bAutoUpdate);
 }
 
 void FSocialUserList::AddReferencedObjects(FReferenceCollector& Collector)
@@ -96,17 +94,15 @@ void FSocialUserList::UpdateNow()
 	UpdateListInternal();
 }
 
-void FSocialUserList::SetAutoUpdatePeriod(float InAutoUpdatePeriod)
+void FSocialUserList::SetAllowAutoUpdate(bool bIsEnabled)
 {
-	AutoUpdatePeriod = InAutoUpdatePeriod;
-	if (UpdateTickerHandle.IsValid())
+	if (!bIsEnabled && UpdateTickerHandle.IsValid())
 	{
 		FTicker::GetCoreTicker().RemoveTicker(UpdateTickerHandle);
 	}
-
-	if (InAutoUpdatePeriod >= 0.f)
+	else if (bIsEnabled && !UpdateTickerHandle.IsValid())
 	{
-		UpdateTickerHandle = FTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateSP(this, &FSocialUserList::HandleAutoUpdateList), InAutoUpdatePeriod);
+		UpdateTickerHandle = FTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateSP(this, &FSocialUserList::HandleAutoUpdateList), AutoUpdatePeriod);
 	}
 }
 
@@ -475,15 +471,14 @@ struct FUserSortData
 
 bool FSocialUserList::HandleAutoUpdateList(float)
 {
-	if (bAllowAutoUpdate)
-	{
-		UpdateListInternal();
-	}
+	UpdateListInternal();
 	return true;
 }
 
 void FSocialUserList::UpdateListInternal()
 {
+	QUICK_SCOPE_CYCLE_COUNTER(STAT_SocialUserList_UpdateList);
+
 	// Re-evaluate whether each user with dirtied presence is still fit for the list
 	for (TWeakObjectPtr<USocialUser> DirtyUser : UsersWithDirtyPresence)
 	{

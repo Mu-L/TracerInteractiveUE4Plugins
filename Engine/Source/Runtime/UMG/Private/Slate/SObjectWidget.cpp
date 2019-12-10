@@ -130,16 +130,6 @@ int32 SObjectWidget::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 	return MaxLayer;
 }
 
-bool SObjectWidget::ComputeVolatility() const
-{
-	if ( CanRouteEvent() )
-	{
-		return SCompoundWidget::ComputeVolatility() || WidgetObject->IsPlayingAnimation();
-	}
-
-	return SCompoundWidget::ComputeVolatility();
-}
-
 FVector2D SObjectWidget::ComputeDesiredSize(float LayoutScaleMultiplier) const
 {
 	const FVector2D BaseDesiredSize = SCompoundWidget::ComputeDesiredSize(LayoutScaleMultiplier);

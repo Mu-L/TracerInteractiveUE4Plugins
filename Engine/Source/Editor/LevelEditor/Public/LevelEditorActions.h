@@ -87,6 +87,7 @@ public:
 	TSharedPtr< FUICommandInfo > BuildPathsOnly;
 	TSharedPtr< FUICommandInfo > BuildLODsOnly;
 	TSharedPtr< FUICommandInfo > BuildTextureStreamingOnly;
+	TSharedPtr< FUICommandInfo > BuildVirtualTextureOnly;
 	TSharedPtr< FUICommandInfo > LightingQuality_Production;
 	TSharedPtr< FUICommandInfo > LightingQuality_High;
 	TSharedPtr< FUICommandInfo > LightingQuality_Medium;
@@ -545,7 +546,6 @@ public:
 	TSharedPtr< FUICommandInfo > WorldProperties;
 	TSharedPtr< FUICommandInfo > OpenContentBrowser;
 	TSharedPtr< FUICommandInfo > OpenMarketplace;
-	TSharedPtr< FUICommandInfo > EditMatinee;
 	TSharedPtr< FUICommandInfo > ToggleVR;
 
 	/**
@@ -584,20 +584,14 @@ public:
 
 	TSharedPtr< FUICommandInfo > ToggleHideViewportUI;
 
-	TSharedPtr< FUICommandInfo > AddMatinee;
-
 	TSharedPtr< FUICommandInfo > MaterialQualityLevel_Low;
 	TSharedPtr< FUICommandInfo > MaterialQualityLevel_Medium;
 	TSharedPtr< FUICommandInfo > MaterialQualityLevel_High;
 
-	TSharedPtr< FUICommandInfo > FeatureLevelPreview[ERHIFeatureLevel::Num];
-	
 	TSharedPtr< FUICommandInfo > ToggleFeatureLevelPreview;
 
-	TSharedPtr< FUICommandInfo > PreviewPlatformOverride_DefaultES2;
+	TSharedPtr< FUICommandInfo > PreviewPlatformOverride_SM5;
 	TSharedPtr< FUICommandInfo > PreviewPlatformOverride_AndroidGLES2;
-
-	TSharedPtr< FUICommandInfo > PreviewPlatformOverride_DefaultES31;
 	TSharedPtr< FUICommandInfo > PreviewPlatformOverride_AndroidGLES31;
 	TSharedPtr< FUICommandInfo > PreviewPlatformOverride_AndroidVulkanES31;
 	TSharedPtr< FUICommandInfo > PreviewPlatformOverride_IOSMetalES31;
@@ -630,6 +624,7 @@ public:
 	TSharedPtr< FUICommandInfo > SelectActorsInLayers;
 
 	TSharedPtr< FUICommandInfo > FocusAllViewportsToSelection;
+	TSharedPtr< FUICommandInfo > FocusViewportToSelection;
 
         // Open merge actor command
 	TSharedPtr< FUICommandInfo > OpenMergeActor;
@@ -776,6 +771,7 @@ public:
 	static void BuildPathsOnly_Execute();
 	static void BuildLODsOnly_Execute();
 	static void BuildTextureStreamingOnly_Execute();
+	static void BuildVirtualTextureOnly_Execute();
 	static void SetLightingQuality( ELightingBuildQuality NewQuality );
 	static bool IsLightingQualityChecked( ELightingBuildQuality TestQuality );
 	static float GetLightingDensityIdeal();
@@ -816,11 +812,8 @@ public:
 	static bool IsFeatureLevelPreviewEnabled();
 	static bool IsFeatureLevelPreviewActive();
 	static bool IsPreviewModeButtonVisible();
-	static void SetPreviewPlatform(FName MaterialQualityPlatform,ERHIFeatureLevel::Type PreviewFeatureLevel);
-	static bool IsPreviewPlatformChecked(FName MaterialQualityPlatform, ERHIFeatureLevel::Type PreviewFeatureLevel);
-	static void SetFeatureLevelPreview(ERHIFeatureLevel::Type InFeatureLevel);
-	static bool IsFeatureLevelPreviewChecked(ERHIFeatureLevel::Type InFeatureLevel);
-	static bool IsFeatureLevelPreviewAvailable(ERHIFeatureLevel::Type InFeatureLevel);
+	static void SetPreviewPlatform(FPreviewPlatformInfo NewPreviewPlatform);
+	static bool IsPreviewPlatformChecked(FPreviewPlatformInfo NewPreviewPlatform);
 	static void GeometryCollection_SelectAllGeometry();
 	static void GeometryCollection_SelectNone();
 	static void GeometryCollection_SelectInverseGeometry();
@@ -1251,8 +1244,6 @@ public:
 	static void MakeBuilderBrush( UClass* BrushBuilderClass );
 
 	static void OnAddVolume( UClass* VolumeClass );
-
-	static void OnAddMatinee();
 
 	static void SelectActorsInLayers();
 

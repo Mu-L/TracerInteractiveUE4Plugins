@@ -31,16 +31,16 @@ void FActorViewportTransformable::ApplyTransform( const FTransform& NewTransform
 				ExistingTransform.GetScale3D() == NewTransform.GetScale3D();
 			GEditor->BroadcastBeginObjectMovement(*Actor);
 			
-			UProperty* TransformProperty = FindField<UProperty>(USceneComponent::StaticClass(), GET_MEMBER_NAME_CHECKED(USceneComponent, RelativeLocation));
+			UProperty* TransformProperty = FindField<UProperty>(USceneComponent::StaticClass(), USceneComponent::GetRelativeLocationPropertyName());
 			if (!bOnlyTranslationChanged)
 			{
 				if (ExistingTransform.GetRotation() != NewTransform.GetRotation())
 				{
-					TransformProperty = FindField<UProperty>(USceneComponent::StaticClass(), GET_MEMBER_NAME_CHECKED(USceneComponent, RelativeRotation));
+					TransformProperty = FindField<UProperty>(USceneComponent::StaticClass(), USceneComponent::GetRelativeRotationPropertyName());
 				}
 				else if (ExistingTransform.GetScale3D() != NewTransform.GetScale3D())
 				{
-					TransformProperty = FindField<UProperty>(USceneComponent::StaticClass(), GET_MEMBER_NAME_CHECKED(USceneComponent, RelativeScale3D));
+					TransformProperty = FindField<UProperty>(USceneComponent::StaticClass(), USceneComponent::GetRelativeScale3DPropertyName());
 				}
 			}
 			
@@ -130,19 +130,6 @@ bool FActorViewportTransformable::IsPhysicallySimulated() const
 
 bool FActorViewportTransformable::ShouldBeCarried() const
 {
-	// Only cameras should be carried, for now
-	bool bShouldBeCarried = false;
-
-	AActor* Actor = ActorWeakPtr.Get();
-	if (Actor != nullptr)
-	{
-		if (UActorComponent* ActorComponent = FLevelEditorViewportClient::FindViewComponentForActor(Actor))
-		{
-			FMinimalViewInfo MinimalViewInfo;
-			bShouldBeCarried = ActorComponent->GetEditorPreviewInfo(/*DeltaTime =*/0.0f, MinimalViewInfo);
-		}
-	}
-
 	return bShouldBeCarried;
 }
 

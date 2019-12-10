@@ -25,6 +25,7 @@
 #include "ScopedTransaction.h"
 
 class FMenuBuilder;
+class UToolMenu;
 class FSCSEditorTreeNode;
 class SSCSEditor;
 class UPrimitiveComponent;
@@ -37,7 +38,7 @@ using FSCSEditorActorNodePtrType = TSharedPtr<class FSCSEditorTreeNodeRootActor>
 /**
  * FSCSEditorTreeNode
  *
- * Wrapper class for component template nodes displayed in the SCS editor tree widget.
+ * Wrapper class for component template nodes displayed in the SCS (Simple Construction Script) editor tree widget.
  */
 class KISMET_API FSCSEditorTreeNode : public TSharedFromThis<FSCSEditorTreeNode>
 {
@@ -851,9 +852,8 @@ public:
 		@param NewInstanceComponent	(In) The component being added to the actor instance
 		@param InParentNodePtr (In) The node this component will be added to
 		@param Asset (In) Optional asset to assign to the component
-		@param bSetFocusToNewItem (In) Select the new item and activate the inline rename widget (default is true)
-		@return The reference of the newly created ActorComponent */
-	UActorComponent* AddNewNodeForInstancedComponent(TUniquePtr<FScopedTransaction> OngoingCreateTransaction, UActorComponent* NewInstanceComponent, FSCSEditorTreeNodePtrType InParentNodePtr, UObject* Asset, bool bSetFocusToNewItem = true);
+		@param bSetFocusToNewItem (In) Select the new item and activate the inline rename widget (default is true) */
+	void AddNewNodeForInstancedComponent(TUniquePtr<FScopedTransaction> OngoingCreateTransaction, UActorComponent* NewInstanceComponent, FSCSEditorTreeNodePtrType InParentNodePtr, UObject* Asset, bool bSetFocusToNewItem = true);
 	
 	/** Returns true if the specified component is currently selected */
 	bool IsComponentSelected(const UPrimitiveComponent* PrimComponent) const;
@@ -1017,6 +1017,12 @@ protected:
 	/** Called to display context menu when right clicking on the widget */
 	TSharedPtr< SWidget > CreateContextMenu();
 
+	/** Registers context menu by name for later access */
+	void RegisterContextMenu();
+
+	/** Populate context menu on the fly */
+	void PopulateContextMenu(UToolMenu* InMenu);
+
 	/** Called when the level editor requests a component to be renamed. */
 	void OnLevelComponentRequestRename(const UActorComponent* InComponent);
 
@@ -1086,6 +1092,9 @@ protected:
 
 	/** Callback when a component item is double clicked. */
 	void HandleItemDoubleClicked(FSCSEditorTreeNodePtrType InItem);
+
+	/** Recursively visits the given node + its children and invokes the given function for each. */
+	void DepthFirstTraversal(const FSCSEditorTreeNodePtrType& InNodePtr, TSet<FSCSEditorTreeNodePtrType>& OutVisitedNodes, const TFunctionRef<void(const FSCSEditorTreeNodePtrType&)> InFunction) const;
 
 	/** Returns the set of expandable nodes that are currently collapsed in the UI */
 	void GetCollapsedNodes(const FSCSEditorTreeNodePtrType& InNodePtr, TSet<FSCSEditorTreeNodePtrType>& OutCollapsedNodes) const;

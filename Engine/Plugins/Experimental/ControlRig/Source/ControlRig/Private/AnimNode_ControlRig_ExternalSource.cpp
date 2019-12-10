@@ -18,9 +18,3 @@ UControlRig* FAnimNode_ControlRig_ExternalSource::GetControlRig() const
 	return (ControlRig.IsValid()? ControlRig.Get() : nullptr);
 }
 
-void FAnimNode_ControlRig_ExternalSource::Evaluate_AnyThread(FPoseContext& Output)
-{
-	Output.ResetToRefPose();
-
-	FAnimNode_ControlRigBase::Evaluate_AnyThread(Output);
-}

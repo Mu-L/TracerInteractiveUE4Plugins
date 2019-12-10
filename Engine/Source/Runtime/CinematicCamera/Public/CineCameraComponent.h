@@ -103,16 +103,16 @@ struct FCameraLensSettings
 };
 
 /** A named bundle of lens settings used to implement lens presets. */
-USTRUCT()
+USTRUCT(BlueprintType)
 struct FNamedLensPreset
 {
 	GENERATED_USTRUCT_BODY()
 
 	/** Name for the preset. */
-	UPROPERTY()
+	UPROPERTY(BlueprintReadWrite, Category = "Lens")
 	FString Name;
 
-	UPROPERTY()
+	UPROPERTY(BlueprintReadWrite, Category = "Lens")
 	FCameraLensSettings LensSettings;
 };
 
@@ -225,9 +225,12 @@ public:
 #if WITH_EDITOR
 	virtual FText GetFilmbackText() const override;
 #endif
+	UPROPERTY()
+	FCameraFilmbackSettings FilmbackSettings_DEPRECATED;
+
 	/** Controls the filmback of the camera. */
 	UPROPERTY(Interp, EditAnywhere, BlueprintReadWrite, Category = "Current Camera Settings")
-	FCameraFilmbackSettings FilmbackSettings;
+	FCameraFilmbackSettings Filmback;
 
 	/** Controls the camera's lens. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Current Camera Settings")
@@ -238,7 +241,7 @@ public:
 	FCameraFocusSettings FocusSettings;
 
 	/** Current focal length of the camera (i.e. controls FoV, zoom) */
-	UPROPERTY(Interp, EditAnywhere, BlueprintReadWrite, Category = "Current Camera Settings")
+	UPROPERTY(Interp, BlueprintSetter = SetCurrentFocalLength, EditAnywhere, BlueprintReadWrite, Category = "Current Camera Settings")
 	float CurrentFocalLength;
 
 	/** Current aperture, in terms of f-stop (e.g. 2.8 for f/2.8) */
@@ -258,6 +261,9 @@ public:
 	/** Override setting FOV to manipulate Focal Length. */
 	virtual void SetFieldOfView(float InFieldOfView) override;
 	
+	UFUNCTION(BlueprintCallable, BlueprintSetter, Category = "Cine Camera")
+	void SetCurrentFocalLength(const float& InFocalLength);
+
 	/** Returns the horizonal FOV of the camera with current settings. */
 	UFUNCTION(BlueprintCallable, Category = "Cine Camera")
 	float GetHorizontalFieldOfView() const;
@@ -270,6 +276,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Cine Camera")
 	FString GetFilmbackPresetName() const;
 
+	/** Returns the name of the default filmback preset. */
+	UFUNCTION(BlueprintPure, Category = "Cine Camera")
+	FString GetDefaultFilmbackPresetName() const { return DefaultFilmbackPreset; }
+
 	/** Set the current preset settings by preset name. */
 	UFUNCTION(BlueprintCallable, Category = "Cine Camera")
 	void SetFilmbackPresetByName(const FString& InPresetName);
@@ -281,6 +291,10 @@ public:
 	/** Set the current lens settings by preset name. */
 	UFUNCTION(BlueprintCallable, Category = "Cine Camera")
 	void SetLensPresetByName(const FString& InPresetName);
+
+	/** Returns a copy of the list of available lens presets. */
+	UFUNCTION(BlueprintCallable, Category = "Cine Camera")
+	static TArray<FNamedLensPreset> GetLensPresetsCopy();
 
 	/** Returns a list of available filmback presets. */
 	static TArray<FNamedFilmbackPreset> const& GetFilmbackPresets();
@@ -307,6 +321,7 @@ protected:
 	
 	/// @endcond
 	
+	virtual void Serialize(FArchive& Ar) override;
 	virtual void PostInitProperties() override;
 	virtual void OnRegister() override;
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
@@ -344,9 +359,13 @@ protected:
 	UPROPERTY(config)
 	TArray<FNamedLensPreset> LensPresets;
 
+	/** Deprecated. See DefaultFilmbackPreset */
+	UPROPERTY(config)
+	FString DefaultFilmbackPresetName_DEPRECATED;
+
 	/** Name of the default filmback preset */
 	UPROPERTY(config)
-	FString DefaultFilmbackPresetName;
+	FString DefaultFilmbackPreset;
 
 	/** Name of the default lens preset */
 	UPROPERTY(config)
@@ -369,6 +388,8 @@ protected:
 private:
 	float GetDesiredFocusDistance(const FVector& InLocation) const;
 	float GetWorldToMetersScale() const;
+	void SetLensPresetByNameInternal(const FString& InPresetName);
+	void SetFilmbackPresetByNameInternal(const FString& InPresetName, FCameraFilmbackSettings& InOutFilmbackSettings);
 
 #if WITH_EDITORONLY_DATA
 	void CreateDebugFocusPlane();

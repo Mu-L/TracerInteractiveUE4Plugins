@@ -18,20 +18,106 @@ public:
 	/** Maximum number a denoiser might be able to denoise at the same time. */
 	static const int32 kMaxBatchSize = 4;
 
+	// Number of screen space harmonic to be feed when denoising multiple lights.
+	static constexpr int32 kMultiPolychromaticPenumbraHarmonics = 4;
 
+	// Number of border between screen space harmonics are used to denoise harmonical signal.
+	static constexpr int32 kHarmonicBordersCount = kMultiPolychromaticPenumbraHarmonics + 1;
+
+	// Number of texture to store spherical harmonics.
+	static constexpr int32 kSphericalHarmonicTextureCount = 4;
+
+
+	/** All the inputs of the shadow denoiser. */
+	BEGIN_SHADER_PARAMETER_STRUCT(FShadowVisibilityInputs, )
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, Mask)
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, ClosestOccluder)
+	END_SHADER_PARAMETER_STRUCT()
+
+	/** All the outputs of the shadow denoiser may generate. */
+	BEGIN_SHADER_PARAMETER_STRUCT(FShadowVisibilityOutputs, )
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, Mask)
+	END_SHADER_PARAMETER_STRUCT()
+		
+	/** Screen space harmonic decomposition a signal to denoise. */
+	BEGIN_SHADER_PARAMETER_STRUCT(FHarmonicTextures, )
+		SHADER_PARAMETER_RDG_TEXTURE_ARRAY(Texture2D, Harmonics, [kHarmonicBordersCount])
+	END_SHADER_PARAMETER_STRUCT()
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FHarmonicUAVs, )
+		SHADER_PARAMETER_RDG_TEXTURE_UAV_ARRAY(Texture2D, Harmonics, [kHarmonicBordersCount])
+	END_SHADER_PARAMETER_STRUCT()
+		
+	/** All the inputs to denoise polychromatic penumbra of multiple lights. */
+	BEGIN_SHADER_PARAMETER_STRUCT(FPolychromaticPenumbraHarmonics, )
+		SHADER_PARAMETER_STRUCT(FHarmonicTextures, Diffuse)
+		SHADER_PARAMETER_STRUCT(FHarmonicTextures, Specular)
+	END_SHADER_PARAMETER_STRUCT()
+
+	/** All the outputs when denoising polychromatic penumbra. */
+	BEGIN_SHADER_PARAMETER_STRUCT(FPolychromaticPenumbraOutputs, )
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, Diffuse)
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, Specular)
+	END_SHADER_PARAMETER_STRUCT()
+		
+	/** All the inputs of the reflection denoiser. */
+	BEGIN_SHADER_PARAMETER_STRUCT(FReflectionsInputs, )
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, Color)
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, RayHitDistance)
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, RayImaginaryDepth)
+	END_SHADER_PARAMETER_STRUCT()
+
+	/** All the outputs of the reflection denoiser may generate. */
+	BEGIN_SHADER_PARAMETER_STRUCT(FReflectionsOutputs, )
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, Color)
+	END_SHADER_PARAMETER_STRUCT()
+		
+	/** All the inputs of the AO denoisers. */
+	BEGIN_SHADER_PARAMETER_STRUCT(FAmbientOcclusionInputs, )
+		// TODO: Merge this back to MaskAndRayHitDistance into RG texture for performance improvement of denoiser's reconstruction pass. May also support RayDistanceOnly for 1spp AO ray tracing.
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, Mask)
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, RayHitDistance)
+	END_SHADER_PARAMETER_STRUCT()
+
+	/** All the outputs of the AO denoiser may generate. */
+	BEGIN_SHADER_PARAMETER_STRUCT(FAmbientOcclusionOutputs, )
+		// Ambient occlusion mask stored in the red channel as [0; 1].
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, AmbientOcclusionMask)
+	END_SHADER_PARAMETER_STRUCT()
+		
+	/** All the inputs of the GI denoisers. */
+	BEGIN_SHADER_PARAMETER_STRUCT(FDiffuseIndirectInputs, )
+		// Irradiance in RGB, AO mask in alpha.
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, Color)
+
+		// Ambient occlusion mask stored in the red channel as [0; 1].
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, AmbientOcclusionMask)
+
+		// Hit distance in world space.
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, RayHitDistance)
+	END_SHADER_PARAMETER_STRUCT()
+
+	/** All the outputs of the GI denoiser may generate. */
+	BEGIN_SHADER_PARAMETER_STRUCT(FDiffuseIndirectOutputs, )
+		// Irradiance in RGB, AO mask in alpha.
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, Color)
+		
+		// Ambient occlusion mask stored in the red channel as [0; 1].
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, AmbientOcclusionMask)
+	END_SHADER_PARAMETER_STRUCT()
+		
+	/** All the inputs and outputs for spherical harmonic denoising. */
+	BEGIN_SHADER_PARAMETER_STRUCT(FDiffuseIndirectHarmonic, )
+		// FloatR11G11B10
+		SHADER_PARAMETER_RDG_TEXTURE_ARRAY(Texture2D, SphericalHarmonic, [kSphericalHarmonicTextureCount])
+	END_SHADER_PARAMETER_STRUCT()
+
+		
 	/** What the shadow ray tracing needs to output */
 	enum class EShadowRequirements
 	{
 		// Denoiser is unable to denoise that configuration.
 		Bailout,
-
-		// Denoiser only need ray hit distance for 1spp.
-		// FShadowPenumbraInputs::Penumbra: non generated
-		// FShadowPenumbraInputs::ClosestOccluder:
-		//   -2: invalid sample,
-		//   -1: miss
-		//   >0: hit distance of occluding geometry
-		ClosestOccluder,
 
 		// Denoiser only need ray hit distance and the diffuse mask of the penumbra.
 		// FShadowPenumbraInputs::Penumbra: average diffuse penumbra mask in [0; 1]
@@ -43,23 +129,19 @@ public:
 		PenumbraAndClosestOccluder,
 	};
 
-	/** All the inputs of the shadow denoiser. */
-	BEGIN_SHADER_PARAMETER_STRUCT(FShadowPenumbraInputs, )
-		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, Penumbra)
-		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, ClosestOccluder)
-	END_SHADER_PARAMETER_STRUCT()
-
-	/** All the outputs of the shadow denoiser may generate. */
-	BEGIN_SHADER_PARAMETER_STRUCT(FShadowPenumbraOutputs, )
-		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, DiffusePenumbra)
-		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, SpecularPenumbra)
-	END_SHADER_PARAMETER_STRUCT()
-
 	/** The configuration of the reflection ray tracing. */
 	struct FShadowRayTracingConfig
 	{
 		// Number of rays per pixels.
 		int32 RayCountPerPixel = 1;
+	};
+
+	/** Structure that contains all the parameters the denoiser needs to denoise one shadow. */
+	struct FShadowVisibilityParameters
+	{
+		const FLightSceneInfo* LightSceneInfo = nullptr;
+		FShadowRayTracingConfig RayTracingConfig;
+		FShadowVisibilityInputs InputTextures;
 	};
 
 	/** The configuration of the reflection ray tracing. */
@@ -81,6 +163,11 @@ public:
 		// Number of rays per pixels.
 		float RayCountPerPixel = 1.0f;
 	};
+	
+
+	static FHarmonicTextures CreateHarmonicTextures(FRDGBuilder& GraphBuilder, FIntPoint Extent, const TCHAR* DebugName);
+	static FHarmonicUAVs CreateUAVs(FRDGBuilder& GraphBuilder, const FHarmonicTextures& Textures);
+
 
 
 	virtual ~IScreenSpaceDenoiser() {};
@@ -94,37 +181,25 @@ public:
 		const FLightSceneInfo& LightSceneInfo,
 		const FShadowRayTracingConfig& RayTracingConfig) const = 0;
 
-	/** Structure that contains all the parameters the denoiser needs to denoise one shadow. */
-	struct FShadowParameters
-	{
-		const FLightSceneInfo* LightSceneInfo = nullptr;
-		FShadowRayTracingConfig RayTracingConfig;
-		FShadowPenumbraInputs InputTextures;
-	};
-
-	/** Entry point to denoise the diffuse mask of a shadow. */
-	// TODO: correct specular.
-	virtual void DenoiseShadows(
+	/** Entry point to denoise the visibility mask of multiple shadows at the same time. */
+	// TODO(Denoiser): Denoise specular occlusion. But requires refactor of direct lighting code.
+	virtual void DenoiseShadowVisibilityMasks(
 		FRDGBuilder& GraphBuilder,
 		const FViewInfo& View,
 		FPreviousViewInfo* PreviousViewInfos,
 		const FSceneTextureParameters& SceneTextures,
-		const TStaticArray<FShadowParameters, IScreenSpaceDenoiser::kMaxBatchSize>& InputParameters,
+		const TStaticArray<FShadowVisibilityParameters, IScreenSpaceDenoiser::kMaxBatchSize>& InputParameters,
 		const int32 InputParameterCount,
-		TStaticArray<FShadowPenumbraOutputs, IScreenSpaceDenoiser::kMaxBatchSize>& Outputs) const = 0;
-	
-	/** All the inputs of the reflection denoiser. */
-	BEGIN_SHADER_PARAMETER_STRUCT(FReflectionsInputs, )
-		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, Color)
-		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, RayHitDistance)
-		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, RayImaginaryDepth)
-	END_SHADER_PARAMETER_STRUCT()
+		TStaticArray<FShadowVisibilityOutputs, IScreenSpaceDenoiser::kMaxBatchSize>& Outputs) const = 0;
 
-	/** All the outputs of the reflection denoiser may generate. */
-	BEGIN_SHADER_PARAMETER_STRUCT(FReflectionsOutputs, )
-		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, Color)
-	END_SHADER_PARAMETER_STRUCT()
-		
+	/** Entry point to denoise polychromatic penumbra of multiple light. */
+	virtual FPolychromaticPenumbraOutputs DenoisePolychromaticPenumbraHarmonics(
+		FRDGBuilder& GraphBuilder,
+		const FViewInfo& View,
+		FPreviousViewInfo* PreviousViewInfos,
+		const FSceneTextureParameters& SceneTextures,
+		const FPolychromaticPenumbraHarmonics& Inputs) const = 0;
+
 	/** Entry point to denoise reflections. */
 	virtual FReflectionsOutputs DenoiseReflections(
 		FRDGBuilder& GraphBuilder,
@@ -134,19 +209,6 @@ public:
 		const FReflectionsInputs& ReflectionInputs,
 		const FReflectionsRayTracingConfig RayTracingConfig) const = 0;
 	
-	/** All the inputs of the AO denoisers. */
-	BEGIN_SHADER_PARAMETER_STRUCT(FAmbientOcclusionInputs, )
-		// TODO: Merge this back to MaskAndRayHitDistance into RG texture for performance improvement of denoiser's reconstruction pass. May also support RayDistanceOnly for 1spp AO ray tracing.
-		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, Mask)
-		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, RayHitDistance)
-	END_SHADER_PARAMETER_STRUCT()
-
-	/** All the outputs of the AO denoiser may generate. */
-	BEGIN_SHADER_PARAMETER_STRUCT(FAmbientOcclusionOutputs, )
-		// Ambient occlusion mask stored in the red channel as [0; 1].
-		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, AmbientOcclusionMask)
-	END_SHADER_PARAMETER_STRUCT()
-		
 	/** Entry point to denoise reflections. */
 	virtual FAmbientOcclusionOutputs DenoiseAmbientOcclusion(
 		FRDGBuilder& GraphBuilder,
@@ -156,28 +218,7 @@ public:
 		const FAmbientOcclusionInputs& ReflectionInputs,
 		const FAmbientOcclusionRayTracingConfig RayTracingConfig) const = 0;
 
-	/** All the inputs of the GI denoisers. */
-	BEGIN_SHADER_PARAMETER_STRUCT(FDiffuseIndirectInputs, )
-		// Irradiance in RGB, AO mask in alpha.
-		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, Color)
-
-		// Ambient occlusion mask stored in the red channel as [0; 1].
-		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, AmbientOcclusionMask)
-
-		// Hit distance in world space.
-		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, RayHitDistance)
-	END_SHADER_PARAMETER_STRUCT()
-
-	/** All the outputs of the GI denoiser may generate. */
-	BEGIN_SHADER_PARAMETER_STRUCT(FDiffuseIndirectOutputs, )
-		// Irradiance in RGB, AO mask in alpha.
-		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, Color)
-		
-		// Ambient occlusion mask stored in the red channel as [0; 1].
-		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, AmbientOcclusionMask)
-	END_SHADER_PARAMETER_STRUCT()
-
-	/** Entry point to denoise reflections. */
+	/** Entry point to denoise diffuse indirect and AO. */
 	virtual FDiffuseIndirectOutputs DenoiseDiffuseIndirect(
 		FRDGBuilder& GraphBuilder,
 		const FViewInfo& View,
@@ -186,7 +227,7 @@ public:
 		const FDiffuseIndirectInputs& Inputs,
 		const FAmbientOcclusionRayTracingConfig Config) const = 0;
 
-	/** Entry point to denoise SkyLight. */
+	/** Entry point to denoise SkyLight diffuse indirect. */
 	virtual FDiffuseIndirectOutputs DenoiseSkyLight(
 		FRDGBuilder& GraphBuilder,
 		const FViewInfo& View,
@@ -195,9 +236,29 @@ public:
 		const FDiffuseIndirectInputs& Inputs,
 		const FAmbientOcclusionRayTracingConfig Config) const = 0;
 
+	/** Entry point to denoise spherical harmonic for diffuse indirect. */
+	virtual FDiffuseIndirectHarmonic DenoiseDiffuseIndirectHarmonic(
+		FRDGBuilder& GraphBuilder,
+		const FViewInfo& View,
+		FPreviousViewInfo* PreviousViewInfos,
+		const FSceneTextureParameters& SceneTextures,
+		const FDiffuseIndirectHarmonic& Inputs,
+		const FAmbientOcclusionRayTracingConfig Config) const = 0;
+
+	/** Entry point to denoise SSGI. */
+	virtual bool SupportsScreenSpaceDiffuseIndirectDenoiser(EShaderPlatform Platform) const = 0;
+	virtual FDiffuseIndirectOutputs DenoiseScreenSpaceDiffuseIndirect(
+		FRDGBuilder& GraphBuilder,
+		const FViewInfo& View,
+		FPreviousViewInfo* PreviousViewInfos,
+		const FSceneTextureParameters& SceneTextures,
+		const FDiffuseIndirectInputs& Inputs,
+		const FAmbientOcclusionRayTracingConfig Config) const = 0;
+
+
 	/** Returns the interface of the default denoiser of the renderer. */
 	static const IScreenSpaceDenoiser* GetDefaultDenoiser();
-}; // class FScreenSpaceDenoisingInterface
+}; // class IScreenSpaceDenoiser
 
 
 // The interface for the renderer to denoise what it needs, Plugins can come and point this to custom interface.

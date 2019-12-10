@@ -35,8 +35,6 @@ FArchive::FArchive()
 #if DEVIRTUALIZE_FLinkerLoad_Serialize
 	ActiveFPLB = &InlineFPLB;
 #endif
-	CustomVersionContainer = nullptr;
-
 	SerializedPropertyChain = nullptr;
 
 #if USE_STABLE_LOCALIZATION_KEYS
@@ -443,7 +441,7 @@ const FCustomVersionContainer& FArchive::GetCustomVersions() const
 		// serialization code to use UsingCustomVersion to populate the container.
 		if (this->IsLoading())
 		{
-			*CustomVersionContainer = FCustomVersionContainer::GetRegistered();
+			*CustomVersionContainer = FCurrentCustomVersions::GetAll();
 		}
 		else
 		{
@@ -480,13 +478,8 @@ void FArchive::UsingCustomVersion(const FGuid& Key)
 		return;
 	}
 
-	auto* RegisteredVersion = FCustomVersionContainer::GetRegistered().GetVersion(Key);
-
-	// Ensure that the version has already been registered.
-	// If this fails, you probably don't have an FCustomVersionRegistration variable defined for this GUID.
-	check(RegisteredVersion);
-
-	const_cast<FCustomVersionContainer&>(GetCustomVersions()).SetVersion(Key, RegisteredVersion->Version, RegisteredVersion->GetFriendlyName());
+	FCustomVersion RegisteredVersion = FCurrentCustomVersions::Get(Key).GetValue();
+	const_cast<FCustomVersionContainer&>(GetCustomVersions()).SetVersion(Key, RegisteredVersion.Version, RegisteredVersion.GetFriendlyName());
 }
 
 int32 FArchive::CustomVer(const FGuid& Key) const

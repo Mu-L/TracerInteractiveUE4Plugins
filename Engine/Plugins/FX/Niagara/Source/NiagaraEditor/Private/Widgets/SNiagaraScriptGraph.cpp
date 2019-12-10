@@ -6,7 +6,7 @@
 #include "NiagaraGraph.h"
 #include "NiagaraNode.h"
 #include "NiagaraNodeInput.h"
-#include "Toolkits/AssetEditorManager.h"
+
 #include "GraphEditor.h"
 #include "EditorStyleSet.h"
 #include "Widgets/Layout/SBorder.h"
@@ -25,6 +25,9 @@
 #include "Widgets/Images/SImage.h"
 #include "Layout/WidgetPath.h"
 #include "Framework/Application/SlateApplication.h"
+#include "GraphEditorActions.h"
+#include "Subsystems/AssetEditorSubsystem.h"
+#include "Editor.h"
 
 #define LOCTEXT_NAMESPACE "NiagaraScriptGraph"
 
@@ -149,6 +152,9 @@ TSharedRef<SGraphEditor> SNiagaraScriptGraph::ConstructGraphEditor()
 	Commands->MapAction(
 		FNiagaraEditorCommands::Get().FindInCurrentView,
 		FExecuteAction::CreateRaw(this, &SNiagaraScriptGraph::FocusGraphSearchBox));
+	Commands->MapAction(
+		FGraphEditorCommands::Get().CreateComment,
+		FExecuteAction::CreateRaw(this, &SNiagaraScriptGraph::OnCreateComment));
 	
 	TSharedRef<SGraphEditor> CreatedGraphEditor = SNew(SGraphEditor)
 		.AdditionalCommands(Commands.ToSharedRef())
@@ -204,7 +210,7 @@ void SNiagaraScriptGraph::OnNodeDoubleClicked(UEdGraphNode* ClickedNode)
 		UObject* ReferencedAsset = NiagaraNode->GetReferencedAsset();
 		if (ReferencedAsset != nullptr)
 		{
-			FAssetEditorManager::Get().OpenEditorForAsset(ReferencedAsset);
+			GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(ReferencedAsset);
 		}
 	}
 }
@@ -236,9 +242,10 @@ void SNiagaraScriptGraph::OnNodeTitleCommitted(const FText& NewText, ETextCommit
 bool SNiagaraScriptGraph::OnVerifyNodeTextCommit(const FText& NewText, UEdGraphNode* NodeBeingChanged, FText& OutErrorMessage)
 {
 	bool bValid = true;
-	if (NodeBeingChanged->IsA(UNiagaraNodeInput::StaticClass()))
+	UNiagaraNodeInput* InputNodeBeingChanged = Cast<UNiagaraNodeInput>(NodeBeingChanged);
+	if (InputNodeBeingChanged != nullptr)
 	{
-		return UNiagaraNodeInput::VerifyNodeRenameTextCommit(NewText, Cast<UNiagaraNodeInput>(NodeBeingChanged), OutErrorMessage);
+		return FNiagaraEditorUtilities::VerifyNameChangeForInputOrOutputNode(*InputNodeBeingChanged, InputNodeBeingChanged->Input.GetName(), *NewText.ToString(), OutErrorMessage);
 	}
 	return bValid;
 }
@@ -504,6 +511,12 @@ void SNiagaraScriptGraph::FocusGraphSearchBox()
 		FSlateApplication::Get().GeneratePathToWidgetUnchecked(SearchBox.ToSharedRef(), WidgetToFocusPath, EVisibility::All);
 		FSlateApplication::Get().SetKeyboardFocus(WidgetToFocusPath, EFocusCause::SetDirectly);
 	}
+}
+
+void SNiagaraScriptGraph::OnCreateComment()
+{
+	FNiagaraSchemaAction_NewComment CommentAction = FNiagaraSchemaAction_NewComment(GraphEditor);
+	CommentAction.PerformAction(ViewModel->GetGraph(), nullptr, GraphEditor->GetPasteLocation(), false);
 }
 
 void SNiagaraScriptGraph::OnSearchBoxSearch(SSearchBox::SearchDirection Direction)

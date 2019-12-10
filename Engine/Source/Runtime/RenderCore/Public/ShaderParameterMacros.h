@@ -8,6 +8,7 @@
 #pragma once
 
 #include "ShaderParameterMetadata.h"
+#include "Algo/Reverse.h"
 
 
 class FRDGTexture;
@@ -149,10 +150,9 @@ struct alignas(SHADER_PARAMETER_STRUCT_ALIGNMENT) FRenderTargetBinding
 	 *
 	 * Notes: Load and store action are on purpose without default values, to force the user to not forget one of these.
 	 */
-	FRenderTargetBinding(FRDGTexture* InTexture, ERenderTargetLoadAction InLoadAction, ERenderTargetStoreAction InStoreAction, uint8 InMipIndex = 0)
+	FRenderTargetBinding(FRDGTexture* InTexture, ERenderTargetLoadAction InLoadAction, uint8 InMipIndex = 0)
 		: Texture(InTexture)
 		, LoadAction(InLoadAction)
-		, StoreAction(InStoreAction)
 		, MipIndex(InMipIndex)
 	{
 		check(Validate());
@@ -166,10 +166,6 @@ struct alignas(SHADER_PARAMETER_STRUCT_ALIGNMENT) FRenderTargetBinding
 	{
 		return LoadAction;
 	}
-	FORCEINLINE ERenderTargetStoreAction GetStoreAction() const
-	{
-		return StoreAction;
-	}
 	FORCEINLINE uint8 GetMipIndex() const
 	{
 		return MipIndex;
@@ -181,7 +177,6 @@ private:
 	 */
 	TAlignedShaderParameterPtr<FRDGTexture*> Texture;
 	ERenderTargetLoadAction		LoadAction		= ERenderTargetLoadAction::ENoAction;
-	ERenderTargetStoreAction	StoreAction		= ERenderTargetStoreAction::ENoAction;
 	uint8						MipIndex		= 0;
 
 	RENDERCORE_API bool Validate() const;
@@ -202,15 +197,11 @@ struct alignas(SHADER_PARAMETER_STRUCT_ALIGNMENT) FDepthStencilBinding
 	FORCEINLINE FDepthStencilBinding(
 		FRDGTexture* InTexture,
 		ERenderTargetLoadAction InDepthLoadAction,
-		ERenderTargetStoreAction InDepthStoreAction,
 		ERenderTargetLoadAction InStencilLoadAction,
-		ERenderTargetStoreAction InStencilStoreAction,
 		FExclusiveDepthStencil InDepthStencilAccess)
 		: Texture(InTexture)
 		, DepthLoadAction(InDepthLoadAction)
-		, DepthStoreAction(InDepthStoreAction)
 		, StencilLoadAction(InStencilLoadAction)
-		, StencilStoreAction(InStencilStoreAction)
 		, DepthStencilAccess(InDepthStencilAccess)
 	{
 		check(Validate());
@@ -219,11 +210,9 @@ struct alignas(SHADER_PARAMETER_STRUCT_ALIGNMENT) FDepthStencilBinding
 	FORCEINLINE FDepthStencilBinding(
 		FRDGTexture* InTexture,
 		ERenderTargetLoadAction InDepthLoadAction,
-		ERenderTargetStoreAction InDepthStoreAction,
 		FExclusiveDepthStencil InDepthStencilAccess)
 		: Texture(InTexture)
 		, DepthLoadAction(InDepthLoadAction)
-		, DepthStoreAction(InDepthStoreAction)
 		, DepthStencilAccess(InDepthStencilAccess)
 	{
 		check(Validate());
@@ -237,17 +226,9 @@ struct alignas(SHADER_PARAMETER_STRUCT_ALIGNMENT) FDepthStencilBinding
 	{
 		return DepthLoadAction;
 	}
-	FORCEINLINE ERenderTargetStoreAction GetDepthStoreAction() const
-	{
-		return DepthStoreAction;
-	}
 	FORCEINLINE ERenderTargetLoadAction GetStencilLoadAction() const
 	{
 		return StencilLoadAction;
-	}
-	FORCEINLINE ERenderTargetStoreAction GetStencilStoreAction() const
-	{
-		return StencilStoreAction;
 	}
 	FORCEINLINE FExclusiveDepthStencil GetDepthStencilAccess() const
 	{
@@ -261,9 +242,7 @@ private:
 	 */
 	TAlignedShaderParameterPtr<FRDGTexture*> Texture = nullptr;
 	ERenderTargetLoadAction		DepthLoadAction		= ERenderTargetLoadAction::ENoAction;
-	ERenderTargetStoreAction	DepthStoreAction	= ERenderTargetStoreAction::ENoAction;
 	ERenderTargetLoadAction		StencilLoadAction	= ERenderTargetLoadAction::ENoAction;
-	ERenderTargetStoreAction	StencilStoreAction	= ERenderTargetStoreAction::ENoAction;
 	FExclusiveDepthStencil		DepthStencilAccess	= FExclusiveDepthStencil::DepthNop_StencilNop;
 
 	RENDERCORE_API bool Validate() const;
@@ -356,6 +335,7 @@ struct TShaderParameterTypeInfo
 	static const FShaderParametersMetadata* GetStructMetadata() { return &TypeParameter::StaticStructMetadata; }
 };
 
+// Compile SHADER_PARAMETER(bool, MyBool), just to give good error message to programmer why they shouldn't do that.
 template<>
 struct TShaderParameterTypeInfo<bool>
 {
@@ -712,9 +692,11 @@ struct TShaderParameterStructTypeInfo<StructType[InNumElements]>
 	private: \
 		typedef StructTypeName zzTThisStruct; \
 		struct zzFirstMemberId { enum { HasDeclaredResource = 0 }; }; \
-		static TArray<FShaderParametersMetadata::FMember> zzGetMembersBefore(zzFirstMemberId) \
+		typedef void* zzFuncPtr; \
+		typedef zzFuncPtr(*zzMemberFunc)(zzFirstMemberId, TArray<FShaderParametersMetadata::FMember>*); \
+		static zzFuncPtr zzAppendMemberGetPrev(zzFirstMemberId, TArray<FShaderParametersMetadata::FMember>*) \
 		{ \
-			return TArray<FShaderParametersMetadata::FMember>(); \
+			return nullptr; \
 		} \
 		typedef zzFirstMemberId
 
@@ -726,13 +708,13 @@ struct TShaderParameterStructTypeInfo<StructType[InNumElements]>
 		static_assert(BaseType != UBMT_INVALID, "Invalid type " #MemberType " of member " #MemberName "."); \
 	private: \
 		struct zzNextMemberId##MemberName { enum { HasDeclaredResource = zzMemberId##MemberName::HasDeclaredResource || !TypeInfo::bIsStoredInConstantBuffer }; }; \
-		static TArray<FShaderParametersMetadata::FMember> zzGetMembersBefore(zzNextMemberId##MemberName) \
+		static zzFuncPtr zzAppendMemberGetPrev(zzNextMemberId##MemberName, TArray<FShaderParametersMetadata::FMember>* Members) \
 		{ \
 			static_assert(TypeInfo::bIsStoredInConstantBuffer || TIsArrayOrRefOfType<decltype(OptionalShaderType), TCHAR>::Value, "No shader type for " #MemberName "."); \
-			/* Route the member enumeration on to the function for the member following this. */ \
-			TArray<FShaderParametersMetadata::FMember> OutMembers = zzGetMembersBefore(zzMemberId##MemberName()); \
-			/* Add this member. */ \
-			OutMembers.Add(FShaderParametersMetadata::FMember( \
+			static_assert(\
+				(STRUCT_OFFSET(zzTThisStruct, MemberName) & (TypeInfo::Alignment - 1)) == 0, \
+				"Misaligned uniform buffer struct member " #MemberName "."); \
+			Members->Add(FShaderParametersMetadata::FMember( \
 				TEXT(#MemberName), \
 				OptionalShaderType, \
 				STRUCT_OFFSET(zzTThisStruct,MemberName), \
@@ -743,10 +725,9 @@ struct TShaderParameterStructTypeInfo<StructType[InNumElements]>
 				TypeInfo::NumElements, \
 				TypeInfo::GetStructMetadata() \
 				)); \
-			static_assert( \
-				(STRUCT_OFFSET(zzTThisStruct,MemberName) & (TypeInfo::Alignment - 1)) == 0, \
-				"Misaligned uniform buffer struct member " #MemberName "."); \
-			return OutMembers; \
+			zzFuncPtr(*PrevFunc)(zzMemberId##MemberName, TArray<FShaderParametersMetadata::FMember>*); \
+			PrevFunc = zzAppendMemberGetPrev; \
+			return (zzFuncPtr)PrevFunc; \
 		} \
 		typedef zzNextMemberId##MemberName
 
@@ -766,7 +747,18 @@ extern RENDERCORE_API FShaderParametersMetadata* FindUniformBufferStructByFName(
 
 #define END_SHADER_PARAMETER_STRUCT() \
 		zzLastMemberId; \
-		static TArray<FShaderParametersMetadata::FMember> zzGetMembers() { return zzGetMembersBefore(zzLastMemberId()); } \
+		static TArray<FShaderParametersMetadata::FMember> zzGetMembers() { \
+			TArray<FShaderParametersMetadata::FMember> Members; \
+			zzFuncPtr(*LastFunc)(zzLastMemberId, TArray<FShaderParametersMetadata::FMember>*); \
+			LastFunc = zzAppendMemberGetPrev; \
+			zzFuncPtr Ptr = (zzFuncPtr)LastFunc; \
+			do \
+			{ \
+				Ptr = reinterpret_cast<zzMemberFunc>(Ptr)(zzFirstMemberId(), &Members); \
+			} while (Ptr); \
+			Algo::Reverse(Members); \
+			return Members; \
+		} \
 	} GCC_ALIGN(SHADER_PARAMETER_STRUCT_ALIGNMENT);
 
 /** Begins & ends a shader global parameter structure.
@@ -914,6 +906,15 @@ extern RENDERCORE_API FShaderParametersMetadata* FindUniformBufferStructByFName(
 
 #define SHADER_PARAMETER_RDG_BUFFER_ARRAY(ShaderType,MemberName, ArrayDecl) \
 	INTERNAL_SHADER_PARAMETER_EXPLICIT(UBMT_RDG_BUFFER, TShaderResourceParameterTypeInfo<FRDGBufferRef ArrayDecl>, FRDGBufferRef,MemberName,ArrayDecl,,EShaderPrecisionModifier::Float,TEXT(#ShaderType),false)
+
+/** Adds a render graph tracked buffer upload.
+ *
+ * Example:
+ *	SHADER_PARAMETER_RDG_BUFFER_UPLOAD(Buffer<float4>, MyBuffer)
+ */
+// TODO: ShaderType is unnecessary, because the RHI does not support binding a buffer as a shader parameter.
+#define SHADER_PARAMETER_RDG_BUFFER_UPLOAD(ShaderType,MemberName) \
+	INTERNAL_SHADER_PARAMETER_EXPLICIT(UBMT_RDG_BUFFER_COPY_DEST, TShaderResourceParameterTypeInfo<FRDGBufferRef>, FRDGBufferRef,MemberName,, = nullptr,EShaderPrecisionModifier::Float,TEXT(#ShaderType),false)
 
 /** Adds a shader resource view for a render graph tracked buffer.
  *

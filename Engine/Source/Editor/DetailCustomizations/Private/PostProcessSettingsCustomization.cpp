@@ -14,7 +14,7 @@
 #include "Widgets/Input/SComboButton.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialInstanceConstant.h"
-#include "Toolkits/AssetEditorManager.h"
+
 #include "IDetailGroup.h"
 #include "IDetailChildrenBuilder.h"
 #include "PropertyCustomizationHelpers.h"
@@ -22,8 +22,13 @@
 #include "Widgets/Layout/SWidgetSwitcher.h"
 #include "DetailCategoryBuilder.h"
 #include "DetailLayoutBuilder.h"
+#include "Subsystems/AssetEditorSubsystem.h"
+#include "Editor.h"
 
 #define LOCTEXT_NAMESPACE "PostProcessSettingsCustomization"
+
+const FName ShowPostProcessCategoriesName("ShowPostProcessCategories");
+const FName ShowOnlyInnerPropertiesName("ShowOnlyInnerProperties");
 
 struct FCategoryOrGroup
 {
@@ -126,7 +131,7 @@ void FPostProcessSettingsCustomization::CustomizeChildren( TSharedRef<IPropertyH
 	const bool bExtendedLuminanceRange = VarDefaultAutoExposureExtendDefaultLuminanceRange->GetValueOnGameThread() == 1;
 	static const FName ExposureCategory("Lens|Exposure");
 
-	static const FName ShowPostProcessCategoriesName("ShowPostProcessCategories");
+
 
 	bool bShowPostProcessCategories = StructPropertyHandle->HasMetaData(ShowPostProcessCategoriesName);
 
@@ -278,7 +283,19 @@ PRAGMA_ENABLE_OPTIMIZATION
 
 void FPostProcessSettingsCustomization::CustomizeHeader( TSharedRef<IPropertyHandle> StructPropertyHandle, class FDetailWidgetRow& HeaderRow, IPropertyTypeCustomizationUtils& StructCustomizationUtils )
 {
-	// No header
+	bool bShowHeader = !StructPropertyHandle->HasMetaData(ShowPostProcessCategoriesName) && !StructPropertyHandle->HasMetaData(ShowOnlyInnerPropertiesName);
+	if(bShowHeader)
+	{
+		HeaderRow.NameContent()
+		[
+			StructPropertyHandle->CreatePropertyNameWidget()
+		];
+
+		HeaderRow.ValueContent()
+		[
+			StructPropertyHandle->CreatePropertyValueWidget()
+		];
+	}
 }
 
 void FWeightedBlendableCustomization::AddDirectAsset(TSharedRef<IPropertyHandle> StructPropertyHandle, TSharedPtr<IPropertyHandle> Weight, TSharedPtr<IPropertyHandle> Value, UClass* Class)
@@ -337,7 +354,7 @@ FReply FWeightedBlendableCustomization::JumpToDirectAsset(TSharedPtr<IPropertyHa
 	
 	Value->GetValue(RefObject);
 
-	FAssetEditorManager::Get().OpenEditorForAsset(RefObject);
+	GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(RefObject);
 
 	return FReply::Handled();
 }

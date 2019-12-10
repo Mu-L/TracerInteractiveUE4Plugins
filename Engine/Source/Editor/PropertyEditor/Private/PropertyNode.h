@@ -59,6 +59,8 @@ namespace EPropertyNodeFlags
 
 	const Type	HasCustomResetToDefault			= 1 << 23;	/** true if this node's visual representation of reset to default has been customized*/
 
+	const Type	IsSparseClassData				= 1 << 24;	/** true if the property on this node is part of a sparse class data structure */
+
 	const Type 	NoFlags							= 0;
 
 };
@@ -206,6 +208,8 @@ struct FPropertyNodeInitParams
 	bool bCreateCategoryNodes;
 	/** Whether or not to create nodes for properties marked CPF_DisableEditOnInstance */
 	bool bCreateDisableEditOnInstanceNodes;
+	/** Whether or not this property is sparse data */
+	bool bIsSparseProperty;
 
 	FPropertyNodeInitParams()
 		: ParentNode(nullptr)
@@ -216,6 +220,7 @@ struct FPropertyNodeInitParams
 		, bForceHiddenPropertyVisibility( false )
 		, bCreateCategoryNodes( true )
 		, bCreateDisableEditOnInstanceNodes( true )
+		, bIsSparseProperty( false )
 	{}
 };
 
@@ -295,32 +300,40 @@ public:
 	void ClearCachedReadAddresses(bool bRecursive = true);
 
 	/**
-	 * Interface function to get at the dervied FObjectPropertyNodeWx class
+	 * Interface function to get at the derived FObjectPropertyNode class
 	 */
 	virtual class FObjectPropertyNode* AsObjectNode() { return nullptr; }
 	virtual const FObjectPropertyNode* AsObjectNode() const { return nullptr; }
 
-	virtual FComplexPropertyNode* AsComplexNode() { return nullptr; }
+	/**
+	 * Interface function to get at the derived FComplexPropertyNode class
+	 */
+	virtual class FComplexPropertyNode* AsComplexNode() { return nullptr; }
 	virtual const FComplexPropertyNode* AsComplexNode() const { return nullptr; }
 
 	/**
-	 * Interface function to get at the dervied FCategoryPropertyNodeWx class
+	 * Interface function to get at the derived FCategoryPropertyNode class
 	 */
 	virtual class FCategoryPropertyNode* AsCategoryNode() { return nullptr; }
+	virtual const FCategoryPropertyNode* AsCategoryNode() const { return nullptr; }
 
 	/**
-	 * Interface function to get at the dervied FItemPropertyNodeWx class
+	 * Interface function to get at the derived FItemPropertyNode class
 	 */
 	virtual class FItemPropertyNode* AsItemPropertyNode() { return nullptr; }
+	virtual const FItemPropertyNode* AsItemPropertyNode() const { return nullptr; }
 
 	/**
-	 * Follows the chain of items upwards until it finds the object window that houses this item.
+	 * Follows the chain of items upwards until it finds the complex property that houses this item.
 	 */
 	class FComplexPropertyNode* FindComplexParent();
-	const class FComplexPropertyNode* FindComplexParent() const;
+	const FComplexPropertyNode* FindComplexParent() const;
 
+	/**
+	 * Follows the chain of items upwards until it finds the object property that houses this item.
+	 */
 	class FObjectPropertyNode* FindObjectItemParent();
-	const class FObjectPropertyNode* FindObjectItemParent() const;
+	const FObjectPropertyNode* FindObjectItemParent() const;
 
 	/**
 	 * Follows the top-most object window that contains this property window item.
@@ -443,18 +456,41 @@ public:
 	 * Calculates the memory address for the data associated with this item's property.  This is typically the value of a UProperty or a UObject address.
 	 *
 	 * @param	StartAddress	the location to use as the starting point for the calculation; typically the address of the object that contains this property.
+	 * @param	bIsSparseData	True if StartAddress is pointing to a sidecar structure containing sparse class data, false otherwise
 	 *
 	 * @return	a pointer to a UProperty value or UObject.  (For dynamic arrays, you'd cast this value to an FArray*)
 	 */
-	virtual uint8* GetValueBaseAddress(uint8* Base);
+	virtual uint8* GetValueBaseAddress(uint8* StartAddress, bool bIsSparseData);
 
 	/**
 	 * Calculates the memory address for the data associated with this item's value.  For most properties, identical to GetValueBaseAddress.  For items corresponding
 	 * to dynamic array elements, the pointer returned will be the location for that element's data.
 	 *
+	 * @param	StartAddress	the location to use as the starting point for the calculation; typically the address of the object that contains this property.
+	 * @param	bIsSparseData	True if StartAddress is pointing to a sidecar structure containing sparse class data, false otherwise
+	 *
 	 * @return	a pointer to a UProperty value or UObject.  (For dynamic arrays, you'd cast this value to whatever type is the Inner for the dynamic array)
 	 */
-	virtual uint8* GetValueAddress(uint8* Base);
+	virtual uint8* GetValueAddress(uint8* StartAddress, bool bIsSparseData);
+
+	/**
+	 * Calculates the memory address for the data associated with this item's property.  This is typically the value of a UProperty or a UObject address.
+	 *
+	 * @param	Obj	The object that contains this property; used as the starting point for the calculation
+	 *
+	 * @return	a pointer to a UProperty value or UObject.  (For dynamic arrays, you'd cast this value to an FArray*)
+	 */
+	uint8* GetValueBaseAddressFromObject(const UObject* Obj);
+
+	/**
+	 * Calculates the memory address for the data associated with this item's value.  For most properties, identical to GetValueBaseAddress.  For items corresponding
+	 * to dynamic array elements, the pointer returned will be the location for that element's data.
+	 *
+	 * @param	Obj	The object that contains this property; used as the starting point for the calculation
+	 *
+	 * @return	a pointer to a UProperty value or UObject.  (For dynamic arrays, you'd cast this value to whatever type is the Inner for the dynamic array)
+	 */
+	uint8* GetValueAddressFromObject(const UObject* Obj);
 
 	/**
 	 * Sets the display name override to use instead of the display name
@@ -825,6 +861,10 @@ public:
 	void BroadcastPropertyResetToDefault();
 protected:
 
+	// Returns a pointer to the starting point of the structure that contains the property this node uses.
+	// This will often be Obj but may also point to a sidecar data structure
+	uint8* GetStartAddress(const UObject* Obj) const;
+
 	TSharedRef<FEditPropertyChain> BuildPropertyChain( UProperty* PropertyAboutToChange );
 
 	/**
@@ -1019,8 +1059,17 @@ public:
 	virtual UStruct* GetBaseStructure() = 0;
 	virtual const UStruct* GetBaseStructure() const = 0;
 
+	// Returns the base struct as well as any sidecar data structs
+	virtual TArray<UStruct*> GetAllStructures() = 0;
+	virtual TArray<const UStruct*> GetAllStructures() const = 0;
+
 	virtual int32 GetInstancesNum() const = 0;
 	virtual uint8* GetMemoryOfInstance(int32 Index) = 0;
+
+	/**
+	 * Returns a pointer to the stored value of InProperty on InParentNode's Index'th instance.
+	 */
+	virtual uint8* GetValuePtrOfInstance(int32 Index, const UProperty* InProperty, FPropertyNode* InParentNode) = 0;
 	virtual TWeakObjectPtr<UObject> GetInstanceAsUObject(int32 Index) = 0;
 	virtual EPropertyType GetPropertyType() const = 0;
 

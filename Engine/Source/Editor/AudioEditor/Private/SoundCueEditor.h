@@ -42,7 +42,7 @@ public:
 	virtual bool GetBoundsForSelectedNodes(class FSlateRect& Rect, float Padding) override;
 	virtual int32 GetNumberOfSelectedNodes() const override;
 	virtual TSet<UObject*> GetSelectedNodes() const override;
-	
+
 	/** IToolkit interface */
 	virtual FName GetToolkitFName() const override;
 	virtual FText GetBaseToolkitName() const override;
@@ -123,6 +123,18 @@ protected:
 	/** Called to redo the last undone action */
 	void RedoGraphAction();
 
+	void OnAlignTop();
+	void OnAlignMiddle();
+	void OnAlignBottom();
+	void OnAlignLeft();
+	void OnAlignCenter();
+	void OnAlignRight();
+
+	void OnStraightenConnections();
+
+	void OnDistributeNodesH();
+	void OnDistributeNodesV();
+
 private:
 	/** FNotifyHook interface */
 	virtual void NotifyPostChange( const FPropertyChangedEvent& PropertyChangedEvent, UProperty* PropertyThatChanged) override;
@@ -132,7 +144,7 @@ private:
 
 	/** Builds the toolbar widget for the SoundCue editor */
 	void ExtendToolbar();
-	
+
 	/** Binds new graph commands to delegates */
 	void BindGraphCommands();
 
@@ -144,6 +156,17 @@ private:
 	void Stop();
 	/** Either play the cue or stop currently playing sound */
 	void TogglePlayback();
+
+	/** Toggle solo explain soloing*/
+	void ToggleSolo();
+	bool CanExcuteToggleSolo() const;
+	bool IsSoloToggled() const;
+	
+	/** Toggle mute */
+	void ToggleMute();
+	bool CanExcuteToggleMute() const;
+	bool IsMuteToggled() const;
+	
 	/** Plays a single specified node */
 	void PlaySingleNode(UEdGraphNode* Node);
 
@@ -186,6 +209,9 @@ private:
 
 	/** Command list for this editor */
 	TSharedPtr<FUICommandList> GraphEditorCommands;
+
+	/** Cache of the Audio debugger instance */
+	class FAudioDebugger* Debugger;
 
 	/**	The tab ids for all the tabs used */
 	static const FName GraphCanvasTabId;

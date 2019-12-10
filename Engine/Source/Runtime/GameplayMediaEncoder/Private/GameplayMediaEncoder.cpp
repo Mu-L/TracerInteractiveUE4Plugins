@@ -251,6 +251,7 @@ bool FGameplayMediaEncoder::Initialize()
 #endif
 
 	StartTime = 0;
+	AudioClock = 0;
 
 	MemoryCheckpoint("Video encoder initialized");
 
@@ -282,7 +283,7 @@ bool FGameplayMediaEncoder::Start()
 	}
 
 	StartTime = FTimespan::FromSeconds(FPlatformTime::Seconds());
-	LastAudioInputTimestamp = LastVideoInputTimestamp = GetMediaTimestamp();
+	AudioClock = 0;
 	NumCapturedFrames = 0;
 
 	//
@@ -296,9 +297,7 @@ bool FGameplayMediaEncoder::Start()
 	}
 
 	VideoEncoder->Start();
-	FSlateRenderer::FOnBackBufferReadyToPresent OnBackBufferReadyDelegate;
-	OnBackBufferReadyDelegate.AddRaw(this, &FGameplayMediaEncoder::OnBackBufferReady);
-	FSlateApplication::Get().GetRenderer()->OnBackBufferReadyToPresent() = OnBackBufferReadyDelegate;
+	FSlateApplication::Get().GetRenderer()->OnBackBufferReadyToPresent().AddRaw(this, &FGameplayMediaEncoder::OnBackBufferReady);
 
 	return true;
 }
@@ -329,6 +328,7 @@ void FGameplayMediaEncoder::Stop()
 
 	VideoEncoder->Stop();
 	StartTime = 0;
+	AudioClock = 0;
 }
 
 void FGameplayMediaEncoder::Shutdown()
@@ -370,7 +370,7 @@ FTimespan FGameplayMediaEncoder::GetMediaTimestamp() const
 	return FTimespan::FromSeconds(FPlatformTime::Seconds()) - StartTime;
 }
 
-void FGameplayMediaEncoder::OnNewSubmixBuffer(const USoundSubmix* OwningSubmix, float* AudioData, int32 NumSamples, int32 NumChannels, const int32 SampleRate, double AudioClock)
+void FGameplayMediaEncoder::OnNewSubmixBuffer(const USoundSubmix* OwningSubmix, float* AudioData, int32 NumSamples, int32 NumChannels, const int32 SampleRate, double /*AudioClock*/)
 {
 	CSV_SCOPED_TIMING_STAT(GameplayMediaEncoder, OnNewSubmixBuffer);
 	if (SampleRate != HardcodedAudioSamplerate)
@@ -406,16 +406,28 @@ bool FGameplayMediaEncoder::ProcessAudioFrame(const float* AudioData, int32 NumS
 		FloatBuffer.MixBufferToChannels(HardcodedAudioNumChannels);
 	}
 
+	// First we need to clamp to [-1.0, 1.0], because the conversion to 16 bits doesn't clamp it,
+	// and we can end up with wrapping when playing loud sounds.
+	FloatBuffer.Clamp();
 	PCM16 = FloatBuffer;
+
+	// Adjust the AudioClock if for some reason it falls behind real time. This can happen if the game spikes, or if we break into the debugger.
+	FTimespan Now = GetMediaTimestamp();
+	if (AudioClock < Now.GetTotalSeconds())
+	{
+		UE_LOG(GameplayMediaEncoder, Warning, TEXT("Audio clock falling behind real time clock by %.3f seconds. Ajusting audio clock"), Now.GetTotalSeconds()-AudioClock);
+		// Put it slightly ahead of the real time clock
+		AudioClock = Now.GetTotalSeconds() + (FloatBuffer.GetSampleDuration() / 2);
+	}
 
 	{
 		FScopeLock Lock(&AudioProcessingCS);
-
-		FTimespan Timestamp = GetMediaTimestamp();
-		FTimespan Duration = Timestamp - LastAudioInputTimestamp;
-		LastAudioInputTimestamp = Timestamp;
+		FTimespan Timestamp = FTimespan::FromSeconds(AudioClock);
+		FTimespan Duration = FTimespan::FromSeconds(FloatBuffer.GetSampleDuration());
 		AudioEncoder->Process(reinterpret_cast<const int8*>(PCM16.GetData()), PCM16.GetNumSamples() * sizeof(*PCM16.GetData()), Timestamp, Duration);
 	}
+
+	AudioClock += FloatBuffer.GetSampleDuration();
 
 	return true;
 }
@@ -494,4 +506,3 @@ bool FGameplayMediaEncoder::ChangeVideoConfig()
 }
 
 GAMEPLAYMEDIAENCODER_END
-

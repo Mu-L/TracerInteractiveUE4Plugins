@@ -17,7 +17,7 @@ FSlate3DRenderer::FSlate3DRenderer( TSharedRef<FSlateFontServices> InSlateFontSe
 	RenderTargetPolicy = MakeShareable( new FSlateRHIRenderingPolicy( SlateFontServices, ResourceManager, InitialBufferSize ) );
 	RenderTargetPolicy->SetUseGammaCorrection( bUseGammaCorrection );
 
-	ElementBatcher = MakeShareable(new FSlateElementBatcher(RenderTargetPolicy.ToSharedRef()));
+	ElementBatcher = MakeUnique<FSlateElementBatcher>(RenderTargetPolicy.ToSharedRef());
 }
 
 void FSlate3DRenderer::Cleanup()
@@ -107,8 +107,13 @@ void FSlate3DRenderer::DrawWindow_GameThread(FSlateDrawBuffer& DrawBuffer)
 	}
 }
 
+struct TKeepAliveCommandString
+{
+	static const TCHAR* TStr() { return TEXT("TKeepAliveCommand"); }
+};
+
 template<typename TKeepAliveType>
-struct TKeepAliveCommand final : public FRHICommand < TKeepAliveCommand<TKeepAliveType> >
+struct TKeepAliveCommand final : public FRHICommand < TKeepAliveCommand<TKeepAliveType>, TKeepAliveCommandString >
 {
 	TKeepAliveType Value;
 	
@@ -148,16 +153,11 @@ void FSlate3DRenderer::DrawWindowToTarget_RenderThread(FRHICommandListImmediate&
 			FSlateWindowElementList& WindowElementList = *WindowsToDraw[WindowIndex];
 
 			FSlateBatchData& BatchData = WindowElementList.GetBatchData();
-			FElementBatchMap& RootBatchMap = WindowElementList.GetRootDrawLayer().GetElementBatchMap();
-
-			WindowElementList.PreDraw_ParallelThread();
-
-			BatchData.CreateRenderBatches(RootBatchMap);
 
 			if (BatchData.GetRenderBatches().Num() > 0)
 			{
-				RenderTargetPolicy->UpdateVertexAndIndexBuffers(InRHICmdList, BatchData);
-
+				RenderTargetPolicy->BuildRenderingBuffers(InRHICmdList, BatchData);
+		
 				FVector2D DrawOffset = Context.WindowDrawBuffer->ViewOffset;
 
 				FMatrix ProjectionMatrix = FSlateRHIRenderer::CreateProjectionMatrix(RTTextureRHI->GetSizeX(), RTTextureRHI->GetSizeY());
@@ -191,6 +191,7 @@ void FSlate3DRenderer::DrawWindowToTarget_RenderThread(FRHICommandListImmediate&
 					BackBufferTarget,
 					ColorTarget,
 					DepthStencil,
+					BatchData.GetFirstRenderBatchIndex(),
 					BatchData.GetRenderBatches(),
 					DrawOptions
 				);

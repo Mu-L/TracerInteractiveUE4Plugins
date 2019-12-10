@@ -133,6 +133,14 @@ public:
 	UPROPERTY()
 	TArray<FString> AdditionalDefines;
 
+	/** Bitfield of supported detail levels in this compile.*/
+	UPROPERTY()
+	uint32 DetailLevelMask;
+
+	/** Whether or not we need to bake Rapid Iteration params. True to keep params, false to bake.*/
+	UPROPERTY()
+	bool bUsesRapidIterationParams;
+
 	/**
 	* The GUID of the subgraph this shader primarily represents.
 	*/
@@ -150,10 +158,6 @@ public:
 	UPROPERTY()
 	TArray<FNiagaraCompileHash> ReferencedCompileHashes;
 
-	/** Guids of any functions, module scripts, parameter collections, or other assets the script was dependent on that might trigger a recompile if they change. */
-	UPROPERTY()
-	TArray<FGuid> ReferencedDependencyIds;
-
 	/** Temp storage while generating the Id. This is NOT serialized and shouldn't be used in any comparisons*/
 	TArray<UObject*> ReferencedObjects;
 #endif
@@ -161,6 +165,8 @@ public:
 	FNiagaraVMExecutableDataId()
 		: CompilerVersionID()
 		, ScriptUsageType(ENiagaraScriptUsage::Function)
+		, DetailLevelMask(0xFFFFFFFF)
+		, bUsesRapidIterationParams(true)
 		, BaseScriptID(0, 0, 0, 0)
 	{ }
 
@@ -219,6 +225,10 @@ public:
 	UPROPERTY()
 	TArray<uint8> ByteCode;
 
+	/** Number of temp registers used by this script. */
+	UPROPERTY()
+	int32 NumTempRegisters;
+
 	/** Number of user pointers we must pass to the VM. */
 	UPROPERTY()
 	int32 NumUserPtrs;
@@ -240,6 +250,9 @@ public:
 	/** Contains various usage information for this script. */
 	UPROPERTY()
 	FNiagaraScriptDataUsageInfo DataUsage;
+
+	UPROPERTY()
+	TArray<FNiagaraFunctionSignature> AdditionalExternalFunctions;
 
 	/** Information about all data interfaces used by this script. */
 	UPROPERTY()
@@ -466,6 +479,7 @@ public:
 #endif
 
 	//~ Begin UObject interface
+	void PreSave(const class ITargetPlatform* TargetPlatform) override;
 	void Serialize(FArchive& Ar)override;
 	virtual void PostLoad() override;
 	virtual bool IsDestructionThreadSafe() const override { return false; }
@@ -476,11 +490,14 @@ public:
 	//~ End UObject interface
 
 	// Infrastructure for GPU compute Shaders
+#if WITH_EDITOR
 	NIAGARA_API void CacheResourceShadersForCooking(EShaderPlatform ShaderPlatform, TArray<FNiagaraShaderScript*>& InOutCachedResources);
 
 	NIAGARA_API void CacheResourceShadersForRendering(bool bRegenerateId, bool bForceRecompile=false);
 	void BeginCacheForCookedPlatformData(const ITargetPlatform *TargetPlatform);
+	virtual bool IsCachedCookedPlatformDataLoaded(const ITargetPlatform* TargetPlatform) override;
 	void CacheShadersForResources(EShaderPlatform ShaderPlatform, FNiagaraShaderScript *ResourceToCache, bool bApplyCompletedShaderMapForRendering, bool bForceRecompile = false, bool bCooking=false);
+#endif // WITH_EDITOR
 	FNiagaraShaderScript* AllocateResource();
 	FNiagaraShaderScript *GetRenderThreadScript()
 	{
@@ -570,14 +587,28 @@ public:
 
 	FNiagaraScriptExecutionParameterStore* GetExecutionReadyParameterStore(ENiagaraSimTarget SimTarget);
 	void InvalidateExecutionReadyParameterStores();
+
 private:
+
 	bool LegacyCanBeRunOnGpu()const;
 
+	/** Return the expected SimTarget for this script. Only returns a valid target if there is valid data to run with. */
+	TOptional<ENiagaraSimTarget> GetSimTarget() const;
+
+#if WITH_EDITORONLY_DATA
 	UPROPERTY(Transient)
 	FNiagaraScriptExecutionParameterStore ScriptExecutionParamStoreCPU;
 
 	UPROPERTY(Transient)
 	FNiagaraScriptExecutionParameterStore ScriptExecutionParamStoreGPU;
+#endif // WITH_EDITORONLY_DATA
+
+	/** The equivalent of ScriptExecutionParamStoreCPU (or GPU) cooked for the given platform.*/
+	UPROPERTY()
+	FNiagaraScriptExecutionParameterStore ScriptExecutionParamStore;
+	/** The cooked binding data between ScriptExecutionParamStore and RapidIterationParameters.*/
+	UPROPERTY()
+	TArray<FNiagaraBoundParameter> ScriptExecutionBoundParameters;
 
 #if WITH_EDITORONLY_DATA
 	class UNiagaraSystem* FindRootSystem();
@@ -634,4 +665,6 @@ private:
 
 	UPROPERTY()
 	TArray<FNiagaraScriptDataInterfaceInfo> CachedDefaultDataInterfaces;
+
+	static UNiagaraDataInterface* CopyDataInterface(UNiagaraDataInterface* Src, UObject* Owner);
 };

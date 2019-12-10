@@ -108,6 +108,14 @@ class COREUOBJECT_API UField : public UObject
 	 */
 	FText GetToolTipText(bool bShortTooltip = false) const;
 
+	/** 
+	 * Formats a source comment into the form we want to show in the editor, is used by GetToolTipText and anything else that will get a native tooltip 
+	 * 
+	 * @param ToolTipString			String parsed out of C++ headers that is modified in place
+	 * @param bRemoveExtraSections	If true, cut off the comment on first line separator or 2 empty lines in a row
+	 */
+	static void FormatNativeToolTip(FString& ToolTipString, bool bRemoveExtraSections = true);
+
 	/**
 	 * Determines if the property has any metadata associated with the key
 	 * 
@@ -169,18 +177,18 @@ class COREUOBJECT_API UField : public UObject
 	 * Find the metadata value associated with the key
 	 * and return int32 
 	 * @param Key The key to lookup in the metadata
-	 * @return the int value stored in the metadata.
+	 * @return the int value stored in the metadata. 0 if not a valid integer.
 	 */
-	int32 GetINTMetaData(const TCHAR* Key) const
+	int32 GetIntMetaData(const TCHAR* Key) const
 	{
-		const FString& INTString = GetMetaData(Key);
-		int32 Value = FCString::Atoi(*INTString);
+		const FString& IntString = GetMetaData(Key);
+		int32 Value = FCString::Atoi(*IntString);
 		return Value;
 	}
-	int32 GetINTMetaData(const FName& Key) const
+	int32 GetIntMetaData(const FName& Key) const
 	{
-		const FString& INTString = GetMetaData(Key);
-		int32 Value = FCString::Atoi(*INTString);
+		const FString& IntString = GetMetaData(Key);
+		int32 Value = FCString::Atoi(*IntString);
 		return Value;
 	}
 
@@ -188,20 +196,18 @@ class COREUOBJECT_API UField : public UObject
 	 * Find the metadata value associated with the key
 	 * and return float
 	 * @param Key The key to lookup in the metadata
-	 * @return the float value stored in the metadata.
+	 * @return the float value stored in the metadata. 0 if not a valid float.
 	 */
-	float GetFLOATMetaData(const TCHAR* Key) const
+	float GetFloatMetaData(const TCHAR* Key) const
 	{
-		const FString& FLOATString = GetMetaData(Key);
-		// FString == operator does case insensitive comparison
-		float Value = FCString::Atof(*FLOATString);
+		const FString& FloatString = GetMetaData(Key);
+		float Value = FCString::Atof(*FloatString);
 		return Value;
 	}
-	float GetFLOATMetaData(const FName& Key) const
+	float GetFloatMetaData(const FName& Key) const
 	{
-		const FString& FLOATString = GetMetaData(Key);
-		// FString == operator does case insensitive comparison
-		float Value = FCString::Atof(*FLOATString);
+		const FString& FloatString = GetMetaData(Key);
+		float Value = FCString::Atof(*FloatString);
 		return Value;
 	}
 	
@@ -600,257 +606,277 @@ struct TStructOpsTypeTraits : public TStructOpsTypeTraitsBase2<CPPSTRUCT>
 };
 
 
-/**
- * Selection of constructor behavior.
- */
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithNoInitConstructor>::Type ConstructWithNoInitOrNot(void *Data)
-{
-	new (Data) CPPSTRUCT();
-}
+#if !PLATFORM_COMPILER_HAS_IF_CONSTEXPR
 
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithNoInitConstructor>::Type ConstructWithNoInitOrNot(void *Data)
-{
-	new (Data) CPPSTRUCT(ForceInit);
-}
-
-
-/**
- * Selection of Serialize call.
- */
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithSerializer, bool>::Type SerializeOrNot(FArchive& Ar, CPPSTRUCT *Data)
-{
-	return false;
-}
-
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithSerializer, bool>::Type SerializeOrNot(FArchive& Ar, CPPSTRUCT *Data)
-{
-	return Data->Serialize(Ar);
-}
-
-/**
-* Selection of structured Serialize call.
-*/
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithStructuredSerializer, bool>::Type SerializeOrNot(FStructuredArchive::FSlot Slot, CPPSTRUCT *Data)
-{
-	return false;
-}
-
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithStructuredSerializer, bool>::Type SerializeOrNot(FStructuredArchive::FSlot Slot, CPPSTRUCT *Data)
-{
-	return Data->Serialize(Slot);
-}
-
-
-/**
- * Selection of PostSerialize call.
- */
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithPostSerialize>::Type PostSerializeOrNot(const FArchive& Ar, CPPSTRUCT *Data)
-{
-}
-
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithPostSerialize>::Type PostSerializeOrNot(const FArchive& Ar, CPPSTRUCT *Data)
-{
-	Data->PostSerialize(Ar);
-}
-
-
-/**
- * Selection of NetSerialize call.
- */
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithNetSerializer, bool>::Type NetSerializeOrNot(FArchive& Ar, UPackageMap* Map, bool& bOutSuccess, CPPSTRUCT *Data)
-{
-	return false;
-}
-
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithNetSerializer, bool>::Type NetSerializeOrNot(FArchive& Ar, UPackageMap* Map, bool& bOutSuccess, CPPSTRUCT *Data)
-{
-	return Data->NetSerialize(Ar, Map, bOutSuccess);
-}
-
-
-/**
- * Selection of NetDeltaSerialize call.
- */
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithNetDeltaSerializer, bool>::Type NetDeltaSerializeOrNot(FNetDeltaSerializeInfo & DeltaParms, CPPSTRUCT *Data)
-{
-	return false;
-}
-
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithNetDeltaSerializer, bool>::Type NetDeltaSerializeOrNot(FNetDeltaSerializeInfo & DeltaParms, CPPSTRUCT *Data)
-{
-	return Data->NetDeltaSerialize(DeltaParms);
-}
-
-
-/**
- * Selection of PostScriptConstruct call.
- */
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithPostScriptConstruct>::Type PostScriptConstructOrNot(CPPSTRUCT *Data)
-{
-}
-
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithPostScriptConstruct>::Type PostScriptConstructOrNot(CPPSTRUCT *Data)
-{
-	Data->PostScriptConstruct();
-}
-
-
-/**
- * Selection of Copy behavior.
- */
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithCopy, bool>::Type CopyOrNot(CPPSTRUCT* Dest, CPPSTRUCT const* Src, int32 ArrayDim)
-{
-	return false;
-}
-
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithCopy, bool>::Type CopyOrNot(CPPSTRUCT* Dest, CPPSTRUCT const* Src, int32 ArrayDim)
-{
-	static_assert((!TIsPODType<CPPSTRUCT>::Value), "You probably don't want custom copy for a POD type.");
-	for (;ArrayDim;--ArrayDim)
+	/**
+	 * Selection of constructor behavior.
+	 */
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithNoInitConstructor>::Type ConstructWithNoInitOrNot(void *Data)
 	{
-		*Dest++ = *Src++;
+		new (Data) CPPSTRUCT();
 	}
-	return true;
-}
+
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithNoInitConstructor>::Type ConstructWithNoInitOrNot(void *Data)
+	{
+		new (Data) CPPSTRUCT(ForceInit);
+	}
 
 
-/**
- * Selection of AddStructReferencedObjects check.
- */
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithAddStructReferencedObjects>::Type AddStructReferencedObjectsOrNot(const void* A, FReferenceCollector& Collector)
-{
-}
+	/**
+	 * Selection of Serialize call.
+	 */
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithSerializer, bool>::Type SerializeOrNot(FArchive& Ar, CPPSTRUCT *Data)
+	{
+		return false;
+	}
 
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithAddStructReferencedObjects>::Type AddStructReferencedObjectsOrNot(const void* A, FReferenceCollector& Collector)
-{
-	((CPPSTRUCT const*)A)->AddStructReferencedObjects(Collector);
-}
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithSerializer, bool>::Type SerializeOrNot(FArchive& Ar, CPPSTRUCT *Data)
+	{
+		return Data->Serialize(Ar);
+	}
 
+	/**
+	* Selection of structured Serialize call.
+	*/
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithStructuredSerializer, bool>::Type SerializeOrNot(FStructuredArchive::FSlot Slot, CPPSTRUCT *Data)
+	{
+		return false;
+	}
 
-/**
- * Selection of Identical check.
- */
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithIdentical && TStructOpsTypeTraits<CPPSTRUCT>::WithIdenticalViaEquality, bool>::Type IdenticalOrNot(const CPPSTRUCT* A, const CPPSTRUCT* B, uint32 PortFlags, bool& bOutResult)
-{
-	static_assert(sizeof(CPPSTRUCT) == 0, "Should not have both WithIdenticalViaEquality and WithIdentical.");
-}
-
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithIdentical && !TStructOpsTypeTraits<CPPSTRUCT>::WithIdenticalViaEquality, bool>::Type IdenticalOrNot(const CPPSTRUCT* A, const CPPSTRUCT* B, uint32 PortFlags, bool& bOutResult)
-{
-	bOutResult = false;
-	return false;
-}
-
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithIdentical && !TStructOpsTypeTraits<CPPSTRUCT>::WithIdenticalViaEquality, bool>::Type IdenticalOrNot(const CPPSTRUCT* A, const CPPSTRUCT* B, uint32 PortFlags, bool& bOutResult)
-{
-	bOutResult = A->Identical(B, PortFlags);
-	return true;
-}
-
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithIdentical && TStructOpsTypeTraits<CPPSTRUCT>::WithIdenticalViaEquality, bool>::Type IdenticalOrNot(const CPPSTRUCT* A, const CPPSTRUCT* B, uint32 PortFlags, bool& bOutResult)
-{
-	bOutResult = (*A == *B);
-	return true;
-}
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithStructuredSerializer, bool>::Type SerializeOrNot(FStructuredArchive::FSlot Slot, CPPSTRUCT *Data)
+	{
+		return Data->Serialize(Slot);
+	}
 
 
-/**
- * Selection of ExportTextItem call.
- */
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithExportTextItem, bool>::Type ExportTextItemOrNot(FString& ValueStr, const CPPSTRUCT* PropertyValue, const CPPSTRUCT* DefaultValue, UObject* Parent, int32 PortFlags, UObject* ExportRootScope)
-{
-	return false;
-}
+	/**
+	 * Selection of PostSerialize call.
+	 */
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithPostSerialize>::Type PostSerializeOrNot(const FArchive& Ar, CPPSTRUCT *Data)
+	{
+	}
 
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithExportTextItem, bool>::Type ExportTextItemOrNot(FString& ValueStr, const CPPSTRUCT* PropertyValue, const CPPSTRUCT* DefaultValue, UObject* Parent, int32 PortFlags, UObject* ExportRootScope)
-{
-	return PropertyValue->ExportTextItem(ValueStr, *DefaultValue, Parent, PortFlags, ExportRootScope);
-}
-
-
-/**
- * Selection of ImportTextItem call.
- */
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithImportTextItem, bool>::Type ImportTextItemOrNot(const TCHAR*& Buffer, CPPSTRUCT* Data, int32 PortFlags, UObject* OwnerObject, FOutputDevice* ErrorText)
-{
-	return false;
-}
-
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithImportTextItem, bool>::Type ImportTextItemOrNot(const TCHAR*& Buffer, CPPSTRUCT* Data, int32 PortFlags, UObject* OwnerObject, FOutputDevice* ErrorText)
-{
-	return Data->ImportTextItem(Buffer, PortFlags, OwnerObject, ErrorText);
-}
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithPostSerialize>::Type PostSerializeOrNot(const FArchive& Ar, CPPSTRUCT *Data)
+	{
+		Data->PostSerialize(Ar);
+	}
 
 
-/**
- * Selection of SerializeFromMismatchedTag call.
- */
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithSerializeFromMismatchedTag, bool>::Type SerializeFromMismatchedTagOrNot(FPropertyTag const& Tag, FArchive& Ar, CPPSTRUCT *Data)
-{
-	return false;
-}
+	/**
+	 * Selection of NetSerialize call.
+	 */
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithNetSerializer, bool>::Type NetSerializeOrNot(FArchive& Ar, UPackageMap* Map, bool& bOutSuccess, CPPSTRUCT *Data)
+	{
+		return false;
+	}
 
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithSerializeFromMismatchedTag, bool>::Type SerializeFromMismatchedTagOrNot(FPropertyTag const& Tag, FArchive& Ar, CPPSTRUCT *Data)
-{
-	return Data->SerializeFromMismatchedTag(Tag, Ar);
-}
-
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithStructuredSerializeFromMismatchedTag, bool>::Type StructuredSerializeFromMismatchedTagOrNot(FPropertyTag const& Tag, FStructuredArchive::FSlot Slot, CPPSTRUCT *Data)
-{
-	return false;
-}
-
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithStructuredSerializeFromMismatchedTag, bool>::Type StructuredSerializeFromMismatchedTagOrNot(FPropertyTag const& Tag, FStructuredArchive::FSlot Slot, CPPSTRUCT *Data)
-{
-	return Data->SerializeFromMismatchedTag(Tag, Slot);
-}
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithNetSerializer, bool>::Type NetSerializeOrNot(FArchive& Ar, UPackageMap* Map, bool& bOutSuccess, CPPSTRUCT *Data)
+	{
+		return Data->NetSerialize(Ar, Map, bOutSuccess);
+	}
 
 
-/**
- * Selection of GetTypeHash call.
- */
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<!TModels<CGetTypeHashable, CPPSTRUCT>::Value, uint32>::Type GetTypeHashOrNot(const CPPSTRUCT *Data)
-{
-	return 0;
-}
+	/**
+	 * Selection of NetDeltaSerialize call.
+	 */
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithNetDeltaSerializer, bool>::Type NetDeltaSerializeOrNot(FNetDeltaSerializeInfo & DeltaParms, CPPSTRUCT *Data)
+	{
+		return false;
+	}
 
-template<class CPPSTRUCT>
-FORCEINLINE typename TEnableIf<TModels<CGetTypeHashable, CPPSTRUCT>::Value, uint32>::Type GetTypeHashOrNot(const CPPSTRUCT *Data)
-{
-	return GetTypeHash(*Data);
-}
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithNetDeltaSerializer, bool>::Type NetDeltaSerializeOrNot(FNetDeltaSerializeInfo & DeltaParms, CPPSTRUCT *Data)
+	{
+		return Data->NetDeltaSerialize(DeltaParms);
+	}
 
+
+	/**
+	 * Selection of PostScriptConstruct call.
+	 */
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithPostScriptConstruct>::Type PostScriptConstructOrNot(CPPSTRUCT *Data)
+	{
+	}
+
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithPostScriptConstruct>::Type PostScriptConstructOrNot(CPPSTRUCT *Data)
+	{
+		Data->PostScriptConstruct();
+	}
+
+
+	/**
+	 * Selection of Copy behavior.
+	 */
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithCopy, bool>::Type CopyOrNot(CPPSTRUCT* Dest, CPPSTRUCT const* Src, int32 ArrayDim)
+	{
+		return false;
+	}
+
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithCopy, bool>::Type CopyOrNot(CPPSTRUCT* Dest, CPPSTRUCT const* Src, int32 ArrayDim)
+	{
+		static_assert((!TIsPODType<CPPSTRUCT>::Value), "You probably don't want custom copy for a POD type.");
+		for (; ArrayDim; --ArrayDim)
+		{
+			*Dest++ = *Src++;
+		}
+		return true;
+	}
+
+
+	/**
+	 * Selection of Identical check.
+	 */
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithIdentical && TStructOpsTypeTraits<CPPSTRUCT>::WithIdenticalViaEquality, bool>::Type IdenticalOrNot(const CPPSTRUCT* A, const CPPSTRUCT* B, uint32 PortFlags, bool& bOutResult)
+	{
+		static_assert(sizeof(CPPSTRUCT) == 0, "Should not have both WithIdenticalViaEquality and WithIdentical.");
+	}
+
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithIdentical && !TStructOpsTypeTraits<CPPSTRUCT>::WithIdenticalViaEquality, bool>::Type IdenticalOrNot(const CPPSTRUCT* A, const CPPSTRUCT* B, uint32 PortFlags, bool& bOutResult)
+	{
+		bOutResult = false;
+		return false;
+	}
+
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithIdentical && !TStructOpsTypeTraits<CPPSTRUCT>::WithIdenticalViaEquality, bool>::Type IdenticalOrNot(const CPPSTRUCT* A, const CPPSTRUCT* B, uint32 PortFlags, bool& bOutResult)
+	{
+		bOutResult = A->Identical(B, PortFlags);
+		return true;
+	}
+
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithIdentical && TStructOpsTypeTraits<CPPSTRUCT>::WithIdenticalViaEquality, bool>::Type IdenticalOrNot(const CPPSTRUCT* A, const CPPSTRUCT* B, uint32 PortFlags, bool& bOutResult)
+	{
+		bOutResult = (*A == *B);
+		return true;
+	}
+
+
+	/**
+	 * Selection of ExportTextItem call.
+	 */
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithExportTextItem, bool>::Type ExportTextItemOrNot(FString& ValueStr, const CPPSTRUCT* PropertyValue, const CPPSTRUCT* DefaultValue, UObject* Parent, int32 PortFlags, UObject* ExportRootScope)
+	{
+		return false;
+	}
+
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithExportTextItem, bool>::Type ExportTextItemOrNot(FString& ValueStr, const CPPSTRUCT* PropertyValue, const CPPSTRUCT* DefaultValue, UObject* Parent, int32 PortFlags, UObject* ExportRootScope)
+	{
+		return PropertyValue->ExportTextItem(ValueStr, *DefaultValue, Parent, PortFlags, ExportRootScope);
+	}
+
+
+	/**
+	 * Selection of ImportTextItem call.
+	 */
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithImportTextItem, bool>::Type ImportTextItemOrNot(const TCHAR*& Buffer, CPPSTRUCT* Data, int32 PortFlags, UObject* OwnerObject, FOutputDevice* ErrorText)
+	{
+		return false;
+	}
+
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithImportTextItem, bool>::Type ImportTextItemOrNot(const TCHAR*& Buffer, CPPSTRUCT* Data, int32 PortFlags, UObject* OwnerObject, FOutputDevice* ErrorText)
+	{
+		return Data->ImportTextItem(Buffer, PortFlags, OwnerObject, ErrorText);
+	}
+
+
+	/**
+	 * Selection of SerializeFromMismatchedTag call.
+	 */
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithSerializeFromMismatchedTag, bool>::Type SerializeFromMismatchedTagOrNot(FPropertyTag const& Tag, FArchive& Ar, CPPSTRUCT *Data)
+	{
+		return false;
+	}
+
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithSerializeFromMismatchedTag, bool>::Type SerializeFromMismatchedTagOrNot(FPropertyTag const& Tag, FArchive& Ar, CPPSTRUCT *Data)
+	{
+		return Data->SerializeFromMismatchedTag(Tag, Ar);
+	}
+
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithStructuredSerializeFromMismatchedTag, bool>::Type StructuredSerializeFromMismatchedTagOrNot(FPropertyTag const& Tag, FStructuredArchive::FSlot Slot, CPPSTRUCT *Data)
+	{
+		return false;
+	}
+
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithStructuredSerializeFromMismatchedTag, bool>::Type StructuredSerializeFromMismatchedTagOrNot(FPropertyTag const& Tag, FStructuredArchive::FSlot Slot, CPPSTRUCT *Data)
+	{
+		return Data->SerializeFromMismatchedTag(Tag, Slot);
+	}
+
+
+	/**
+	 * Selection of GetTypeHash call.
+	 */
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<!TModels<CGetTypeHashable, CPPSTRUCT>::Value, uint32>::Type GetTypeHashOrNot(const CPPSTRUCT *Data)
+	{
+		return 0;
+	}
+
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<TModels<CGetTypeHashable, CPPSTRUCT>::Value, uint32>::Type GetTypeHashOrNot(const CPPSTRUCT *Data)
+	{
+		return GetTypeHash(*Data);
+	}
+
+#endif
+
+#if PLATFORM_COMPILER_HAS_IF_CONSTEXPR
+
+	/**
+	 * Selection of AddStructReferencedObjects check.
+	 */
+	template<class CPPSTRUCT>
+	FORCEINLINE void AddStructReferencedObjectsOrNot(const void* A, FReferenceCollector& Collector)
+	{
+		if constexpr (TStructOpsTypeTraits<CPPSTRUCT>::WithAddStructReferencedObjects)
+		{
+			((CPPSTRUCT const*)A)->AddStructReferencedObjects(Collector);
+		}
+	}
+
+#else
+
+	/**
+	 * Selection of AddStructReferencedObjects check.
+	 */
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithAddStructReferencedObjects>::Type AddStructReferencedObjectsOrNot(const void* A, FReferenceCollector& Collector)
+	{
+	}
+
+	template<class CPPSTRUCT>
+	FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithAddStructReferencedObjects>::Type AddStructReferencedObjectsOrNot(const void* A, FReferenceCollector& Collector)
+	{
+		((CPPSTRUCT const*)A)->AddStructReferencedObjects(Collector);
+	}
+
+#endif
 
 /**
  * Reflection data for a standalone structure declared in a header or as a user defined struct
@@ -886,7 +912,7 @@ public:
 		{
 			return Size;
 		}
-		/** return the ALIGNOF() of this structure **/
+		/** return the alignof() of this structure **/
 		FORCEINLINE int32 GetAlignment()
 		{
 			return Alignment;
@@ -991,7 +1017,7 @@ public:
 		virtual bool HasGetTypeHash() = 0;
 
 		/** Calls GetTypeHash if enabled */
-		virtual uint32 GetTypeHash(const void* Src) = 0;
+		virtual uint32 GetStructTypeHash(const void* Src) = 0;
 
 		/** Returns property flag values that can be computed at compile time */
 		virtual EPropertyFlags GetComputedPropertyFlags() const = 0;
@@ -1001,7 +1027,7 @@ public:
 	private:
 		/** sizeof() of the structure **/
 		const int32 Size;
-		/** ALIGNOF() of the structure **/
+		/** alignof() of the structure **/
 		const int32 Alignment;
 	};
 
@@ -1028,7 +1054,18 @@ public:
 			check(!TTraits::WithZeroConstructor); // don't call this if we have indicated it is not necessary
 			// that could have been an if statement, but we might as well force optimization above the virtual call
 			// could also not attempt to call the constructor for types where this is not possible, but I didn't do that here
+#if PLATFORM_COMPILER_HAS_IF_CONSTEXPR
+			if constexpr (TStructOpsTypeTraits<CPPSTRUCT>::WithNoInitConstructor)
+			{
+				new (Dest) CPPSTRUCT(ForceInit);
+			}
+			else
+			{
+				new (Dest) CPPSTRUCT();
+			}
+#else
 			ConstructWithNoInitOrNot<CPPSTRUCT>(Dest);
+#endif
 		}
 		virtual bool HasDestructor() override
 		{
@@ -1052,13 +1089,35 @@ public:
 		virtual bool Serialize(FArchive& Ar, void *Data) override
 		{
 			check(TTraits::WithSerializer); // don't call this if we have indicated it is not necessary
+#if PLATFORM_COMPILER_HAS_IF_CONSTEXPR
+			if constexpr (TStructOpsTypeTraits<CPPSTRUCT>::WithSerializer)
+			{
+				return ((CPPSTRUCT*)Data)->Serialize(Ar);
+			}
+			else
+			{
+				return false;
+			}
+#else
 			return SerializeOrNot(Ar, (CPPSTRUCT*)Data);
+#endif
 		}
 		virtual bool Serialize(FStructuredArchive::FSlot Slot, void *Data) override
 		{
 			check(TTraits::WithStructuredSerializer); // don't call this if we have indicated it is not necessary
+#if PLATFORM_COMPILER_HAS_IF_CONSTEXPR
+			if constexpr (TStructOpsTypeTraits<CPPSTRUCT>::WithStructuredSerializer)
+			{
+				return ((CPPSTRUCT*)Data)->Serialize(Slot);
+			}
+			else
+			{
+				return false;
+			}
+#else
 			return SerializeOrNot(Slot, (CPPSTRUCT*)Data);
-		}
+#endif
+			}
 		virtual bool HasPostSerialize() override
 		{
 			return TTraits::WithPostSerialize;
@@ -1066,7 +1125,14 @@ public:
 		virtual void PostSerialize(const FArchive& Ar, void *Data) override
 		{
 			check(TTraits::WithPostSerialize); // don't call this if we have indicated it is not necessary
+#if PLATFORM_COMPILER_HAS_IF_CONSTEXPR
+			if constexpr (TStructOpsTypeTraits<CPPSTRUCT>::WithPostSerialize)
+			{
+				((CPPSTRUCT*)Data)->PostSerialize(Ar);
+			}
+#else
 			PostSerializeOrNot(Ar, (CPPSTRUCT*)Data);
+#endif
 		}
 		virtual bool HasNetSerializer() override
 		{
@@ -1082,11 +1148,33 @@ public:
 		}
 		virtual bool NetSerialize(FArchive& Ar, class UPackageMap* Map, bool& bOutSuccess, void *Data) override
 		{
+#if PLATFORM_COMPILER_HAS_IF_CONSTEXPR
+			if constexpr (TStructOpsTypeTraits<CPPSTRUCT>::WithNetSerializer)
+			{
+				return ((CPPSTRUCT*)Data)->NetSerialize(Ar, Map, bOutSuccess);
+			}
+			else
+			{
+				return false;
+			}
+#else
 			return NetSerializeOrNot(Ar, Map, bOutSuccess, (CPPSTRUCT*)Data);
+#endif
 		}
 		virtual bool NetDeltaSerialize(FNetDeltaSerializeInfo & DeltaParms, void *Data) override
 		{
+#if PLATFORM_COMPILER_HAS_IF_CONSTEXPR
+			if constexpr (TStructOpsTypeTraits<CPPSTRUCT>::WithNetDeltaSerializer)
+			{
+				return ((CPPSTRUCT*)Data)->NetDeltaSerialize(DeltaParms);
+			}
+			else
+			{
+				return false;
+			}
+#else
 			return NetDeltaSerializeOrNot(DeltaParms, (CPPSTRUCT*)Data);
+#endif
 		}
 		virtual bool HasPostScriptConstruct() override
 		{
@@ -1095,7 +1183,14 @@ public:
 		virtual void PostScriptConstruct(void *Data) override
 		{
 			check(TTraits::WithPostScriptConstruct); // don't call this if we have indicated it is not necessary
+#if PLATFORM_COMPILER_HAS_IF_CONSTEXPR
+			if constexpr (TStructOpsTypeTraits<CPPSTRUCT>::WithPostScriptConstruct)
+			{
+				((CPPSTRUCT*)Data)->PostScriptConstruct();
+			}
+#else
 			PostScriptConstructOrNot((CPPSTRUCT*)Data);
+#endif
 		}
 		virtual bool IsPlainOldData() override
 		{
@@ -1107,7 +1202,27 @@ public:
 		}
 		virtual bool Copy(void* Dest, void const* Src, int32 ArrayDim) override
 		{
+#if PLATFORM_COMPILER_HAS_IF_CONSTEXPR
+			if constexpr (TStructOpsTypeTraits<CPPSTRUCT>::WithCopy)
+			{
+				static_assert((!TIsPODType<CPPSTRUCT>::Value), "You probably don't want custom copy for a POD type.");
+
+				CPPSTRUCT* TypedDest = (CPPSTRUCT*)Dest;
+				const CPPSTRUCT* TypedSrc  = (const CPPSTRUCT*)Src;
+
+				for (; ArrayDim; --ArrayDim)
+				{
+					*TypedDest++ = *TypedSrc++;
+				}
+				return true;
+			}
+			else
+			{
+				return false;
+			}
+#else
 			return CopyOrNot((CPPSTRUCT*)Dest, (CPPSTRUCT const*)Src, ArrayDim);
+#endif
 		}
 		virtual bool HasIdentical() override
 		{
@@ -1116,7 +1231,27 @@ public:
 		virtual bool Identical(const void* A, const void* B, uint32 PortFlags, bool& bOutResult) override
 		{
 			check((TTraits::WithIdentical || TTraits::WithIdenticalViaEquality)); // don't call this if we have indicated it is not necessary
+#if PLATFORM_COMPILER_HAS_IF_CONSTEXPR
+			if constexpr (TStructOpsTypeTraits<CPPSTRUCT>::WithIdentical)
+			{
+				static_assert(!TStructOpsTypeTraits<CPPSTRUCT>::WithIdenticalViaEquality, "Should not have both WithIdenticalViaEquality and WithIdentical.");
+
+				bOutResult = ((const CPPSTRUCT*)A)->Identical((const CPPSTRUCT*)B, PortFlags);
+				return true;
+			}
+			else if constexpr (TStructOpsTypeTraits<CPPSTRUCT>::WithIdenticalViaEquality)
+			{
+				bOutResult = (*(const CPPSTRUCT*)A == *(const CPPSTRUCT*)B);
+				return true;
+			}
+			else
+			{
+				bOutResult = false;
+				return false;
+			}
+#else
 			return IdenticalOrNot((const CPPSTRUCT*)A, (const CPPSTRUCT*)B, PortFlags, bOutResult);
+#endif
 		}
 		virtual bool HasExportTextItem() override
 		{
@@ -1125,7 +1260,18 @@ public:
 		virtual bool ExportTextItem(FString& ValueStr, const void* PropertyValue, const void* DefaultValue, class UObject* Parent, int32 PortFlags, class UObject* ExportRootScope) override
 		{
 			check(TTraits::WithExportTextItem); // don't call this if we have indicated it is not necessary
+#if PLATFORM_COMPILER_HAS_IF_CONSTEXPR
+			if constexpr (TStructOpsTypeTraits<CPPSTRUCT>::WithExportTextItem)
+			{
+				return ((const CPPSTRUCT*)PropertyValue)->ExportTextItem(ValueStr, *(const CPPSTRUCT*)DefaultValue, Parent, PortFlags, ExportRootScope);
+			}
+			else
+			{
+				return false;
+			}
+#else
 			return ExportTextItemOrNot(ValueStr, (const CPPSTRUCT*)PropertyValue, (const CPPSTRUCT*)DefaultValue, Parent, PortFlags, ExportRootScope);
+#endif
 		}
 		virtual bool HasImportTextItem() override
 		{
@@ -1134,7 +1280,18 @@ public:
 		virtual bool ImportTextItem(const TCHAR*& Buffer, void* Data, int32 PortFlags, class UObject* OwnerObject, FOutputDevice* ErrorText) override
 		{
 			check(TTraits::WithImportTextItem); // don't call this if we have indicated it is not necessary
+#if PLATFORM_COMPILER_HAS_IF_CONSTEXPR
+			if constexpr (TStructOpsTypeTraits<CPPSTRUCT>::WithImportTextItem)
+			{
+				return ((CPPSTRUCT*)Data)->ImportTextItem(Buffer, PortFlags, OwnerObject, ErrorText);
+			}
+			else
+			{
+				return false;
+			}
+#else
 			return ImportTextItemOrNot(Buffer, (CPPSTRUCT*)Data, PortFlags, OwnerObject, ErrorText);
+#endif
 		}
 		virtual bool HasAddStructReferencedObjects() override
 		{
@@ -1152,7 +1309,18 @@ public:
 		virtual bool SerializeFromMismatchedTag(struct FPropertyTag const& Tag, FArchive& Ar, void *Data) override
 		{
 			check(TTraits::WithSerializeFromMismatchedTag); // don't call this if we have indicated it is not allowed
+#if PLATFORM_COMPILER_HAS_IF_CONSTEXPR
+			if constexpr (TStructOpsTypeTraits<CPPSTRUCT>::WithSerializeFromMismatchedTag)
+			{
+				return ((CPPSTRUCT*)Data)->SerializeFromMismatchedTag(Tag, Ar);
+			}
+			else
+			{
+				return false;
+			}
+#else
 			return SerializeFromMismatchedTagOrNot(Tag, Ar, (CPPSTRUCT*)Data);
+#endif
 		}
 		virtual bool HasStructuredSerializeFromMismatchedTag() override
 		{
@@ -1161,7 +1329,18 @@ public:
 		virtual bool StructuredSerializeFromMismatchedTag(struct FPropertyTag const& Tag, FStructuredArchive::FSlot Slot, void *Data) override
 		{
 			check(TTraits::WithStructuredSerializeFromMismatchedTag); // don't call this if we have indicated it is not allowed
+#if PLATFORM_COMPILER_HAS_IF_CONSTEXPR
+			if constexpr (TStructOpsTypeTraits<CPPSTRUCT>::WithStructuredSerializeFromMismatchedTag)
+			{
+				return ((CPPSTRUCT*)Data)->SerializeFromMismatchedTag(Tag, Slot);
+			}
+			else
+			{
+				return false;
+			}
+#else
 			return StructuredSerializeFromMismatchedTagOrNot(Tag, Slot, (CPPSTRUCT*)Data);
+#endif
 		}
 
 		static_assert(!(TTraits::WithSerializeFromMismatchedTag && TTraits::WithStructuredSerializeFromMismatchedTag), "Structs cannot have both WithSerializeFromMismatchedTag and WithStructuredSerializeFromMismatchedTag set");
@@ -1170,10 +1349,22 @@ public:
 		{
 			return TModels<CGetTypeHashable, CPPSTRUCT>::Value;
 		}
-		uint32 GetTypeHash(const void* Src) override
+		uint32 GetStructTypeHash(const void* Src) override
 		{
 			ensure(HasGetTypeHash());
+
+#if PLATFORM_COMPILER_HAS_IF_CONSTEXPR
+			if constexpr (TModels<CGetTypeHashable, CPPSTRUCT>::Value)
+			{
+				return GetTypeHash(*(const CPPSTRUCT*)Src);
+			}
+			else
+			{
+				return 0;
+			}
+#else
 			return GetTypeHashOrNot((const CPPSTRUCT*)Src);
+#endif
 		}
 		virtual EPropertyFlags GetComputedPropertyFlags() const override
 		{
@@ -1337,6 +1528,20 @@ public:
 	 * @return Buffer after parsing has succeeded, or NULL on failure
 	 */
 	COREUOBJECT_API const TCHAR* ImportText(const TCHAR* Buffer, void* Value, UObject* OwnerObject, int32 PortFlags, FOutputDevice* ErrorText, const FString& StructName, bool bAllowNativeOverride = true);
+
+	/**
+	 * Sets value of script struct based on imported string
+	 *
+	 * @param	Buffer			String to read text data out of
+	 * @param	Value			Struct that will be modified
+	 * @param	OwnerObject		UObject that contains this struct
+	 * @param	PortFlags		EPropertyPortFlags controlling import behavior
+	 * @param	ErrorText		What to print import errors to
+	 * @param	StructNameGetter Function to return the struct name to avoid doing work if no error message is forthcoming
+	 * @param	bAllowNativeOverride If true, will try to run native version of export text on the struct
+	 * @return Buffer after parsing has succeeded, or NULL on failure
+	 */
+	COREUOBJECT_API const TCHAR* ImportText(const TCHAR* Buffer, void* Value, UObject* OwnerObject, int32 PortFlags, FOutputDevice* ErrorText, const TFunctionRef<FString()>& StructNameGetter, bool bAllowNativeOverride = true);
 
 	/**
 	 * Compare two script structs
@@ -2225,6 +2430,7 @@ class COREUOBJECT_API UClass : public UStruct
 
 public:
 	friend class FRestoreClassInfo;
+	friend class FBlueprintEditorUtils;
 
 	typedef void		(*ClassConstructorType)				(const FObjectInitializer&);
 	typedef UObject*	(*ClassVTableHelperCtorCallerType)	(FVTableHelper& Helper);
@@ -2237,7 +2443,7 @@ public:
 	ClassAddReferencedObjectsType ClassAddReferencedObjects;
 
 	/** Class pseudo-unique counter; used to accelerate unique instance name generation */
-	uint32 ClassUnique:31;
+	mutable uint32 ClassUnique:31;
 
 	/** Used to check if the class was cooked or not */
 	uint32 bCooked:1;
@@ -2301,6 +2507,28 @@ public:
 	/** The class default object; used for delta serialization and object initialization */
 	UObject* ClassDefaultObject;
 
+protected:
+	/** This is where we store the data that is only changed per class instead of per instance */
+	UPROPERTY()
+	void* SparseClassData;
+
+	/** The struct used to store sparse class data. */
+	UPROPERTY()
+	UScriptStruct* SparseClassDataStruct;
+
+public:
+	/**
+	 * Returns a pointer to the sidecar data structure. This function will create an instance of the data structure if one has been specified and it has not yet been created.
+	 */
+	void* GetOrCreateSparseClassData() { return SparseClassData ? SparseClassData : CreateSparseClassData(); }
+
+	/**
+	 * Returns a pointer to the type of the sidecar data structure if one is specified.
+	 */
+	virtual UScriptStruct* GetSparseClassDataStruct() const;
+
+	void SetSparseClassDataStruct(UScriptStruct* InSparseClassDataStruct);
+
 	/** Assemble reference token streams for all classes if they haven't had it assembled already */
 	static void AssembleReferenceTokenStreams();
 
@@ -2312,6 +2540,10 @@ public:
 #endif // WITH_EDITOR
 
 private:
+	void* CreateSparseClassData();
+
+	void CleanupSparseClassData();
+
 #if WITH_EDITOR
 	/** Provides access to attributes of the underlying C++ class. Should never be unset. */
 	TOptional<FCppClassTypeInfo> CppTypeInfo;
@@ -2517,11 +2749,11 @@ public:
 	 * @param	bCreateIfNeeded if true (default) then the CDO is created if it is null
 	 * @return		the CDO for this class
 	 */
-	UObject* GetDefaultObject(bool bCreateIfNeeded = true)
+	UObject* GetDefaultObject(bool bCreateIfNeeded = true) const
 	{
 		if (ClassDefaultObject == nullptr && bCreateIfNeeded)
 		{
-			CreateDefaultObject();
+			const_cast<UClass*>(this)->CreateDefaultObject();
 		}
 
 		return ClassDefaultObject;
@@ -2542,10 +2774,15 @@ public:
 	virtual void InitPropertiesFromCustomList(uint8* DataPtr, const uint8* DefaultDataPtr) {}
 
 	/**
+	 * Allows class to provide data to the object initializer that can affect how native class subobjects are created.
+	 */
+	virtual void SetupObjectInitializer(FObjectInitializer& ObjectInitializer) const {}
+
+	/**
 	 * Get the name of the CDO for the this class
 	 * @return The name of the CDO
 	 */
-	FName GetDefaultObjectName();
+	FName GetDefaultObjectName() const;
 
 	/** Returns memory used to store temporary data on an instance, used by blueprints */
 	virtual uint8* GetPersistentUberGraphFrame(UObject* Obj, UFunction* FuncToCheck) const
@@ -2568,7 +2805,7 @@ public:
 	 * @return		the CDO for this class
 	 */
 	template<class T>
-	T* GetDefaultObject()
+	T* GetDefaultObject() const
 	{
 		UObject *Ret = GetDefaultObject();
 		check(Ret->IsA(T::StaticClass()));
@@ -2718,7 +2955,7 @@ public:
 	 */
 	bool ImplementsInterface(const class UClass* SomeInterface) const;
 
-	/** serializes the passed in object as this class's default object using the given archive
+	/** serializes the passed in object as this class's default object using the given archive slot
 	 * @param Object the object to serialize as default
 	 * @param Slot the structured archive slot to serialize from
 	 */
@@ -2732,6 +2969,11 @@ public:
 	{
 		SerializeDefaultObject(Object, FStructuredArchiveFromArchive(Ar).GetSlot());
 	}
+
+	/** serializes the associated sparse class data for the passed in object using the given archive slot. This should only be called if the class has an associated sparse data structure.
+	 * @param Slot the structured archive slot to serialize from
+	 */
+	void SerializeSparseClassData(FStructuredArchive::FSlot Slot);
 
 	/** Wraps the PostLoad() call for the class default object.
 	 * @param Object the default object to call PostLoad() on
@@ -2780,10 +3022,16 @@ public:
 	virtual bool HasProperty(UProperty* InProperty) const;
 
 	/** Finds the object that is used as the parent object when serializing properties, overridden for blueprints */
-	virtual UObject* FindArchetype(UClass* ArchetypeClass, const FName ArchetypeName) const { return nullptr; }
+	virtual UObject* FindArchetype(const UClass* ArchetypeClass, const FName ArchetypeName) const { return nullptr; }
 
 	/** Returns archetype object for CDO */
 	virtual UObject* GetArchetypeForCDO() const;
+
+	/** Returns archetype for sparse class data */
+	virtual void* GetArchetypeForSparseClassData() const;
+
+	/** Returns the struct used by the sparse class data archetype */
+	UScriptStruct* GetSparseClassDataArchetypeStruct() const;
 
 	/**
 	* Returns all objects that should be preloaded before the class default object is serialized at load time. Only used by the EDL.
@@ -2863,12 +3111,15 @@ class COREUOBJECT_API UDynamicClass : public UClass
 
 public:
 
+	typedef void (*DynamicClassInitializerType)	(UDynamicClass*);
+
 	UDynamicClass(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 	explicit UDynamicClass(const FObjectInitializer& ObjectInitializer, UClass* InSuperClass);
 	UDynamicClass(EStaticConstructor, FName InName, uint32 InSize, uint32 InAlignment, EClassFlags InClassFlags, EClassCastFlags InClassCastFlags,
 		const TCHAR* InClassConfigName, EObjectFlags InFlags, ClassConstructorType InClassConstructor,
 		ClassVTableHelperCtorCallerType InClassVTableHelperCtorCaller,
-		ClassAddReferencedObjectsType InClassAddReferencedObjects);
+		ClassAddReferencedObjectsType InClassAddReferencedObjects,
+		DynamicClassInitializerType InDynamicClassInitializer);
 
 	// UObject interface.
 	static void AddReferencedObjects(UObject* InThis, FReferenceCollector& Collector);
@@ -2876,7 +3127,8 @@ public:
 	// UClass interface
 	virtual UObject* CreateDefaultObject();
 	virtual void PurgeClass(bool bRecompilingOnLoad) override;
-	virtual UObject* FindArchetype(UClass* ArchetypeClass, const FName ArchetypeName) const override;
+	virtual UObject* FindArchetype(const UClass* ArchetypeClass, const FName ArchetypeName) const override;
+	virtual void SetupObjectInitializer(FObjectInitializer& ObjectInitializer) const override;
 
 	/** Find a struct property, called from generated code */
 	UStructProperty* FindStructPropertyChecked(const TCHAR* PropertyName) const;
@@ -2895,8 +3147,13 @@ public:
 	TArray<UObject*> ComponentTemplates;
 	TArray<UObject*> Timelines;
 
+	/** Array of blueprint overrides of component classes in parent classes */
+	TArray<TPair<FName, UClass*>> ComponentClassOverrides;
+
 	/** IAnimClassInterface (UAnimClassData) or null */
 	UObject* AnimClassImplementation;
+
+	DynamicClassInitializerType DynamicClassInitializer;
 };
 
 /**
@@ -2960,7 +3217,8 @@ COREUOBJECT_API void GetPrivateStaticClassBody(
 	UClass::ClassAddReferencedObjectsType InClassAddReferencedObjects,
 	UClass::StaticClassFunctionType InSuperClassFn,
 	UClass::StaticClassFunctionType InWithinClassFn,
-	bool bIsDynamic = false);
+	bool bIsDynamic = false,
+	UDynamicClass::DynamicClassInitializerType InDynamicClassInitializer = nullptr);
 
 /*-----------------------------------------------------------------------------
 	FObjectInstancingGraph.

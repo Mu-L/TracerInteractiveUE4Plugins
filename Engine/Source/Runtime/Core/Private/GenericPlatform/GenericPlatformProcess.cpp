@@ -16,6 +16,7 @@
 #include "Misc/CoreStats.h"
 #include "Misc/EventPool.h"
 #include "Misc/EngineVersion.h"
+#include "Misc/LazySingleton.h"
 #include "ProfilingDebugging/CsvProfiler.h"
 
 #ifndef DEFAULT_NO_THREADING
@@ -106,8 +107,12 @@ const TCHAR* FGenericPlatformProcess::UserName(bool bOnlyAlphaNumeric/* = true*/
 
 void FGenericPlatformProcess::SetCurrentWorkingDirectoryToBaseDir()
 {
+#if defined(DISABLE_CWD_CHANGES) && DISABLE_CWD_CHANGES != 0
+	check(false);
+#else
 	// even if we don't set a directory, we should remember the current one so LaunchDir works
 	FPlatformMisc::CacheLaunchDir();
+#endif
 }
 
 FString FGenericPlatformProcess::GetCurrentWorkingDirectory()
@@ -172,7 +177,7 @@ const TCHAR* FGenericPlatformProcess::ExecutableName(bool bRemoveExtension)
 	return NULL;
 }
 
-FString FGenericPlatformProcess::GenerateApplicationPath( const FString& AppName, EBuildConfigurations::Type BuildConfiguration)
+FString FGenericPlatformProcess::GenerateApplicationPath( const FString& AppName, EBuildConfiguration BuildConfiguration)
 {
 	UE_LOG(LogHAL, Fatal, TEXT("FGenericPlatformProcess::GenerateApplicationPath not implemented on this platform"));
 	return FString();
@@ -466,8 +471,8 @@ FEvent* FGenericPlatformProcess::CreateSynchEvent(bool bIsManualReset)
 FEvent* FGenericPlatformProcess::GetSynchEventFromPool(bool bIsManualReset)
 {
 	return bIsManualReset
-		? FEventPool<EEventPoolTypes::ManualReset>::Get().GetEventFromPool()
-		: FEventPool<EEventPoolTypes::AutoReset>::Get().GetEventFromPool();
+		? TLazySingleton<FEventPool<EEventPoolTypes::ManualReset>>::Get().GetEventFromPool()
+		: TLazySingleton<FEventPool<EEventPoolTypes::AutoReset>>::Get().GetEventFromPool();
 }
 
 
@@ -480,11 +485,11 @@ void FGenericPlatformProcess::ReturnSynchEventToPool(FEvent* Event)
 
 	if (Event->IsManualReset())
 	{
-		FEventPool<EEventPoolTypes::ManualReset>::Get().ReturnToPool(Event);
+		TLazySingleton<FEventPool<EEventPoolTypes::ManualReset>>::Get().ReturnToPool(Event);
 	}
 	else
 	{
-		FEventPool<EEventPoolTypes::AutoReset>::Get().ReturnToPool(Event);
+		TLazySingleton<FEventPool<EEventPoolTypes::AutoReset>>::Get().ReturnToPool(Event);
 	}
 }
 
@@ -541,19 +546,30 @@ bool FGenericPlatformProcess::WritePipe(void* WritePipe, const uint8* Data, cons
 bool FGenericPlatformProcess::SupportsMultithreading()
 {
 #if DEFAULT_NO_THREADING
-	static bool bSupportsMultithreading = FParse::Param(FCommandLine::Get(), TEXT("threading"));
+	static bool bSupportsMultithreading = FCommandLine::IsInitialized() ? FParse::Param(FCommandLine::Get(), TEXT("threading")) : 0;
 #else
-	static bool bSupportsMultithreading = !FParse::Param(FCommandLine::Get(), TEXT("nothreading"));
+	static bool bSupportsMultithreading = FCommandLine::IsInitialized() ? !FParse::Param(FCommandLine::Get(), TEXT("nothreading")) : 1;
 #endif
 	return bSupportsMultithreading;
 }
 
 FGenericPlatformProcess::FSemaphore::FSemaphore(const FString& InName)
+	: FSemaphore(*InName)
 {
-	FCString::Strcpy(Name, sizeof(Name)-1, *InName);
+}
+
+
+FGenericPlatformProcess::FSemaphore::FSemaphore(const TCHAR* InName) 
+{
+	FCString::Strcpy(Name, sizeof(Name) - 1, InName);
 }
 
 FGenericPlatformProcess::FSemaphore* FGenericPlatformProcess::NewInterprocessSynchObject(const FString& Name, bool bCreate, uint32 MaxLocks)
+{
+	return NewInterprocessSynchObject(*Name, bCreate, MaxLocks);
+}
+
+FGenericPlatformProcess::FSemaphore* FGenericPlatformProcess::NewInterprocessSynchObject(const TCHAR* Name, bool bCreate, uint32 MaxLocks)
 {
 	UE_LOG(LogHAL, Fatal, TEXT("FGenericPlatformProcess::NewInterprocessSynchObject not implemented on this platform"));
 	return NULL;
@@ -583,4 +599,10 @@ bool FGenericPlatformProcess::IsFirstInstance()
 FSystemWideCriticalSectionNotImplemented::FSystemWideCriticalSectionNotImplemented(const FString& Name, FTimespan Timeout)
 {
 	UE_LOG(LogHAL, Fatal, TEXT("FSystemWideCriticalSection not implemented on this platform"));
+}
+
+void FGenericPlatformProcess::TearDown()
+{
+	TLazySingleton<FEventPool<EEventPoolTypes::AutoReset>>::TearDown();
+	TLazySingleton<FEventPool<EEventPoolTypes::ManualReset>>::TearDown();
 }

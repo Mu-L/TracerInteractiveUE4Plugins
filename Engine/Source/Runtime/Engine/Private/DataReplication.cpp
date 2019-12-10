@@ -51,7 +51,6 @@ static FAutoConsoleVariableRef CVarSupportsFastArrayDelta(
 
 extern TAutoConsoleVariable<int32> CVarNetEnableDetailedScopeCounters;
 
-PRAGMA_DISABLE_DEPRECATION_WARNINGS
 class FNetSerializeCB : public INetSerializeCB
 {
 private:
@@ -274,9 +273,7 @@ private:
 	FCachedRequestState CachedRequestState;
 	TSharedPtr<FReplicationChangelistMgr> ChangelistMgr;
 };
-PRAGMA_ENABLE_DEPRECATION_WARNINGS
 
-PRAGMA_DISABLE_DEPRECATION_WARNINGS
 FObjectReplicator::FObjectReplicator()
 	: bLastUpdateEmpty(false)
 	, bOpenAckCalled(false)
@@ -295,60 +292,6 @@ FObjectReplicator::~FObjectReplicator()
 {
 	CleanUp();
 }
-PRAGMA_ENABLE_DEPRECATION_WARNINGS
-
-PRAGMA_DISABLE_DEPRECATION_WARNINGS
-bool FObjectReplicator::SerializeCustomDeltaProperty(
-	UNetConnection* Connection,
-	void* Src,
-	UProperty* Property,
-	uint32 ArrayIndex,
-	FNetBitWriter& OutBunch,
-	TSharedPtr<INetDeltaBaseState>& NewFullState,
-	TSharedPtr<INetDeltaBaseState>& OldState)
-{
-	check( NewFullState.IsValid() == false ); // NewState is passed in as nullptr and instantiated within this function if necessary
-
-	CONDITIONAL_SCOPE_CYCLE_COUNTER( STAT_NetSerializeItemDeltaTime, CVarNetEnableDetailedScopeCounters.GetValueOnAnyThread() > 0 );
-
-	UStructProperty * StructProperty = CastChecked< UStructProperty >( Property );
-
-	//------------------------------------------------
-	//	Custom NetDeltaSerialization
-	//------------------------------------------------
-	if ( !ensure( ( StructProperty->Struct->StructFlags & STRUCT_NetDeltaSerializeNative ) != 0 ) )
-	{
-		return false;
-	}
-
-	FNetSerializeCB NetSerializeCB( Connection->Driver );
-
-	FNetDeltaSerializeInfo Parms;
-	Parms.Data = Property->ContainerPtrToValuePtr<void>(Src, ArrayIndex);
-	Parms.Object = reinterpret_cast<UObject*>(Src);
-	Parms.Connection = Connection;
-	Parms.bInternalAck = Connection->InternalAck;
-	Parms.Writer = &OutBunch;
-	Parms.Map = Connection->PackageMap;
-	Parms.OldState = OldState.Get();
-	Parms.NewState = &NewFullState;
-	Parms.NetSerializeCB = &NetSerializeCB;
-	Parms.bIsWritingOnClient = (Connection->Driver && Connection->Driver->GetWorld()) ? Connection->Driver->GetWorld()->IsRecordingClientReplay() : false;
-
-	UScriptStruct::ICppStructOps * CppStructOps = StructProperty->Struct->GetCppStructOps();
-
-	check(CppStructOps); // else should not have STRUCT_NetSerializeNative
-
-	Parms.Struct = StructProperty->Struct;
-
-	if ( Property->ArrayDim != 1 )
-	{
-		OutBunch.SerializeIntPacked( ArrayIndex );
-	}
-
-	return CppStructOps->NetDeltaSerialize(Parms, Parms.Data);
-}
-PRAGMA_ENABLE_DEPRECATION_WARNINGS
 
 bool FObjectReplicator::SendCustomDeltaProperty(UObject* InObject, UProperty* Property, uint32 ArrayIndex, FNetBitWriter& OutBunch, TSharedPtr<INetDeltaBaseState>& NewFullState, TSharedPtr<INetDeltaBaseState>& OldState)
 {
@@ -826,7 +769,7 @@ void FObjectReplicator::ReceivedNak( int32 NakPacketId )
 	{
 		UE_LOG(LogNet, Verbose, TEXT("FObjectReplicator::ReceivedNak: ObjectClass == nullptr"));
 	}
-	else if (ERepLayoutState::Normal == RepLayout->GetRepLayoutState())
+	else if (!RepLayout->IsEmpty())
 	{
 		if (FSendingRepState* SendingRepState = RepState.IsValid() ? RepState->GetSendingRepState() : nullptr)
 		{
@@ -866,7 +809,7 @@ void FObjectReplicator::ReceivedNak( int32 NakPacketId )
 					}
 					else if (NakPacketId >= Rec->OutPacketIdRange.First && NakPacketId <= Rec->OutPacketIdRange.Last)
 					{
-						UE_LOG(LogNet, Verbose, TEXT("Restoring Previous Base State of dynamic property. Channel: %s, NakId: %d, First: %d, Last: %d, Address: %s)"), *OwningChannel->Describe(), NakPacketId, Rec->OutPacketIdRange.First, Rec->OutPacketIdRange.Last, *Connection->LowLevelGetRemoteAddress(true));
+						UE_LOG(LogNet, VeryVerbose, TEXT("Restoring Previous Base State of dynamic property. Channel: %s, NakId: %d, First: %d, Last: %d, Address: %s)"), *OwningChannel->Describe(), NakPacketId, Rec->OutPacketIdRange.First, Rec->OutPacketIdRange.Last, *Connection->LowLevelGetRemoteAddress(true));
 
 						// The Nack'd packet did update this property, so we need to replace the buffer in RecentDynamic
 						// with the buffer we used to create this update (which was dropped), so that the update will be recreated on the next replicate actor
@@ -1567,10 +1510,9 @@ bool FObjectReplicator::ReplicateProperties( FOutBunch & Bunch, FReplicationFlag
 		check(RepLayout.IsValid());
 		check(RepState.IsValid());
 		check(RepState->GetSendingRepState());
-		check(RepLayout->GetRepLayoutState() != ERepLayoutState::Uninitialized);
 		check(ChangelistMgr.IsValid());
 		check(ChangelistMgr->GetRepChangelistState() != nullptr);
-		check((ChangelistMgr->GetRepChangelistState()->StaticBuffer.Num() == 0) == (RepLayout->GetRepLayoutState() == ERepLayoutState::Empty));
+		check((ChangelistMgr->GetRepChangelistState()->StaticBuffer.Num() == 0) == RepLayout->IsEmpty());
 	}
 
 	UNetConnection* OwningChannelConnection = OwningChannel->Connection;
@@ -1705,6 +1647,27 @@ void FObjectReplicator::PostSendBunch( FPacketIdRange & PacketRange, uint8 bReli
 			}
 		}
 
+		// bPausedUntilReliableAck won't have been set until *after* we generated a changelist and tried to send
+		// data. Therefore, there may be a changelist already created, and we need to remove it from the history.
+		else
+		{
+			// We won't try to replicate again until this bunch has been acked, so there should only ever possibly
+			// be a single unset history item, and that should correspond to the one that is in this bunch.
+			// However, PostSendBunch will be called on all subobject replicators when we replicate an Actor, so it's
+			// possible that we either didn't send anything, or the last thing we sent wasn't reliable.
+			if (SendingRepState->HistoryEnd > SendingRepState->HistoryStart)
+			{
+				const int32 HistoryIndex = (SendingRepState->HistoryEnd - 1) % FSendingRepState::MAX_CHANGE_HISTORY;
+				FRepChangedHistory& HistoryItem = SendingRepState->ChangeHistory[HistoryIndex];
+	
+				if (!HistoryItem.WasSent())
+				{
+					HistoryItem.Reset();
+					--SendingRepState->HistoryEnd;
+				}
+			}
+		}
+
 		for (FPropertyRetirement& Retirement : SendingRepState->Retirement)
 		{
 			FPropertyRetirement* Next = Retirement.Next;
@@ -1745,15 +1708,6 @@ void FObjectReplicator::FRPCPendingLocalCall::CountBytes(FArchive& Ar) const
 {
 	Buffer.CountBytes(Ar);
 	UnmappedGuids.CountBytes(Ar);
-}
-
-
-void FObjectReplicator::Serialize(FArchive& Ar)
-{
-	if (Ar.IsCountingMemory())
-	{
-		CountBytes(Ar);
-	}
 }
 
 void FObjectReplicator::CountBytes(FArchive& Ar) const

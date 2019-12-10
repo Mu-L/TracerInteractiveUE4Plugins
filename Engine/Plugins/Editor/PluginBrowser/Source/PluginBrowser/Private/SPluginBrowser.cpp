@@ -21,6 +21,7 @@
 #include "Interfaces/IProjectManager.h"
 #include "ProjectDescriptor.h"
 #include "GameProjectGenerationModule.h"
+#include "Framework/MultiBox/MultiBoxBuilder.h"
 
 #define LOCTEXT_NAMESPACE "PluginsEditor"
 
@@ -84,7 +85,9 @@ void SPluginBrowser::Construct( const FArguments& Args )
 		static void PluginToStringArray( const IPlugin* Plugin, OUT TArray< FString >& StringArray )
 		{
 			// NOTE: Only the friendly name is searchable for now.  We don't display the actual plugin name in the UI.
-			StringArray.Add( Plugin->GetDescriptor().FriendlyName );
+			const FPluginDescriptor& Descriptor = Plugin->GetDescriptor();
+			StringArray.Add( Descriptor.FriendlyName );
+			StringArray.Add( Descriptor.Description );
 		}
 	};
 
@@ -95,6 +98,45 @@ void SPluginBrowser::Construct( const FArguments& Args )
 
 	PluginCategories = SNew( SPluginCategoryTree, SharedThis( this ) );
 
+	FMenuBuilder DetailViewOptions(true, nullptr);
+	DetailViewOptions.AddMenuEntry(
+		LOCTEXT("ShowOnlyEnabled", "Show Only Enabled"),
+		LOCTEXT("ShowOnlyEnabled_ToolTip", "Displays only the plugins which are enabled"),
+		FSlateIcon(),
+		FUIAction(
+			FExecuteAction::CreateLambda([this]
+			{
+				PluginCategories->ToggleFilterType(SPluginCategoryTree::EFilterType::OnlyEnabled);
+			}),
+			FCanExecuteAction(),
+			FIsActionChecked::CreateLambda([this]() -> bool
+			{
+				return PluginCategories->IsFilterEnabled(SPluginCategoryTree::EFilterType::OnlyEnabled);
+			})
+		),
+		NAME_None,
+		EUserInterfaceActionType::ToggleButton
+	);
+
+	DetailViewOptions.AddMenuEntry(
+		LOCTEXT("ShowOnlyDisabled", "Show Only Disabled"),
+		LOCTEXT("ShowOnlyDisabled_ToolTip", "Displays only the plugins which are disabled"),
+		FSlateIcon(),
+		FUIAction(
+			FExecuteAction::CreateLambda([this]
+			{
+				PluginCategories->ToggleFilterType(SPluginCategoryTree::EFilterType::OnlyDisabled);
+			}),
+			FCanExecuteAction(),
+			FIsActionChecked::CreateLambda([this]() -> bool
+			{
+				return PluginCategories->IsFilterEnabled(SPluginCategoryTree::EFilterType::OnlyDisabled);
+			})
+		),
+		NAME_None,
+		EUserInterfaceActionType::ToggleButton
+	);
+
 	TSharedRef<SVerticalBox> MainContent = SNew( SVerticalBox )
 	+SVerticalBox::Slot()
 	[
@@ -102,7 +144,12 @@ void SPluginBrowser::Construct( const FArguments& Args )
 		+SSplitter::Slot()
 		.Value(.3f)
 		[
-			PluginCategories.ToSharedRef()
+			SNew(SBorder)
+			.Padding(8.0f)
+			.BorderImage(FEditorStyle::GetBrush("ToolPanel.GroupBorder"))
+			[
+				PluginCategories.ToSharedRef()
+			]
 		]
 		+SSplitter::Slot()
 		[
@@ -128,6 +175,25 @@ void SPluginBrowser::Construct( const FArguments& Args )
 				[
 					SAssignNew( SearchBoxPtr, SSearchBox )
 					.OnTextChanged( this, &SPluginBrowser::SearchBox_OnPluginSearchTextChanged )
+				]
+
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				[
+					SNew(SComboButton)
+					.ContentPadding(0)
+					.ForegroundColor(FSlateColor::UseForeground())
+					.ButtonStyle(FEditorStyle::Get(), "ToggleButton")
+					.AddMetaData<FTagMetaData>(FTagMetaData(TEXT("ViewOptions")))
+					.MenuContent()
+					[
+						DetailViewOptions.MakeWidget()
+					]
+					.ButtonContent()
+					[
+						SNew(SImage)
+						.Image(FEditorStyle::GetBrush("GenericViewButton"))
+					]
 				]
 			]
 
@@ -172,68 +238,29 @@ void SPluginBrowser::Construct( const FArguments& Args )
 						SNew(SButton)
 						.Text(LOCTEXT("PluginSettingsRestartEditor", "Restart Now"))
 						.OnClicked(this, &SPluginBrowser::HandleRestartEditorButtonClicked)
+						.TextStyle(FEditorStyle::Get(), "LargeText")
+						.ButtonStyle(FEditorStyle::Get(), "FlatButton.Default")
 					]
 				]
 			]
 
-			+SVerticalBox::Slot()
+
+			+ SVerticalBox::Slot()
 			.AutoHeight()
 			.Padding(FMargin(PaddingAmount, PaddingAmount, PaddingAmount, 0.0f))
+			.HAlign(HAlign_Right)
 			[
-				SNew(SBorder)
-				.BorderBackgroundColor(FLinearColor::Yellow)
-				.BorderImage(FEditorStyle::GetBrush("ToolPanel.GroupBorder"))
-				.Padding(8.0f)
-				.Visibility(this, &SPluginBrowser::HandleUpgradeToUnrealStudioVisibility)
-				[
-					SNew( SHorizontalBox )
-
-					+SHorizontalBox::Slot()
-					.AutoWidth()
-					.VAlign(VAlign_Center)
-					.Padding(FMargin(0.0f, 0.0f, 8.0f, 0.0f))
-					[
-						SNew(SImage)
-						.Image(FPluginStyle::Get()->GetBrush("Plugins.Warning"))
-					]
-
-					+SHorizontalBox::Slot()
-					.VAlign(VAlign_Center)
-					[
-						SNew(STextBlock)
-						.Text(LOCTEXT("PluginSettingsUpgradeToStudioNotice", "The current project is not an Unreal Studio project. Click 'Convert Project & Restart' to use Unreal Studio plugins."))
-					]
-
-					+SHorizontalBox::Slot()
-					.AutoWidth()
-					.VAlign(VAlign_Center)
-					.HAlign(HAlign_Right)
-					[
-						SNew(SButton)
-						.Text(LOCTEXT("PluginSettingsUpgradeToStudio", "Convert Project & Restart"))
-						.OnClicked(this, &SPluginBrowser::HandleUpgradeToUnrealStudioButtonClicked)
-					]
-				]
+				SNew(SButton)
+				.ContentPadding(5)
+				.IsEnabled(true)
+				.ToolTip(SNew(SToolTip).Text(LOCTEXT("NewPluginEnabled", "Click here to open the Plugin Creator dialog.")))
+				.TextStyle(FEditorStyle::Get(), "LargeText")
+				.ButtonStyle(FEditorStyle::Get(), "FlatButton.Success")
+				.HAlign(HAlign_Center)
+				.Text(LOCTEXT("NewPluginLabel", "New Plugin"))
+				.OnClicked(this, &SPluginBrowser::HandleNewPluginButtonClicked)
 			]
 		]
-	];
-
-	const FText NewPluginTooltip = LOCTEXT("NewPluginEnabled", "Click here to open the Plugin Creator dialog.");
-
-	MainContent->AddSlot()
-	.AutoHeight()
-	.Padding(5)
-	.HAlign(HAlign_Right)
-	[
-		SNew(SButton)
-		.ContentPadding(5)
-		.IsEnabled(true)
-		.ToolTip(SNew(SToolTip).Text(NewPluginTooltip))
-		.TextStyle(FEditorStyle::Get(), "LargeText")
-		.ButtonStyle(FEditorStyle::Get(), "FlatButton.Success")
-		.HAlign(HAlign_Center)
-		.Text(LOCTEXT("NewPluginLabel", "New Plugin"))
-		.OnClicked(this, &SPluginBrowser::HandleNewPluginButtonClicked)
 	];
 
 	ChildSlot
@@ -248,49 +275,10 @@ EVisibility SPluginBrowser::HandleRestartEditorNoticeVisibility() const
 	return FPluginBrowserModule::Get().HasPluginsPendingEnable() ? EVisibility::Visible : EVisibility::Collapsed;
 }
 
-EVisibility SPluginBrowser::HandleUpgradeToUnrealStudioVisibility() const
-{
-	const FProjectDescriptor* CurrentProject = IProjectManager::Get().GetCurrentProject();
-
-	TSharedPtr< FPluginCategory > SelectedCategory = GetSelectedCategory();
-
-	// Don't display the message for the root category or the project is an Unreal Studio project
-	if ( SelectedCategory.IsValid() && SelectedCategory->ParentCategory.IsValid() && !IProjectManager::Get().IsEnterpriseProject() ) 
-	{
-		for ( TSharedRef< IPlugin >& Plugin : SelectedCategory->Plugins )
-		{
-			if ( Plugin->GetType() == EPluginType::Enterprise )
-			{
-				return EVisibility::Visible;
-			}
-		}
-	}
-
-	return EVisibility::Collapsed;
-}
-
 FReply SPluginBrowser::HandleRestartEditorButtonClicked() const
 {
 	const bool bWarn = false;
 	FUnrealEdMisc::Get().RestartEditor(bWarn);
-	return FReply::Handled();
-}
-
-FReply SPluginBrowser::HandleUpgradeToUnrealStudioButtonClicked() const
-{
-	if ( IProjectManager::Get().GetCurrentProject() )
-	{
-		FGameProjectGenerationModule::Get().TryMakeProjectFileWriteable(FPaths::GetProjectFilePath());
-
-		IProjectManager::Get().SetIsEnterpriseProject(true);
-
-		FText FailMessage;
-		IProjectManager::Get().SaveCurrentProjectToDisk(FailMessage);
-
-		const bool bWarn = false;
-		FUnrealEdMisc::Get().RestartEditor(bWarn);
-	}
-	
 	return FReply::Handled();
 }
 

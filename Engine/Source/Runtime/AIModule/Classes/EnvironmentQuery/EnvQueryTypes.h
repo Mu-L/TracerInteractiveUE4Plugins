@@ -150,6 +150,7 @@ namespace EEnvTestScoreOperator
 		AverageScore	UMETA(Tooltip = "Use average score from all contexts"),
 		MinScore		UMETA(Tooltip = "Use minimum score from all contexts"),
 		MaxScore		UMETA(Tooltip = "Use maximum score from all contexts"),
+		Multiply		UMETA(Tooltip = "Multiply scores from all contexts"),
 	};
 }
 
@@ -1090,7 +1091,7 @@ public:
 			{
 				case EEnvTestFilterType::Match:
 					bPassedTest = (bScore == bExpected);
-					UE_EQS_DBGMSG(!bPassedTest, TEXT("Boolean score don't mach (expected %s and got %s)"), bExpected ? TEXT("TRUE") : TEXT("FALSE"), bScore ? TEXT("TRUE") : TEXT("FALSE"));
+					UE_EQS_DBGMSG(!bPassedTest, TEXT("Boolean score doesn't match (expected %s and got %s)"), bExpected ? TEXT("TRUE") : TEXT("FALSE"), bScore ? TEXT("TRUE") : TEXT("FALSE"));
 					break;
 
 				case EEnvTestFilterType::Maximum:
@@ -1202,6 +1203,9 @@ public:
 				{
 					ItemScore = Score;
 				}
+				break;
+			case EEnvTestScoreOperator::Multiply:
+				ItemScore *= Score;
 				break;
 			}
 		}

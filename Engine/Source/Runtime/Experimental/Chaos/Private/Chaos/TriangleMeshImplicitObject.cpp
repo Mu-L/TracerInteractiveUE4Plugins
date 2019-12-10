@@ -3,7 +3,6 @@
 #include "Chaos/Capsule.h"
 #include "Chaos/Convex.h"
 #include "Chaos/GJK.h"
-#include "Chaos/ImplicitObjectScaled.h"
 
 namespace Chaos
 {
@@ -13,35 +12,12 @@ TTriangleMeshImplicitObject<T>::TTriangleMeshImplicitObject(TParticles<T, 3>&& P
 	, MParticles(MoveTemp(Particles))
 	, MElements(MoveTemp(Elements))
 	, MLocalBoundingBox(MParticles.X(0), MParticles.X(0))
-	, BVH(ConvexHulls)
 {
 	for (uint32 Idx = 1; Idx < MParticles.Size(); ++Idx)
 	{
 		MLocalBoundingBox.GrowToInclude(MParticles.X(Idx));
 	}
-
-	ConvexHulls.AddParticles(MElements.Num());
-
-	for (int32 TriIdx = 0; TriIdx < MElements.Num(); ++TriIdx)
-	{
-		const TVector<T, 3>& A = MParticles.X(MElements[TriIdx][0]);
-		const TVector<T, 3>& B = MParticles.X(MElements[TriIdx][1]);
-		const TVector<T, 3>& C = MParticles.X(MElements[TriIdx][2]);
-
-		TParticles<T, 3> Pts;
-		Pts.AddParticles(3);
-		Pts.X(0) = A;
-		Pts.X(1) = B;
-		Pts.X(2) = C;
-
-		TUniquePtr<TConvex<T, 3>> TriConvex = MakeUnique<TConvex<T,3>>(Pts);
-		ConvexHulls.X(TriIdx) = TVector<T,3>(0);
-		ConvexHulls.R(TriIdx) = TRotation<T, 3>::Identity;
-		ConvexHulls.SetDynamicGeometry(TriIdx, MoveTemp(TriConvex));
-	}
-
-	//BVH = BVHType(ConvexHulls, 2);
-	BVH = BVHType(ConvexHulls, false, 0, 64);
+	RebuildBV();
 }
 
 template <typename T>
@@ -94,7 +70,8 @@ struct TTriangleMeshRaycastVisitor
 		T Time;
 
 		//Check if we even intersect with triangle plane
-		if (TriPlane.Raycast(StartPoint, Dir, CurLength, Thickness, Time, RaycastPosition, RaycastNormal))
+		int32 DummyFaceIndex;
+		if (TriPlane.Raycast(StartPoint, Dir, CurLength, Thickness, Time, RaycastPosition, RaycastNormal, DummyFaceIndex))
 		{
 			TVector<T, 3> IntersectionPosition = RaycastPosition;
 			TVector<T, 3> IntersectionNormal = RaycastNormal;
@@ -107,6 +84,7 @@ struct TTriangleMeshRaycastVisitor
 				if (DistToTriangle2 <= R2)
 				{
 					OutTime = 0;
+					OutFaceIndex = TriIdx;
 					return false; //no one will beat Time == 0
 				}
 			}
@@ -125,14 +103,23 @@ struct TTriangleMeshRaycastVisitor
 				T BorderTimes[3];
 				bool bBorderIntersections[3];
 
-				const TCapsule<T> ABCapsule(A, B, Thickness);
-				bBorderIntersections[0] = ABCapsule.Raycast(StartPoint, Dir, CurLength, 0, BorderTimes[0], BorderPositions[0], BorderNormals[0]);
-
-				const TCapsule<T> BCCapsule(B, C, Thickness);
-				bBorderIntersections[1] = BCCapsule.Raycast(StartPoint, Dir, CurLength, 0, BorderTimes[1], BorderPositions[1], BorderNormals[1]);
-
-				const TCapsule<T> ACCapsule(A, C, Thickness);
-				bBorderIntersections[2] = ACCapsule.Raycast(StartPoint, Dir, CurLength, 0, BorderTimes[2], BorderPositions[2], BorderNormals[2]);
+				{
+					TVector<T, 3> ABCapsuleAxis = B - A;
+					T ABHeight = ABCapsuleAxis.SafeNormalize();
+					bBorderIntersections[0] = TCapsule<T>::RaycastFast(Thickness, ABHeight, ABCapsuleAxis, A, B, StartPoint, Dir, CurLength, 0, BorderTimes[0], BorderPositions[0], BorderNormals[0], DummyFaceIndex);
+				}
+				
+				{
+					TVector<T, 3> BCCapsuleAxis = C - B;
+					T BCHeight = BCCapsuleAxis.SafeNormalize();
+					bBorderIntersections[1] = TCapsule<T>::RaycastFast(Thickness, BCHeight, BCCapsuleAxis, B, C, StartPoint, Dir, CurLength, 0, BorderTimes[1], BorderPositions[1], BorderNormals[1], DummyFaceIndex);
+				}
+				
+				{
+					TVector<T, 3> ACCapsuleAxis = C - A;
+					T ACHeight = ACCapsuleAxis.SafeNormalize();
+					bBorderIntersections[2] = TCapsule<T>::RaycastFast(Thickness, ACHeight, ACCapsuleAxis, A, C, StartPoint, Dir, CurLength, 0, BorderTimes[2], BorderPositions[2], BorderNormals[2], DummyFaceIndex);
+				}
 
 				int32 MinBorderIdx = INDEX_NONE;
 				T MinBorderTime = 0;	//initialization not needed, but fixes warning
@@ -175,6 +162,7 @@ struct TTriangleMeshRaycastVisitor
 					OutNormal = RaycastNormal;	//We use the plane normal even when hitting triangle edges. This is to deal with triangles that approximate a single flat surface.
 					OutTime = Time;
 					CurLength = Time;	//prevent future rays from going any farther
+					OutFaceIndex = TriIdx;
 				}
 			}
 		}
@@ -182,14 +170,14 @@ struct TTriangleMeshRaycastVisitor
 		return true;
 	}
 
-	bool VisitRaycast(int32 TriIdx, T& CurLength)
+	bool VisitRaycast(TSpatialVisitorData<int32> TriIdx, T& CurLength)
 	{
-		return Visit<ERaycastType::Raycast>(TriIdx, CurLength);
+		return Visit<ERaycastType::Raycast>(TriIdx.Payload, CurLength);
 	}
 
-	bool VisitSweep(int32 TriIdx, T& CurLength)
+	bool VisitSweep(TSpatialVisitorData<int32> TriIdx, T& CurLength)
 	{
-		return Visit<ERaycastType::Sweep>(TriIdx, CurLength);
+		return Visit<ERaycastType::Sweep>(TriIdx.Payload, CurLength);
 	}
 
 	const TParticles<T, 3>& Particles;
@@ -200,10 +188,11 @@ struct TTriangleMeshRaycastVisitor
 	T OutTime;
 	TVector<T, 3> OutPosition;
 	TVector<T, 3> OutNormal;
+	int32 OutFaceIndex;
 };
 
 template <typename T>
-bool TTriangleMeshImplicitObject<T>::Raycast(const TVector<T, 3>& StartPoint, const TVector<T, 3>& Dir, const T Length, const T Thickness, T& OutTime, TVector<T, 3>& OutPosition, TVector<T, 3>& OutNormal) const
+bool TTriangleMeshImplicitObject<T>::Raycast(const TVector<T, 3>& StartPoint, const TVector<T, 3>& Dir, const T Length, const T Thickness, T& OutTime, TVector<T, 3>& OutPosition, TVector<T, 3>& OutNormal, int32& OutFaceIndex) const
 {
 	TTriangleMeshRaycastVisitor<T> SQVisitor(StartPoint, Dir, Thickness, MParticles, MElements);
 
@@ -221,6 +210,7 @@ bool TTriangleMeshImplicitObject<T>::Raycast(const TVector<T, 3>& StartPoint, co
 		OutTime = SQVisitor.OutTime;
 		OutPosition = SQVisitor.OutPosition;
 		OutNormal = SQVisitor.OutNormal;
+		OutFaceIndex = SQVisitor.OutFaceIndex;
 		return true;
 	}
 	else
@@ -233,7 +223,7 @@ template <typename T>
 bool TTriangleMeshImplicitObject<T>::Overlap(const TVector<T, 3>& Point, const T Thickness) const
 {
 	TBox<T, 3> QueryBounds(Point, Point);
-	QueryBounds.Thicken(TVector<T, 3>(Thickness));
+	QueryBounds.Thicken(Thickness);
 	const TArray<int32> PotentialIntersections = BVH.FindAllIntersections(QueryBounds);
 
 	const T Epsilon = 1e-4;
@@ -268,56 +258,82 @@ bool TTriangleMeshImplicitObject<T>::Overlap(const TVector<T, 3>& Point, const T
 }
 
 template <typename T>
-bool TTriangleMeshImplicitObject<T>::OverlapGeom(const TImplicitObject<T, 3>& QueryGeom, const TRigidTransform<T, 3>& QueryTM, const T Thickness, const TVector<T,3> Scale) const
+bool TTriangleMeshImplicitObject<T>::OverlapGeom(const TImplicitObject<T, 3>& QueryGeom, const TRigidTransform<T, 3>& QueryTM, const T Thickness) const
 {
-	bool bResult = false;
-	TBox<T, 3> QueryBounds = QueryGeom.BoundingBox();
-	QueryBounds.Thicken(TVector<T, 3>(Thickness));
-	QueryBounds = QueryBounds.TransformedBox(QueryTM);
-	const TArray<int32> PotentialIntersections = BVH.FindAllIntersections(QueryBounds);
-
-	for (int32 TriIdx : PotentialIntersections)
+	auto OverlapTriangle = [&](const TVector<T, 3>& A, const TVector<T, 3>& B, const TVector<T, 3>& C) -> bool
 	{
-		const TVector<T, 3>& A = MParticles.X(MElements[TriIdx][0]);
-		const TVector<T, 3>& B = MParticles.X(MElements[TriIdx][1]);
-		const TVector<T, 3>& C = MParticles.X(MElements[TriIdx][2]);
 		const TVector<T, 3> AB = B - A;
 		const TVector<T, 3> AC = C - A;
-		
+
 		//It's most likely that the query object is in front of the triangle since queries tend to be on the outside.
 		//However, maybe we should check if it's behind the triangle plane. Also, we should enforce this winding in some way
 		const TVector<T, 3> Offset = TVector<T, 3>::CrossProduct(AB, AC);
 
-		if (GJKIntersection(*ConvexHulls.Geometry(TriIdx), QueryGeom, QueryTM, Thickness, Offset))
+		// Ugly but required for now until we have an easier way to do tri collisons 
+		TParticles<T, 3> Particles;
+		Particles.AddParticles(3);
+
+		Particles.X(0) = A;
+		Particles.X(1) = B;
+		Particles.X(2) = C;
+
+		TConvex<T, 3> TriangleConvex(Particles);
+
+		return GJKIntersection(TriangleConvex, QueryGeom, QueryTM, Thickness, Offset);
+	};
+
+	bool bResult = false;
+	TBox<T, 3> QueryBounds = QueryGeom.BoundingBox();
+	QueryBounds.Thicken(Thickness);
+	QueryBounds = QueryBounds.TransformedBox(QueryTM);
+	const TArray<int32> PotentialIntersections = BVH.FindAllIntersections(QueryBounds);
+
+
+	for (int32 TriIdx : PotentialIntersections)
+	{
+	const TVector<T, 3>& A = MParticles.X(MElements[TriIdx][0]);
+	const TVector<T, 3>& B = MParticles.X(MElements[TriIdx][1]);
+	const TVector<T, 3>& C = MParticles.X(MElements[TriIdx][2]);
+
+		if (OverlapTriangle(A, B, C))
 		{
-			bResult = true;
-			break;
+			return true;
 		}
 	}
-	return bResult;
+
+	return false;
 }
+
 
 template <typename T>
 struct TTriangleMeshSweepVisitor
 {
-	TTriangleMeshSweepVisitor(const TTriangleMeshImplicitObject<T>& InTriMesh, const TImplicitObject<T,3>& InQueryGeom, const TRigidTransform<T,3>& InStartTM, const TVector<T,3>& InDir, const T InThickness, const TVector<T,3>& InScale)
+	TTriangleMeshSweepVisitor(const TTriangleMeshImplicitObject<T>& InTriMesh, const TImplicitObject<T,3>& InQueryGeom, const TRigidTransform<T,3>& InStartTM, const TVector<T,3>& InDir, const T InThickness)
 	: TriMesh(InTriMesh)
 	, StartTM(InStartTM)
 	, QueryGeom(InQueryGeom)
 	, Dir(InDir)
-	, Scale(InScale)
 	, Thickness(InThickness)
 	, OutTime(TNumericLimits<T>::Max())
 	{
 	}
 
-	bool VisitSweep(int32 TriIdx, T& CurLength)
+	bool VisitSweep(const TSpatialVisitorData<int32>& VisitData, T& CurLength)
 	{
-		TImplicitObjectScaled<T, 3> TriConvex(TriMesh.ConvexHulls.Geometry(TriIdx), Scale);
+		const int32 TriIdx = VisitData.Payload;
+
+		TParticles<T, 3> TriParticles;
+		TriParticles.AddParticles(3);
+		TriParticles.X(0) = TriMesh.MParticles.X(TriMesh.MElements[TriIdx][0]);
+		TriParticles.X(1) = TriMesh.MParticles.X(TriMesh.MElements[TriIdx][1]);
+		TriParticles.X(2) = TriMesh.MParticles.X(TriMesh.MElements[TriIdx][2]);
+
+		TConvex<T, 3> TriConvex(TriParticles);
+
 		T Time;
 		TVector<T, 3> HitPosition;
 		TVector<T, 3> HitNormal;
-		if (GJKRaycast<T>(TriConvex, QueryGeom, StartTM, StartTM.GetLocation(), Dir, CurLength, Time, HitPosition, HitNormal, Thickness))
+		if (GJKRaycast<T>(TriConvex, QueryGeom, StartTM, Dir, CurLength, Time, HitPosition, HitNormal, Thickness))
 		{
 			if (Time < OutTime)
 			{
@@ -325,6 +341,7 @@ struct TTriangleMeshSweepVisitor
 				OutPosition = HitPosition;
 				OutTime = Time;
 				CurLength = Time;
+				OutFaceIndex = TriIdx;
 
 				if (Time == 0)
 				{
@@ -341,35 +358,124 @@ struct TTriangleMeshSweepVisitor
 	const TRigidTransform<T, 3> StartTM;
 	const TImplicitObject<T, 3>& QueryGeom;
 	const TVector<T, 3>& Dir;
-	const TVector<T, 3>& Scale;
 	const T Thickness;
 
 	T OutTime;
 	TVector<T, 3> OutPosition;
 	TVector<T, 3> OutNormal;
+	int32 OutFaceIndex;
 };
 
 template <typename T>
-bool TTriangleMeshImplicitObject<T>::SweepGeom(const TImplicitObject<T, 3>& QueryGeom, const TRigidTransform<T, 3>& StartTM, const TVector<T, 3>& Dir, const T Length, T& OutTime, TVector<T, 3>& OutPosition, TVector<T, 3>& OutNormal, const T Thickness, const TVector<T,3> Scale) const
+bool TTriangleMeshImplicitObject<T>::SweepGeom(const TImplicitObject<T, 3>& QueryGeom, const TRigidTransform<T, 3>& StartTM, const TVector<T, 3>& Dir, const T Length, T& OutTime, TVector<T, 3>& OutPosition, TVector<T, 3>& OutNormal, int32& OutFaceIndex, const T Thickness) const
 {
 	bool bHit = false;
-	TTriangleMeshSweepVisitor<T> SQVisitor(*this, QueryGeom, StartTM, Dir, Thickness, Scale);
+	TTriangleMeshSweepVisitor<T> SQVisitor(*this, QueryGeom, StartTM, Dir, Thickness);
 	const TBox<T, 3> QueryBounds = QueryGeom.BoundingBox();
 	const TVector<T, 3> StartPoint = StartTM.TransformPositionNoScale(QueryBounds.Center());
 	const TVector<T, 3> Inflation = QueryBounds.Extents() * 0.5 + TVector<T, 3>(Thickness);
-	BVH.template Sweep<TTriangleMeshSweepVisitor<T>, false>(StartPoint, Dir, Length, Inflation, SQVisitor, Scale);
+	BVH.template Sweep<TTriangleMeshSweepVisitor<T>, false>(StartPoint, Dir, Length, Inflation, SQVisitor);
 
 	if (SQVisitor.OutTime <= Length)
 	{
 		OutTime = SQVisitor.OutTime;
 		OutPosition = SQVisitor.OutPosition;
 		OutNormal = SQVisitor.OutNormal;
+		OutFaceIndex = SQVisitor.OutFaceIndex;
 		bHit = true;
 	}
 	return bHit;
 }
 
+template <typename T>
+int32 TTriangleMeshImplicitObject<T>::FindMostOpposingFace(const TVector<T, 3>& Position, const TVector<T, 3>& UnitDir, int32 HintFaceIndex, T SearchDist) const
+{
+	//todo: this is horribly slow, need adjacency information
+	const T SearchDist2 = SearchDist * SearchDist;
+	
+	TBox<T, 3> QueryBounds(Position - TVector<T,3>(SearchDist), Position + TVector<T,3>(SearchDist));
+
+	const TArray<int32> PotentialIntersections = BVH.FindAllIntersections(QueryBounds);
+	const T Epsilon = 1e-4;
+
+	T MostOpposingDot = TNumericLimits<T>::Max();
+	int32 MostOpposingFace = HintFaceIndex;
+	
+	for (int32 TriIdx : PotentialIntersections)
+	{
+		const TVector<T, 3>& A = MParticles.X(MElements[TriIdx][0]);
+		const TVector<T, 3>& B = MParticles.X(MElements[TriIdx][1]);
+		const TVector<T, 3>& C = MParticles.X(MElements[TriIdx][2]);
+
+		const TVector<T, 3> AB = B - A;
+		const TVector<T, 3> AC = C - A;
+		TVector<T, 3> Normal = TVector<T, 3>::CrossProduct(AB, AC);
+		const T NormalLength = Normal.SafeNormalize();
+		if (!ensure(NormalLength > Epsilon))
+		{
+			//hitting degenerate triangle - should be fixed before we get to this stage
+			continue;
+		}
+
+		const TPlane<T, 3> TriPlane{ A, Normal };
+		const TVector<T, 3> ClosestPointOnTri = FindClosestPointOnTriangle(TriPlane, A, B, C, Position);
+		const T Distance2 = (ClosestPointOnTri - Position).SizeSquared();
+		if (Distance2 < SearchDist2)
+		{
+			const T Dot = TVector<T, 3>::DotProduct(Normal, UnitDir);
+			if (Dot < MostOpposingDot)
+			{
+				MostOpposingDot = Dot;
+				MostOpposingFace = TriIdx;
+			}
+		}
+	}
+
+	return MostOpposingFace;
+}
+
+template <typename T>
+TVector<T, 3> TTriangleMeshImplicitObject<T>::FindGeometryOpposingNormal(const TVector<T, 3>& DenormDir, int32 FaceIndex, const TVector<T, 3>& OriginalNormal) const
+{
+	return GetFaceNormal(FaceIndex);
+}
+
+template <typename T>
+TVector<T, 3> TTriangleMeshImplicitObject<T>::GetFaceNormal(const int32 FaceIdx) const
+{
+	if (ensure(FaceIdx != INDEX_NONE))
+	{
+		const TVector<T, 3>& A = MParticles.X(MElements[FaceIdx][0]);
+		const TVector<T, 3>& B = MParticles.X(MElements[FaceIdx][1]);
+		const TVector<T, 3>& C = MParticles.X(MElements[FaceIdx][2]);
+
+		const TVector<T, 3> AB = B - A;
+		const TVector<T, 3> AC = C - A;
+		TVector<T, 3> Normal = TVector<T, 3>::CrossProduct(AB, AC);
+		const T Length = Normal.SafeNormalize();
+		ensure(Length);
+		return Normal;
+	}
+
+	return TVector<T, 3>(0, 0, 1);
+}
+
+
+template<typename T>
+void Chaos::TTriangleMeshImplicitObject<T>::RebuildBV()
+{
+	const int32 NumTris = MElements.Num();
+	BVEntries.Reset(NumTris);
+
+	for (int Tri = 0; Tri<NumTris; Tri++)
+	{
+		BVEntries.Add({ this, Tri });
+	}
+	BVH.Reinitialize(BVEntries);
+}
+
 
 }
+
 
 template class Chaos::TTriangleMeshImplicitObject<float>;

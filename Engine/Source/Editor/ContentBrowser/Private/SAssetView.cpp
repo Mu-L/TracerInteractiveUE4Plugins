@@ -419,7 +419,6 @@ void SAssetView::Construct( const FArguments& InArgs )
 
 	bCanShowDevelopersFolder = InArgs._CanShowDevelopersFolder;
 
-	bCanShowCollections = InArgs._CanShowCollections;
 	bCanShowFavorites = InArgs._CanShowFavorites;
 	bPreloadAssetsForContextMenu = InArgs._PreloadAssetsForContextMenu;
 
@@ -737,7 +736,7 @@ void SAssetView::OnCreateNewFolder(const FString& FolderName, const FString& Fol
 	// Make sure we are showing the location of the new folder (we may have created it in a folder)
 	OnPathSelected.Execute(FolderPath);
 
-	DeferredFolderToCreate = MakeShareable(new FCreateDeferredFolderData());
+	DeferredFolderToCreate = MakeUnique<FCreateDeferredFolderData>();
 	DeferredFolderToCreate->FolderName = FolderName;
 	DeferredFolderToCreate->FolderPath = FolderPath;
 }
@@ -784,7 +783,7 @@ void SAssetView::CreateNewAsset(const FString& DefaultAssetName, const FString& 
 	OnPathSelected.Execute(PackagePath);
 
 	// Defer asset creation until next tick, so we get a chance to refresh the view
-	DeferredAssetToCreate = MakeShareable(new FCreateDeferredAssetData());
+	DeferredAssetToCreate = MakeUnique<FCreateDeferredAssetData>();
 	DeferredAssetToCreate->DefaultAssetName = DefaultAssetName;
 	DeferredAssetToCreate->PackagePath = PackagePath;
 	DeferredAssetToCreate->AssetClass = AssetClass;
@@ -1101,6 +1100,14 @@ void SAssetView::AdjustActiveSelection(int32 SelectionDelta)
 
 void SAssetView::ProcessRecentlyLoadedOrChangedAssets()
 {
+	if (RecentlyLoadedOrChangedAssets.Num() == 0)
+	{
+		return;
+	}
+
+	// Gather recently loaded or changed assets
+	TArray<FAssetData> AssetDatas;
+	TArray<int32> FilteredAssetItemIndices;
 	for (int32 AssetIdx = FilteredAssetItems.Num() - 1; AssetIdx >= 0 && RecentlyLoadedOrChangedAssets.Num() > 0; --AssetIdx)
 	{
 		if (FilteredAssetItems[AssetIdx]->GetType() != EAssetItemType::Folder)
@@ -1109,48 +1116,69 @@ void SAssetView::ProcessRecentlyLoadedOrChangedAssets()
 				
 			// Find the updated version of the asset data from the set
 			// This is the version of the data we should use to update our view
-			FAssetData RecentlyLoadedOrChangedAsset;
 			if (const FAssetData* RecentlyLoadedOrChangedAssetPtr = RecentlyLoadedOrChangedAssets.Find(ItemAsAsset->Data))
 			{
-				RecentlyLoadedOrChangedAsset = *RecentlyLoadedOrChangedAssetPtr;
+				if (RecentlyLoadedOrChangedAssetPtr->IsValid())
+				{
+					AssetDatas.Add(*RecentlyLoadedOrChangedAssetPtr);
+					FilteredAssetItemIndices.Add(AssetIdx);
+				}
+
 				RecentlyLoadedOrChangedAssets.Remove(ItemAsAsset->Data);
 			}
-
-			if (RecentlyLoadedOrChangedAsset.IsValid())
-			{
-				bool bShouldRemoveAsset = false;
-
-				if (!PassesCurrentBackendFilter(RecentlyLoadedOrChangedAsset))
-				{
-					bShouldRemoveAsset = true;
-				}
-
-				if (!bShouldRemoveAsset && OnShouldFilterAsset.IsBound() && OnShouldFilterAsset.Execute(RecentlyLoadedOrChangedAsset))
-				{
-					bShouldRemoveAsset = true;
-				}
-
-				if (!bShouldRemoveAsset && (IsFrontendFilterActive() && !PassesCurrentFrontendFilter(RecentlyLoadedOrChangedAsset)))
-				{
-					bShouldRemoveAsset = true;
-				}
-
-				if (bShouldRemoveAsset)
-				{
-					FilteredAssetItems.RemoveAt(AssetIdx);
-				}
-				else
-				{
-					// Update the asset data on the item
-					ItemAsAsset->SetAssetData(RecentlyLoadedOrChangedAsset);
-
-					// Update the custom column data
-					ItemAsAsset->CacheCustomColumns(CustomColumns, true, true, true);
-				}
-
-				RefreshList();
-			}
 		}
+	}
+
+	// Run backend filter
+	TSet<FAssetData> PassedBackendFilterSet;
+	if (AssetDatas.Num() > 0)
+	{
+		TArray<FAssetData> AssetDatasCopy = AssetDatas;
+		RunAssetsThroughBackendFilter(AssetDatasCopy);
+		PassedBackendFilterSet.Append(AssetDatasCopy);
+	}
+
+	// Update or remove
+	for (int32 i = 0; i < FilteredAssetItemIndices.Num(); ++i)
+	{
+		const int32 AssetIdx = FilteredAssetItemIndices[i];
+		const TSharedPtr<FAssetViewAsset>& ItemAsAsset = StaticCastSharedPtr<FAssetViewAsset>(FilteredAssetItems[AssetIdx]);
+		const FAssetData& RecentlyLoadedOrChangedAsset = AssetDatas[i];
+
+		bool bShouldRemoveAsset = false;
+
+		if (!PassedBackendFilterSet.Contains(ItemAsAsset->Data))
+		{
+			bShouldRemoveAsset = true;
+		}
+
+		if (!bShouldRemoveAsset && OnShouldFilterAsset.IsBound() && OnShouldFilterAsset.Execute(RecentlyLoadedOrChangedAsset))
+		{
+			bShouldRemoveAsset = true;
+		}
+
+		if (!bShouldRemoveAsset && (IsFrontendFilterActive() && !PassesCurrentFrontendFilter(RecentlyLoadedOrChangedAsset)))
+		{
+			bShouldRemoveAsset = true;
+		}
+
+		if (bShouldRemoveAsset)
+		{
+			FilteredAssetItems.RemoveAt(AssetIdx);
+		}
+		else
+		{
+			// Update the asset data on the item
+			ItemAsAsset->SetAssetData(RecentlyLoadedOrChangedAsset);
+
+			// Update the custom column data
+			ItemAsAsset->CacheCustomColumns(CustomColumns, true, true, true);
+		}
+	}
+
+	if (FilteredAssetItemIndices.Num() > 0)
+	{
+		RefreshList();
 	}
 
 	if (FilteredRecentlyAddedAssets.Num() == 0 && RecentlyAddedAssets.Num() == 0)
@@ -1573,6 +1601,7 @@ FReply SAssetView::OnDrop( const FGeometry& MyGeometry, const FDragDropEvent& Dr
 		// Note: We don't test IsAssetPathSelected here as we need to prevent dropping assets on class paths
 		const FString DestPath = SourcesData.PackagePaths[0].ToString();
 
+		// If the DragDrop event is validated, continue trying to dock it to the Widget
 		bool bUnused = false;
 		if (DragDropHandler::ValidateDragDropOnAssetFolder(MyGeometry, DragDropEvent, DestPath, bUnused))
 		{
@@ -1592,8 +1621,15 @@ FReply SAssetView::OnDrop( const FGeometry& MyGeometry, const FDragDropEvent& Dr
 			{
 				OnAssetsOrPathsDragDropped(AssetDragDropOp->GetAssets(), AssetDragDropOp->GetAssetPaths(), DestPath);
 			}
+			return FReply::Handled();
 		}
-		return FReply::Handled();
+		// If the DragDropEvent is not successful, it has not been handled
+		// If it returned Handled rather than Unhandled, when a widget were dragged in there (which is not dropable nor dockable in there),
+		// that widget would disappear rather than being placed as an undocked widget
+		else
+		{
+			return FReply::Unhandled();
+		}
 	}
 	else if (HasSingleCollectionSource())
 	{
@@ -1742,6 +1778,14 @@ FReply SAssetView::OnMouseWheel( const FGeometry& MyGeometry, const FPointerEven
 void SAssetView::OnFocusChanging( const FWeakWidgetPath& PreviousFocusPath, const FWidgetPath& NewWidgetPath, const FFocusEvent& InFocusEvent)
 {
 	ResetQuickJump();
+}
+
+void SAssetView::AddReferencedObjects(FReferenceCollector& Collector)
+{
+	if (DeferredAssetToCreate)
+	{
+		DeferredAssetToCreate->AddReferencedObjects(Collector);
+	}
 }
 
 TSharedRef<SAssetTileView> SAssetView::CreateTileView()
@@ -2041,6 +2085,25 @@ void SAssetView::RefreshSourceItems()
 	}
 }
 
+bool SAssetView::IsFilteringRecursively() const
+{
+	// In some cases we want to not filter recursively even if we have a backend filter (e.g. the open level window)
+	// Most of the time, bFilterRecursivelyWithBackendFilter is true
+	return bFilterRecursivelyWithBackendFilter && GetDefault<UContentBrowserSettings>()->FilterRecursively;
+}
+
+bool SAssetView::IsToggleFilteringRecursivelyAllowed() const
+{
+	return bFilterRecursivelyWithBackendFilter;
+}
+
+void SAssetView::ToggleFilteringRecursively()
+{
+	check(IsToggleFilteringRecursivelyAllowed());
+	GetMutableDefault<UContentBrowserSettings>()->FilterRecursively = !GetDefault<UContentBrowserSettings>()->FilterRecursively;
+	GetMutableDefault<UContentBrowserSettings>()->PostEditChange();
+}
+
 bool SAssetView::ShouldFilterRecursively() const
 {
 	// Quick check for conditions which force recursive filtering
@@ -2049,9 +2112,7 @@ bool SAssetView::ShouldFilterRecursively() const
 		return true;
 	}
 
-	// In some cases we want to not filter recursively even if we have a backend filter (e.g. the open level window)
-	// Most of the time, bFilterRecursivelyWithBackendFilter is true
-	if ( bFilterRecursivelyWithBackendFilter && !BackendFilter.IsEmpty() )
+	if (IsFilteringRecursively() && !BackendFilter.IsEmpty() )
 	{
 		return true;
 	}
@@ -2844,6 +2905,12 @@ void SAssetView::OnAssetLoaded(UObject* Asset)
 		return;
 	}
 
+	if (Asset->GetOutermost()->HasAnyPackageFlags(PKG_ForDiffing))
+	{
+		// No need to consider packages loaded for diffing purposes
+		return;
+	}
+
 	FName AssetPathName = FName(*Asset->GetPathName());
 	RecentlyLoadedOrChangedAssets.Add( FAssetData(Asset) );
 
@@ -3107,19 +3174,6 @@ TSharedRef<SWidget> SAssetView::GetViewButtonContent()
 		);
 
 		MenuBuilder.AddMenuEntry(
-			LOCTEXT("ShowCollectionOption", "Show Collections"),
-			LOCTEXT("ShowCollectionOptionToolTip", "Show the collections list in the view?"),
-			FSlateIcon(),
-			FUIAction(
-				FExecuteAction::CreateSP( this, &SAssetView::ToggleShowCollections ),
-				FCanExecuteAction::CreateSP( this, &SAssetView::IsToggleShowCollectionsAllowed ),
-				FIsActionChecked::CreateSP( this, &SAssetView::IsShowingCollections )
-			),
-			NAME_None,
-			EUserInterfaceActionType::ToggleButton
-		);
-
-		MenuBuilder.AddMenuEntry(
 			LOCTEXT("ShowFavoriteOptions", "Show Favorites"),
 			LOCTEXT("ShowFavoriteOptionToolTip", "Show the favorite folders in the view?"),
 			FSlateIcon(),
@@ -3127,6 +3181,19 @@ TSharedRef<SWidget> SAssetView::GetViewButtonContent()
 				FExecuteAction::CreateSP(this, &SAssetView::ToggleShowFavorites),
 				FCanExecuteAction::CreateSP(this, &SAssetView::IsToggleShowFavoritesAllowed),
 				FIsActionChecked::CreateSP(this, &SAssetView::IsShowingFavorites)
+			),
+			NAME_None,
+			EUserInterfaceActionType::ToggleButton
+		);
+
+		MenuBuilder.AddMenuEntry(
+			LOCTEXT("FilterRecursivelyOption", "Filter Recursively"),
+			LOCTEXT("FilterRecursivelyOptionToolTip", "Should filters apply recursively in the view?"),
+			FSlateIcon(),
+			FUIAction(
+				FExecuteAction::CreateSP(this, &SAssetView::ToggleFilteringRecursively),
+				FCanExecuteAction::CreateSP(this, &SAssetView::IsToggleFilteringRecursivelyAllowed),
+				FIsActionChecked::CreateSP(this, &SAssetView::IsFilteringRecursively)
 			),
 			NAME_None,
 			EUserInterfaceActionType::ToggleButton
@@ -3463,24 +3530,6 @@ bool SAssetView::IsShowingLocalizedContent() const
 {
 	return IsToggleShowLocalizedContentAllowed() && GetDefault<UContentBrowserSettings>()->GetDisplayL10NFolder();
 }
-
-void SAssetView::ToggleShowCollections()
-{
-	const bool bDisplayCollections = GetDefault<UContentBrowserSettings>()->GetDisplayCollections();
-	GetMutableDefault<UContentBrowserSettings>()->SetDisplayCollections( !bDisplayCollections );
-	GetMutableDefault<UContentBrowserSettings>()->PostEditChange();
-}
-
-bool SAssetView::IsToggleShowCollectionsAllowed() const
-{
-	return bCanShowCollections;
-}
-
-bool SAssetView::IsShowingCollections() const
-{
-	return IsToggleShowCollectionsAllowed() && GetDefault<UContentBrowserSettings>()->GetDisplayCollections();
-}
-
 
 void SAssetView::ToggleShowFavorites()
 {
@@ -4775,7 +4824,14 @@ FText SAssetView::GetAssetShowWarningText() const
 
 	if ( SourcesData.HasCollections() && !SourcesData.IsDynamicCollection() )
 	{
-		DropText = LOCTEXT( "DragAssetsHere", "Drag and drop assets here to add them to the collection." );
+		if (SourcesData.Collections[0].Name.IsNone())
+		{
+			DropText = LOCTEXT("NoCollectionSelected", "No collection selected.");
+		}
+		else
+		{
+			DropText = LOCTEXT("DragAssetsHere", "Drag and drop assets here to add them to the collection.");
+		}
 	}
 	else if ( OnGetAssetContextMenu.IsBound() )
 	{
@@ -4929,7 +4985,7 @@ FReply SAssetView::HandleQuickJumpKeyDown(const TCHAR InCharacter, const bool bI
 	}
 
 	// Check for invalid characters
-	for(int InvalidCharIndex = 0; InvalidCharIndex < ARRAY_COUNT(INVALID_OBJECTNAME_CHARACTERS) - 1; ++InvalidCharIndex)
+	for(int InvalidCharIndex = 0; InvalidCharIndex < UE_ARRAY_COUNT(INVALID_OBJECTNAME_CHARACTERS) - 1; ++InvalidCharIndex)
 	{
 		if(InCharacter == INVALID_OBJECTNAME_CHARACTERS[InvalidCharIndex])
 		{

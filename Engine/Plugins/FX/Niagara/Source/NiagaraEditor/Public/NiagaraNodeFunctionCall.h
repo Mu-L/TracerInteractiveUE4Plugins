@@ -70,6 +70,9 @@ public:
 	UPROPERTY()
 	FNiagaraFunctionSignature Signature;
 
+	UPROPERTY(VisibleAnywhere, Category = "Function")
+	TMap<FName, FName> FunctionSpecifiers;
+
 	/** All the input values the function propagates to the next higher caller instead of forcing the user to set them directly. */
 	UPROPERTY()
 	TArray<FNiagaraPropagatedVariable> PropagatedStaticSwitchParameters;
@@ -88,7 +91,7 @@ public:
 	virtual ENiagaraNumericOutputTypeSelectionMode GetNumericOutputTypeSelectionMode() const override;
 	virtual bool CanAddToGraph(UNiagaraGraph* TargetGraph, FString& OutErrorMsg) const override;
 	virtual void SubsumeExternalDependencies(TMap<const UObject*, UObject*>& ExistingConversions) override;
-	virtual void GatherExternalDependencyIDs(ENiagaraScriptUsage InMasterUsage, const FGuid& InMasterUsageId, TArray<FNiagaraCompileHash>& InReferencedCompileHashes, TArray<FGuid>& InReferencedIDs, TArray<UObject*>& InReferencedObjs) const override;
+	virtual void GatherExternalDependencyData(ENiagaraScriptUsage InMasterUsage, const FGuid& InMasterUsageId, TArray<FNiagaraCompileHash>& InReferencedCompileHashes, TArray<UObject*>& InReferencedObjs) const override;
 	virtual void UpdateCompileHashForNode(FSHA1& HashState) const override;
 	//End UNiagaraNode interface
 
@@ -127,7 +130,12 @@ public:
 	void RemovePropagatedVariable(const FNiagaraVariable& Variable);
 	void CleanupPropagatedSwitchValues();
 
+	/** Does any automated data manipulated required to update DI function call nodes to the current version. */
+	void UpgradeDIFunctionCalls();
+
+	virtual TSharedPtr<SGraphNode> CreateVisualWidget() override;
 protected:
+
 	virtual bool IsValidPinToCompile(UEdGraphPin* Pin) const;
 
 	virtual bool AllowDynamicPins() const override { return false; }

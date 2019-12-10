@@ -9,6 +9,7 @@
 #include "Widgets/SWidget.h"
 #include "Widgets/SCompoundWidget.h"
 #include "AssetData.h"
+#include "SAssetSearchBox.h"
 #include "Framework/MultiBox/MultiBoxExtender.h"
 #include "CollectionManagerTypes.h"
 #include "IContentBrowserSingleton.h"
@@ -16,10 +17,10 @@
 
 class FAssetContextMenu;
 class FFrontendFilter_Text;
+class FSourcesSearch;
 class FPathContextMenu;
 class FTabManager;
 class FUICommandList;
-class SAssetSearchBox;
 class SAssetView;
 class SCollectionView;
 class SComboButton;
@@ -223,13 +224,16 @@ private:
 	/** Called when item in the path delimiter arrow menu is clicked */
 	void OnPathMenuItemClicked(FString ClickedPath);
 
+	/** Called to query whether the crumb menu would contain any content (see also OnGetCrumbDelimiterContent) */
+	bool OnHasCrumbDelimiterContent(const FString& CrumbData) const;
+
 	/** 
 	 * Populates the delimiter arrow with a menu of directories under the current directory that can be navigated to
 	 * 
 	 * @param CrumbData	The current directory path
 	 * @return The directory menu
 	 */
-	TSharedPtr<SWidget> OnGetCrumbDelimiterContent(const FString& CrumbData) const;
+	TSharedRef<SWidget> OnGetCrumbDelimiterContent(const FString& CrumbData) const;
 
 	/** Gets the content for the path picker combo button */
 	TSharedRef<SWidget> GetPathPickerContent();
@@ -287,6 +291,18 @@ private:
 
 	/** Gets the visibility of the path expander button */
 	EVisibility GetPathExpanderVisibility() const;
+
+	/** Gets the icon used on the source switch button */
+	const FSlateBrush* GetSourcesSwitcherIcon() const;
+
+	/** Gets the tooltip text used on the source switch button */
+	FText GetSourcesSwitcherToolTipText() const;
+
+	/** Handler for clicking the source switch button */
+	FReply OnSourcesSwitcherClicked();
+
+	/** Gets the source search hint text */
+	FText GetSourcesSearchHintText() const;
 
 	/** Handler for clicking the history back button */
 	FReply BackClicked();
@@ -400,7 +416,10 @@ private:
 	void HandlePathRemoved(const FString& Path);
 
 	/** Gets all suggestions for the asset search box */
-	TArray<FString> GetAssetSearchSuggestions() const;
+	void OnAssetSearchSuggestionFilter(const FText& SearchText, TArray<FAssetSearchBoxSuggestion>& PossibleSuggestions, FText& SuggestionHighlightText) const;
+
+	/** Combines the chosen suggestion with the active search text */
+	FText OnAssetSearchSuggestionChosen(const FText& SearchText, const FString& Suggestion) const;
 
 	/** Gets the dynamic hint text for the "Search Assets" search text box */
 	FText GetSearchAssetsHintText() const;
@@ -420,14 +439,8 @@ private:
 	/** Bind our UI commands */
 	void BindCommands();
 
-	/** Gets the visibility of the collection view */
-	EVisibility GetCollectionViewVisibility() const;
-
 	/** Gets the visibility of the favorites view */
 	EVisibility GetFavoriteFolderVisibility() const;
-	
-	/** The visibility of the search bar for the base path view*/
-	EVisibility GetAlternateSearchBarVisibility() const;
 
 	/** Toggles the favorite status of an array of folders*/
 	void ToggleFolderFavorite(const TArray<FString>& FolderPaths);
@@ -448,6 +461,9 @@ private:
 
 	/** The context menu manager for the path view */
 	TSharedPtr<class FPathContextMenu> PathContextMenu;
+
+	/** The sources search, shared between the paths and collections views */
+	TSharedPtr<FSourcesSearch> SourcesSearch;
 
 	/** The asset tree widget */
 	TSharedPtr<SPathView> PathViewPtr;
@@ -472,6 +488,9 @@ private:
 
 	/** The path picker */
 	TSharedPtr<SComboButton> PathPickerButton;
+
+	/** Index of the active sources widget */
+	int32 ActiveSourcesWidgetIndex = 0;
 
 	/** The expanded state of the asset tree */
 	bool bSourcesViewExpanded;
@@ -500,20 +519,17 @@ private:
 	/** Delegate used to create a new folder */
 	FOnCreateNewFolder OnCreateNewFolder;
 
+	/** Switcher between the different sources views */
+	TSharedPtr<SWidgetSwitcher> SourcesWidgetSwitcher;
+
 	/** The splitter between the path & asset view */
 	TSharedPtr<SSplitter> PathAssetSplitterPtr;
-
-	/** The splitter between the path & collection view */
-	TSharedPtr<SSplitter> PathCollectionSplitterPtr;
 
 	/** The splitter between the path & favorite view */
 	TSharedPtr<SSplitter> PathFavoriteSplitterPtr;
 
 	/** When viewing a dynamic collection, the active search query will be stashed in this variable so that it can be restored again later */
 	TOptional<FText> StashedSearchBoxText;
-
-	/** True if we should always show collections in this Content Browser, ignoring the view settings */
-	bool bAlwaysShowCollections;
 
 public: 
 

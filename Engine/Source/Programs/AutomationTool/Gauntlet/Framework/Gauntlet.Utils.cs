@@ -17,7 +17,7 @@ using System.Text;
 
 namespace Gauntlet
 {
-	public class Globals
+	public static class Globals
 	{
 		static Params InnerParams = new Params(Environment.GetCommandLineArgs());
 
@@ -48,6 +48,21 @@ namespace Gauntlet
 			}
 
 		}
+
+		/// <summary>
+		/// Get the worker pool id of the host worker, pools are assigned to teams such as QA, Automation, etc
+		/// returns -1 if instance is not running on a worker pool
+		/// </summary>
+		public static int WorkerPoolID
+		{
+			get
+			{
+				int Default = -1;
+				return Params.ParseValue("workerpoolid", Default);
+			}
+
+		}
+
 
 		/// <summary>
 		/// Returns true if Gauntlet instance is a member of a worker group

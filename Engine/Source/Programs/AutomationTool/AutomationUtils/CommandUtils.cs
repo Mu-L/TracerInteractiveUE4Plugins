@@ -20,8 +20,6 @@ using System.Xml.Serialization;
 
 namespace AutomationTool
 {
-	#region ParamList
-
 	/// <summary>
 	/// Wrapper around List with support for multi parameter constructor, i.e:
 	///   var Maps = new ParamList<string>("Map1", "Map2");
@@ -54,10 +52,6 @@ namespace AutomationTool
 		}
 	}
 
-	#endregion
-
-	#region PathSeparator
-
 	public enum PathSeparator
 	{
 		Default = 0,
@@ -67,15 +61,11 @@ namespace AutomationTool
 		Local
 	}
 
-	#endregion
-
 	/// <summary>
 	/// Base utility function for script commands.
 	/// </summary>
 	public partial class CommandUtils
 	{
-		#region Environment Setup
-
 		static private CommandEnvironment CmdEnvironment;
 
 		/// <summary>
@@ -104,8 +94,6 @@ namespace AutomationTool
 			CmdEnvironment = new CommandEnvironment();
 		}
 
-		#endregion
-
 		/// <summary>
 		/// Returns true if AutomationTool is running using installed Engine components
 		/// </summary>
@@ -120,8 +108,6 @@ namespace AutomationTool
 		}
 
 		static private bool? bIsEngineInstalled;
-
-		#region Logging
 
 		/// <summary>
 		/// Writes formatted text to log (with LogEventType.Console).
@@ -283,10 +269,6 @@ namespace AutomationTool
             Tools.DotNETCommon.Log.WriteLine(1, Verbosity, LogUtils.FormatException(Ex));
 		}
 
-		#endregion
-
-		#region Progress Logging
-
 		public static void LogPushProgress(bool bShowProgress, int Numerator, int Denominator)
 		{
 			if(bShowProgress)
@@ -326,10 +308,6 @@ namespace AutomationTool
 				LogInformation("[@progress {0}/{1} '{2}' skipline]", Numerator, Denominator, String.Format(Format, Args));
 			}
 		}
-
-		#endregion
-
-		#region IO
 
 		/// <summary>
 		/// Finds files in specified paths. 
@@ -1368,7 +1346,7 @@ namespace AutomationTool
 		/// <param name="Dest">The full path to the destination file</param>
 		/// <param name="bAllowDifferingTimestamps">If true, will always skip a file if the destination exists, even if timestamp differs; defaults to false</param>
 		/// <returns>True if the operation was successful, false otherwise.</returns>
-		public static void CopyFileIncremental(FileReference Source, FileReference Dest, bool bAllowDifferingTimestamps = false, bool bFilterSpecialLinesFromIniFiles = false)
+		public static void CopyFileIncremental(FileReference Source, FileReference Dest, bool bAllowDifferingTimestamps = false, List<string> IniKeyBlacklist = null, List<string> IniSectionBlacklist = null)
 		{
 			if (InternalUtils.SafeFileExists(Dest.FullName, true))
 			{
@@ -1396,7 +1374,7 @@ namespace AutomationTool
 			{
 				throw new AutomationException("Failed to delete {0} for copy", Dest);
 			}
-			if (!InternalUtils.SafeCopyFile(Source.FullName, Dest.FullName, bFilterSpecialLinesFromIniFiles:bFilterSpecialLinesFromIniFiles))
+			if (!InternalUtils.SafeCopyFile(Source.FullName, Dest.FullName, IniKeyBlacklist:IniKeyBlacklist, IniSectionBlacklist:IniSectionBlacklist))
 			{
 				throw new AutomationException("Failed to copy {0} to {1}", Source, Dest);
 			}
@@ -1619,10 +1597,6 @@ namespace AutomationTool
 			CloneDirectoryRecursiveWorker(SourcePath, TargetPath, ClonedFiles, bIncremental: true);
 		}
 
-		#endregion
-
-		#region Threaded Copy
-
         /// <summary>
 		/// Copies files using multiple threads
 		/// </summary>
@@ -1743,10 +1717,6 @@ namespace AutomationTool
 			}
 		}
 
-		#endregion
-
-		#region Environment variables
-
 		/// <summary>
 		/// Gets environment variable value.
 		/// </summary>
@@ -1799,10 +1769,6 @@ namespace AutomationTool
 				Environment.SetEnvironmentVariable(VarName, Value);
 			}
 		}
-
-		#endregion
-
-		#region CommandLine
 
 		/// <summary>
 		/// Converts a list of arguments to a string where each argument is separated with a space character.
@@ -1934,10 +1900,6 @@ namespace AutomationTool
 			return UnrealBuildTool.Utils.MakePathSafeToUseWithCommandLine(InPath);
 		}
 
-		#endregion
-
-		#region Other
-
 		public static string EscapePath(string InPath)
 		{
 			return InPath.Replace(":", "").Replace("/", "+").Replace("\\", "+").Replace(" ", "+");
@@ -1952,10 +1914,6 @@ namespace AutomationTool
 		{
 			return Collection == null || Collection.Count == 0;
 		}
-
-	    #endregion
-
-		#region Properties
 
 		/// <summary>
 		/// Checks if this command is running on a build machine.
@@ -1976,11 +1934,39 @@ namespace AutomationTool
 		public static readonly DirectoryReference EngineDirectory = DirectoryReference.Combine(RootDirectory, "Engine");
 
 		/// <summary>
+		/// Return the main engine directory and any platform extension engine directories
+		/// </summary>
+ 		public static DirectoryReference[] GetAllEngineDirectories()
+		{
+			List<DirectoryReference> EngineDirectories = new List<DirectoryReference>() { EngineDirectory };
+			DirectoryReference EnginePlatformsDirectory = DirectoryReference.Combine(EngineDirectory, "Platforms");
+			if (DirectoryReference.Exists(EnginePlatformsDirectory))
+			{
+				EngineDirectories.AddRange(DirectoryReference.EnumerateDirectories(EnginePlatformsDirectory).ToList());
+			}
+
+			return EngineDirectories.ToArray();
+		}
+
+		/// <summary>
+		/// Return the main project directory and any platform extension project directories
+		/// </summary>
+		public static DirectoryReference[] GetAllProjectDirectories(FileReference ProjectFile)
+		{
+			List<DirectoryReference> ProjectDirectories = new List<DirectoryReference>() { ProjectFile.Directory };
+			DirectoryReference ProjectPlatformsDirectory = DirectoryReference.Combine(ProjectFile.Directory, "Platforms");
+			if (DirectoryReference.Exists(ProjectPlatformsDirectory))
+			{
+				ProjectDirectories.AddRange(DirectoryReference.EnumerateDirectories(ProjectPlatformsDirectory).ToList());
+			}
+
+			return ProjectDirectories.ToArray();
+		}
+
+		/// <summary>
 		/// Telemetry data for the current run. Add -WriteTelemetry=<Path> to the command line to export to disk.
 		/// </summary>
 		public static TelemetryData Telemetry = new TelemetryData();
-
-		#endregion
 
         /// <summary>
         /// Cached location of the build root storage because the logic to compute it is a little non-trivial.
@@ -2082,6 +2068,10 @@ namespace AutomationTool
 			{
 				return "Windows";
 			}
+			else if(Platform == UnrealTargetPlatform.Linux || Platform == UnrealTargetPlatform.LinuxAArch64)
+			{
+				return "Linux";
+			}
 			else
 			{
 				return Platform.ToString();
@@ -2108,32 +2098,9 @@ namespace AutomationTool
 		/// <param name="Files">Files to include in the archive</param>
 		public static void ZipFiles(FileReference ZipFile, DirectoryReference BaseDirectory, IEnumerable<FileReference> Files)
 		{
-			// Ionic.Zip.Zip64Option.Always option produces broken archives on Mono, so we use system zip tool instead
-			if (Utils.IsRunningOnMono)
-			{
-				CommandUtils.CreateDirectory(ZipFile.Directory);
- 				CommandUtils.PushDir(BaseDirectory.FullName);
- 				string FilesList = "";
-				foreach(FileReference File in Files)
-				{
-					FilesList += " \"" + File.MakeRelativeTo(BaseDirectory) + "\"";
-					if (FilesList.Length > 32000)
-					{
-						CommandUtils.RunAndLog(CommandUtils.CmdEnv, "zip", "-g -q \"" + ZipFile.FullName + "\"" + FilesList);
-						FilesList = "";
-					}
-				}
-				if (FilesList.Length > 0)
-				{
-					CommandUtils.RunAndLog(CommandUtils.CmdEnv, "zip", "-g -q \"" + ZipFile.FullName + "\"" + FilesList);
-				}
-				CommandUtils.PopDir();
-			}
-			else
-			{
 				using(Ionic.Zip.ZipFile Zip = new Ionic.Zip.ZipFile(Encoding.UTF8))
 				{
-					Zip.UseZip64WhenSaving = Ionic.Zip.Zip64Option.Always;
+				Zip.UseZip64WhenSaving = Ionic.Zip.Zip64Option.AsNecessary;
 					foreach(FileReference File in Files)
 					{
 						Zip.AddFile(File.FullName, Path.GetDirectoryName(File.MakeRelativeTo(BaseDirectory)));
@@ -2142,7 +2109,6 @@ namespace AutomationTool
 					Zip.Save(ZipFile.FullName);
 				}
 			}
-		}
 
 		/// <summary>
 		/// Extracts the contents of a zip file
@@ -2289,27 +2255,6 @@ namespace AutomationTool
 
 			return BuildVersionPaths;
 		}
-
-		static public string GetPreviousXboxOneReleaseArchiveDir(string XboxOneReleasesArchiveDir)
-		{
-			var BuildFolders = Directory.GetDirectories(XboxOneReleasesArchiveDir);
-			if (BuildFolders.Length > 0)
-			{
-				Dictionary<Version, string> BuildVersionPathMap = GetBuildVersionPathMap(BuildFolders);
-				if (BuildVersionPathMap.Count > 0)
-				{
-					return BuildVersionPathMap.Where(archiveDir => DirectoryExists(CombinePaths(archiveDir.Value, "Paks"))).OrderByDescending(versionPathPair => versionPathPair.Key).First().Value;
-				}
-				else
-				{
-					throw new AutomationException(String.Format("No valid builds were found in %s", XboxOneReleasesArchiveDir));
-				}
-			}
-			else
-			{
-				throw new AutomationException(String.Format("No builds were found in %s", XboxOneReleasesArchiveDir));
-			}
-		}
 		
 		public static string FormatSizeString(long Size)
 		{
@@ -2420,6 +2365,7 @@ namespace AutomationTool
 		Minutes,
 		Bytes,
 		Megabytes,
+		Percentage,
 	}
 
 	/// <summary>
@@ -2468,6 +2414,7 @@ namespace AutomationTool
 		{
 			Samples.RemoveAll(x => x.Name == Name);
 			Samples.Add(new TelemetrySample() { Name = Name, Value = Value, Units = Units });
+			Log.TraceLog("Added telemetry value: {0} = {1} ({2})", Name, Value, Units);
 		}
 
 		/// <summary>
@@ -2530,6 +2477,7 @@ namespace AutomationTool
 		/// <param name="FileName"></param>
 		public void Write(string FileName)
 		{
+			Log.TraceLog("Writing telemetry to {0}...", FileName);
 			using (JsonWriter Writer = new JsonWriter(FileName))
 			{
 				Writer.WriteObjectStart();
@@ -2865,7 +2813,11 @@ namespace AutomationTool
 			TargetFileInfo.IsReadOnly = false;
 
 			CodeSignWindows.Sign(new FileReference(TargetFileInfo), CodeSignWindows.SignatureType.SHA1);
-			CodeSignWindows.Sign(new FileReference(TargetFileInfo), CodeSignWindows.SignatureType.SHA256);
+			// MSI files can only have one signature; prefer SHA1 for compatibility, so don't run SHA256 on msi files.
+			if (!TargetFileInfo.FullName.EndsWith(".msi", StringComparison.InvariantCultureIgnoreCase))
+			{
+				CodeSignWindows.Sign(new FileReference(TargetFileInfo), CodeSignWindows.SignatureType.SHA256);
+			}
 		}
 
 		/// <summary>

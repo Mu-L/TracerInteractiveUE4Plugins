@@ -34,7 +34,7 @@
 	#include "Editor/UnrealEdEngine.h"
 	#include "PackageTools.h"
 	#include "ObjectTools.h"
-	#include "Toolkits/AssetEditorManager.h"
+	#include "Subsystems/AssetEditorSubsystem.h"
 	#include "GameMapsSettings.h"
 	#include "FileHelpers.h"
 #endif
@@ -355,17 +355,30 @@ void PurgePackages(TArrayView<const FName> InPackageNames)
 	TArray<UObject*> ObjectsToPurge;
 	auto CollectObjectToPurge = [&ObjectsToPurge](UObject* InObject)
 	{
-		if (InObject->IsAsset())
+		if (InObject->IsAsset() && GIsEditor)
 		{
-			FAssetEditorManager::Get().CloseAllEditorsForAsset(InObject);
+			GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->CloseAllEditorsForAsset(InObject);
 		}
 		ObjectsToPurge.Add(InObject);
 	};
 
 	// Get the current edited map package to check if its going to be purged.
 	bool bEditedMapPurged = false;
-	UWorld* EditedWorld = GEditor->GetEditorWorldContext().World();
-	UPackage* EditedMapPackage = EditedWorld ? EditedWorld->GetOutermost() : nullptr;
+	UPackage* EditedMapPackage = nullptr;
+	if (GIsEditor)
+	{
+		if (UWorld* EditorWorld = GEditor->GetEditorWorldContext().World())
+		{
+			EditedMapPackage = EditorWorld->GetOutermost();
+		}
+	}
+	else if (UGameEngine* GameEngine = Cast<UGameEngine>(GEngine))
+	{
+		if (UWorld* GameWorld = GameEngine->GetGameWorld())
+		{
+			EditedMapPackage = GameWorld->GetOutermost();
+		}
+	}
 
 	// Collect any in-memory packages that should be purged and check if we are including the current map in the purge.
 	for (const FName PackageName : InPackageNames)

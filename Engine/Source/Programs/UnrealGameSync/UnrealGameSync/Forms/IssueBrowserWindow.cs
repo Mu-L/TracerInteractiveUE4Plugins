@@ -46,6 +46,15 @@ namespace UnrealGameSync
 
 			InitializeComponent();
 
+			using (Graphics Graphics = Graphics.FromHwnd(IntPtr.Zero))
+			{
+				float DpiScaleX = Graphics.DpiX / 96.0f;
+				foreach (ColumnHeader Column in IssueListView.Columns)
+				{
+					Column.Width = (int)(Column.Width * DpiScaleX);
+				}
+			}
+
 			System.Reflection.PropertyInfo DoubleBufferedProperty = typeof(Control).GetProperty("DoubleBuffered", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
 			DoubleBufferedProperty.SetValue(IssueListView, true, null);
 		}
@@ -284,7 +293,15 @@ namespace UnrealGameSync
 
 		private void ShowIssue(IssueData Issue)
 		{
-			Issue.Builds = RESTApi.GET<List<IssueBuildData>>(IssueMonitor.ApiUrl, String.Format("issues/{0}/builds", Issue.Id));
+			try
+			{
+				Issue.Builds = RESTApi.GET<List<IssueBuildData>>(IssueMonitor.ApiUrl, String.Format("issues/{0}/builds", Issue.Id));
+			}
+			catch(Exception Ex)
+			{
+				MessageBox.Show(Owner, Ex.ToString(), "Error querying builds", MessageBoxButtons.OK);
+				return;
+			}
 			IssueDetailsWindow.Show(Owner, IssueMonitor, ServerAndPort, UserName, ServerTimeOffset, Issue, Log, CurrentStream);
 		}
 

@@ -745,7 +745,7 @@ int32 FPoly::Triangulate( ABrush* InOwnerBrush, TArray<FPoly>& OutTriangles )
 		vtx.TangentY = FVector::ZeroVector;
 		vtx.TangentZ = FVector::ZeroVector;
 		vtx.Color = FColor(0, 0, 0);
-		for( int32 uvIndex=0; uvIndex<ARRAY_COUNT(vtx.UVs); ++uvIndex )
+		for( int32 uvIndex=0; uvIndex<UE_ARRAY_COUNT(vtx.UVs); ++uvIndex )
 		{
 			vtx.UVs[uvIndex] = FVector2D(0.f, 0.f);
 		}
@@ -978,12 +978,14 @@ int32 FPoly::Faces( const FPoly &Test ) const
 	return 0;
 }
 
+#if WITH_EDITOR
 bool UPolys::Modify(bool bAlwaysMarkDirty)
 {
 	Super::Modify(bAlwaysMarkDirty);
 
 	return !!GUndo; // we will make a broad assumption that if we have an undo buffer, we were saved in it
 }
+#endif
 
 void UPolys::AddReferencedObjects(UObject* InThis, FReferenceCollector& Collector)
 {

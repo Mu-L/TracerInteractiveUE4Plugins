@@ -101,7 +101,7 @@ void FUnixCrashContext::InitFromSignal(int32 InSignal, siginfo_t* InInfo, void* 
 	Info = InInfo;
 	Context = reinterpret_cast< ucontext_t* >( InContext );
 
-	FCString::Strcat(SignalDescription, ARRAY_COUNT( SignalDescription ) - 1, *DescribeSignal(Signal, Info, Context));
+	FCString::Strcat(SignalDescription, UE_ARRAY_COUNT( SignalDescription ) - 1, *DescribeSignal(Signal, Info, Context));
 }
 
 void FUnixCrashContext::InitFromEnsureHandler(const TCHAR* EnsureMessage, const void* CrashAddress)
@@ -116,10 +116,10 @@ void FUnixCrashContext::InitFromEnsureHandler(const TCHAR* EnsureMessage, const 
 	Context = nullptr;
 
 	// set signal description to a more human-readable one for ensures
-	FCString::Strcpy(SignalDescription, ARRAY_COUNT(SignalDescription) - 1, EnsureMessage);
+	FCString::Strcpy(SignalDescription, UE_ARRAY_COUNT(SignalDescription) - 1, EnsureMessage);
 
 	// only need the first string
-	for (int Idx = 0; Idx < ARRAY_COUNT(SignalDescription); ++Idx)
+	for (int Idx = 0; Idx < UE_ARRAY_COUNT(SignalDescription); ++Idx)
 	{
 		if (SignalDescription[Idx] == TEXT('\n'))
 		{
@@ -139,7 +139,7 @@ void GracefulTerminationHandler(int32 Signal, siginfo_t* Info, void* Context)
 	GEnteredSignalHandler = 1;
 
 	// do not flush logs at this point; this can result in a deadlock if the signal was received while we were holding lock in the malloc (flushing allocates memory)
-	if( !GIsRequestingExit )
+	if( !IsEngineExitRequested() )
 	{
 		FPlatformMisc::RequestExitWithStatus(false, 128 + Signal);	// Keeping the established shell practice of returning 128 + signal for terminations by signal. Allows to distinguish SIGINT/SIGTERM/SIGHUP.
 	}
@@ -155,7 +155,7 @@ void CreateExceptionInfoString(int32 Signal, siginfo_t* Info, ucontext_t *Contex
 {
 	FString ErrorString = TEXT("Unhandled Exception: ");
 	ErrorString += DescribeSignal(Signal, Info, Context);
-	FCString::Strncpy(GErrorExceptionDescription, *ErrorString, FMath::Min(ErrorString.Len() + 1, (int32)ARRAY_COUNT(GErrorExceptionDescription)));
+	FCString::Strncpy(GErrorExceptionDescription, *ErrorString, FMath::Min(ErrorString.Len() + 1, (int32)UE_ARRAY_COUNT(GErrorExceptionDescription)));
 }
 
 namespace
@@ -303,7 +303,7 @@ void FUnixCrashContext::CaptureStackTrace()
 		printf("StackTrace:\n%s\n", StackTrace);
 #endif
 
-		FCString::Strncat( GErrorHist, UTF8_TO_TCHAR(StackTrace), ARRAY_COUNT(GErrorHist) - 1 );
+		FCString::Strncat( GErrorHist, UTF8_TO_TCHAR(StackTrace), UE_ARRAY_COUNT(GErrorHist) - 1 );
 		CreateExceptionInfoString(Signal, Info, Context);
 
 		FMemory::Free( StackTrace );
@@ -628,21 +628,32 @@ void FUnixCrashContext::GenerateCrashInfoAndLaunchReporter(bool bReportingNonCra
 			}
 			else
 			{
-				// spin here until CrashReporter exits
-				FProcHandle RunningProc = FPlatformProcess::CreateProc(RelativePathToCrashReporter, *CrashReportClientArguments, true, false, false, NULL, 0, NULL, NULL);
-
-				// do not wait indefinitely - can be more generous about the hitch than in ensure() case
-				// NOTE: Chris.Wood - increased from 3 to 8 mins because server crashes were timing out and getting lost
-				// NOTE: Do not increase above 8.5 mins without altering watchdog scripts to match
-				const double kCrashTimeOut = 8 * 60.0;
-
-				const double kCrashSleepInterval = 1.0;
-				if (!UnixCrashReporterTracker::WaitForProcWithTimeout(RunningProc, kCrashTimeOut, kCrashSleepInterval))
+				// Things can be setup to allow for a global crash handler to capture the core from a crash and allow another process
+				// to handle spawning of this process
+				bool bStartCRCFromEngineHandler = true;
+				if (GConfig)
 				{
-					FPlatformProcess::TerminateProc(RunningProc);
+					GConfig->GetBool(TEXT("CrashReportClient"), TEXT("bStartCRCFromEngineHandler"), bStartCRCFromEngineHandler, GEngineIni);
 				}
 
-				FPlatformProcess::CloseProc(RunningProc);
+				if (bStartCRCFromEngineHandler)
+				{
+					// spin here until CrashReporter exits
+					FProcHandle RunningProc = FPlatformProcess::CreateProc(RelativePathToCrashReporter, *CrashReportClientArguments, true, false, false, NULL, 0, NULL, NULL);
+
+					// do not wait indefinitely - can be more generous about the hitch than in ensure() case
+					// NOTE: Chris.Wood - increased from 3 to 8 mins because server crashes were timing out and getting lost
+					// NOTE: Do not increase above 8.5 mins without altering watchdog scripts to match
+					const double kCrashTimeOut = 8 * 60.0;
+
+					const double kCrashSleepInterval = 1.0;
+					if (!UnixCrashReporterTracker::WaitForProcWithTimeout(RunningProc, kCrashTimeOut, kCrashSleepInterval))
+					{
+						FPlatformProcess::TerminateProc(RunningProc);
+					}
+
+					FPlatformProcess::CloseProc(RunningProc);
+				}
 			}
 		}
 	}
@@ -837,8 +848,9 @@ void FUnixPlatformMisc::SetCrashHandler(void (* CrashHandler)(const FGenericCras
 	Action.sa_flags = SA_SIGINFO | SA_RESTART | SA_ONSTACK;
 	Action.sa_handler = SIG_IGN;
 
-	// set all the signals except ones we know we are handling to be ignored
-	for (int Signal = 1; Signal < NSIG; ++Signal)
+	// Set all the signals except ones we know we are handling to be ignored
+	// Exempt realtime signals as well as they are used by third party libs and VTune
+	for (int Signal = 1; Signal < SIGRTMIN; ++Signal)
 	{
 		bool bSignalShouldBeIgnored = true;
 		for (int HandledSignal : HandledSignals)

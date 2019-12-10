@@ -12,7 +12,6 @@
 #include "Containers/StringConv.h"
 #include "UObject/UnrealNames.h"
 #include "Templates/Atomic.h"
-#include "Serialization/StructuredArchive.h"
 
 /*----------------------------------------------------------------------------
 	Definitions.
@@ -67,8 +66,16 @@ struct FNameEntryId
 
 	/** Create from unstable int produced by this process */
 	CORE_API static FNameEntryId FromUnstableInt(uint32 UnstableInt);
+
+	FORCEINLINE static FNameEntryId FromEName(EName Ename)
+	{
+		return Ename == NAME_None ? FNameEntryId() : FromValidEName(Ename);
+	}
+
 private:
 	uint32 Value;
+
+	CORE_API static FNameEntryId FromValidEName(EName Ename);
 };
 
 CORE_API uint32 GetTypeHash(FNameEntryId Id);
@@ -191,7 +198,7 @@ public:
 	{
 		return Header.bIsWide;
 	}
-	
+
 	FORCEINLINE int32 GetNameLength() const
 	{
 		return Header.Len;
@@ -230,13 +237,12 @@ public:
 	 * @param	bIsPureAnsi		Whether name is pure ANSI or not
 	 * @return	required size of FNameEntry structure to hold this string (might be wide or ansi)
 	 */
-	static int32 GetSize(int32 Length, bool bIsPureAnsi);
+	static int32 GetSize( int32 Length, bool bIsPureAnsi );
 	static CORE_API int32 GetSize(const TCHAR* Name);
 
 	CORE_API int32 GetSizeInBytes() const;
 
 	CORE_API void Write(FArchive& Ar) const;
-	CORE_API void Write(FStructuredArchive::FSlot Slot) const;
 
 	static int32 GetDataOffset();
 	struct FNameStringView MakeView(union FNameBuffer& OptionalDecodeBuffer) const;
@@ -309,12 +315,6 @@ struct FNameEntrySerialized
 	{
 		return Ar << *E;
 	}
-
-	friend CORE_API void operator<<(FStructuredArchive::FSlot Slot, FNameEntrySerialized& E);
-	friend void operator<<(FStructuredArchive::FSlot Slot, FNameEntrySerialized* E)
-	{
-		Slot << *E;
-	}
 };
 
 /**
@@ -324,8 +324,11 @@ struct FNameEntrySerialized
 struct FMinimalName
 {
 	FMinimalName() {}
-
-	CORE_API FMinimalName(EName N);
+	
+	FMinimalName(EName N)
+		: Index(FNameEntryId::FromEName(N))
+	{
+	}
 
 	FMinimalName(FNameEntryId InIndex, int32 InNumber)
 		: Index(InIndex)
@@ -352,13 +355,17 @@ struct FMinimalName
 struct FScriptName
 {
 	FScriptName() {}
-
-	CORE_API FScriptName(EName N);
+	
+	FScriptName(EName Ename)
+		: ComparisonIndex(FNameEntryId::FromEName(Ename))
+		, DisplayIndex(ComparisonIndex)
+	{
+	}
 
 	FScriptName(FNameEntryId InComparisonIndex, FNameEntryId InDisplayIndex, int32 InNumber)
-	: ComparisonIndex(InComparisonIndex)
-	, DisplayIndex(InDisplayIndex)
-	, Number(InNumber)
+		: ComparisonIndex(InComparisonIndex)
+		, DisplayIndex(InDisplayIndex)
+		, Number(InNumber)
 	{
 	}
 
@@ -619,15 +626,15 @@ public:
 			return ComparisonDiff;
 		}
 
-		return GetNumber() - Other.GetNumber();
-	}
+			return GetNumber() - Other.GetNumber();
+		}
 
 	/**
 	 * Create an FName with a hardcoded string index.
 	 *
 	 * @param N The hardcoded value the string portion of the name will have. The number portion will be NAME_NO_NUMBER
 	 */
-	FName(EName N);
+	FORCEINLINE FName(EName Ename) : FName(Ename, NAME_NO_NUMBER_INTERNAL) {}
 
 	/**
 	 * Create an FName with a hardcoded string index and (instance).
@@ -635,7 +642,15 @@ public:
 	 * @param N The hardcoded value the string portion of the name will have
 	 * @param InNumber The hardcoded value for the number portion of the name
 	 */
-	FName(EName N, int32 InNumber);
+	FORCEINLINE FName(EName Ename, int32 InNumber)
+		: ComparisonIndex(FNameEntryId::FromEName(Ename))
+#if WITH_CASE_PRESERVING_NAME
+		, DisplayIndex(ComparisonIndex)
+#endif
+		, Number(InNumber)
+	{
+	}
+
 
 	/**
 	 * Create an FName from an existing string, but with a different instance.
@@ -742,7 +757,7 @@ public:
 	 * this version skips calculating the hashes of the names if possible
 	 */
 	FName(const FNameEntrySerialized& LoadedEntry);
-	
+
 	/**
 	 * Equality operator.
 	 *
@@ -793,7 +808,7 @@ public:
 	static FNameEntry const* GetEntry(FNameEntryId Id);
 
 	//@}
-	
+
 	/** Run autotest on FNames. */
 	static void AutoTest();
 	
@@ -811,6 +826,13 @@ public:
 	/** Get the EName that this FName represents or nullptr */
 	const EName* ToEName() const;
 
+	/** 
+		Tear down system and free all allocated memory 
+	
+		FName must not be used after teardown
+	 */
+	static void TearDown();
+
 private:
 
 	/** Index into the Names array (used to find String portion of the string/number pair used for comparison) */
@@ -818,10 +840,10 @@ private:
 #if WITH_CASE_PRESERVING_NAME
 	/** Index into the Names array (used to find String portion of the string/number pair used for display) */
 	FNameEntryId	DisplayIndex;
-#endif
+#endif // WITH_CASE_PRESERVING_NAME
 	/** Number portion of the string/number pair (stored internally as 1 more than actual, so zero'd memory will be the default, no-instance case) */
 	uint32			Number;
-	
+
 	friend const TCHAR* DebugFName(int32);
 	friend const TCHAR* DebugFName(int32, int32);
 	friend const TCHAR* DebugFName(FName&);
@@ -955,4 +977,124 @@ private:
 	static constexpr uint32 OffsetMask = (1 << OffsetBits) - 1;
 	static constexpr uint32 UnusedMask = UINT32_MAX << BlockBits << OffsetBits;
 	static constexpr uint32 MaxLength = NAME_SIZE;
+};
+
+/** Lazily constructed FName that helps avoid allocating FNames during static initialization */
+class FLazyName
+{
+public:
+	FLazyName()
+		: Either(FNameEntryId())
+	{}
+
+	/** @param Literal must be a string literal */
+	template<int N>
+	FLazyName(const WIDECHAR(&Literal)[N])
+		: Either(Literal)
+		, Number(ParseNumber(Literal, N - 1))
+		, bLiteralIsWide(true)
+	{}
+
+	/** @param Literal must be a string literal */
+	template<int N>
+	FLazyName(const ANSICHAR(&Literal)[N])
+		: Either(Literal)
+		, Number(ParseNumber(Literal, N - 1))
+		, bLiteralIsWide(false)
+	{}
+
+	explicit FLazyName(FName Name)
+		: Either(Name.GetComparisonIndex())
+		, Number(Name.GetNumber())
+	{}
+	
+	operator FName() const
+	{
+		return Resolve();
+	}
+
+	CORE_API FName Resolve() const;
+
+private:
+	struct FLiteralOrName
+	{
+		// NOTE: uses high bit of pointer for flag; this may be an issue in future when high byte of address may be used for features like hardware ASAN
+		static constexpr uint64 LiteralFlag = uint64(1) << (sizeof(uint64) * 8 - 1);
+
+		explicit FLiteralOrName(const ANSICHAR* Literal)
+			: Int(reinterpret_cast<uint64>(Literal) | LiteralFlag)
+		{}
+		
+		explicit FLiteralOrName(const WIDECHAR* Literal)
+			: Int(reinterpret_cast<uint64>(Literal) | LiteralFlag)
+		{}
+
+		explicit FLiteralOrName(FNameEntryId Name)
+			: Int(Name.ToUnstableInt())
+		{}
+
+		bool IsName() const
+		{
+			return (LiteralFlag & Int) == 0;
+		}
+
+		bool IsLiteral() const
+		{
+			return (LiteralFlag & Int) != 0;
+		}
+
+		FNameEntryId AsName() const
+		{
+			return FNameEntryId::FromUnstableInt(static_cast<uint32>(Int));
+		}
+		
+		const ANSICHAR* AsAnsiLiteral() const
+		{
+			return reinterpret_cast<const ANSICHAR*>(Int & ~LiteralFlag);
+		}
+
+		const WIDECHAR* AsWideLiteral() const
+		{
+			return reinterpret_cast<const WIDECHAR*>(Int & ~LiteralFlag);
+		}
+
+		uint64 Int;
+	};
+
+	mutable FLiteralOrName Either;
+	mutable uint32 Number = 0;
+
+	// Distinguishes WIDECHAR* and ANSICHAR* literals, doesn't indicate if literal contains any wide characters 
+	bool bLiteralIsWide = false;
+	
+	CORE_API static uint32 ParseNumber(const WIDECHAR* Literal, int32 Len);
+	CORE_API static uint32 ParseNumber(const ANSICHAR* Literal, int32 Len);
+
+public:
+
+	friend bool operator==(FName Name, const FLazyName& Lazy)
+	{
+		// If !Name.IsNone(), we have started creating FNames
+		// and might as well resolve and cache Lazy
+		if (Lazy.Either.IsName() || !Name.IsNone())
+		{
+			return Name == Lazy.Resolve();
+		}
+		else if (!Lazy.bLiteralIsWide)
+		{
+			return Name == Lazy.Either.AsAnsiLiteral();
+		}
+		else
+		{
+			return Name == Lazy.Either.AsWideLiteral();
+		}
+	}
+
+	friend bool operator==(const FLazyName& Lazy, FName Name)
+	{
+		return Name == Lazy;
+	}
+
+	CORE_API friend bool operator==(const FLazyName& A, const FLazyName& B);
+
 };

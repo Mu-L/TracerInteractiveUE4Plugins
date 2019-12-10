@@ -8,7 +8,6 @@
 #include "Misc/Guid.h"
 #include "UObject/Class.h"
 #include "Engine/EngineTypes.h"
-#include "Templates/ScopedPointer.h"
 #include "Engine/TextureStreamingTypes.h"
 #include "Components/MeshComponent.h"
 #include "PackedNormal.h"
@@ -165,7 +164,7 @@ struct TStructOpsTypeTraits<FStaticMeshComponentLODInfo> : public TStructOpsType
  * @see https://docs.unrealengine.com/latest/INT/Engine/Content/Types/StaticMeshes/
  * @see UStaticMesh
  */
-UCLASS(ClassGroup=(Rendering, Common), hidecategories=(Object,Activation,"Components|Activation"), ShowCategories=(Mobility), editinlinenew, meta=(BlueprintSpawnableComponent))
+UCLASS(Blueprintable, ClassGroup=(Rendering, Common), hidecategories=(Object,Activation,"Components|Activation"), ShowCategories=(Mobility), editinlinenew, meta=(BlueprintSpawnableComponent))
 class ENGINE_API UStaticMeshComponent : public UMeshComponent
 {
 	GENERATED_UCLASS_BODY()
@@ -204,6 +203,9 @@ public:
 	/** Wireframe color to use if bOverrideWireframeColor is true */
 	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category=Rendering, meta=(editcondition = "bOverrideWireframeColor"))
 	FColor WireframeColorOverride;
+
+	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category=RayTracing)
+	uint8 bEvaluateWorldPositionOffset:1;
 
 #if WITH_EDITORONLY_DATA
 	/** The section currently selected in the Editor. Used for highlighting */
@@ -404,7 +406,9 @@ public:
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 	virtual bool CanEditChange(const UProperty* InProperty) const override;
 #endif // WITH_EDITOR
+#if WITH_EDITORONLY_DATA
 	virtual void PreSave(const class ITargetPlatform* TargetPlatform) override;
+#endif // WITH_EDITORONLY_DATA
 	virtual void PostLoad() override;
 	virtual bool IsPostLoadThreadSafe() const override;
 	virtual bool AreNativePropertiesIdenticalTo( UObject* Other ) const override;
@@ -555,6 +559,7 @@ public:
 		int32& VertexLightMapMemoryUsage, int32& VertexShadowMapMemoryUsage,
 		int32& StaticLightingResolution, bool& bIsUsingTextureMapping, bool& bHasLightmapTexCoords) const;
 
+#if WITH_EDITORONLY_DATA
 	/**
 	 * Determines whether any of the component's LODs require override vertex color fixups
 	 *
@@ -577,6 +582,7 @@ public:
 	 * @param SourceComponent The component to copy vertex colors from
 	 */
 	void CopyInstanceVertexColorsIfCompatible( UStaticMeshComponent* SourceComponent );
+#endif
 
 	/**
 	 * Removes instance vertex colors from the specified LOD
@@ -584,13 +590,16 @@ public:
 	 */
 	void RemoveInstanceVertexColorsFromLOD( int32 LODToRemoveColorsFrom );
 
+#if WITH_EDITORONLY_DATA
 	/**
 	 * Removes instance vertex colors from all LODs
 	 */
 	void RemoveInstanceVertexColors();
+#endif
 
 	void UpdatePreCulledData(int32 LODIndex, const TArray<uint32>& PreCulledData, const TArray<int32>& NumTrianglesPerSection);
 
+#if WITH_EDITORONLY_DATA
 	/**
 	*	Sets the value of the SectionIndexPreview flag and reattaches the component as necessary.
 	*	@param	InSectionIndexPreview		New value of SectionIndexPreview.
@@ -602,7 +611,8 @@ public:
 	*	@param	InMaterialIndexPreview		New value of MaterialIndexPreview.
 	*/
 	void SetMaterialPreview(int32 InMaterialIndexPreview);
-	
+#endif
+
 	/** Sets the BodyInstance to use the mesh's body setup for external collision information*/
 	void UpdateCollisionFromStaticMesh();
 
@@ -616,8 +626,10 @@ private:
 	/** Initializes the resources used by the static mesh component. */
 	void InitResources();
 
+#if WITH_EDITOR
 	/** Update the vertex override colors */
 	void PrivateFixupOverrideColors();
+#endif
 protected:
 
 	/** Whether the component type supports static lighting. */

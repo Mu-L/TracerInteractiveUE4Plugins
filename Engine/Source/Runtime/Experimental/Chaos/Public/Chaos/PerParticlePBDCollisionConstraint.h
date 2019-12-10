@@ -1,7 +1,6 @@
 // Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
 #pragma once
 
-#include "Chaos/GeometryParticles.h"
 #include "Chaos/PerParticleRule.h"
 #include "Chaos/Transform.h"
 
@@ -9,7 +8,7 @@
 
 namespace Chaos
 {
-template<class T, int d>
+template<class T, int d, EGeometryParticlesSimType SimType>
 class TPerParticlePBDCollisionConstraint : public TPerParticleRule<T, d>
 {
 	struct VelocityConstraint
@@ -19,7 +18,7 @@ class TPerParticlePBDCollisionConstraint : public TPerParticleRule<T, d>
 	};
 
   public:
-	TPerParticlePBDCollisionConstraint(const TKinematicGeometryParticles<T, d>& InParticles, TArrayCollectionArray<bool>& Collided, const T Thickness = (T)0, const T Friction = (T)0)
+	TPerParticlePBDCollisionConstraint(const TKinematicGeometryParticlesImp<T, d, SimType>& InParticles, TArrayCollectionArray<bool>& Collided, const T Thickness = (T)0, const T Friction = (T)0)
 	    : MParticles(InParticles), MCollided(Collided), MThickness(Thickness), MFriction(Friction) {}
 	virtual ~TPerParticlePBDCollisionConstraint() {}
 
@@ -67,7 +66,7 @@ class TPerParticlePBDCollisionConstraint : public TPerParticleRule<T, d>
 
   private:
 	// TODO(mlentine): Need a bb hierarchy
-	const TKinematicGeometryParticles<T, d>& MParticles;
+	const TKinematicGeometryParticlesImp<T, d, SimType>& MParticles;
 	TArrayCollectionArray<bool>& MCollided;
 	mutable TMap<int32, VelocityConstraint> MVelocityConstraints;
 	const T MThickness, MFriction;

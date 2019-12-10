@@ -38,6 +38,7 @@
 #include "Engine/GameInstance.h"
 #include "Engine/RendererSettings.h"
 #include "Engine/World.h"
+#include "DesktopPlatformModule.h"
 #include "Settings/LevelEditorPlaySettings.h"
 #include "AI/NavigationSystemBase.h"
 #include "Editor/EditorEngine.h"
@@ -68,9 +69,9 @@
 #include "Slate/SceneViewport.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Kismet2/BlueprintEditorUtils.h"
-#include "Toolkits/AssetEditorManager.h"
+
 #include "LevelEditor.h"
-#include "ILevelViewport.h"
+#include "IAssetViewport.h"
 #include "BlueprintEditorModule.h"
 #include "Interfaces/ITargetPlatform.h"
 #include "Interfaces/ITargetPlatformManagerModule.h"
@@ -100,6 +101,7 @@
 #include "Engine/LevelStreaming.h"
 #include "Components/ModelComponent.h"
 #include "GameDelegates.h"
+#include "PlatformInfo.h"
 #include "Net/OnlineEngineInterface.h"
 #include "Kismet2/DebuggerCommands.h"
 #include "Misc/ScopeExit.h"
@@ -109,6 +111,8 @@
 #include "CookerSettings.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/SBoxPanel.h"
+#include "Subsystems/AssetEditorSubsystem.h"
+#include "Async/Async.h"
 
 
 DEFINE_LOG_CATEGORY_STATIC(LogPlayLevel, Log, All);
@@ -408,7 +412,7 @@ void UEditorEngine::EndPlayMap()
 				Object->ClearFlags(RF_Standalone);
 			}
 			// Close any asset editors that are currently editing this object
-			FAssetEditorManager::Get().CloseAllEditorsForAsset(Object);
+			GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->CloseAllEditorsForAsset(Object);
 		}
 	}
 
@@ -609,7 +613,7 @@ void UEditorEngine::TeardownPlaySession(FWorldContext& PieWorldContext)
 		{
 			if (SlatePlayInEditorSession->DestinationSlateViewport.IsValid())
 			{
-				TSharedPtr<ILevelViewport> Viewport = SlatePlayInEditorSession->DestinationSlateViewport.Pin();
+				TSharedPtr<IAssetViewport> Viewport = SlatePlayInEditorSession->DestinationSlateViewport.Pin();
 
 				if( !bIsSimulatingInEditor)
 				{
@@ -617,25 +621,25 @@ void UEditorEngine::TeardownPlaySession(FWorldContext& PieWorldContext)
 					if (bLastViewAndLocationValid == true && !GEngine->IsStereoscopic3D( Viewport->GetActiveViewport() ) )
 					{
 						bLastViewAndLocationValid = false;
-						Viewport->GetLevelViewportClient().SetViewLocation( LastViewLocation );
+						Viewport->GetAssetViewportClient().SetViewLocation( LastViewLocation );
 
-						if( Viewport->GetLevelViewportClient().IsPerspective() )
+						if( Viewport->GetAssetViewportClient().IsPerspective() )
 						{
 							// Rotation only matters for perspective viewports not orthographic
-							Viewport->GetLevelViewportClient().SetViewRotation( LastViewRotation );
+							Viewport->GetAssetViewportClient().SetViewRotation( LastViewRotation );
 						}
 					}
 				}
 
 				// No longer simulating in the viewport
-				Viewport->GetLevelViewportClient().SetIsSimulateInEditorViewport( false );
+				Viewport->GetAssetViewportClient().SetIsSimulateInEditorViewport( false );
 
 				
 				FEditorModeRegistry::Get().UnregisterMode(FBuiltinEditorModes::EM_Physics);
 				
 
 				// Clear out the hit proxies before GC'ing
-				Viewport->GetLevelViewportClient().Viewport->InvalidateHitProxy();
+				Viewport->GetAssetViewportClient().Viewport->InvalidateHitProxy();
 			}
 			else if (SlatePlayInEditorSession->SlatePlayInEditorWindow.IsValid())
 			{
@@ -732,13 +736,13 @@ void UEditorEngine::TeardownPlaySession(FWorldContext& PieWorldContext)
 
 	// Construct a list of editors that are active for objects being debugged. We will refresh these when we have cleaned up to ensure no invalid objects exist in them
 	TArray< IBlueprintEditor* > Editors;
-	FAssetEditorManager& AssetEditorManager = FAssetEditorManager::Get();
+	UAssetEditorSubsystem* AssetEditorSubsystem = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>();
 	const UWorld::FBlueprintToDebuggedObjectMap& EditDebugObjectsPre = PlayWorld->GetBlueprintObjectsBeingDebugged();
 	for (UWorld::FBlueprintToDebuggedObjectMap::TConstIterator EditIt(EditDebugObjectsPre); EditIt; ++EditIt)
 	{
 		if (UBlueprint* TargetBP = EditIt.Key().Get())
 		{
-			if(IBlueprintEditor* EachEditor = static_cast<IBlueprintEditor*>(AssetEditorManager.FindEditorForAsset(TargetBP, false)))
+			if(IBlueprintEditor* EachEditor = static_cast<IBlueprintEditor*>(AssetEditorSubsystem->FindEditorForAsset(TargetBP, false)))
 			{
 				Editors.AddUnique( EachEditor );
 			}
@@ -792,7 +796,7 @@ void UEditorEngine::TeardownPlaySession(FWorldContext& PieWorldContext)
 		FSlatePlayInEditorInfo* const SlatePlayInEditorSession = SlatePlayInEditorMap.Find(PieWorldContext.ContextHandle);
 		if (SlatePlayInEditorSession && SlatePlayInEditorSession->DestinationSlateViewport.IsValid())
 		{
-			TSharedPtr<ILevelViewport> Viewport = SlatePlayInEditorSession->DestinationSlateViewport.Pin();
+			TSharedPtr<IAssetViewport> Viewport = SlatePlayInEditorSession->DestinationSlateViewport.Pin();
 
 			if( Viewport->HasPlayInEditorViewport() )
 			{
@@ -805,7 +809,7 @@ void UEditorEngine::TeardownPlaySession(FWorldContext& PieWorldContext)
 				Viewport->OnSimulateSessionFinished();
 			}
 
-			Viewport->GetLevelViewportClient().SetReferenceToWorldContext(EditorWorldContext);
+			StaticCast<FLevelEditorViewportClient&>(Viewport->GetAssetViewportClient()).SetReferenceToWorldContext(EditorWorldContext);
 		}
 
 		// Remove the slate info from the map (note that the UWorld* is long gone at this point, but the WorldContext still exists. It will be removed outside of this function)
@@ -848,7 +852,7 @@ void UEditorEngine::PlayMap( const FVector* StartLocation, const FRotator* Start
 }
 
 
-void UEditorEngine::RequestPlaySession( bool bAtPlayerStart, TSharedPtr<class ILevelViewport> DestinationViewport, bool bInSimulateInEditor, const FVector* StartLocation, const FRotator* StartRotation, int32 DestinationConsole, bool bUseMobilePreview, bool bUseVRPreview, bool bUseVulkanPreview )
+void UEditorEngine::RequestPlaySession( bool bAtPlayerStart, TSharedPtr<class IAssetViewport> DestinationViewport, bool bInSimulateInEditor, const FVector* StartLocation, const FRotator* StartRotation, int32 DestinationConsole, bool bUseMobilePreview, bool bUseVRPreview, bool bUseVulkanPreview )
 {
 	// Remember whether or not we were attempting to play from playerstart or from viewport
 	GIsPIEUsingPlayerStart = bAtPlayerStart;
@@ -1378,7 +1382,7 @@ void UEditorEngine::PlayStandaloneLocalPc(FString MapNameOverride, FIntPoint* Wi
 		}
 		else
 		{
-			AdditionalParameters += TEXT(" -featureleveles2");
+			AdditionalParameters += TEXT(" -featureleveles31");
 		}
 
 		if (IsOpenGLPlatform(GShaderPlatformForFeatureLevel[GMaxRHIFeatureLevel]))
@@ -1427,6 +1431,15 @@ void UEditorEngine::PlayStandaloneLocalPc(FString MapNameOverride, FIntPoint* Wi
 	if (bIsServer && PlayInSettings->GetServerPort(ServerPort))
 	{
 		AdditionalParameters += FString::Printf(TEXT(" -port=%hu"), ServerPort);
+	}
+
+	if (PlayInSettings->IsNetworkEmulationEnabled())
+	{
+		NetworkEmulationTarget CurrentTarget = bIsServer ? NetworkEmulationTarget::Server : NetworkEmulationTarget::Client;
+		if (PlayInSettings->NetworkEmulationSettings.IsEmulationEnabledForTarget(CurrentTarget))
+		{
+			AdditionalParameters += PlayInSettings->NetworkEmulationSettings.BuildPacketSettingsForCmdLine();
+		}
 	}
 
 	// Decide if fullscreen or windowed based on what is specified in the params
@@ -1684,7 +1697,7 @@ void UEditorEngine::HandleLaunchCanceled(double TotalTime, bool bHasCode, TWeakP
 	bPlayUsingLauncher = false;	
 }
 
-void UEditorEngine::HandleLaunchCompleted(bool Succeeded, double TotalTime, int32 ErrorCode, bool bHasCode, TWeakPtr<SNotificationItem> NotificationItemPtr, TSharedPtr<class FMessageLog> MessageLog)
+void UEditorEngine::HandleLaunchCompleted(bool Succeeded, double TotalTime, int32 ErrorCode, bool bHasCode, TWeakPtr<SNotificationItem> NotificationItemPtr)
 {
 	const FString DummyIOSDeviceName(FString::Printf(TEXT("All_iOS_On_%s"), FPlatformProcess::ComputerName()));
 	const FString DummyTVOSDeviceName(FString::Printf(TEXT("All_tvOS_On_%s"), FPlatformProcess::ComputerName()));
@@ -1727,12 +1740,17 @@ void UEditorEngine::HandleLaunchCompleted(bool Succeeded, double TotalTime, int3
 			CompletionMsg = LOCTEXT("LauncherTaskFailed", "Launch failed!");
 		}
 		
-		MessageLog->Error()
-			->AddToken(FTextToken::Create(CompletionMsg))
-			->AddToken(FTextToken::Create(FText::FromString(FEditorAnalytics::TranslateErrorCode(ErrorCode))));
+		AsyncTask(ENamedThreads::GameThread, [=]
+		{
+			FMessageLog MessageLog("PackagingResults");
 
-		// flush log, because it won't be destroyed until the notification popup closes
-		MessageLog->NumMessages(EMessageSeverity::Info);
+			MessageLog.Error()
+				->AddToken(FTextToken::Create(CompletionMsg))
+				->AddToken(FTextToken::Create(FText::FromString(FEditorAnalytics::TranslateErrorCode(ErrorCode))));
+
+			// flush log, because it won't be destroyed until the notification popup closes
+			MessageLog.NumMessages(EMessageSeverity::Info);
+		});
 
 		TGraphTask<FLauncherNotificationTask>::CreateTask().ConstructAndDispatchWhenReady(
 			NotificationItemPtr,
@@ -1982,14 +2000,35 @@ void UEditorEngine::PlayUsingLauncher()
 				return;
 			}
 		}
-		
+
+		// set the build/launch configuration 
+		EBuildConfiguration BuildConfiguration;
+		const ULevelEditorPlaySettings* PlayInSettings = GetDefault<ULevelEditorPlaySettings>();
+		switch (PlayInSettings->LaunchConfiguration)
+		{
+		case LaunchConfig_Debug:
+			BuildConfiguration = EBuildConfiguration::Debug;
+			break;
+		case LaunchConfig_Development:
+			BuildConfiguration = EBuildConfiguration::Development;
+			break;
+		case LaunchConfig_Test:
+			BuildConfiguration = EBuildConfiguration::Test;
+			break;
+		case LaunchConfig_Shipping:
+			BuildConfiguration = EBuildConfiguration::Shipping;
+			break;
+		default:
+			// same as the running editor
+			BuildConfiguration = FApp::GetBuildConfiguration();
+			break;
+		}
+
 		// does the project have any code?
 		FGameProjectGenerationModule& GameProjectModule = FModuleManager::LoadModuleChecked<FGameProjectGenerationModule>(TEXT("GameProjectGeneration"));
-		bPlayUsingLauncherHasCode = GameProjectModule.Get().ProjectRequiresBuild(FName(*LaunchPlatformName));
+		bPlayUsingLauncherHasCode = GameProjectModule.Get().ProjectHasCodeFiles();
 
-		const ULevelEditorPlaySettings* PlayInSettings = GetDefault<ULevelEditorPlaySettings>();
-		// Setup launch profile, keep the setting here to a minimum.
-		ILauncherProfileRef LauncherProfile = LauncherServicesModule.CreateProfile(TEXT("Launch On Device"));
+		// Figure out if we need to build anything
 		if(PlayInSettings->BuildGameBeforeLaunch == EPlayOnBuildMode::PlayOnBuild_Always)
 		{
 			bPlayUsingLauncherBuild = true;
@@ -2001,33 +2040,25 @@ void UEditorEngine::PlayUsingLauncher()
 		else if(PlayInSettings->BuildGameBeforeLaunch == EPlayOnBuildMode::PlayOnBuild_Default)
 		{
 			bPlayUsingLauncherBuild = bPlayUsingLauncherHasCode || !FApp::GetEngineIsPromotedBuild();
+			if (!bPlayUsingLauncherBuild)
+			{
+				FText Reason;
+				if (LaunchPlatform->RequiresTempTarget(bPlayUsingLauncherHasCode, BuildConfiguration, false, Reason))
+				{
+					UE_LOG(LogPlayLevel, Log, TEXT("Project requires temp target (%s)"), *Reason.ToString());
+					bPlayUsingLauncherBuild = true;
+				}
+			}
 		}
 		else if(PlayInSettings->BuildGameBeforeLaunch == EPlayOnBuildMode::PlayOnBuild_IfEditorBuiltLocally)
 		{
 			bPlayUsingLauncherBuild = !FApp::GetEngineIsPromotedBuild();
 		}
-		LauncherProfile->SetBuildGame(bPlayUsingLauncherBuild);
 
-		// set the build/launch configuration 
-		switch (PlayInSettings->LaunchConfiguration)
-		{
-		case LaunchConfig_Debug:
-			LauncherProfile->SetBuildConfiguration(EBuildConfigurations::Debug);
-			break;
-		case LaunchConfig_Development:
-			LauncherProfile->SetBuildConfiguration(EBuildConfigurations::Development);
-			break;
-		case LaunchConfig_Test:
-			LauncherProfile->SetBuildConfiguration(EBuildConfigurations::Test);
-			break;
-		case LaunchConfig_Shipping:
-			LauncherProfile->SetBuildConfiguration(EBuildConfigurations::Shipping);
-			break;
-		default:
-			// same as the running editor
-			LauncherProfile->SetBuildConfiguration(FApp::GetBuildConfiguration());
-			break;
-		}
+		// Setup launch profile, keep the setting here to a minimum.
+		ILauncherProfileRef LauncherProfile = LauncherServicesModule.CreateProfile(TEXT("Launch On Device"));
+		LauncherProfile->SetBuildGame(bPlayUsingLauncherBuild);
+		LauncherProfile->SetBuildConfiguration(BuildConfiguration);
 
 		// select the quickest cook mode based on which in editor cook mode is enabled
 		bool bIncrimentalCooking = true;
@@ -2167,13 +2198,11 @@ void UEditorEngine::PlayUsingLauncher()
 		TWeakPtr<SNotificationItem> NotificationItemPtr(NotificationItem);
 		if (GEditor->LauncherWorker.IsValid() && GEditor->LauncherWorker->GetStatus() != ELauncherWorkerStatus::Completed)
 		{
-			TSharedPtr<FMessageLog> MessageLog = MakeShareable(new FMessageLog("PackagingResults"));
-
 			GEditor->PlayEditorSound(TEXT("/Engine/EditorSounds/Notifications/CompileStart_Cue.CompileStart_Cue"));
 			GEditor->LauncherWorker->OnOutputReceived().AddStatic(HandleOutputReceived);
 			GEditor->LauncherWorker->OnStageStarted().AddUObject(this, &UEditorEngine::HandleStageStarted, NotificationItemPtr);
 			GEditor->LauncherWorker->OnStageCompleted().AddUObject(this, &UEditorEngine::HandleStageCompleted, bPlayUsingLauncherHasCode, NotificationItemPtr);
-			GEditor->LauncherWorker->OnCompleted().AddUObject(this, &UEditorEngine::HandleLaunchCompleted, bPlayUsingLauncherHasCode, NotificationItemPtr, MessageLog);
+			GEditor->LauncherWorker->OnCompleted().AddUObject(this, &UEditorEngine::HandleLaunchCompleted, bPlayUsingLauncherHasCode, NotificationItemPtr);
 			GEditor->LauncherWorker->OnCanceled().AddUObject(this, &UEditorEngine::HandleLaunchCanceled, bPlayUsingLauncherHasCode, NotificationItemPtr);
 		}
 		else
@@ -2474,11 +2503,6 @@ void UEditorEngine::PlayInEditor( UWorld* InWorld, bool bInSimulateInEditor, FPl
 	if (GetDefault<UEditorStyleSettings>()->bPromoteOutputLogWarningsDuringPIE)
 	{
 		OutputLogErrorsToMessageLogProxyPtr = MakeShareable(new FOutputLogErrorsToMessageLogProxy());
-	}
-
-	if (GEngine->XRSystem.IsValid() && !bInSimulateInEditor)
-	{
-		GEngine->XRSystem->OnBeginPlay(*GEngine->GetWorldContextFromWorld(InWorld));
 	}
 
 	// remember old GWorld
@@ -3072,6 +3096,61 @@ void UEditorEngine::RequestLateJoin()
 	GetMultipleInstancePositions(0, NextX, NextY);
 }
 
+class SPIEViewport : public SViewport
+{
+	SLATE_BEGIN_ARGS(SPIEViewport)
+		: _Content()
+		, _RenderDirectlyToWindow(false)
+		, _EnableStereoRendering(false)
+		, _IgnoreTextureAlpha(true)
+	{
+		_Clipping = EWidgetClipping::ClipToBoundsAlways;
+	}
+
+		SLATE_DEFAULT_SLOT(FArguments, Content)
+
+		/**
+		 * Whether or not to render directly to the window's backbuffer or an offscreen render target that is applied to the window later
+		 * Rendering to an offscreen target is the most common option in the editor where there may be many frames which this viewport's interface may wish to not re-render but use a cached buffer instead
+		 * Rendering directly to the backbuffer is the most common option in the game where you want to update each frame without the cost of writing to an intermediate target first.
+		 */
+		SLATE_ARGUMENT(bool, RenderDirectlyToWindow)
+
+		/** Whether or not to enable stereo rendering. */
+		SLATE_ARGUMENT(bool, EnableStereoRendering )
+
+		/**
+		 * If true, the viewport's texture alpha is ignored when performing blending.  In this case only the viewport tint opacity is used
+		 * If false, the texture alpha is used during blending
+		 */
+		SLATE_ARGUMENT( bool, IgnoreTextureAlpha )
+
+	SLATE_END_ARGS()
+
+	void Construct(const FArguments& InArgs)
+	{
+		SViewport::Construct(
+			SViewport::FArguments()
+			.EnableGammaCorrection(false) // Gamma correction in the game is handled in post processing in the scene renderer
+			.RenderDirectlyToWindow(InArgs._RenderDirectlyToWindow)
+			.EnableStereoRendering(InArgs._EnableStereoRendering)
+			.IgnoreTextureAlpha(InArgs._IgnoreTextureAlpha)
+			[
+				InArgs._Content.Widget
+			]
+		);
+	}
+
+	virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override
+	{
+		SViewport::Tick(AllottedGeometry, InCurrentTime, InDeltaTime);
+
+		// Rather than binding the attribute we're going to poll it in tick, otherwise we will make this widget volatile, and it therefore
+		// wont be possible to cache it or its children in GSlateEnableGlobalInvalidation mode.
+		SetEnabled(FSlateApplication::Get().GetNormalExecutionAttribute().Get());
+	}
+};
+
 UGameInstance* UEditorEngine::CreatePIEGameInstance(int32 InPIEInstance, bool bInSimulateInEditor, bool bAnyBlueprintErrors, bool bStartInSpectatorMode, bool bRunAsDedicated, bool bPlayStereoscopic, float PIEStartTime)
 {
 	// create a new GameInstance
@@ -3093,7 +3172,7 @@ UGameInstance* UEditorEngine::CreatePIEGameInstance(int32 InPIEInstance, bool bI
 	GameInstanceParams.bSimulateInEditor = bInSimulateInEditor;
 	GameInstanceParams.bStartInSpectatorMode = bStartInSpectatorMode;
 	GameInstanceParams.bRunAsDedicated = bRunAsDedicated;
-	GameInstanceParams.WorldFeatureLevel = PreviewFeatureLevel;
+	GameInstanceParams.WorldFeatureLevel = PreviewPlatform.GetEffectivePreviewFeatureLevel();
 
 	const FGameInstancePIEResult InitializeResult = GameInstance->InitializeForPlayInEditor(InPIEInstance, GameInstanceParams);
 	if (!InitializeResult.IsSuccess())
@@ -3125,7 +3204,7 @@ UGameInstance* UEditorEngine::CreatePIEGameInstance(int32 InPIEInstance, bool bI
 	FFormatNamedArguments Args;
 	Args.Add( TEXT("GameName"), FText::FromString( FString( WindowTitleOverride.IsEmpty() ? FApp::GetProjectName() : WindowTitleOverride.ToString() ) ) );
 	Args.Add( TEXT("PlatformBits"), FText::FromString( PlatformBitsString ) );
-	Args.Add( TEXT("RHIName"), FText::FromName( LegacyShaderPlatformToShaderFormat( GShaderPlatformForFeatureLevel[PreviewFeatureLevel] ) ) );
+	Args.Add( TEXT("RHIName"), FText::FromName( LegacyShaderPlatformToShaderFormat( GShaderPlatformForFeatureLevel[PreviewPlatform.PreviewFeatureLevel] ) ) );
 
 	const ULevelEditorPlaySettings* PlayInSettings = GetDefault<ULevelEditorPlaySettings>();
 	const EPlayNetMode PlayNetMode = [&PlayInSettings]{ EPlayNetMode NetMode(PIE_Standalone); return (PlayInSettings->GetPlayNetMode(NetMode) ? NetMode : PIE_Standalone); }();
@@ -3174,7 +3253,7 @@ UGameInstance* UEditorEngine::CreatePIEGameInstance(int32 InPIEInstance, bool bI
 			ActorsThatWereSelected.Add( Actor );
 
 			AActor* SimActor = EditorUtilities::GetSimWorldCounterpartActor(Actor);
-			if (SimActor && !SimActor->bHidden && bInSimulateInEditor)
+			if (SimActor && !SimActor->IsHidden() && bInSimulateInEditor)
 			{
 				SelectActor( SimActor, true, false );
 			}
@@ -3182,7 +3261,7 @@ UGameInstance* UEditorEngine::CreatePIEGameInstance(int32 InPIEInstance, bool bI
 	}
 
 	// For play in editor, this is the viewport widget where the game is being displayed
-	TSharedPtr<SViewport> PieViewportWidget;
+	TSharedPtr<SPIEViewport> PieViewportWidget;
 
 	// Initialize the viewport client.
 	UGameViewportClient* ViewportClient = NULL;
@@ -3230,7 +3309,7 @@ UGameInstance* UEditorEngine::CreatePIEGameInstance(int32 InPIEInstance, bool bI
 			// Only create a separate viewport and window if we aren't playing in a current viewport
 			if( SlatePlayInEditorSession.DestinationSlateViewport.IsValid() )
 			{
-				TSharedPtr<ILevelViewport> LevelViewportRef = SlatePlayInEditorSession.DestinationSlateViewport.Pin();
+				TSharedPtr<IAssetViewport> LevelViewportRef = SlatePlayInEditorSession.DestinationSlateViewport.Pin();
 
 				LevelViewportRef->StartPlayInEditorSession( ViewportClient, bInSimulateInEditor );
 
@@ -3301,10 +3380,13 @@ UGameInstance* UEditorEngine::CreatePIEGameInstance(int32 InPIEInstance, bool bI
 						.Title(ViewportName)
 						.ScreenPosition(FVector2D(PosX, PosY))
 						.ClientSize(FVector2D(NewWindowWidth, NewWindowHeight))
+						.AdjustInitialSizeAndPositionForDPIScale(false)
 						.AutoCenter(CenterNewWindow ? EAutoCenter::PreferredWorkArea : EAutoCenter::None)
 						.UseOSWindowBorder(bUseOSWndBorder)
 						.SaneWindowPlacement(!CenterNewWindow)
 						.SizingRule(ESizingRule::UserSized);
+
+					PieWindow->SetAllowFastUpdate(true);
 				}
 
 
@@ -3343,9 +3425,7 @@ UGameInstance* UEditorEngine::CreatePIEGameInstance(int32 InPIEInstance, bool bI
 				const bool bIgnoreTextureAlpha = (PropagateAlpha != EAlphaChannelMode::AllowThroughTonemapper);
 
 				PieViewportWidget = 
-					SNew( SViewport )
-						.IsEnabled(FSlateApplication::Get().GetNormalExecutionAttribute())
-						.EnableGammaCorrection( false )// Gamma correction in the game is handled in post processing in the scene renderer
+					SNew( SPIEViewport )
 						.RenderDirectlyToWindow( bRenderDirectlyToWindow )
 						.EnableStereoRendering( bEnableStereoRendering )
 						.IgnoreTextureAlpha(bIgnoreTextureAlpha)
@@ -3369,6 +3449,7 @@ UGameInstance* UEditorEngine::CreatePIEGameInstance(int32 InPIEInstance, bool bI
 
 				ViewportClient->SetViewportOverlayWidget( PieWindow, ViewportOverlayWidgetRef );
 				ViewportClient->SetGameLayerManager(GameLayerManagerRef);
+
 				bool bShouldMinimizeRootWindow = bPlayStereoscopic && GEngine->XRSystem.IsValid() && GetDefault<ULevelEditorPlaySettings>()->ShouldMinimizeEditorOnVRPIE;
 				// Set up a notification when the window is closed so we can clean up PIE
 				{
@@ -3377,9 +3458,7 @@ UGameInstance* UEditorEngine::CreatePIEGameInstance(int32 InPIEInstance, bool bI
 						static void OnPIEWindowClosed( const TSharedRef< SWindow >& WindowBeingClosed, TWeakPtr< SViewport > PIEViewportWidget, int32 index, bool bRestoreRootWindow )
 						{
 							// Save off the window position
-							FVector2D PIEWindowPos = WindowBeingClosed->GetPositionInScreen();
-							const float DPIScale = FPlatformApplicationMisc::GetDPIScaleFactorAtPoint(PIEWindowPos.X, PIEWindowPos.Y);
-							PIEWindowPos /= DPIScale;
+							const FVector2D PIEWindowPos = WindowBeingClosed->GetPositionInScreen();
 
 							ULevelEditorPlaySettings* LevelEditorPlaySettings = ULevelEditorPlaySettings::StaticClass()->GetDefaultObject<ULevelEditorPlaySettings>();
 
@@ -3428,10 +3507,12 @@ UGameInstance* UEditorEngine::CreatePIEGameInstance(int32 InPIEInstance, bool bI
 				// Create a new viewport that the viewport widget will use to render the game
 				SlatePlayInEditorSession.SlatePlayInEditorWindowViewport = MakeShareable( new FSceneViewport( ViewportClient, PieViewportWidget ) );
 
+				GameLayerManagerRef->SetSceneViewport(SlatePlayInEditorSession.SlatePlayInEditorWindowViewport.Get());
+
 				const bool bShouldGameGetMouseControl = GetDefault<ULevelEditorPlaySettings>()->GameGetsMouseControl || (bPlayStereoscopic && GEngine->XRSystem.IsValid());
 				SlatePlayInEditorSession.SlatePlayInEditorWindowViewport->SetPlayInEditorGetsMouseControl(bShouldGameGetMouseControl);
 				PieViewportWidget->SetViewportInterface( SlatePlayInEditorSession.SlatePlayInEditorWindowViewport.ToSharedRef() );
-				
+
 				FSlateApplication::Get().RegisterViewport(PieViewportWidget.ToSharedRef());
 				
 				SlatePlayInEditorSession.SlatePlayInEditorWindow = PieWindow;
@@ -3478,9 +3559,11 @@ UGameInstance* UEditorEngine::CreatePIEGameInstance(int32 InPIEInstance, bool bI
 	GameInstance->RemoveFromRoot();
 
 	// Start the game instance, make sure to set the PIE instance global as this is basically a tick
-	GPlayInEditorID = InPIEInstance;
-	const FGameInstancePIEResult StartResult = GameInstance->StartPlayInEditorGameInstance(NewLocalPlayer, GameInstanceParams);
-	GPlayInEditorID = -1;
+	FGameInstancePIEResult StartResult = FGameInstancePIEResult::Success();
+	{
+		FTemporaryPlayInEditorIDOverride OverrideIDHelper(InPIEInstance);
+		StartResult = GameInstance->StartPlayInEditorGameInstance(NewLocalPlayer, GameInstanceParams);
+	}
 
 	if (!StartResult.IsSuccess())
 	{
@@ -3536,7 +3619,7 @@ FViewport* UEditorEngine::GetActiveViewport()
 	// Get the Level editor module and request the Active Viewport.
 	FLevelEditorModule& LevelEditorModule = FModuleManager::Get().GetModuleChecked<FLevelEditorModule>( TEXT("LevelEditor") );
 
-	TSharedPtr<ILevelViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
+	TSharedPtr<IAssetViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
 
 	if ( ActiveLevelViewport.IsValid() )
 	{
@@ -3586,10 +3669,10 @@ bool UEditorEngine::GetSimulateInEditorViewTransform(FTransform& OutViewTransfor
 				if (SlateInfoPtr)
 				{
 					// This is only supported inside SLevelEditor viewports currently
-					TSharedPtr<ILevelViewport> LevelViewport = SlateInfoPtr->DestinationSlateViewport.Pin();
+					TSharedPtr<IAssetViewport> LevelViewport = SlateInfoPtr->DestinationSlateViewport.Pin();
 					if (LevelViewport.IsValid())
 					{
-						FLevelEditorViewportClient& EditorViewportClient = LevelViewport->GetLevelViewportClient();
+						FEditorViewportClient& EditorViewportClient = LevelViewport->GetAssetViewportClient();
 						OutViewTransform = FTransform(EditorViewportClient.GetViewRotation(), EditorViewportClient.GetViewLocation());
 						return true;
 					}
@@ -3634,10 +3717,10 @@ void UEditorEngine::ToggleBetweenPIEandSIE( bool bNewSession )
 	FSlatePlayInEditorInfo & SlatePlayInEditorSession = *SlateInfoPtr;
 
 	// This is only supported inside SLevelEditor viewports currently
-	TSharedPtr<ILevelViewport> LevelViewport = SlatePlayInEditorSession.DestinationSlateViewport.Pin();
+	TSharedPtr<IAssetViewport> LevelViewport = SlatePlayInEditorSession.DestinationSlateViewport.Pin();
 	if( ensure(LevelViewport.IsValid()) )
 	{
-		FLevelEditorViewportClient& EditorViewportClient = LevelViewport->GetLevelViewportClient();
+		FEditorViewportClient& EditorViewportClient = LevelViewport->GetAssetViewportClient();
 
 		// Toggle to pie if currently simulating
 		if( bIsSimulatingInEditor )
@@ -3732,7 +3815,7 @@ void UEditorEngine::ToggleBetweenPIEandSIE( bool bNewSession )
 		if (Actor.IsValid())
 		{
 			AActor* SimActor = EditorUtilities::GetSimWorldCounterpartActor(Actor.Get());
-			if (SimActor && !SimActor->bHidden)
+			if (SimActor && !SimActor->IsHidden())
 			{
 				SelectActor( SimActor, bIsSimulatingInEditor, false );
 			}
@@ -3803,7 +3886,7 @@ UWorld* UEditorEngine::CreatePIEWorldByDuplication(FWorldContext &WorldContext, 
 	const FScopedBusyCursor BusyCursor;
 
 	// Before loading the map, we need to set these flags to true so that postload will work properly
-	GIsPlayInEditorWorld = true;
+	TGuardValue<bool> OverrideIsPlayWorld(GIsPlayInEditorWorld, true);
 
 	const FName PlayWorldMapFName = FName(*PlayWorldMapName);
 	UWorld::WorldTypePreLoadMap.FindOrAdd(PlayWorldMapFName) = EWorldType::PIE;
@@ -3820,7 +3903,7 @@ UWorld* UEditorEngine::CreatePIEWorldByDuplication(FWorldContext &WorldContext, 
 
 	// check(GPlayInEditorID == -1 || GPlayInEditorID == WorldContext.PIEInstance);
 	// Currently GPlayInEditorID is not correctly reset after map loading, so it's not safe to assert here
-	GPlayInEditorID = WorldContext.PIEInstance;
+	FTemporaryPlayInEditorIDOverride IDHelper(WorldContext.PIEInstance);
 
 	{
 		double SDOStart = FPlatformTime::Seconds();
@@ -3876,14 +3959,10 @@ UWorld* UEditorEngine::CreatePIEWorldByDuplication(FWorldContext &WorldContext, 
 	// Clean up the world type list now that PostLoad has occurred
 	UWorld::WorldTypePreLoadMap.Remove(PlayWorldMapFName);
 
-	GPlayInEditorID = -1;
 	check( NewPIEWorld );
 	NewPIEWorld->FeatureLevel = InWorld->FeatureLevel;
 	PostCreatePIEWorld(NewPIEWorld);
 
-	// After loading the map, reset these so that things continue as normal
-	GIsPlayInEditorWorld = false;
-	
 	UE_LOG(LogPlayLevel, Log, TEXT("PIE: Created PIE world by copying editor world from %s to %s (%fs)"), *InWorld->GetPathName(), *NewPIEWorld->GetPathName(), float(FPlatformTime::Seconds() - StartTime));
 	return NewPIEWorld;
 }

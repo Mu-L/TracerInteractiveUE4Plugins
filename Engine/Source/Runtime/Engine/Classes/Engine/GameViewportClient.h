@@ -64,7 +64,7 @@ public:
 	UPROPERTY()
 	class UConsole* ViewportConsole;
 
-	/** @todo document */
+	/** Debug properties that have been added via one of the "displayall" commands */
 	UPROPERTY()
 	TArray<struct FDebugDisplayProperty> DebugProperties;
 
@@ -368,12 +368,26 @@ public:
 	virtual void LayoutPlayers();
 
 	/** Allows game code to disable splitscreen (useful when in menus) */
-	void SetDisableSplitscreenOverride( const bool bDisabled );
+	void SetForceDisableSplitscreen(const bool bDisabled);
 
 	/** Determines whether splitscreen is forced to be turned off */
-	bool GetDisableSplitscreenOverride() const
+	bool IsSplitscreenForceDisabled() const
 	{
 		return bDisableSplitScreenOverride;
+	}
+
+	/** Allows game code to disable splitscreen (useful when in menus) */
+	UE_DEPRECATED(4.24, "SetDisableSplitscreenOverride is deprecated. Please call UGameViewportClient::SetForceDisableSplitscreen(bDisabled) instead.")
+	void SetDisableSplitscreenOverride( const bool bDisabled )
+	{
+		SetForceDisableSplitscreen(bDisabled);
+	}
+
+	/** Determines whether splitscreen is forced to be turned off */
+	UE_DEPRECATED(4.24, "GetDisableSplitscreenOverride is deprecated. Please call UGameViewportClient::IsSplitscreenForceDisabled() instead.")
+	bool GetDisableSplitscreenOverride() const
+	{
+		return IsSplitscreenForceDisabled();
 	}
 
 	/** called before rending subtitles to allow the game viewport to determine the size of the subtitle area
@@ -846,6 +860,17 @@ private:
 
 	/** Finds available PNG cursor images */
 	bool LoadAvailableCursorPngs(TArray<TSharedPtr<FPngFileData>>& Results, const FString& InPathToCursorWithoutExtension);
+
+	/**
+	* Adds a DebugDisplayProperty to the DebugProperties array if it does not already exist. 
+	* @see FDebugDisplayProperty for more info on debug properties
+	* 
+	* @param Obj				Object that the debug property is on
+	* @param WithinClass		further limit the display to objects that have an Outer of WithinClass
+	* @param PropertyName		name of the property to display
+	* @param bSpecialProperty	whether PropertyName is a "special" value not directly mapping to a real property (e.g. state name)
+	*/
+	void AddDebugDisplayProperty(class UObject* Obj, TSubclassOf<class UObject> WithinClass, const FName& PropertyName, bool bSpecialProperty = false);
 
 private:
 	/** Slate window associated with this viewport client.  The same window may host more than one viewport client. */

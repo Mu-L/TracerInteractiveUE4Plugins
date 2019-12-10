@@ -13,7 +13,7 @@ public:
 	    : MSize(0) {}
 	TArrayCollection(const TArrayCollection& Other) = delete;
 	TArrayCollection(TArrayCollection&& Other) = delete;
-	~TArrayCollection() {}
+	virtual ~TArrayCollection() {}
 
 	int32 AddArray(TArrayCollectionArrayBase* Array)
 	{
@@ -89,7 +89,37 @@ protected:
 				Array->RemoveAt(Index, Count);
 			}
 		}
-		MSize = FMath::Min(static_cast<int32>(MSize) - Index, Count);
+		const int32 AvailableToRemove = MSize - Index;
+		MSize -= FMath::Min(AvailableToRemove, Count);
+	}
+
+	void RemoveAtSwapHelper(const int32 Index)
+	{
+		check(static_cast<uint32>(Index) < MSize);
+		for (TArrayCollectionArrayBase* Array : MArrays)
+		{
+			if (Array)
+			{
+				Array->RemoveAtSwap(Index);
+			}
+		}
+		MSize--;
+	}
+
+	void MoveToOtherArrayCollection(const int32 Index, TArrayCollection& Other)
+	{
+		check(MArrays.Num() == Other.MArrays.Num());
+		check(static_cast<uint32>(Index) < MSize);
+
+		for (int32 ArrayIdx = 0; ArrayIdx < MArrays.Num(); ++ArrayIdx)
+		{
+			if (TArrayCollectionArrayBase* Array = MArrays[ArrayIdx])
+			{
+				Array->MoveToOtherArray(Index, *Other.MArrays[ArrayIdx]);
+			}
+		}
+		++Other.MSize;
+		--MSize;
 	}
 
 private:

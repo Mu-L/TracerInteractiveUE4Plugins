@@ -6,7 +6,6 @@
 
 FSoundEffectBase::FSoundEffectBase()
 	: bChanged(false)
-	, Preset(nullptr)
 	, bIsRunning(false)
 	, bIsActive(false)
 {}
@@ -16,13 +15,13 @@ FSoundEffectBase::~FSoundEffectBase()
 }
 
 bool FSoundEffectBase::IsActive() const
-{ 
-	return bIsActive; 
+{
+	return bIsActive;
 }
 
 void FSoundEffectBase::SetEnabled(const bool bInIsEnabled)
-{ 
-	bIsActive = bInIsEnabled; 
+{
+	bIsActive = bInIsEnabled;
 }
 
 void FSoundEffectBase::SetPreset(USoundEffectPreset* Inpreset)
@@ -32,7 +31,7 @@ void FSoundEffectBase::SetPreset(USoundEffectPreset* Inpreset)
 		ClearPreset();
 
 		Preset = Inpreset;
-		if (Preset)
+		if (Preset.IsValid())
 		{
 			Preset->AddEffectInstance(this);
 		}
@@ -43,24 +42,36 @@ void FSoundEffectBase::SetPreset(USoundEffectPreset* Inpreset)
 	bChanged = true;
 }
 
-void FSoundEffectBase::ClearPreset()
+USoundEffectPreset* FSoundEffectBase::GetPreset()
 {
-	if (Preset)
+	return Preset.Get();
+}
+
+void FSoundEffectBase::ClearPreset(bool bRemoveFromPreset)
+{
+	if (Preset.IsValid())
 	{
-		Preset->RemoveEffectInstance(this);
-		Preset = nullptr;
+		if (bRemoveFromPreset)
+		{
+			Preset->RemoveEffectInstance(this);
+		}
+		Preset.Reset();
 	}
 }
 
-void FSoundEffectBase::Update()
+bool FSoundEffectBase::Update()
 {
 	PumpPendingMessages();
 
-	if (bChanged && Preset)
+	if (bChanged && Preset.IsValid())
 	{
 		OnPresetChanged();
 		bChanged = false;
+
+		return true;
 	}
+
+	return false;
 }
 
 bool FSoundEffectBase::IsPreset(USoundEffectPreset* InPreset) const
@@ -72,6 +83,7 @@ void FSoundEffectBase::EffectCommand(TFunction<void()> Command)
 {
 	CommandQueue.Enqueue(MoveTemp(Command));
 }
+
 void FSoundEffectBase::PumpPendingMessages()
 {
 	// Pumps the command queue

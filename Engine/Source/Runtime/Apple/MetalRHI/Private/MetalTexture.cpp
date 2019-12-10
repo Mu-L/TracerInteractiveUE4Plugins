@@ -22,6 +22,13 @@ FAutoConsoleVariableRef CVarMetalMaxOutstandingAsyncTexUploads(
 															   ECVF_ReadOnly|ECVF_RenderThreadSafe
 															   );
 
+int32 GMetalForceIOSTexturesShared = 1;
+FAutoConsoleVariableRef CVarMetalForceIOSTexturesShared(
+														TEXT("rhi.Metal.ForceIOSTexturesShared"),
+														GMetalForceIOSTexturesShared,
+														TEXT("If true, forces all textures to be Shared on iOS"),
+														ECVF_RenderThreadSafe);
+
 
 /** Texture reference class. */
 class FMetalTextureReference : public FRHITextureReference
@@ -534,7 +541,7 @@ FMetalSurface::FMetalSurface(FMetalSurface& Source, NSRange MipRange)
 , SizeZ(Source.SizeZ)
 , bIsCubemap(Source.bIsCubemap)
 , Flags(Source.Flags)
-, WriteLock(0)
+, BufferLocks(0)
 , TotalTextureSize(0)
 , Viewport(nullptr)
 , ImageSurfaceRef(nullptr)
@@ -556,7 +563,7 @@ FMetalSurface::FMetalSurface(FMetalSurface& Source, NSRange const MipRange, EPix
 , SizeZ(Source.SizeZ)
 , bIsCubemap(Source.bIsCubemap)
 , Flags(Source.Flags)
-, WriteLock(0)
+, BufferLocks(0)
 , TotalTextureSize(0)
 , Viewport(nullptr)
 , ImageSurfaceRef(nullptr)
@@ -663,7 +670,7 @@ FMetalSurface::FMetalSurface(ERHIResourceType ResourceType, EPixelFormat Format,
 , SizeZ(InSizeZ)
 , bIsCubemap(false)
 , Flags(InFlags)
-, WriteLock(0)
+, BufferLocks(0)
 , TotalTextureSize(0)
 , Viewport(nullptr)
 , ImageSurfaceRef(nullptr)
@@ -799,8 +806,21 @@ FMetalSurface::FMetalSurface(ERHIResourceType ResourceType, EPixelFormat Format,
 		{
 			check(!(Flags & TexCreate_CPUReadback));
 			Desc.SetCpuCacheMode(mtlpp::CpuCacheMode::DefaultCache);
+#if PLATFORM_MAC
 			Desc.SetStorageMode(mtlpp::StorageMode::Private);
 			Desc.SetResourceOptions((mtlpp::ResourceOptions)(mtlpp::ResourceOptions::CpuCacheModeDefaultCache|mtlpp::ResourceOptions::StorageModePrivate));
+#else
+			if(GMetalForceIOSTexturesShared)
+			{
+				Desc.SetStorageMode(mtlpp::StorageMode::Shared);
+				Desc.SetResourceOptions((mtlpp::ResourceOptions)(mtlpp::ResourceOptions::CpuCacheModeDefaultCache|mtlpp::ResourceOptions::StorageModeShared));
+			}
+			else
+			{
+				Desc.SetStorageMode(mtlpp::StorageMode::Private);
+				Desc.SetResourceOptions((mtlpp::ResourceOptions)(mtlpp::ResourceOptions::CpuCacheModeDefaultCache|mtlpp::ResourceOptions::StorageModePrivate));
+			}
+#endif
 		}
 		else
 		{
@@ -811,21 +831,40 @@ FMetalSurface::FMetalSurface(ERHIResourceType ResourceType, EPixelFormat Format,
 			Desc.SetResourceOptions((mtlpp::ResourceOptions)(mtlpp::ResourceOptions::CpuCacheModeWriteCombined|mtlpp::ResourceOptions::StorageModePrivate));
 #else
 			Desc.SetCpuCacheMode(mtlpp::CpuCacheMode::DefaultCache);
+			if(GMetalForceIOSTexturesShared)
+			{
+				Desc.SetStorageMode(mtlpp::StorageMode::Shared);
+				Desc.SetResourceOptions((mtlpp::ResourceOptions)(mtlpp::ResourceOptions::CpuCacheModeDefaultCache|mtlpp::ResourceOptions::StorageModeShared));
+			}
 			// No private storage for PVRTC as it messes up the blit-encoder usage.
 			// note: this is set to always be on and will be re-addressed in a future release
-            if (IsPixelFormatPVRTCCompressed(Format))
-            {
-                Desc.SetStorageMode(mtlpp::StorageMode::Shared);
-                Desc.SetResourceOptions((mtlpp::ResourceOptions)(mtlpp::ResourceOptions::CpuCacheModeDefaultCache|mtlpp::ResourceOptions::StorageModeShared));
-            }
-            else
+			else
 			{
-				Desc.SetStorageMode(mtlpp::StorageMode::Private);
-				Desc.SetResourceOptions((mtlpp::ResourceOptions)(mtlpp::ResourceOptions::CpuCacheModeDefaultCache|mtlpp::ResourceOptions::StorageModePrivate));
+				if (IsPixelFormatPVRTCCompressed(Format))
+				{
+					Desc.SetStorageMode(mtlpp::StorageMode::Shared);
+					Desc.SetResourceOptions((mtlpp::ResourceOptions)(mtlpp::ResourceOptions::CpuCacheModeDefaultCache|mtlpp::ResourceOptions::StorageModeShared));
+				}
+				else
+				{
+					Desc.SetStorageMode(mtlpp::StorageMode::Private);
+					Desc.SetResourceOptions((mtlpp::ResourceOptions)(mtlpp::ResourceOptions::CpuCacheModeDefaultCache|mtlpp::ResourceOptions::StorageModePrivate));
+				}
 			}
 #endif
 		}
 		
+#if PLATFORM_IOS
+		if (Flags & TexCreate_Memoryless)
+		{
+			ensure(Flags & (TexCreate_RenderTargetable | TexCreate_DepthStencilTargetable));
+			ensure(!(Flags & (TexCreate_CPUReadback | TexCreate_CPUWritable)));
+			ensure(!(Flags & TexCreate_UAV));
+			Desc.SetStorageMode(mtlpp::StorageMode::Memoryless);
+			Desc.SetResourceOptions((mtlpp::ResourceOptions)(mtlpp::ResourceOptions::CpuCacheModeDefaultCache | mtlpp::ResourceOptions::StorageModeMemoryless));
+		}
+#endif
+
 		static mtlpp::ResourceOptions GeneralResourceOption = FMetalCommandQueue::GetCompatibleResourceOptions(mtlpp::ResourceOptions::HazardTrackingModeUntracked);
 		Desc.SetResourceOptions((mtlpp::ResourceOptions)(Desc.GetResourceOptions() | GeneralResourceOption));
 	}
@@ -897,7 +936,7 @@ FMetalSurface::FMetalSurface(ERHIResourceType ResourceType, EPixelFormat Format,
 			// lock, copy, unlock
 			void* LockedData = Lock(0, 0, RLM_WriteOnly, Stride);
 			FMemory::Memcpy(LockedData, BulkData->GetResourceBulkData(), BulkData->GetResourceBulkDataSize());
-			Unlock(0, 0);
+			Unlock(0, 0, false);
 			
 			// bulk data can be unloaded now
 			BulkData->Discard();
@@ -1137,25 +1176,23 @@ FMetalSurface::~FMetalSurface()
 	}
 	
 	ImageSurfaceRef = nullptr;
-	for(uint32 i = 0; i < 16; i++)
-	{
-		if(LockedMemory[i])
-		{
-			SafeReleaseMetalBuffer(LockedMemory[i]);
-			LockedMemory[i] = nullptr;
-		}
-	}
 }
 
-FMetalBuffer FMetalSurface::AllocSurface(uint32 MipIndex, uint32 ArrayIndex, EResourceLockMode LockMode, uint32& DestStride)
+id <MTLBuffer> FMetalSurface::AllocSurface(uint32 MipIndex, uint32 ArrayIndex, EResourceLockMode LockMode, uint32& DestStride, bool SingleLayer /*= false*/)
 {
+	check(IsInRenderingThread());
+
 	// get size and stride
-	uint32 MipBytes = GetMipSize(MipIndex, &DestStride, false);
+	uint32 MipBytes = GetMipSize(MipIndex, &DestStride, SingleLayer);
 	
 	// allocate some temporary memory
-	mtlpp::ResourceOptions ResMode = FMetalCommandQueue::GetCompatibleResourceOptions((mtlpp::ResourceOptions)(mtlpp::ResourceOptions::StorageModeShared | (!(PLATFORM_MAC && PixelFormat == PF_G8 && (Flags & TexCreate_SRGB)) ? mtlpp::ResourceOptions::CpuCacheModeWriteCombined : 0)));
+	// This should really be pooled and texture transfers should be their own pool
+	id <MTLDevice> Device = GetMetalDeviceContext().GetDevice();
+	id <MTLBuffer> Buffer = [Device newBufferWithLength:MipBytes options:MTLResourceStorageModeShared];
+	Buffer.label = @"Temporary Surface Backing";
 	
-	FMetalBuffer Buffer = GetMetalDeviceContext().GetResourceHeap().CreateBuffer(MipBytes, BufferOffsetAlignment, BUF_Dynamic, ResMode);
+	// Note: while the lock is active, this map owns the backing store.
+	GRHILockTracker.Lock(this, Buffer, MipIndex, 0, LockMode, false);
 	
 #if PLATFORM_MAC
 	// Expand R8_sRGB into RGBA8_sRGB for Mac.
@@ -1170,12 +1207,12 @@ FMetalBuffer FMetalSurface::AllocSurface(uint32 MipIndex, uint32 ArrayIndex, ERe
 	return Buffer;
 }
 
-void FMetalSurface::UpdateSurface(FMetalBuffer& Buffer, uint32 MipIndex, uint32 ArrayIndex)
+void FMetalSurface::UpdateSurfaceAndDestroySourceBuffer(id <MTLBuffer> SourceBuffer, uint32 MipIndex, uint32 ArrayIndex)
 {
 #if STATS
 	uint64 Start = FPlatformTime::Cycles64();
 #endif
-	check(Buffer);
+	check(SourceBuffer);
 	
 	uint32 Stride;
 	uint32 BytesPerImage = GetMipSize(MipIndex, &Stride, true);
@@ -1196,7 +1233,8 @@ void FMetalSurface::UpdateSurface(FMetalBuffer& Buffer, uint32 MipIndex, uint32 
 	if (PixelFormat == PF_G8 && (Flags & TexCreate_SRGB) && Type == RRT_Texture2D)
 	{
 		TArray<uint8> Data;
-		uint8* ExpandedMem = (uint8*)Buffer.GetContents();
+		uint8* ExpandedMem = (uint8*) SourceBuffer.contents;
+		check(ExpandedMem);
 		Data.Append(ExpandedMem, BytesPerImage);
 		uint32 SrcStride = FMath::Max<uint32>(SizeX >> MipIndex, 1);
 		for(uint y = 0; y < FMath::Max<uint32>(SizeY >> MipIndex, 1); y++)
@@ -1217,6 +1255,8 @@ void FMetalSurface::UpdateSurface(FMetalBuffer& Buffer, uint32 MipIndex, uint32 
 	if(Texture.GetStorageMode() == mtlpp::StorageMode::Private)
 	{
 		SCOPED_AUTORELEASE_POOL;
+		
+		FMetalBuffer Buffer(SourceBuffer);
 		
 		int64 Size = BytesPerImage * Region.size.depth * FMath::Max(1u, ArrayIndex);
 		
@@ -1242,9 +1282,9 @@ void FMetalSurface::UpdateSurface(FMetalBuffer& Buffer, uint32 MipIndex, uint32 
 			{
 				FPlatformAtomics::InterlockedExchange(Cycles, FPlatformTime::Cycles64());
 			};
-			mtlpp::CommandBufferHandler CompletionHandler = [Size, Cycles](mtlpp::CommandBuffer const&)
+			mtlpp::CommandBufferHandler CompletionHandler = [SourceBuffer, Size, Cycles](mtlpp::CommandBuffer const&)
 	#else
-			mtlpp::CommandBufferHandler CompletionHandler = [Size](mtlpp::CommandBuffer const&)
+			mtlpp::CommandBufferHandler CompletionHandler = [SourceBuffer, Size](mtlpp::CommandBuffer const&)
 	#endif
 			{
 				FPlatformAtomics::InterlockedAdd(&ActiveUploads, -Size);
@@ -1253,17 +1293,20 @@ void FMetalSurface::UpdateSurface(FMetalBuffer& Buffer, uint32 MipIndex, uint32 
 				delete Cycles;
 				FPlatformAtomics::InterlockedAdd(&GMetalTexturePageOnTime, Taken);
 	#endif
+				[SourceBuffer release];
 			};
 			GetMetalDeviceContext().SubmitAsyncCommands(ScheduledHandler, CompletionHandler, bWait);
 			
 		}
 		else
 		{
-			mtlpp::CommandBufferHandler CompletionHandler = [Size](mtlpp::CommandBuffer const&) { FPlatformAtomics::InterlockedAdd(&ActiveUploads, -Size); };
+			mtlpp::CommandBufferHandler CompletionHandler = [SourceBuffer, Size](mtlpp::CommandBuffer const&)
+			{
+				FPlatformAtomics::InterlockedAdd(&ActiveUploads, -Size);
+				[SourceBuffer release];
+			};
 			GetMetalDeviceContext().GetCurrentRenderPass().AddCompletionHandler(CompletionHandler);
 		}
-		
-		GetMetalDeviceContext().ReleaseBuffer(Buffer);
 		
 		INC_DWORD_STAT_BY(STAT_MetalTextureMemUpdate, Size);
 		
@@ -1282,7 +1325,8 @@ void FMetalSurface::UpdateSurface(FMetalBuffer& Buffer, uint32 MipIndex, uint32 
 		}
 #endif
 		
-		MTLPP_VALIDATE(mtlpp::Texture, Texture, SafeGetRuntimeDebuggingLevel() >= EMetalDebugLevelValidation, Replace(Region, MipIndex, ArrayIndex, MTLPP_VALIDATE(mtlpp::Buffer, Buffer, SafeGetRuntimeDebuggingLevel() >= EMetalDebugLevelValidation, GetContents()), Stride, BytesPerImage));
+		MTLPP_VALIDATE(mtlpp::Texture, Texture, SafeGetRuntimeDebuggingLevel() >= EMetalDebugLevelValidation, Replace(Region, MipIndex, ArrayIndex, SourceBuffer.contents, Stride, BytesPerImage));
+		[SourceBuffer release];
 		
 		INC_DWORD_STAT_BY(STAT_MetalTextureMemUpdate, BytesPerImage);
 	}
@@ -1294,16 +1338,14 @@ void FMetalSurface::UpdateSurface(FMetalBuffer& Buffer, uint32 MipIndex, uint32 
 #endif
 }
 
-void* FMetalSurface::Lock(uint32 MipIndex, uint32 ArrayIndex, EResourceLockMode LockMode, uint32& DestStride)
+void* FMetalSurface::Lock(uint32 MipIndex, uint32 ArrayIndex, EResourceLockMode LockMode, uint32& DestStride, bool SingleLayer /*= false*/)
 {
 	// get size and stride
 	uint32 MipBytes = GetMipSize(MipIndex, &DestStride, false);
 	
 	// allocate some temporary memory
-	if(!LockedMemory[MipIndex])
-	{
-		LockedMemory[MipIndex] = AllocSurface(MipIndex, ArrayIndex, LockMode, DestStride);
-	}
+	id <MTLBuffer> Buffer = AllocSurface(MipIndex, ArrayIndex, LockMode, DestStride, SingleLayer);
+	FMetalBuffer SourceData(Buffer);
 	
 	switch(LockMode)
 	{
@@ -1325,7 +1367,7 @@ void* FMetalSurface::Lock(uint32 MipIndex, uint32 ArrayIndex, EResourceLockMode 
 			
 			if (Texture.GetStorageMode() == mtlpp::StorageMode::Private)
 			{
-				GetMetalDeviceContext().CopyFromTextureToBuffer(Texture, ArrayIndex, MipIndex, Region.origin, Region.size, LockedMemory[MipIndex], 0, DestStride, MipBytes, mtlpp::BlitOption::None);
+				GetMetalDeviceContext().CopyFromTextureToBuffer(Texture, ArrayIndex, MipIndex, Region.origin, Region.size, SourceData, 0, DestStride, MipBytes, mtlpp::BlitOption::None);
 				
 				//kick the current command buffer.
 				GetMetalDeviceContext().SubmitCommandBufferAndWait();
@@ -1355,7 +1397,7 @@ void* FMetalSurface::Lock(uint32 MipIndex, uint32 ArrayIndex, EResourceLockMode 
 					BytesPerRow = 0;
 					MipBytes = 0;
 				}
-				MTLPP_VALIDATE(mtlpp::Texture, Texture, SafeGetRuntimeDebuggingLevel() >= EMetalDebugLevelValidation, GetBytes(MTLPP_VALIDATE(mtlpp::Buffer, LockedMemory[MipIndex], SafeGetRuntimeDebuggingLevel() >= EMetalDebugLevelValidation, GetContents()), BytesPerRow, MipBytes, Region, MipIndex, ArrayIndex));
+				MTLPP_VALIDATE(mtlpp::Texture, Texture, SafeGetRuntimeDebuggingLevel() >= EMetalDebugLevelValidation, GetBytes(MTLPP_VALIDATE(mtlpp::Buffer, SourceData, SafeGetRuntimeDebuggingLevel() >= EMetalDebugLevelValidation, GetContents()), BytesPerRow, MipBytes, Region, MipIndex, ArrayIndex));
 			}
 			
 #if PLATFORM_MAC
@@ -1363,7 +1405,7 @@ void* FMetalSurface::Lock(uint32 MipIndex, uint32 ArrayIndex, EResourceLockMode 
 			if (PixelFormat == PF_G8 && (Flags & TexCreate_SRGB) && Type == RRT_Texture2D)
 			{
 				TArray<uint8> Data;
-				uint8* ExpandedMem = (uint8*)LockedMemory[MipIndex].GetContents();
+				uint8* ExpandedMem = (uint8*)SourceData.GetContents();
 				Data.Append(ExpandedMem, MipBytes);
 				uint32 SrcStride = DestStride;
 				DestStride = FMath::Max<uint32>(SizeX >> MipIndex, 1);
@@ -1383,7 +1425,7 @@ void* FMetalSurface::Lock(uint32 MipIndex, uint32 ArrayIndex, EResourceLockMode 
 		}
 		case RLM_WriteOnly:
 		{
-			WriteLock |= 1 << MipIndex;
+			BufferLocks |= 1 << MipIndex;
 			break;
 		}
 		default:
@@ -1391,16 +1433,24 @@ void* FMetalSurface::Lock(uint32 MipIndex, uint32 ArrayIndex, EResourceLockMode 
 			break;
 	}
 	
-	return LockedMemory[MipIndex].GetContents();
+	return SourceData.GetContents();
 }
 
-void FMetalSurface::Unlock(uint32 MipIndex, uint32 ArrayIndex)
+void FMetalSurface::Unlock(uint32 MipIndex, uint32 ArrayIndex, bool bTryAsync)
 {
-	if(WriteLock & (1 << MipIndex))
+	check(IsInRenderingThread());
+	BufferLocks &= ~(1 << MipIndex);
+	
+	FRHILockTracker::FLockParams Params = GRHILockTracker.Unlock(this, MipIndex);
+	id <MTLBuffer> SourceData = (id <MTLBuffer>) Params.Buffer;
+	
+	if(bTryAsync)
 	{
-		WriteLock &= ~(1 << MipIndex);
-		UpdateSurface(LockedMemory[MipIndex], MipIndex, ArrayIndex);
-		LockedMemory[MipIndex] = nullptr;
+		AsyncUnlock(SourceData, MipIndex, ArrayIndex);
+	}
+	else
+	{
+		UpdateSurfaceAndDestroySourceBuffer(SourceData, MipIndex, ArrayIndex);
 	}
 }
 
@@ -1420,18 +1470,16 @@ void* FMetalSurface::AsyncLock(class FRHICommandListImmediate& RHICmdList, uint3
 			RHICmdList.ImmediateFlush(EImmediateFlushType::FlushRHIThread);
 		}
 		BufferData = Lock(MipIndex, ArrayIndex, LockMode, DestStride);
-		
-		GRHILockTracker.Lock(this, BufferData, MipIndex, 0, LockMode, bDirectLock);
 	}
 	else
 	{
-		FMetalBuffer* Buffer = new FMetalBuffer(AllocSurface(MipIndex, 0, LockMode, DestStride));
-		check(Buffer && Buffer->GetPtr());
+		id <MTLBuffer> Buffer = AllocSurface(MipIndex, 0, LockMode, DestStride);
+		check(Buffer);
 		
-		BufferData = Buffer->GetContents();
-		
-		GRHILockTracker.Lock(this, Buffer, MipIndex, 0, LockMode, bDirectLock);
+		BufferData = Buffer.contents;
 	}
+	
+	check(BufferData);
 	
 	return BufferData;
 }
@@ -1439,49 +1487,38 @@ void* FMetalSurface::AsyncLock(class FRHICommandListImmediate& RHICmdList, uint3
 struct FMetalRHICommandUnlockTextureUpdate final : public FRHICommand<FMetalRHICommandUnlockTextureUpdate>
 {
 	FMetalSurface* Surface;
-	FMetalBuffer* UpdateData;
+	id <MTLBuffer> UpdateData;
 	uint32 MipIndex;
 	
-	FORCEINLINE_DEBUGGABLE FMetalRHICommandUnlockTextureUpdate(FMetalSurface* InSurface, FMetalBuffer* InUpdateData, uint32 InMipIndex)
+	FORCEINLINE_DEBUGGABLE FMetalRHICommandUnlockTextureUpdate(FMetalSurface* InSurface, id <MTLBuffer> InUpdateData, uint32 InMipIndex)
 	: Surface(InSurface)
 	, UpdateData(InUpdateData)
 	, MipIndex(InMipIndex)
 	{
+		[UpdateData retain];
 	}
 	
 	void Execute(FRHICommandListBase& CmdList)
 	{
-		Surface->UpdateSurface(*UpdateData, MipIndex, 0);
+		Surface->UpdateSurfaceAndDestroySourceBuffer(UpdateData, MipIndex, 0);
 	}
 	
 	virtual ~FMetalRHICommandUnlockTextureUpdate()
 	{
-		SafeReleaseMetalBuffer(*UpdateData);
-		delete UpdateData;
+		[UpdateData release];
 	}
 };
 
-void FMetalSurface::AsyncUnlock(class FRHICommandListImmediate& RHICmdList, uint32 MipIndex, uint32 ArrayIndex)
+void FMetalSurface::AsyncUnlock(id <MTLBuffer> SourceData, uint32 MipIndex, uint32 ArrayIndex)
 {
-	FRHILockTracker::FLockParams Params = GRHILockTracker.Unlock(this, MipIndex);
-	bool bDoDirectUnlock = Params.bDirectLock;
-	const bool bUnlockForCreate = Params.bCreateLock;
-	
-	if (RHICmdList.Bypass() || !IsRunningRHIInSeparateThread() || bDoDirectUnlock)
+	FRHICommandListImmediate& RHICmdList = FRHICommandListExecutor::GetImmediateCommandList();
+	if (RHICmdList.Bypass() || !IsRunningRHIInSeparateThread())
 	{
-		if (bDoDirectUnlock)
-		{
-			Unlock(MipIndex, ArrayIndex);
-		}
-		else
-		{
-			FMetalRHICommandUnlockTextureUpdate UpdateCommand(this, (FMetalBuffer*)Params.Buffer, Params.Offset);
-			UpdateCommand.Execute(RHICmdList);
-		}
+		UpdateSurfaceAndDestroySourceBuffer(SourceData, MipIndex, ArrayIndex);
 	}
 	else
 	{
-		new (RHICmdList.AllocCommand<FMetalRHICommandUnlockTextureUpdate>()) FMetalRHICommandUnlockTextureUpdate(this, (FMetalBuffer*)Params.Buffer, Params.Offset);
+		new (RHICmdList.AllocCommand<FMetalRHICommandUnlockTextureUpdate>()) FMetalRHICommandUnlockTextureUpdate(this, SourceData, MipIndex);
 	}
 }
 
@@ -1855,7 +1892,7 @@ void FMetalDynamicRHI::UnlockTexture2D_RenderThread(class FRHICommandListImmedia
 		check(IsInRenderingThread());
 		
 		FMetalTexture2D* TextureMTL = ResourceCast(Texture);
-		TextureMTL->Surface.AsyncUnlock(RHICmdList, MipIndex, 0);
+		TextureMTL->Surface.Unlock(MipIndex, 0, true);
 	}
 }
 
@@ -1872,7 +1909,7 @@ void FMetalDynamicRHI::RHIUnlockTexture2D(FRHITexture2D* TextureRHI,uint32 MipIn
 {
 	@autoreleasepool {
 		FMetalTexture2D* Texture = ResourceCast(TextureRHI);
-		Texture->Surface.Unlock(MipIndex, 0);
+		Texture->Surface.Unlock(MipIndex, 0, false);
 	}
 }
 
@@ -1888,7 +1925,7 @@ void FMetalDynamicRHI::RHIUnlockTexture2DArray(FRHITexture2DArray* TextureRHI,ui
 {
 	@autoreleasepool {
 		FMetalTexture2DArray* Texture = ResourceCast(TextureRHI);
-		Texture->Surface.Unlock(MipIndex, TextureIndex);
+		Texture->Surface.Unlock(MipIndex, TextureIndex, false);
 	}
 }
 
@@ -2244,7 +2281,7 @@ void* FMetalDynamicRHI::RHILockTextureCubeFace(FRHITextureCube* TextureCubeRHI,u
 	@autoreleasepool {
 		FMetalTextureCube* TextureCube = ResourceCast(TextureCubeRHI);
 		uint32 MetalFace = GetMetalCubeFace((ECubeFace)FaceIndex);
-		return TextureCube->Surface.Lock(MipIndex, MetalFace + (6 * ArrayIndex), LockMode, DestStride);
+		return TextureCube->Surface.Lock(MipIndex, MetalFace + (6 * ArrayIndex), LockMode, DestStride, true);
 	}
 }
 
@@ -2253,7 +2290,7 @@ void FMetalDynamicRHI::RHIUnlockTextureCubeFace(FRHITextureCube* TextureCubeRHI,
 	@autoreleasepool {
 		FMetalTextureCube* TextureCube = ResourceCast(TextureCubeRHI);
 		uint32 MetalFace = GetMetalCubeFace((ECubeFace)FaceIndex);
-		TextureCube->Surface.Unlock(MipIndex, MetalFace + (ArrayIndex * 6));
+		TextureCube->Surface.Unlock(MipIndex, MetalFace + (ArrayIndex * 6), false);
 	}
 }
 
@@ -2303,7 +2340,7 @@ FTexture2DArrayRHIRef FMetalDynamicRHI::RHICreateTexture2DArray_RenderThread(cla
 			FMetalTexture2DArray* TextureMTL = ResourceCast(Result.GetReference());
 			void* LockedData = TextureMTL->Surface.AsyncLock(RHICmdList, 0, 0, RLM_WriteOnly, Stride, false);
 			FMemory::Memcpy(LockedData, CreateInfo.BulkData->GetResourceBulkData(), CreateInfo.BulkData->GetResourceBulkDataSize());
-			TextureMTL->Surface.AsyncUnlock(RHICmdList, 0, 0);
+			TextureMTL->Surface.Unlock(0, 0, true);
 			
 			// bulk data can be unloaded now
 			CreateInfo.BulkData->Discard();
@@ -2330,7 +2367,7 @@ FTexture3DRHIRef FMetalDynamicRHI::RHICreateTexture3D_RenderThread(class FRHICom
 			FMetalTexture3D* TextureMTL = ResourceCast(Result.GetReference());
 			void* LockedData = TextureMTL->Surface.AsyncLock(RHICmdList, 0, 0, RLM_WriteOnly, Stride, false);
 			FMemory::Memcpy(LockedData, CreateInfo.BulkData->GetResourceBulkData(), CreateInfo.BulkData->GetResourceBulkDataSize());
-			TextureMTL->Surface.AsyncUnlock(RHICmdList, 0, 0);
+			TextureMTL->Surface.Unlock(0, 0, true);
 			
 			// bulk data can be unloaded now
 			CreateInfo.BulkData->Discard();

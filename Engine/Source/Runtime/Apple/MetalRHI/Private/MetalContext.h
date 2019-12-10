@@ -22,6 +22,7 @@
 #define NUM_SAFE_FRAMES 4
 
 class FMetalRHICommandContext;
+class FMetalPipelineStateCacheManager;
 
 class FMetalContext
 {
@@ -92,7 +93,9 @@ public:
     bool AsyncCopyFromBufferToTexture(FMetalBuffer const& Buffer, uint32 sourceOffset, uint32 sourceBytesPerRow, uint32 sourceBytesPerImage, mtlpp::Size sourceSize, FMetalTexture const& toTexture, uint32 destinationSlice, uint32 destinationLevel, mtlpp::Origin destinationOrigin, mtlpp::BlitOption options);
     
     bool AsyncCopyFromTextureToTexture(FMetalTexture const& Texture, uint32 sourceSlice, uint32 sourceLevel, mtlpp::Origin sourceOrigin, mtlpp::Size sourceSize, FMetalTexture const& toTexture, uint32 destinationSlice, uint32 destinationLevel, mtlpp::Origin destinationOrigin);
-    
+	
+	bool CanAsyncCopyToBuffer(FMetalBuffer const& DestinationBuffer);
+	
     void AsyncCopyFromBufferToBuffer(FMetalBuffer const& SourceBuffer, NSUInteger SourceOffset, FMetalBuffer const& DestinationBuffer, NSUInteger DestinationOffset, NSUInteger Size);
 	
     void AsyncGenerateMipmapsForTexture(FMetalTexture const& Texture);
@@ -121,7 +124,7 @@ public:
 	TRefCountPtr<FMetalFence> const& GetParallelPassEndFence(void) const;
 	
 	void InitFrame(bool const bImmediateContext, uint32 Index, uint32 Num);
-	void FinishFrame();
+	void FinishFrame(bool const bImmediateContext);
 
 	// Track Write->Read transitions for TBDR Fragment->Verex fencing
 	void TransitionResources(FRHIUnorderedAccessView** InUAVs, int32 NumUAVs);
@@ -222,6 +225,12 @@ public:
 	/** Get the index of the bound Metal device in the global list of rendering devices. */
 	uint32 GetDeviceIndex(void) const;
     
+	/** Device frame index accessor. */
+	uint64 GetDeviceFrameIndex() const
+	{
+		return DeviceFrameIndex;
+	}
+	
 #if METAL_DEBUG_OPTIONS
     void AddActiveBuffer(FMetalBuffer const& Buffer);
     void RemoveActiveBuffer(FMetalBuffer const& Buffer);
@@ -303,4 +312,10 @@ private:
 	
 	/** Whether we presented this frame - only used to track when to introduce debug markers */
 	bool bPresented;
+	
+	/** PSO cache manager */
+	FMetalPipelineStateCacheManager* PSOManager;
+
+	/** Device frame index, glorified frame counter in the device namespace. */
+	uint64 DeviceFrameIndex;
 };

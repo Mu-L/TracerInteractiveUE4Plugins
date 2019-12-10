@@ -24,7 +24,7 @@
 
 // UnrealEd includes
 #include "Editor.h"
-#include "Toolkits/AssetEditorManager.h"
+
 #include "ObjectTools.h"
 #include "UObject/GCObjectScopeGuard.h"
 
@@ -40,8 +40,9 @@
 #include "Widgets/Input/SButton.h"
 
 // LevelEditor includes
-#include "ILevelViewport.h"
+#include "IAssetViewport.h"
 #include "LevelEditor.h"
+#include "Subsystems/AssetEditorSubsystem.h"
 
 #define LOCTEXT_NAMESPACE "TakeRecorder"
 
@@ -162,7 +163,7 @@ private:
 		{
 			ETakeRecorderState NewTakeRecorderState = Recorder->GetState();
 
-			if (NewTakeRecorderState == ETakeRecorderState::CountingDown)
+			if (NewTakeRecorderState == ETakeRecorderState::CountingDown || NewTakeRecorderState == ETakeRecorderState::Started)
 			{
 				// When counting down the text may change on tick
 				TextBlock->SetText(GetDetailText());
@@ -221,6 +222,22 @@ private:
 			else if (Recorder->GetState() == ETakeRecorderState::Cancelled)
 			{
 				return LOCTEXT("CancelledText", "Recording Cancelled");
+			}
+
+			ULevelSequence* LevelSequence = Recorder->GetSequence();
+
+			UTakeMetaData* TakeMetaData = LevelSequence ? LevelSequence->FindMetaData<UTakeMetaData>() : nullptr;
+
+			if (TakeMetaData)
+			{
+				FFrameRate FrameRate = TakeMetaData->GetFrameRate();
+				FTimespan RecordingDuration = FDateTime::UtcNow() - TakeMetaData->GetTimestamp();
+
+				FFrameNumber TotalFrames = FFrameNumber(static_cast<int32>(FrameRate.AsDecimal() * RecordingDuration.GetTotalSeconds()));
+
+				FTimecode Timecode = FTimecode::FromFrameNumber(TotalFrames, FrameRate, FTimecode::IsDropFormatTimecodeSupported(FrameRate));
+
+				return FText::Format(LOCTEXT("RecordingTimecodeText", "Recording...{0}"), FText::FromString(Timecode.ToString()));
 			}
 		}
 
@@ -329,13 +346,17 @@ public:
 FTickableTakeRecorder TickableTakeRecorder;
 
 // Static members of UTakeRecorder
-TStrongObjectPtr<UTakeRecorder> CurrentRecorder;
+static TStrongObjectPtr<UTakeRecorder>& GetCurrentRecorder()
+{
+	static TStrongObjectPtr<UTakeRecorder> CurrentRecorder;
+	return CurrentRecorder;
+}
 FOnTakeRecordingInitialized UTakeRecorder::OnRecordingInitializedEvent;
 
 // Static functions for UTakeRecorder
 UTakeRecorder* UTakeRecorder::GetActiveRecorder()
 {
-	return CurrentRecorder.Get();
+	return GetCurrentRecorder().Get();
 }
 
 FOnTakeRecordingInitialized& UTakeRecorder::OnRecordingInitialized()
@@ -345,13 +366,13 @@ FOnTakeRecordingInitialized& UTakeRecorder::OnRecordingInitialized()
 
 bool UTakeRecorder::SetActiveRecorder(UTakeRecorder* NewActiveRecorder)
 {
-	if (CurrentRecorder.IsValid())
+	if (GetCurrentRecorder().IsValid())
 	{
 		return false;
 	}
 
-	CurrentRecorder.Reset(NewActiveRecorder);
-	TickableTakeRecorder.WeakRecorder = CurrentRecorder.Get();
+	GetCurrentRecorder().Reset(NewActiveRecorder);
+	TickableTakeRecorder.WeakRecorder = GetCurrentRecorder().Get();
 	OnRecordingInitializedEvent.Broadcast(NewActiveRecorder);
 	return true;
 }
@@ -387,6 +408,10 @@ bool UTakeRecorder::Initialize(ULevelSequence* LevelSequenceBase, UTakeRecorderS
 		}
 		return false;
 	}
+
+	OnRecordingPreInitializeEvent.Broadcast(this);
+
+	UTakeRecorderBlueprintLibrary::OnTakeRecorderPreInitialize();
 
 	if (!CreateDestinationAsset(*InParameters.Project.GetTakeAssetPath(), LevelSequenceBase, Sources, MetaData, OutError))
 	{
@@ -504,6 +529,7 @@ bool UTakeRecorder::CreateDestinationAsset(const TCHAR* AssetPathFormat, ULevelS
 
 	FDateTime UtcNow = FDateTime::UtcNow();
 	AssetMetaData->SetTimestamp(UtcNow);
+	AssetMetaData->SetFrameRate(FApp::GetTimecodeFrameRate());
 
 	// @todo: duration / tick resolution / sample rate / frame rate needs some clarification between sync clocks, template sequences and meta data
 	if (AssetMetaData->GetDuration() > 0)
@@ -522,9 +548,9 @@ bool UTakeRecorder::CreateDestinationAsset(const TCHAR* AssetPathFormat, ULevelS
 bool UTakeRecorder::InitializeSequencer(FText* OutError)
 {
 	// Open the sequence and set the sequencer ptr
-	FAssetEditorManager::Get().OpenEditorForAsset(SequenceAsset);
+	GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(SequenceAsset);
 
-	IAssetEditorInstance*        AssetEditor         = FAssetEditorManager::Get().FindEditorForAsset(SequenceAsset, false);
+	IAssetEditorInstance*        AssetEditor         = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->FindEditorForAsset(SequenceAsset, false);
 	ILevelSequenceEditorToolkit* LevelSequenceEditor = static_cast<ILevelSequenceEditorToolkit*>(AssetEditor);
 
 	WeakSequencer = LevelSequenceEditor ? LevelSequenceEditor->GetSequencer() : nullptr;
@@ -549,7 +575,7 @@ void UTakeRecorder::InitializeFromParameters()
 	// Apply immersive mode if the parameters demand it
 	if (Parameters.User.bMaximizeViewport)
 	{
-		TSharedPtr<ILevelViewport> ActiveLevelViewport = FModuleManager::Get().LoadModuleChecked<FLevelEditorModule>("LevelEditor").GetFirstActiveViewport();
+		TSharedPtr<IAssetViewport> ActiveLevelViewport = FModuleManager::Get().LoadModuleChecked<FLevelEditorModule>("LevelEditor").GetFirstActiveViewport();
 
 		// If it's already immersive we just leave it alone
 		if (ActiveLevelViewport.IsValid() && !ActiveLevelViewport->IsImmersive())
@@ -557,9 +583,9 @@ void UTakeRecorder::InitializeFromParameters()
 			ActiveLevelViewport->MakeImmersive(true/*bWantImmersive*/, false/*bAllowAnimation*/);
 
 			// Restore it when we're done
-			auto RestoreImmersiveMode = [WeakViewport = TWeakPtr<ILevelViewport>(ActiveLevelViewport)]
+			auto RestoreImmersiveMode = [WeakViewport = TWeakPtr<IAssetViewport>(ActiveLevelViewport)]
 			{
-				if (TSharedPtr<ILevelViewport> CleaupViewport = WeakViewport.Pin())
+				if (TSharedPtr<IAssetViewport> CleaupViewport = WeakViewport.Pin())
 				{
 					CleaupViewport->MakeImmersive(false/*bWantImmersive*/, false/*bAllowAnimation*/);
 				}
@@ -712,6 +738,9 @@ void UTakeRecorder::Start(const FTimecode& InTimecodeSource)
 		{
 			MovieScene->SetClockSource(EUpdateClockSource::Timecode);
 			Sequencer->ResetTimeController();
+
+			// Set infinite playback range when starting recording. Playback range will be clamped to the bounds of the sections at the completion of the recording
+			MovieScene->SetPlaybackRange(MovieScene->GetPlaybackRange().GetLowerBoundValue(), TNumericLimits<int32>::Max() - 1, false);
 		}
 		Sequencer->SetPlaybackStatus(EMovieScenePlayerStatus::Playing);
 	}
@@ -721,6 +750,7 @@ void UTakeRecorder::Start(const FTimecode& InTimecodeSource)
 	UTakeMetaData* AssetMetaData = SequenceAsset->FindMetaData<UTakeMetaData>();
 	FDateTime UtcNow = FDateTime::UtcNow();
 	AssetMetaData->SetTimestamp(UtcNow);
+	AssetMetaData->SetTimecodeIn(InTimecodeSource);
 
 	Sources->StartRecording(SequenceAsset, InTimecodeSource, Parameters.User.bAutoSerialize ? &ManifestSerializer : nullptr);
 
@@ -731,6 +761,16 @@ void UTakeRecorder::Start(const FTimecode& InTimecodeSource)
 
 void UTakeRecorder::Stop()
 {
+	static bool bStoppedRecording = false;
+
+	if (bStoppedRecording)
+	{
+		return;
+	}
+
+	TGuardValue<bool> ReentrantGuard(bStoppedRecording, true);
+
+	FTimecode TimecodeOut = FApp::GetTimecode();
 	USequencerSettings* SequencerSettings = USequencerSettingsContainer::GetOrCreate<USequencerSettings>(TEXT("TakeRecorderSequenceEditor"));
 
 	SequencerSettings->SetAllowEditsMode(CachedAllowEditsMode);
@@ -789,6 +829,8 @@ void UTakeRecorder::Stop()
 		UTakeMetaData* AssetMetaData = SequenceAsset->FindMetaData<UTakeMetaData>();
 		check(AssetMetaData);
 
+		AssetMetaData->SetTimecodeOut(TimecodeOut);
+
 		if (GEditor && GEditor->GetEditorWorldContext().World())
 		{
 			AssetMetaData->SetLevelOrigin(GEditor->GetEditorWorldContext().World()->PersistentLevel);
@@ -825,9 +867,9 @@ void UTakeRecorder::Stop()
 	OnStopCleanup.Reset();
 
 	// reset the current recorder and stop us from being ticked
-	if (CurrentRecorder.Get() == this)
+	if (GetCurrentRecorder().Get() == this)
 	{
-		CurrentRecorder.Reset();
+		GetCurrentRecorder().Reset();
 		TickableTakeRecorder.WeakRecorder = nullptr;
 
 		if (bDidEverStartRecording)
@@ -843,6 +885,11 @@ void UTakeRecorder::Stop()
 	}
 
 	RemoveFromRoot();
+}
+
+FOnTakeRecordingPreInitialize& UTakeRecorder::OnRecordingPreInitialize()
+{
+	return OnRecordingPreInitializeEvent;
 }
 
 FOnTakeRecordingStarted& UTakeRecorder::OnRecordingStarted()
@@ -873,6 +920,11 @@ void UTakeRecorder::HandleEndPIE(bool bIsSimulating)
 	PendingNotification->SetCompletionState(SNotificationItem::CS_Success);
 	
 	Stop();
+
+	if (FinishedAsset)
+	{
+		GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->CloseAllEditorsForAsset(FinishedAsset);
+	}
 }
 
 #undef LOCTEXT_NAMESPACE

@@ -6,13 +6,14 @@
 #include "Internationalization/LocalizationResourceTextSource.h"
 #include "Internationalization/PolyglotTextSource.h"
 #include "Internationalization/StringTableRegistry.h"
+#include "Internationalization/Cultures/LeetCulture.h"
 #include "GenericPlatform/GenericPlatformFile.h"
 #include "HAL/FileManager.h"
 #include "HAL/LowLevelMemTracker.h"
 #include "Misc/Parse.h"
-#include "Templates/ScopedPointer.h"
 #include "Misc/ScopeLock.h"
 #include "Misc/CommandLine.h"
+#include "Misc/LazySingleton.h"
 #include "Internationalization/Culture.h"
 #include "Internationalization/Internationalization.h"
 #include "Internationalization/StringTableCore.h"
@@ -46,9 +47,9 @@ void ApplyDefaultCultureSettings(const ELocalizationLoadFlags LocLoadFlags)
 
 	// Set culture according to configuration now that configs are available.
 #if ENABLE_LOC_TESTING
-	if (FCommandLine::IsInitialized() && FParse::Param(FCommandLine::Get(), TEXT("LEET")))
+	if (FCommandLine::IsInitialized() && FParse::Param(FCommandLine::Get(), *FLeetCulture::StaticGetName()))
 	{
-		I18N.SetCurrentCulture(TEXT("LEET"));
+		I18N.SetCurrentCulture(FLeetCulture::StaticGetName());
 	}
 	else
 #endif
@@ -187,7 +188,7 @@ void ApplyDefaultCultureSettings(const ELocalizationLoadFlags LocLoadFlags)
 			FString TargetCultureName = InRequestedCulture;
 
 #if ENABLE_LOC_TESTING
-			if (TargetCultureName != TEXT("LEET"))
+			if (TargetCultureName != FLeetCulture::StaticGetName())
 #endif
 			{
 				ELocalizationLoadFlags ValidationFlags = ELocalizationLoadFlags::None;
@@ -377,11 +378,15 @@ void InitGameTextLocalization()
 	//FTextLocalizationManager::Get().DumpMemoryInfo();
 }
 
-
 FTextLocalizationManager& FTextLocalizationManager::Get()
 {
-	static FTextLocalizationManager TextLocalizationManager;
-	return TextLocalizationManager;
+	return TLazySingleton<FTextLocalizationManager>::Get();
+}
+
+void FTextLocalizationManager::TearDown()
+{
+	TLazySingleton<FTextLocalizationManager>::TearDown();
+	FTextKey::TearDown();
 }
 
 FTextLocalizationManager::FTextLocalizationManager()
@@ -567,7 +572,7 @@ FTextDisplayStringRef FTextLocalizationManager::GetDisplayString(const FTextKey&
 	}
 
 #if ENABLE_LOC_TESTING
-	const bool bShouldLEETIFYAll = bIsInitialized && FInternationalization::Get().GetCurrentLanguage()->GetName() == TEXT("LEET");
+	const bool bShouldLEETIFYAll = bIsInitialized && FInternationalization::Get().GetCurrentLanguage()->GetName() == FLeetCulture::StaticGetName();
 
 	// Attempt to set bShouldLEETIFYUnlocalizedString appropriately, only once, after the commandline is initialized and parsed.
 	static bool bShouldLEETIFYUnlocalizedString = false;
@@ -880,12 +885,21 @@ void FTextLocalizationManager::LoadLocalizationResourcesForPrioritizedCultures(T
 		return;
 	}
 
+	// Leet-ify always needs the native text to operate on, so force native data if we're loading for LEET
+	ELocalizationLoadFlags FinalLocLoadFlags = LocLoadFlags;
+#if ENABLE_LOC_TESTING
+	if (PrioritizedCultureNames[0] == FLeetCulture::StaticGetName())
+	{
+		FinalLocLoadFlags |= ELocalizationLoadFlags::Native;
+	}
+#endif
+
 	// Load the resources from each text source
 	FTextLocalizationResource NativeResource;
 	FTextLocalizationResource LocalizedResource;
 	for (const TSharedPtr<ILocalizedTextSource>& LocalizedTextSource : LocalizedTextSources)
 	{
-		LocalizedTextSource->LoadLocalizedResources(LocLoadFlags, PrioritizedCultureNames, NativeResource, LocalizedResource);
+		LocalizedTextSource->LoadLocalizedResources(FinalLocLoadFlags, PrioritizedCultureNames, NativeResource, LocalizedResource);
 	}
 
 	// When loc testing is enabled, UpdateFromNative also takes care of restoring non-localized text which is why the condition below is gated
@@ -898,7 +912,7 @@ void FTextLocalizationManager::LoadLocalizationResourcesForPrioritizedCultures(T
 
 #if ENABLE_LOC_TESTING
 	// The leet culture is fake. Just leet-ify existing strings.
-	if (PrioritizedCultureNames[0] == TEXT("LEET"))
+	if (PrioritizedCultureNames[0] == FLeetCulture::StaticGetName())
 	{
 		// Lock while updating the tables
 		{

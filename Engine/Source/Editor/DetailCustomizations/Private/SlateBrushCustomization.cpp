@@ -1066,7 +1066,7 @@ private:
 				if (SlateBrush)
 				{
 					TemporaryBrush = *SlateBrush;
-				}
+				}				
 			}
 		}
 	}

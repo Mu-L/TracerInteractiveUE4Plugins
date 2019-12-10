@@ -7,6 +7,13 @@
 
 #define LOCTEXT_NAMESPACE "Landscape"
 
+#if WITH_EDITOR
+static TAutoConsoleVariable<int32> CVarLandscapeBrushPadding(
+	TEXT("landscape.BrushFramePadding"),
+	5,
+	TEXT("The number of frames to wait before pushing a full Landscape update when a brush is calling RequestLandscapeUpdate"));
+#endif
+
 ALandscapeBlueprintBrushBase::ALandscapeBlueprintBrushBase(const FObjectInitializer& ObjectInitializer)
 #if WITH_EDITORONLY_DATA
 	: OwningLandscape(nullptr)
@@ -57,7 +64,7 @@ void ALandscapeBlueprintBrushBase::Tick(float DeltaSeconds)
 #if WITH_EDITORONLY_DATA
 	// Avoid computing collision and client updates every frame
 	// Wait until we didn't trigger any more landscape update requests (padding of a couple of frames)
-	if (LastRequestLayersContentUpdateFrameNumber + 5 == GFrameNumber)
+	if (LastRequestLayersContentUpdateFrameNumber + CVarLandscapeBrushPadding.GetValueOnAnyThread() == GFrameNumber)
 	{
 		uint32 ModeMask = 0;
 		if (AffectHeightmap)
@@ -88,6 +95,11 @@ void ALandscapeBlueprintBrushBase::Tick(float DeltaSeconds)
 bool ALandscapeBlueprintBrushBase::ShouldTickIfViewportsOnly() const
 {
 	return true;
+}
+
+bool ALandscapeBlueprintBrushBase::IsLayerUpdatePending() const
+{
+	return GFrameNumber < LastRequestLayersContentUpdateFrameNumber + CVarLandscapeBrushPadding.GetValueOnAnyThread();
 }
 
 void ALandscapeBlueprintBrushBase::SetIsVisible(bool bInIsVisible)
@@ -164,6 +176,14 @@ void ALandscapeBlueprintBrushBase::Destroyed()
 	}
 	OwningLandscape = nullptr;
 #endif
+}
+
+void ALandscapeBlueprintBrushBase::GetRenderDependencies(TSet<UTexture2D *>& OutTextures)
+{
+	TArray<UTexture2D*> BPDependencies;
+	GetBlueprintRenderDependencies(BPDependencies);
+
+	OutTextures.Append(BPDependencies);
 }
 
 void ALandscapeBlueprintBrushBase::SetOwningLandscape(ALandscape* InOwningLandscape)

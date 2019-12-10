@@ -66,12 +66,12 @@ FString GetReadableResult(HRESULT Hr)
 
 void LogSlateD3DRendererFailure(const FString& Description, HRESULT Hr)
 {
-	UE_LOG(LogStandaloneRenderer, Log, TEXT("%s Result: %s [%X]"), *Description, *GetReadableResult(Hr), Hr);
+	UE_LOG(LogStandaloneRenderer, Warning, TEXT("%s Result: %s [%X]"), *Description, *GetReadableResult(Hr), Hr);
 
 	if (Hr == DXGI_ERROR_DEVICE_REMOVED && IsValidRef(GD3DDevice))
 	{
 		HRESULT ReasonHr = GD3DDevice->GetDeviceRemovedReason();
-		UE_LOG(LogStandaloneRenderer, Log, TEXT("%s Reason: %s [%X]"), *Description, *GetReadableResult(ReasonHr), ReasonHr);
+		UE_LOG(LogStandaloneRenderer, Warning, TEXT("%s Reason: %s [%X]"), *Description, *GetReadableResult(ReasonHr), ReasonHr);
 	}
 }
 
@@ -83,17 +83,20 @@ public:
 	{
 	}
 
-	virtual FIntPoint GetAtlasSize() const override
+	virtual FIntPoint GetAtlasSize(const bool InIsGrayscale) const override
 	{
-		return FIntPoint(TextureSize, TextureSize);
+		return InIsGrayscale
+			? FIntPoint(GrayscaleTextureSize, GrayscaleTextureSize)
+			: FIntPoint(ColorTextureSize, ColorTextureSize);
 	}
 
-	virtual TSharedRef<FSlateFontAtlas> CreateFontAtlas() const override
+	virtual TSharedRef<FSlateFontAtlas> CreateFontAtlas(const bool InIsGrayscale) const override
 	{
-		return MakeShareable( new FSlateFontAtlasD3D( TextureSize, TextureSize ) );
+		const FIntPoint AtlasSize = GetAtlasSize(InIsGrayscale);
+		return MakeShareable(new FSlateFontAtlasD3D(AtlasSize.X, AtlasSize.Y, InIsGrayscale));
 	}
 
-	virtual TSharedPtr<ISlateFontTexture> CreateNonAtlasedTexture(const uint32 InWidth, const uint32 InHeight, const TArray<uint8>& InRawData) const override
+	virtual TSharedPtr<ISlateFontTexture> CreateNonAtlasedTexture(const uint32 InWidth, const uint32 InHeight, const bool InIsGrayscale, const TArray<uint8>& InRawData) const override
 	{
 		return nullptr;
 	}
@@ -101,7 +104,8 @@ public:
 private:
 
 	/** Size of each font texture, width and height */
-	static const uint32 TextureSize = 1024;
+	static const uint32 GrayscaleTextureSize = 1024;
+	static const uint32 ColorTextureSize = 512;
 };
 
 TSharedRef<FSlateFontServices> CreateD3DFontServices()
@@ -138,7 +142,6 @@ bool FSlateD3DRenderer::Initialize()
 			GEncounteredCriticalD3DDeviceError = false;
 
 			TextureManager = MakeShareable(new FSlateD3DTextureManager);
-			FSlateDataPayload::ResourceManager = TextureManager.Get();
 
 			if (!GEncounteredCriticalD3DDeviceError)
 			{
@@ -152,7 +155,7 @@ bool FSlateD3DRenderer::Initialize()
 
 			if (!GEncounteredCriticalD3DDeviceError)
 			{
-				ElementBatcher = MakeShareable(new FSlateElementBatcher(RenderingPolicy.ToSharedRef()));
+				ElementBatcher = MakeUnique<FSlateElementBatcher>(RenderingPolicy.ToSharedRef());
 			}
 		}
 		else
@@ -413,18 +416,23 @@ void FSlateD3DRenderer::Private_ResizeViewport( const TSharedRef<SWindow> InWind
 		Viewport->ProjectionMatrix = CreateProjectionMatrixD3D( Width, Height );
 
 		DXGI_SWAP_CHAIN_DESC Desc;
-		Viewport->D3DSwapChain->GetDesc( &Desc );
-		HRESULT Hr = Viewport->D3DSwapChain->ResizeBuffers( Desc.BufferCount, Viewport->ViewportInfo.Width, Viewport->ViewportInfo.Height, Desc.BufferDesc.Format, Desc.Flags );
-
-		if (SUCCEEDED(Hr))
+		HRESULT Hr = Viewport->D3DSwapChain->GetDesc( &Desc );
+		if (FAILED(Hr))
 		{
-			CreateBackBufferResources(Viewport->D3DSwapChain, Viewport->BackBufferTexture, Viewport->RenderTargetView);
+			LogSlateD3DRendererFailure(TEXT("FSlateD3DRenderer::Private_ResizeViewport() - FSlateD3DViewport::IDXGISwapChain::GetDesc"), Hr);
+			GEncounteredCriticalD3DDeviceError = true;
+			return;
 		}
-		else
+
+		Hr = Viewport->D3DSwapChain->ResizeBuffers(Desc.BufferCount, Viewport->ViewportInfo.Width, Viewport->ViewportInfo.Height, Desc.BufferDesc.Format, Desc.Flags);
+		if (FAILED(Hr))
 		{
 			LogSlateD3DRendererFailure(TEXT("FSlateD3DRenderer::Private_ResizeViewport() - FSlateD3DViewport::IDXGISwapChain::ResizeBuffers"), Hr);
 			GEncounteredCriticalD3DDeviceError = true;
+			return;
 		}
+
+		CreateBackBufferResources(Viewport->D3DSwapChain, Viewport->BackBufferTexture, Viewport->RenderTargetView);
 	}
 }
 
@@ -503,8 +511,10 @@ bool FSlateD3DRenderer::HasLostDevice() const
 	return (bHasAttemptedInitialization && (GEncounteredCriticalD3DDeviceError || !IsValidRef(GD3DDevice) || FAILED(GD3DDevice->GetDeviceRemovedReason())));
 }
 
-void FSlateD3DRenderer::DrawWindows( FSlateDrawBuffer& InWindowDrawBuffer )
+void FSlateD3DRenderer::DrawWindows(FSlateDrawBuffer& InWindowDrawBuffer)
 {
+	FMemMark MemMark(FMemStack::Get());
+
 	if (HasLostDevice())
 	{
 		return;
@@ -520,10 +530,15 @@ void FSlateD3DRenderer::DrawWindows( FSlateDrawBuffer& InWindowDrawBuffer )
 
 		if ( ElementList.GetRenderWindow() )
 		{
+			if (HasLostDevice())
+			{
+				break;
+			}
+
 			SWindow* WindowToDraw = ElementList.GetRenderWindow();
 
 			// Add all elements for this window to the element batcher
-			ElementBatcher->AddElements( ElementList );
+			ElementBatcher->AddElements(ElementList);
 
 			// Update the font cache with new text before elements are batched
 			FontCache->UpdateCache();
@@ -535,8 +550,8 @@ void FSlateD3DRenderer::DrawWindows( FSlateDrawBuffer& InWindowDrawBuffer )
 
 			FSlateBatchData& BatchData = ElementList.GetBatchData();
 			{
-				BatchData.CreateRenderBatches(ElementList.GetRootDrawLayer().GetElementBatchMap());
-				RenderingPolicy->UpdateVertexAndIndexBuffers(BatchData);
+
+				RenderingPolicy->BuildRenderingBuffers(BatchData);
 			}
 
 			check(Viewport);
@@ -553,20 +568,29 @@ void FSlateD3DRenderer::DrawWindows( FSlateDrawBuffer& InWindowDrawBuffer )
 #endif
 			GD3DDeviceContext->OMSetRenderTargets( 1, &RTV, NULL );
 
+			if (HasLostDevice())
 			{
-				RenderingPolicy->DrawElements(ViewMatrix * Viewport->ProjectionMatrix, BatchData.GetRenderBatches());
+				break;
+			}
+			else
+			{
+				RenderingPolicy->DrawElements(ViewMatrix * Viewport->ProjectionMatrix, BatchData.GetFirstRenderBatchIndex(), BatchData.GetRenderBatches());
 			}
 
 			GD3DDeviceContext->OMSetRenderTargets(0, NULL, NULL);
 
-
 			const bool bUseVSync = false;
-			Viewport->D3DSwapChain->Present( bUseVSync ? 1 : 0, 0);
+			HRESULT Hr = Viewport->D3DSwapChain->Present( bUseVSync ? 1 : 0, 0);
+			if (FAILED(Hr))
+			{
+				LogSlateD3DRendererFailure(TEXT("FSlateD3DRenderer::DrawWindows() - IDXGISwapChain::Viewport->D3DSwapChain->Present( bUseVSync ? 1 : 0, 0)"), Hr);
+				GEncounteredCriticalD3DDeviceError = true;
+				break;
+			}
 
 			// All elements have been drawn.  Reset all cached data
 			ElementBatcher->ResetBatches();
 		}
-
 	}
 
 	// flush the cache if needed

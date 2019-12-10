@@ -15,6 +15,38 @@
 
 class FSkeletalMeshLODModel;
 
+#endif
+
+//////////////////////////////////////////////////////////////////////////
+//uenum class cannot be inside a preprocessor like #if WITH_EDITOR
+
+UENUM()
+enum class ESkeletalMeshGeoImportVersions : uint8
+{
+	Before_Versionning = 0,
+	SkeletalMeshBuildRefactor,
+
+	// -----<new versions can be added above this line>-------------------------------------------------
+	VersionPlusOne,
+	LatestVersion = VersionPlusOne - 1
+};
+
+UENUM()
+enum class ESkeletalMeshSkinningImportVersions : uint8
+{
+	Before_Versionning = 0,
+	SkeletalMeshBuildRefactor,
+
+	// -----<new versions can be added above this line>-------------------------------------------------
+	VersionPlusOne,
+	LatestVersion = VersionPlusOne - 1
+};
+
+// End of enum declaration
+//////////////////////////////////////////////////////////////////////////
+
+#if WITH_EDITOR
+
 namespace SkeletalMeshImportData
 {
 	struct FMeshWedge
@@ -284,20 +316,31 @@ template <> struct TIsPODType<SkeletalMeshImportData::FVertInfluence> { enum { V
 class ENGINE_API FSkeletalMeshImportData
 {
 public:
-	TArray <SkeletalMeshImportData::FMaterial>			Materials;				// Materials
-	TArray <FVector>			Points;											// 3D Points
-	TArray <SkeletalMeshImportData::FVertex>			Wedges;					// Wedges
-	TArray <SkeletalMeshImportData::FTriangle>			Faces;					// Faces
-	TArray <SkeletalMeshImportData::FBone>				RefBonesBinary;			// Reference Skeleton
-	TArray <SkeletalMeshImportData::FRawBoneInfluence>	Influences;				// Influences
-	TArray <int32>				PointToRawMap;									// Mapping from current point index to the original import point index
-	uint32	NumTexCoords;														// The number of texture coordinate sets
-	uint32	MaxMaterialIndex;													// The max material index found on a triangle
-	bool 	bHasVertexColors; 													// If true there are vertex colors in the imported file
-	bool	bHasNormals;														// If true there are normals in the imported file
-	bool	bHasTangents;														// If true there are tangents in the imported file
-	bool	bUseT0AsRefPose;													// If true, then the pose at time=0 will be used instead of the ref pose
-	bool	bDiffPose;															// If true, one of the bones has a different pose at time=0 vs the ref pose
+	TArray <SkeletalMeshImportData::FMaterial> Materials;
+	TArray <FVector> Points;
+	TArray <SkeletalMeshImportData::FVertex> Wedges;
+	TArray <SkeletalMeshImportData::FTriangle> Faces;
+	TArray <SkeletalMeshImportData::FBone> RefBonesBinary;
+	TArray <SkeletalMeshImportData::FRawBoneInfluence> Influences;
+	TArray <int32> PointToRawMap;	// Mapping from current point index to the original import point index
+	uint32 NumTexCoords; // The number of texture coordinate sets
+	uint32 MaxMaterialIndex; // The max material index found on a triangle
+	bool bHasVertexColors; // If true there are vertex colors in the imported file
+	bool bHasNormals; // If true there are normals in the imported file
+	bool bHasTangents; // If true there are tangents in the imported file
+	bool bUseT0AsRefPose; // If true, then the pose at time=0 will be used instead of the ref pose
+	bool bDiffPose; // If true, one of the bones has a different pose at time=0 vs the ref pose
+
+	// Morph targets imported(i.e. FBX) data. The name is the morph target name
+	TArray<FSkeletalMeshImportData> MorphTargets;
+	TArray<TSet<uint32>> MorphTargetModifiedPoints;
+	TArray<FString> MorphTargetNames;
+	
+	// Alternate influence imported(i.e. FBX) data. The name is the alternate skinning profile name
+	TArray<FSkeletalMeshImportData> AlternateInfluences;
+	TArray<FString> AlternateInfluenceProfileNames;
+
+	//////////////////////////////////////////////////////////////////////////
 
 	FSkeletalMeshImportData()
 		: NumTexCoords(0)
@@ -310,6 +353,17 @@ public:
 	{
 
 	}
+
+	/*
+	 * Copy only unnecessary array data from the structure to build the morph target (this will save a lot of memory)
+	 */
+	void CopyDataNeedByMorphTargetImport(FSkeletalMeshImportData& Other) const;
+
+	/*
+	 * Remove all unnecessary array data from the structure (this will save a lot of memory)
+	 * We only need Points, Influences and RefBonesBinary arrays
+	 */
+	void KeepAlternateSkinningBuildDataOnly();
 
 	/**
 	* Copy mesh data for importing a single LOD
@@ -360,6 +414,15 @@ struct FReductionBaseSkeletalMeshBulkData
 	//The custom version when this was load
 	FCustomVersionContainer SerializeLoadingCustomVersionContainer;
 	bool bUseSerializeLoadingCustomVersion = false;
+
+	uint32 CacheLODVertexNumber = MAX_uint32;
+	uint32 CacheLODTriNumber = MAX_uint32;
+
+	/*
+	 * Caching those value since this is a slow operation to load the bulk data to retrieve the original geometry information
+	 */
+	void CacheGeometryInfo(const FSkeletalMeshLODModel& SourceLODModel);
+
 public:
 	/** Default constructor. */
 	ENGINE_API FReductionBaseSkeletalMeshBulkData();
@@ -369,10 +432,13 @@ public:
 	ENGINE_API void Serialize(class FArchive& Ar, class UObject* Owner);
 
 	/** Store a new raw mesh in the bulk data. */
-	ENGINE_API void SaveReductionData(FSkeletalMeshLODModel& BaseLODModel, TMap<FString, TArray<FMorphTargetDelta>>& BaseLODMorphTargetData);
+	ENGINE_API void SaveReductionData(FSkeletalMeshLODModel& BaseLODModel, TMap<FString, TArray<FMorphTargetDelta>>& BaseLODMorphTargetData, UObject* Owner);
 
 	/** Load the raw mesh from bulk data. */
-	ENGINE_API void LoadReductionData(FSkeletalMeshLODModel& BaseLODModel, TMap<FString, TArray<FMorphTargetDelta>>& BaseLODMorphTargetData);
+	ENGINE_API void LoadReductionData(FSkeletalMeshLODModel& BaseLODModel, TMap<FString, TArray<FMorphTargetDelta>>& BaseLODMorphTargetData, UObject* Owner);
+
+	/** Return the number of vertices and triangles store in this bulk data. */
+	ENGINE_API void GetGeometryInfo(uint32& LODVertexNumber, uint32& LODTriNumber, UObject* Owner);
 
 	ENGINE_API FByteBulkData& GetBulkData() { return BulkData; }
 
@@ -394,7 +460,23 @@ class FRawSkeletalMeshBulkData
 	/** If true, the GUID is actually a hash of the contents. */
 	bool bGuidIsHash;
 
+	//The custom version when this was load
+	FCustomVersionContainer SerializeLoadingCustomVersionContainer;
+	bool bUseSerializeLoadingCustomVersion = false;
+
 public:
+	/*
+	 * The last geo imported version, we use this flag to know if we have some data or not.
+	 * This flag must be updated every time we import a new geometry
+	 */
+	ESkeletalMeshGeoImportVersions GeoImportVersion;
+
+	/*
+	 * The last skinning imported version, we use this flag to know if we have some data or not.
+	 * This flag must be updated every time we import the skinning
+	 */
+	ESkeletalMeshSkinningImportVersions SkinningImportVersion;
+
 	/** Default constructor. */
 	ENGINE_API FRawSkeletalMeshBulkData();
 
@@ -420,6 +502,13 @@ public:
 
 	/** Returns true if no bulk data is available for this mesh. */
 	FORCEINLINE bool IsEmpty() const { return BulkData.GetBulkDataSize() == 0; }
+
+	/** Returns true if the last import version is enough to use the new build system. WE cannot rebuild asset if we did not previously store the data*/
+	ENGINE_API bool IsBuildDataAvailable() const
+	{
+		return GeoImportVersion >= ESkeletalMeshGeoImportVersions::SkeletalMeshBuildRefactor &&
+			SkinningImportVersion >= ESkeletalMeshSkinningImportVersions::SkeletalMeshBuildRefactor;
+	}
 };
 
 namespace FWedgePositionHelper

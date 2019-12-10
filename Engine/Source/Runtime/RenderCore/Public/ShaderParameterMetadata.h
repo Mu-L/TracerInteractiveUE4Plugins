@@ -111,7 +111,7 @@ public:
 		/** Returns the size of the member. */
 		inline uint32 GetMemberSize() const
 		{
-			check(BaseType == UBMT_BOOL || BaseType == UBMT_FLOAT32 || BaseType == UBMT_INT32 || BaseType == UBMT_UINT32);
+			check(BaseType == UBMT_FLOAT32 || BaseType == UBMT_INT32 || BaseType == UBMT_UINT32);
 			uint32 ElementSize = sizeof(uint32) * NumRows * NumColumns;
 
 			/** If this an array, the alignment of the element are changed. */
@@ -144,11 +144,7 @@ public:
 		uint32 InSize,
 		const TArray<FMember>& InMembers);
 
-	virtual ~FShaderParametersMetadata()
-	{
-		GlobalListLink.Unlink();
-		GetNameStructMap().Remove(FName(StructTypeName, FNAME_Find));
-	}
+	virtual ~FShaderParametersMetadata();
 
 	void GetNestedStructs(TArray<const FShaderParametersMetadata*>& OutNestedStructs) const;
 
@@ -172,12 +168,23 @@ public:
 		const FShaderParametersMetadata::FMember** OutMember,
 		int32* ArrayElementId, FString* NamePrefix) const;
 
+	/** Returns the full C++ member name from it's byte offset in the structure. */
+	FString GetFullMemberCodeName(uint16 MemberOffset) const;
+
 	static TLinkedList<FShaderParametersMetadata*>*& GetStructList();
 	/** Speed up finding the uniform buffer by its name */
 	static TMap<FName, FShaderParametersMetadata*>& GetNameStructMap();
 
 	/** Initialize all the global shader parameter structs. */
 	static void InitializeAllGlobalStructs();
+
+	/** Returns a hash about the entire layout of the structure. */
+	uint32 GetLayoutHash() const
+	{
+		check(UseCase == EUseCase::ShaderParameterStruct || UseCase == EUseCase::GlobalShaderParameterStruct);
+		check(bLayoutInitialized);
+		return LayoutHash;	
+	}
 
 private:
 	/** Name of the structure type in C++ and shader code. */
@@ -203,6 +210,9 @@ private:
 
 	/** Whether the layout is actually initialized yet or not. */
 	uint32 bLayoutInitialized : 1;
+
+	/** Hash about the entire memory layout of the structure. */
+	uint32 LayoutHash = 0;
 
 
 	void InitializeLayout();

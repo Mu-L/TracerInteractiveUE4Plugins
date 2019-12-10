@@ -67,12 +67,19 @@ struct FShaderParameterStructBindingContext
 				BaseType == UBMT_SRV ||
 				BaseType == UBMT_UAV ||
 				BaseType == UBMT_SAMPLER);
-			const bool bIsRDGResource = IsRDGResourceReferenceShaderParameterType(BaseType) && BaseType != UBMT_RDG_BUFFER;
+
+			const bool bIsRDGResource =
+				IsRDGResourceReferenceShaderParameterType(BaseType) &&
+				BaseType != UBMT_RDG_BUFFER &&
+				BaseType != UBMT_RDG_BUFFER_COPY_DEST &&
+				BaseType != UBMT_RDG_TEXTURE_COPY_DEST;
+
 			const bool bIsVariableNativeType = (
-				BaseType == UBMT_BOOL ||
 				BaseType == UBMT_INT32 ||
 				BaseType == UBMT_UINT32 ||
 				BaseType == UBMT_FLOAT32);
+
+			checkf(BaseType != UBMT_BOOL, TEXT("Should have failed in FShaderParametersMetadata::InitializeLayout()"));
 
 			if (BaseType == UBMT_INCLUDED_STRUCT)
 			{
@@ -192,10 +199,15 @@ struct FShaderParameterStructBindingContext
 					Parameter.BaseIndex = BaseIndex;
 					Parameter.ByteOffset = ByteOffset + ArrayElementId * SHADER_PARAMETER_POINTER_ALIGNMENT;
 
-					checkf(
-						BoundSize == 1,
-						TEXT("The shader compiler should give precisely which elements of an array did not get compiled out, ")
-						TEXT("for optimal automatic render graph pass dependency with ClearUnusedGraphResources()."));
+					if (BoundSize != 1)
+					{
+						UE_LOG(LogShaders, Fatal, 
+							TEXT("Error with shader %s's (Permutation Id %d) parameter %s is %i bytes, cpp name = %s.")
+							TEXT("The shader compiler should give precisely which elements of an array did not get compiled out, ")
+							TEXT("for optimal automatic render graph pass dependency with ClearUnusedGraphResources()."),
+							Shader->GetType()->GetName(), Shader->GetPermutationId(),
+							*ElementShaderBindingName, BoundSize, *CppName);
+					}
 
 					if (BaseType == UBMT_TEXTURE)
 						Bindings->Textures.Add(Parameter);
@@ -250,6 +262,7 @@ void FShaderParameterBindings::BindForLegacyShaderParameters(const FShader* Shad
 		/* MemberPrefix = */ TEXT(""),
 		/* ByteOffset = */ 0);
 
+	StructureLayoutHash = StructMetaData.GetLayoutHash();
 	RootParameterBufferIndex = kInvalidBufferIndex;
 
 	TArray<FString> AllParameterNames;
@@ -301,6 +314,8 @@ void FShaderParameterBindings::BindForRootShaderParameters(const FShader* Shader
 		/* MemberPrefix = */ TEXT(""),
 		/* ByteOffset = */ 0);
 
+	StructureLayoutHash = StructMetaData.GetLayoutHash();
+
 	// Binds the uniform buffer that contains the root shader parameters.
 	{
 		const TCHAR* ShaderBindingName = FShaderParametersMetadata::kRootUniformBufferBindingName;
@@ -337,16 +352,10 @@ void FShaderParameterBindings::BindForRootShaderParameters(const FShader* Shader
 
 bool FRenderTargetBinding::Validate() const
 {
-	if (Texture)
+	if (!Texture)
 	{
-		checkf(StoreAction != ERenderTargetStoreAction::ENoAction,
-			TEXT("You must specify a store action for non-null render target %s."),
-			Texture->Name);
-	}
-	else
-	{
-		checkf(LoadAction == ERenderTargetLoadAction::ENoAction && StoreAction == ERenderTargetStoreAction::ENoAction,
-			TEXT("Can't have a load or store action when no texture is bound."));
+		checkf(LoadAction == ERenderTargetLoadAction::ENoAction,
+			TEXT("Can't have a load action when no texture is bound."));
 	}
 	
 	return true;
@@ -371,7 +380,7 @@ bool FDepthStencilBinding::Validate() const
 		bool bHasStencil = PixelFormat == PF_DepthStencil;
 		if (!bHasStencil)
 		{
-			checkf(StencilLoadAction == ERenderTargetLoadAction::ENoAction && StencilStoreAction == ERenderTargetStoreAction::ENoAction,
+			checkf(StencilLoadAction == ERenderTargetLoadAction::ENoAction,
 				TEXT("Unable to load stencil of texture %s that have a pixel format %s that does not support stencil."),
 				Texture->Name, FormatString);
 		
@@ -379,13 +388,24 @@ bool FDepthStencilBinding::Validate() const
 				TEXT("Unable to have stencil access on texture %s that have a pixel format %s that does not support stencil."),
 				Texture->Name, FormatString);
 		}
+
+		bool bReadDepth = DepthStencilAccess.IsUsingDepth() && !DepthStencilAccess.IsDepthWrite();
+		bool bReadStencil = DepthStencilAccess.IsUsingStencil() && !DepthStencilAccess.IsStencilWrite();
+
+		checkf(!(bReadDepth && DepthLoadAction != ERenderTargetLoadAction::ELoad),
+			TEXT("Depth read access, but without depth load action on texture %s doesn't make any sens."),
+			Texture->Name);
+
+		checkf(!(bReadStencil && StencilLoadAction != ERenderTargetLoadAction::ELoad),
+			TEXT("Stencil read access, but without stencil load action on texture %s doesn't make any sens."),
+			Texture->Name);
 	}
 	else
 	{
-		checkf(DepthLoadAction == ERenderTargetLoadAction::ENoAction && DepthStoreAction == ERenderTargetStoreAction::ENoAction,
-			TEXT("Can't have a depth load or store action when no texture are bound."));
-		checkf(StencilLoadAction == ERenderTargetLoadAction::ENoAction && StencilStoreAction == ERenderTargetStoreAction::ENoAction,
-			TEXT("Can't have a stencil load or store action when no texture are bound."));
+		checkf(DepthLoadAction == ERenderTargetLoadAction::ENoAction,
+			TEXT("Can't have a depth load action when no texture are bound."));
+		checkf(StencilLoadAction == ERenderTargetLoadAction::ENoAction,
+			TEXT("Can't have a stencil load action when no texture are bound."));
 		checkf(DepthStencilAccess == FExclusiveDepthStencil::DepthNop_StencilNop,
 			TEXT("Can't have a depth stencil access when no texture are bound."));
 	}
@@ -395,17 +415,7 @@ bool FDepthStencilBinding::Validate() const
 
 void EmitNullShaderParameterFatalError(const FShader* Shader, const FShaderParametersMetadata* ParametersMetadata, uint16 MemberOffset)
 {
-	const FShaderParametersMetadata* MemberContainingStruct = nullptr;
-	const FShaderParametersMetadata::FMember* Member = nullptr;
-	int32 ArrayElementId = 0;
-	FString NamePrefix;
-	ParametersMetadata->FindMemberFromOffset(MemberOffset, &MemberContainingStruct, &Member, &ArrayElementId, &NamePrefix);
-	
-	FString MemberName = FString::Printf(TEXT("%s%s"), *NamePrefix, Member->GetName());
-	if (Member->GetNumElements() > 0)
-	{
-		MemberName = FString::Printf(TEXT("%s%s[%d]"), *NamePrefix, Member->GetName(), ArrayElementId); 
-	}
+	FString MemberName = ParametersMetadata->GetFullMemberCodeName(MemberOffset);
 
 	const TCHAR* ShaderClassName = Shader->GetType()->GetName();
 
@@ -421,7 +431,16 @@ void EmitNullShaderParameterFatalError(const FShader* Shader, const FShaderParam
 void ValidateShaderParameters(const FShader* Shader, const FShaderParametersMetadata* ParametersMetadata, const void* Parameters)
 {
 	const FShaderParameterBindings& Bindings = Shader->Bindings;
+
+	checkf(
+		Bindings.StructureLayoutHash == ParametersMetadata->GetLayoutHash(),
+		TEXT("Seams shader %s's parameter structure has changed without recompilation of the shader"),
+		Shader->GetType()->GetName());
+
 	const uint8* Base = reinterpret_cast<const uint8*>(Parameters);
+
+	const TCHAR* ShaderClassName = Shader->GetType()->GetName();
+	const TCHAR* ShaderParemeterStructName = ParametersMetadata->GetStructTypeName();
 
 	// Textures
 	for (const FShaderParameterBindings::FResourceParameter& ParameterBinding : Bindings.Textures)
@@ -460,6 +479,14 @@ void ValidateShaderParameters(const FShader* Shader, const FShaderParametersMeta
 		if (!GraphTexture)
 		{
 			EmitNullShaderParameterFatalError(Shader, ParametersMetadata, ParameterBinding.ByteOffset);
+		}
+		else if ((GraphTexture->Desc.TargetableFlags & TexCreate_ShaderResource) == 0)
+		{
+			FString MemberName = ParametersMetadata->GetFullMemberCodeName(ParameterBinding.ByteOffset);
+
+			UE_LOG(LogShaders, Error,
+				TEXT("Attempting to set shader %s parameter %s::%s with the RDG texture %s which was not created with TexCreate_ShaderResource"),
+				ShaderClassName, ShaderParemeterStructName, *MemberName, GraphTexture->Name);
 		}
 	}
 

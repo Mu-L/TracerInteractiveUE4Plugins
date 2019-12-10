@@ -6,7 +6,7 @@
 #include "Misc/AssertionMacros.h"
 #include "Misc/Crc.h"
 #include "Containers/UnrealString.h"
-#include "Serialization/StructuredArchiveFromArchive.h"
+#include "Serialization/StructuredArchive.h"
 
 class FArchive;
 class FOutputDevice;
@@ -59,8 +59,14 @@ enum class EGuidFormats
 	 * For example: 00000000-00000000-00000000-00000000
 	*/
 	UniqueObjectGuid,
-};
 
+	/**
+	 * Base64 characters with dashes and underscores instead of pluses and slashes (respectively)
+	 *
+	 * For example: AQsMCQ0PAAUKCgQEBAgADQ
+	 */
+	Short
+};
 
 /**
  * Implements a globally unique identifier.

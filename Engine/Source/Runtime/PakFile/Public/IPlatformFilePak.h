@@ -7,7 +7,6 @@
 #include "Stats/Stats.h"
 #include "Misc/Paths.h"
 #include "Misc/ScopeLock.h"
-#include "Templates/ScopedPointer.h"
 #include "Templates/UniquePtr.h"
 #include "Math/BigInt.h"
 #include "Misc/AES.h"
@@ -211,7 +210,7 @@ struct FPakInfo
 			if (Ar.IsLoading())
 			{
 				Ar.Serialize(Methods, BufferSize);
-				for (int Index = 0; Index < MaxNumCompressionMethods; Index++)
+				for (int32 Index = 0; Index < MaxNumCompressionMethods; Index++)
 				{
 					ANSICHAR* MethodString = &Methods[Index * CompressionMethodNameLen];
 					if (MethodString[0] != 0)
@@ -225,7 +224,7 @@ struct FPakInfo
 				// we always zero out fully what we write out so that reading in is simple
 				FMemory::Memzero(Methods, BufferSize);
 
-				for (int Index = 1; Index < CompressionMethods.Num(); Index++)
+				for (int32 Index = 1; Index < CompressionMethods.Num(); Index++)
 				{
 					ANSICHAR* MethodString = &Methods[(Index - 1) * CompressionMethodNameLen];
 					FCStringAnsi::Strcpy(MethodString, CompressionMethodNameLen, TCHAR_TO_ANSI(*CompressionMethods[Index].ToString()));
@@ -549,6 +548,10 @@ class PAKFILE_API FPakFile : FNoncopyable
 	bool bFilenamesRemoved;
 	/** ID for the chunk this pakfile is part of. INDEX_NONE if this isn't a pak chunk (derived from filename) */
 	int32 ChunkID;
+	/** Flag to say we tried shrinking pak entries already */
+	bool bAttemptedPakEntryShrink;
+	/** Flag to say we tried unloading pak index filenames already */
+	bool bAttemptedPakFilenameUnload;
 
 	class IMappedFileHandle* MappedFileHandle;
 	FCriticalSection MappedFileHandleCriticalSection;
@@ -573,8 +576,31 @@ class PAKFILE_API FPakFile : FNoncopyable
 	FArchive* CreatePakReader(IFileHandle& InHandle, const TCHAR* Filename);
 	FArchive* SetupSignedPakReader(FArchive* Reader, const TCHAR* Filename);
 
+
+public:
+	/** Pak files can share a cache or have their own */
+	enum class ECacheType : uint8
+	{
+		Shared,
+		Individual,
+	};
+private:
+	/** The type of cache this pak file should have */
+	ECacheType	CacheType;
+	/** The index of this pak file into the cache array, -1 = not initialized */
+	int32		CacheIndex;
+	/** Allow the cache of a pak file to never shrink, should be used with caution, it will burn memory */
+	bool UnderlyingCacheTrimDisabled;
+
 public:
 
+	void SetUnderlyingCacheTrimDisabled(bool InUnderlyingCacheTrimDisabled) { UnderlyingCacheTrimDisabled = InUnderlyingCacheTrimDisabled; }
+	bool GetUnderlyingCacheTrimDisabled(void) { return UnderlyingCacheTrimDisabled; }
+
+	void SetCacheType(ECacheType InCacheType) { CacheType = InCacheType; }
+	ECacheType GetCacheType(void) { return CacheType; }
+	void SetCacheIndex(int32 InCacheIndex) { CacheIndex = InCacheIndex; }
+	int32 GetCacheIndex(void) { return CacheIndex; }
 #if IS_PROGRAM
 	/**
 	* Opens a pak file given its filename.
@@ -592,7 +618,7 @@ public:
 	 * @param Filename Filename.
 	 * @param bIsSigned = true if the pak is signed.
 	 */
-	FPakFile(IPlatformFile* LowerLevel, const TCHAR* Filename, bool bIsSigned);
+	FPakFile(IPlatformFile* LowerLevel, const TCHAR* Filename, bool bIsSigned, bool bLoadIndex = true);
 
 	/**
 	 * Creates a pak file using the supplied archive.
@@ -656,7 +682,7 @@ public:
 	 */
 	int32 GetNumFiles() const
 	{
-		return Files.Num();
+		return NumEntries;
 	}
 
 	void GetFilenames(TArray<FString>& OutFileList) const;
@@ -872,6 +898,7 @@ public:
 
 		const FString& Filename() const		{ return CachedFilename; }
 		const FPakEntry& Info() const	{ return PakFile.Files[DirectoryIt.Value()]; }
+		const int32 GetIndexInPakFile() const { return DirectoryIt.Value(); }
 
 	private:
 		FORCEINLINE void AdvanceToValid()
@@ -949,29 +976,43 @@ public:
 	/**
 	 * Saves memory by hashing the filenames, if possible. After this process,
 	 * wildcard scanning of pak entries can no longer be performed. Returns TRUE
-	 * if there were any collisions within this pak or with any of the previous pak results supplied in CrossPakCollisionChecker
+	 * if the process successfully unloaded filenames from this pak
 	 *
 	 * @param CrossPakCollisionChecker A map of hash->fileentry records encountered during filename unloading on other pak files. Used to detect collisions with entries in other pak files.
 	 * @param DirectoryRootsToKeep An array of strings in wildcard format that specify whole directory structures of filenames to keep in memory for directory iteration to work.
+	 * @param bAllowRetries If a collision is encountered, change the intial seed and try again a fixed number of times before failing
 	 */
-	bool UnloadPakEntryFilenames(TMap<uint64, FPakEntry>& CrossPakCollisionChecker, TArray<FString>* DirectoryRootsToKeep = nullptr);
+	bool UnloadPakEntryFilenames(TMap<uint64, FPakEntry>& CrossPakCollisionChecker, TArray<FString>* DirectoryRootsToKeep = nullptr, bool bAllowRetries = true);
 
 	/**
 	 * Lower memory usage by bit-encoding the pak file entry information.
 	 */
-	void ShrinkPakEntriesMemoryUsage();
+	bool ShrinkPakEntriesMemoryUsage();
+
+	/**
+	 * Returns whether the pak files list has been shrunk or not
+	 */
+	bool HasShrunkPakEntries() const
+	{
+		return bAttemptedPakEntryShrink;
+	}
 
 private:
 
 	/**
 	 * Initializes the pak file.
 	 */
-	void Initialize(FArchive* Reader);
+	void Initialize(FArchive* Reader, bool bLoadIndex = true);
 
 	/**
 	 * Loads and initializes pak file index.
 	 */
 	void LoadIndex(FArchive* Reader);
+
+	/**
+	 * Manually add a file to a pak file,
+	 */
+	void AddSpecialFile(FPakEntry Entry, const FString& Filename);
 
 	/**
 	 * Decodes a bit-encoded pak entry.
@@ -1052,14 +1093,18 @@ private:
 		// Filter the encrypted flag.
 		OutEntry->SetEncrypted((Value & (1 << 22)) != 0);
 
-		// Filter the compression block size or use the UncompressedSize if less that 64k.
-		OutEntry->CompressionBlockSize = OutEntry->UncompressedSize < 65536 ? (uint32)OutEntry->UncompressedSize : ((Value & 0x3f) << 11);
-
 		// This should clear out any excess CompressionBlocks that may be valid in the user's
 		// passed in entry.
 		uint32 CompressionBlocksCount = (Value >> 6) & 0xffff;
 		OutEntry->CompressionBlocks.Empty(CompressionBlocksCount);
 		OutEntry->CompressionBlocks.SetNum(CompressionBlocksCount);
+
+		// Filter the compression block size or use the UncompressedSize if less that 64k.
+		OutEntry->CompressionBlockSize = 0;
+		if (CompressionBlocksCount > 0)
+		{
+			OutEntry->CompressionBlockSize = OutEntry->UncompressedSize < 65536 ? (uint32)OutEntry->UncompressedSize : ((Value & 0x3f) << 11);
+		}
 
 		// Set Verified to true to avoid have a synchronous open fail comparing FPakEntry structures.
 		OutEntry->Verified = true;
@@ -1071,7 +1116,7 @@ private:
 		int64 BaseOffset = Info.HasRelativeCompressedChunkOffsets() ? 0 : OutEntry->Offset;
 
 		// Handle building of the CompressionBlocks array.
-		if (OutEntry->CompressionBlocks.Num() == 1)
+		if (OutEntry->CompressionBlocks.Num() == 1 && !OutEntry->IsEncrypted())
 		{
 			// If the number of CompressionBlocks is 1, we didn't store any extra information.
 			// Derive what we can from the entry's file offset and size.
@@ -1084,6 +1129,9 @@ private:
 			// Get the right pointer to start copying the CompressionBlocks information from.
 			uint32* CompressionBlockSizePtr = (uint32*)SourcePtr;
 
+			// Alignment of the compressed blocks
+			uint64 CompressedBlockAlignment = OutEntry->IsEncrypted() ? FAES::AESBlockSize : 1;
+
 			// CompressedBlockOffset is the starting offset. Everything else can be derived from there.
 			int64 CompressedBlockOffset = BaseOffset + OutEntry->GetSerializedSize(Info.Version);
 			for (int CompressionBlockIndex = 0; CompressionBlockIndex < OutEntry->CompressionBlocks.Num(); ++CompressionBlockIndex)
@@ -1091,7 +1139,7 @@ private:
 				FPakCompressedBlock& CompressedBlock = OutEntry->CompressionBlocks[CompressionBlockIndex];
 				CompressedBlock.CompressedStart = CompressedBlockOffset;
 				CompressedBlock.CompressedEnd = CompressedBlockOffset + *CompressionBlockSizePtr++;
-				CompressedBlockOffset = CompressedBlock.CompressedEnd;
+				CompressedBlockOffset += Align(CompressedBlock.CompressedEnd - CompressedBlock.CompressedStart, CompressedBlockAlignment);
 			}
 		}
 
@@ -1512,6 +1560,11 @@ public:
 	static const TCHAR* GetMountStartupPaksWildCard();
 
 	/**
+	 * Overrides the wildcard used for searching paks. Call before initialization
+	 */
+	static void SetMountStartupPaksWildCard(const FString& WildCard);
+
+	/**
 	* Determine location information for a given chunk ID. Will be DoesNotExist if the pak file wasn't detected, NotAvailable if it exists but hasn't been mounted due to a missing encryption key, or LocalFast if it exists and has been mounted
 	*/
 	EChunkLocation::Type GetPakChunkLocation(int32 InChunkID) const;
@@ -1601,12 +1654,17 @@ public:
 	 * @param InPakFilename Pak filename.
 	 * @param InPath Path to mount the pak at.
 	 */
-	bool Mount(const TCHAR* InPakFilename, uint32 PakOrder, const TCHAR* InPath = NULL);
+	bool Mount(const TCHAR* InPakFilename, uint32 PakOrder, const TCHAR* InPath = NULL, bool bLoadIndex = true);
 
 	bool Unmount(const TCHAR* InPakFilename);
 
 	int32 MountAllPakFiles(const TArray<FString>& PakFolders);
 	int32 MountAllPakFiles(const TArray<FString>& PakFolders, const FString& WildCard);
+
+	/**
+	 * Make unique in memory pak files from a list of named files
+	 */
+	virtual void MakeUniquePakFilesForTheseFiles(TArray<TArray<FString>> InFiles);
 
 
 	/**
@@ -2418,7 +2476,7 @@ struct FPakSignatureFile
 	{
 		ChunkHashes = InChunkHashes;
 		DecryptedHash = ComputeCurrentMasterHash();
-		FRSA::EncryptPrivate(TArrayView<const uint8>(DecryptedHash.Hash, ARRAY_COUNT(FSHAHash::Hash)), EncryptedHash, InKey);
+		FRSA::EncryptPrivate(TArrayView<const uint8>(DecryptedHash.Hash, UE_ARRAY_COUNT(FSHAHash::Hash)), EncryptedHash, InKey);
 	}
 
 	/**
@@ -2455,7 +2513,7 @@ struct FPakSignatureFile
 		{
 			TArray<uint8> Decrypted;
 			int32 BytesDecrypted = FRSA::DecryptPublic(EncryptedHash, Decrypted, InKey);
-			if (BytesDecrypted == ARRAY_COUNT(FSHAHash::Hash))
+			if (BytesDecrypted == UE_ARRAY_COUNT(FSHAHash::Hash))
 			{
 				FSHAHash CurrentHash = ComputeCurrentMasterHash();
 				if (FMemory::Memcmp(Decrypted.GetData(), CurrentHash.Hash, Decrypted.Num()) == 0)

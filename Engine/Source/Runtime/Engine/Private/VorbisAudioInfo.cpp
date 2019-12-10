@@ -11,21 +11,11 @@
 
 #if WITH_OGGVORBIS
 
-// hack to get ogg types right for HTML5.
-#if PLATFORM_HTML5
-#define _WIN32
-#define __MINGW32__
-#endif
 #pragma pack(push, 8)
 #include "ogg/ogg.h"
 #include "vorbis/vorbisenc.h"
 #include "vorbis/vorbisfile.h"
 #pragma pack(pop)
-#endif
-
-#if PLATFORM_HTML5
-#undef  _WIN32
-#undef __MINGW32__
 #endif
 
 #if PLATFORM_LITTLE_ENDIAN
@@ -197,11 +187,22 @@ size_t FVorbisAudioInfo::ReadStreaming(void *Ptr, uint32 Size )
 		if (!CurrentStreamingChunkData || CurrentStreamingChunkIndex != NextStreamingChunkIndex)
 		{
 			CurrentStreamingChunkIndex = NextStreamingChunkIndex;
-			CurrentStreamingChunkData = IStreamingManager::Get().GetAudioStreamingManager().GetLoadedChunk(StreamingSoundWave, CurrentStreamingChunkIndex);
+
+			check(CurrentStreamingChunkIndex >= 0);
+
+			if (static_cast<uint32>(CurrentStreamingChunkIndex) >= StreamingSoundWave->GetNumChunks())
+			{
+				CurrentStreamingChunkData = nullptr;
+				CurrentStreamingChunksSize = 0;
+			}
+			else
+			{
+				CurrentStreamingChunkData = GetLoadedChunk(StreamingSoundWave, CurrentStreamingChunkIndex, CurrentStreamingChunksSize);
+			}
+
 			if (CurrentStreamingChunkData)
 			{
 				check(CurrentStreamingChunkIndex < StreamingSoundWave->RunningPlatformData->Chunks.Num());
-				CurrentStreamingChunksSize = StreamingSoundWave->RunningPlatformData->Chunks[CurrentStreamingChunkIndex].AudioDataSize;
 				CurrentBufferChunkOffset = 0;
 			}
 		}
@@ -212,9 +213,11 @@ size_t FVorbisAudioInfo::ReadStreaming(void *Ptr, uint32 Size )
 			return NumBytesRead;
 		}
 
+		check(CurrentStreamingChunksSize >= CurrentBufferChunkOffset);
 		// How many bytes left in the current chunk
 		uint32 BytesLeftInCurrentChunk = CurrentStreamingChunksSize - CurrentBufferChunkOffset;
 
+		check(Size >= NumBytesRead);
 		// How many more bytes we want to read
 		uint32 NumBytesLeftToRead = Size - NumBytesRead;
 
@@ -569,6 +572,28 @@ bool FVorbisAudioInfo::StreamCompressedInfoInternal(USoundWave* Wave, struct FSo
 	return bHeaderParsed;
 }
 
+const uint8* FVorbisAudioInfo::GetLoadedChunk(USoundWave* InSoundWave, uint32 ChunkIndex, uint32& OutChunkSize)
+{
+	if (!InSoundWave || ChunkIndex >= InSoundWave->GetNumChunks())
+	{
+		UE_LOG(LogAudio, Error, TEXT("Error calling GetLoadedChunk for ChunkIndex %d!"), ChunkIndex);
+		OutChunkSize = 0;
+		return nullptr;
+	}
+	else if (ChunkIndex == 0)
+	{
+		TArrayView<const uint8> ZerothChunk = InSoundWave->GetZerothChunk();
+		OutChunkSize = ZerothChunk.Num();
+		return ZerothChunk.GetData();
+	}
+	else
+	{
+		CurCompressedChunkHandle = IStreamingManager::Get().GetAudioStreamingManager().GetLoadedChunk(InSoundWave, ChunkIndex);
+		OutChunkSize = CurCompressedChunkHandle.Num();
+		return CurCompressedChunkHandle.GetData();
+	}
+}
+
 bool FVorbisAudioInfo::StreamCompressedData(uint8* InDestination, bool bLooping, uint32 BufferSize)
 {
 	if (!bDllLoaded)
@@ -602,8 +627,11 @@ bool FVorbisAudioInfo::StreamCompressedData(uint8* InDestination, bool bLooping,
 		if( BytesActuallyRead <= 0 )
 		{
 			// if we read 0 bytes or there was an error, instead of assuming we looped, lets write out zero's.
-			// this means that the chunk wasn't loaded in time
-			if (NextStreamingChunkIndex < StreamingSoundWave->RunningPlatformData->Chunks.Num())
+			// this means that the chunk wasn't loaded in time.
+
+			check(StreamingSoundWave->GetNumChunks() < ((uint32)TNumericLimits<int32>::Max()));
+
+			if (NextStreamingChunkIndex < static_cast<int32>(StreamingSoundWave->GetNumChunks()))
 			{
 				// zero out the rest of the buffer
 				FMemory::Memzero(InDestination, BufferSize);

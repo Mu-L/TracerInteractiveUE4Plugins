@@ -5,6 +5,7 @@
 #include "BackChannel/Protocol/OSC/BackChannelOSCConnection.h"
 #include "BackChannel/Protocol/OSC/BackChannelOSCMessage.h"
 #include "MessageHandler/RecordingMessageHandler.h"
+#include "RemoteSessionUtils.h"
 
 
 namespace RemoteSessionVars
@@ -27,7 +28,7 @@ FRemoteSessionInputChannel::FRemoteSessionInputChannel(ERemoteSessionChannelMode
 		// and passes it through to the default UE handler
 		DefaultHandler = FSlateApplication::Get().GetPlatformApplication()->GetMessageHandler();
 
-		RecordingHandler = MakeShareable(new FRecordingMessageHandler(DefaultHandler));
+		RecordingHandler = MakeShared<FRecordingMessageHandler>(DefaultHandler);
 		RecordingHandler->SetRecordingHandler(this);
 
 		FSlateApplication::Get().GetPlatformApplication()->SetMessageHandler(RecordingHandler.ToSharedRef());
@@ -36,7 +37,7 @@ FRemoteSessionInputChannel::FRemoteSessionInputChannel(ERemoteSessionChannelMode
 	{
 		DefaultHandler = FSlateApplication::Get().GetPlatformApplication()->GetMessageHandler();
 
-		PlaybackHandler = MakeShareable(new FRecordingMessageHandler(DefaultHandler));
+		PlaybackHandler = MakeShared<FRecordingMessageHandler>(DefaultHandler);
 		
 		auto Delegate = FBackChannelDispatchDelegate::FDelegate::CreateRaw(this, &FRemoteSessionInputChannel::OnRemoteMessage);
 		MessageCallbackHandle = Connection->AddMessageHandler(TEXT("/MessageHandler/"), Delegate);
@@ -55,7 +56,7 @@ FRemoteSessionInputChannel::~FRemoteSessionInputChannel()
 	}
 
 	// todo - is this ok? Might other things have changed the handler like we do?
-	if (DefaultHandler.IsValid())
+	if (DefaultHandler.IsValid() && FSlateApplication::IsInitialized())
 	{
 		FSlateApplication::Get().GetPlatformApplication()->SetMessageHandler(DefaultHandler.ToSharedRef());
 	}
@@ -70,7 +71,18 @@ FRemoteSessionInputChannel::~FRemoteSessionInputChannel()
 
 void FRemoteSessionInputChannel::SetPlaybackWindow(TWeakPtr<SWindow> InWindow, TWeakPtr<FSceneViewport> InViewport)
 {
-	PlaybackHandler->SetPlaybackWindow(InWindow, InViewport);
+	if (PlaybackHandler.IsValid())
+	{
+		PlaybackHandler->SetPlaybackWindow(InWindow, InViewport);
+	}
+}
+
+void FRemoteSessionInputChannel::TryRouteTouchMessageToWidget(bool bRouteMessageToWidget)
+{
+	if (PlaybackHandler.IsValid())
+	{
+		PlaybackHandler->TryRouteTouchMessageToWidget(bRouteMessageToWidget);
+	}
 }
 
 void FRemoteSessionInputChannel::SetInputRect(const FVector2D& TopLeft, const FVector2D& Extents)
@@ -96,6 +108,12 @@ void FRemoteSessionInputChannel::Tick(const float InDeltaTime)
 		{
 			PlaybackHandler->SetConsumeInput(false);
 		}
+
+		PlaybackHandler->Tick(InDeltaTime);
+	}
+	else
+	{
+		RecordingHandler->Tick(InDeltaTime);
 	}
 }
 
@@ -121,5 +139,20 @@ void FRemoteSessionInputChannel::OnRemoteMessage(FBackChannelOSCMessage& Message
 	TArray<uint8> MsgData;
 	Message << MsgData;
 	
-	PlaybackHandler->PlayMessage(*MessageName, MsgData);
+	PlaybackHandler->PlayMessage(*MessageName, MoveTemp(MsgData));
+}
+
+TSharedPtr<IRemoteSessionChannel> FRemoteSessionInputChannelFactoryWorker::Construct(ERemoteSessionChannelMode InMode, TSharedPtr<FBackChannelOSCConnection, ESPMode::ThreadSafe> InConnection) const
+{
+	TSharedPtr<FRemoteSessionInputChannel> Channel = MakeShared<FRemoteSessionInputChannel>(InMode, InConnection);
+	if (InMode == ERemoteSessionChannelMode::Read)
+	{
+		TWeakPtr<SWindow> InputWindow;
+		TWeakPtr<FSceneViewport> SceneViewport;
+		FRemoteSessionUtils::FindSceneViewport(InputWindow, SceneViewport);
+
+		Channel->SetPlaybackWindow(InputWindow, SceneViewport);
+	}
+
+	return Channel;
 }

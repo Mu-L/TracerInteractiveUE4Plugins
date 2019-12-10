@@ -7,6 +7,8 @@
 #include "MetalDebugCommandEncoder.h"
 #endif
 
+#include "ShaderPipelineCache.h"
+
 enum EMetalPipelineHashBits
 {
 	NumBits_RenderTargetFormat = 5, //(x8=40),
@@ -47,13 +49,28 @@ enum EMetalPipelineHashOffsets
 	Offset_End = Offset_SampleCount + NumBits_SampleCount
 };
 
+class FMetalPipelineStateCacheManager
+{
+public:
+	FMetalPipelineStateCacheManager();
+	~FMetalPipelineStateCacheManager();
+	
+private:
+	FDelegateHandle OnShaderPipelineCachePreOpenDelegate;
+	FDelegateHandle OnShaderPipelineCacheOpenedDelegate;
+	FDelegateHandle OnShaderPipelineCachePrecompilationCompleteDelegate;
+	
+	/** Delegate handlers to track the ShaderPipelineCache precompile. */
+	void OnShaderPipelineCachePreOpen(FString const& Name, EShaderPlatform Platform, bool& bReady);
+	void OnShaderPipelineCacheOpened(FString const& Name, EShaderPlatform Platform, uint32 Count, const FGuid& VersionGuid, FShaderPipelineCache::FShaderCachePrecompileContext& ShaderCachePrecompileContext);
+	void OnShaderPipelineCachePrecompilationComplete(uint32 Count, double Seconds, const FShaderPipelineCache::FShaderCachePrecompileContext& ShaderCachePrecompileContext);
+};
+
 struct FMetalTessellationPipelineDesc
 {
 	FMetalTessellationPipelineDesc()
-	: DomainVertexDescriptor(nil)
 	{
 	}
-	mtlpp::VertexDescriptor DomainVertexDescriptor;
 	NSUInteger TessellationInputControlPointBufferIndex;
 	NSUInteger TessellationOutputControlPointBufferIndex;
 	NSUInteger TessellationPatchControlPointOutSize;
@@ -65,7 +82,6 @@ struct FMetalTessellationPipelineDesc
 	NSUInteger TessellationPatchCountBufferIndex;
 	NSUInteger TessellationControlPointIndexBufferIndex;
 	NSUInteger TessellationIndexBufferIndex;
-	NSUInteger DSNumUniformBuffers; // DEBUG ONLY
 };
 
 @interface FMetalShaderPipeline : FApplePlatformObject
@@ -73,18 +89,22 @@ struct FMetalTessellationPipelineDesc
 @public
 	mtlpp::RenderPipelineState RenderPipelineState;
 	mtlpp::ComputePipelineState ComputePipelineState;
+	mtlpp::RenderPipelineState StreamPipelineState;
 	mtlpp::RenderPipelineState DebugPipelineState;
 	FMetalTessellationPipelineDesc TessellationPipelineDesc;
 	TArray<uint32> BufferDataSizes[EMetalShaderStagesNum];
 	TMap<uint8, uint8> TextureTypes[EMetalShaderStagesNum];
 	FMetalDebugShaderResourceMask ResourceMask[EMetalShaderStagesNum];
 	mtlpp::RenderPipelineReflection RenderPipelineReflection;
+	mtlpp::RenderPipelineReflection StreamPipelineReflection;
 	mtlpp::ComputePipelineReflection ComputePipelineReflection;
 #if METAL_DEBUG_OPTIONS
 	ns::String VertexSource;
+	ns::String DomainSource;
 	ns::String FragmentSource;
 	ns::String ComputeSource;
 	mtlpp::RenderPipelineDescriptor RenderDesc;
+	mtlpp::RenderPipelineDescriptor StreamDesc;
 	mtlpp::ComputePipelineDescriptor ComputeDesc;
 #endif
 }

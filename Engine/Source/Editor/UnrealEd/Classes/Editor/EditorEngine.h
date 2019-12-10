@@ -23,9 +23,12 @@
 #include "Settings/LevelEditorPlaySettings.h"
 #include "Settings/LevelEditorViewportSettings.h"
 #include "Misc/CompilationResult.h"
+#include "Interfaces/ITargetPlatform.h"
+#include "Interfaces/ITargetPlatformManagerModule.h"
 
 #include "EditorSubsystem.h"
 #include "Subsystems/SubsystemCollection.h"
+#include "RHI.h"
 
 #include "EditorEngine.generated.h"
 
@@ -43,7 +46,7 @@ class FViewport;
 class IEngineLoop;
 class ILauncherWorker;
 class ILayers;
-class ILevelViewport;
+class IAssetViewport;
 class ITargetPlatform;
 class SViewport;
 class UActorFactory;
@@ -102,7 +105,7 @@ struct FSlatePlayInEditorInfo
 	TSharedPtr<class FSceneViewport>	SlatePlayInEditorWindowViewport;
 	
 	/** The slate viewport that should be used for play in viewport */
-	TWeakPtr<class ILevelViewport>		DestinationSlateViewport;
+	TWeakPtr<class IAssetViewport>		DestinationSlateViewport;
 
 	FSlatePlayInEditorInfo()
 	: SlatePlayInEditorWindow(NULL), DestinationSlateViewport(NULL)
@@ -358,6 +361,56 @@ struct FPlayInEditorOverrides
 	TOptional<int32> NumberOfClients;
 };
 
+struct FPreviewPlatformInfo
+{
+	FPreviewPlatformInfo()
+	:	PreviewFeatureLevel(ERHIFeatureLevel::SM5)
+	,	bPreviewFeatureLevelActive(false)
+	{}
+
+	FPreviewPlatformInfo(ERHIFeatureLevel::Type InFeatureLevel, FName InPreviewShaderPlatformName = NAME_None, bool InbPreviewFeatureLevelActive = false)
+	:	PreviewFeatureLevel(InFeatureLevel)
+	,	PreviewShaderPlatformName(InPreviewShaderPlatformName)
+	,	bPreviewFeatureLevelActive(InbPreviewFeatureLevelActive)
+	{}
+
+	/** The feature level we should use when loading or creating a new world */
+	ERHIFeatureLevel::Type PreviewFeatureLevel;
+	
+	/** The shader platform to preview, or NAME_None if there is no shader preview platform */
+	FName PreviewShaderPlatformName;
+
+	/** Is feature level preview currently active */
+	bool bPreviewFeatureLevelActive;
+
+	/** Checks if two FPreviewPlatformInfos are for the same preview platform. Note, this does NOT compare the bPreviewFeatureLevelActive flag */
+	bool Matches(const FPreviewPlatformInfo& Other) const
+	{
+		return PreviewFeatureLevel == Other.PreviewFeatureLevel && PreviewShaderPlatformName == Other.PreviewShaderPlatformName;
+	}
+
+	/** Convert platform name like "Android", or NAME_None if none is set or the preview feature level is not active */
+	FName GetEffectivePreviewPlatformName() const
+	{
+		if (PreviewShaderPlatformName != NAME_None && bPreviewFeatureLevelActive)
+		{
+			ITargetPlatform* TargetPlatform = GetTargetPlatformManager()->FindTargetPlatformWithSupport(TEXT("ShaderFormat"), PreviewShaderPlatformName);
+			if (TargetPlatform)
+			{
+				return FName(*TargetPlatform->IniPlatformName());
+			}
+		}
+		return NAME_None;
+	}
+
+	/** returns the preview feature level if active, or GMaxRHIFeatureLevel otherwise */
+	ERHIFeatureLevel::Type GetEffectivePreviewFeatureLevel() const
+	{
+		return bPreviewFeatureLevelActive ? PreviewFeatureLevel : GMaxRHIFeatureLevel;
+	}
+
+};
+
 /**
  * Engine that drives the Editor.
  * Separate from UGameEngine because it may have much different functionality than desired for an instance of a game itself.
@@ -574,7 +627,7 @@ public:
 	TMap<FName, FSlatePlayInEditorInfo>	SlatePlayInEditorMap;
 
 	/** Viewport the next PlaySession was requested to happen on */
-	TWeakPtr<class ILevelViewport>		RequestedDestinationSlateViewport;
+	TWeakPtr<class IAssetViewport>		RequestedDestinationSlateViewport;
 
 	/** When set to anything other than -1, indicates a specific In-Editor viewport index that PIE should use */
 	UPROPERTY()
@@ -644,9 +697,9 @@ public:
 	/** The feature level we should use when loading or creating a new world */
 	ERHIFeatureLevel::Type DefaultWorldFeatureLevel;
 
-	/** The feature level we should use when loading or creating a new world */
-	ERHIFeatureLevel::Type PreviewFeatureLevel;
-
+	/** The feature level and platform we should use when loading or creating a new world */
+	FPreviewPlatformInfo PreviewPlatform;
+	
 	/** A delegate that is called when the preview feature level changes. Primarily used to switch a viewport's feature level. */
 	DECLARE_MULTICAST_DELEGATE_OneParam(FPreviewFeatureLevelChanged, ERHIFeatureLevel::Type);
 	FPreviewFeatureLevelChanged PreviewFeatureLevelChanged;
@@ -680,6 +733,7 @@ private:
 public:
 
 	/** The "manager" of all the layers for the UWorld currently being edited */
+	UE_DEPRECATED(4.24, "ILayers and FLayers (GEditor->Layers) have been deprecated, use ULayersSubsystem (rather than ILayers) and GEditor->GetEditorSubsystem<ULayersSubsystem>() (rather than GEditor->Layers) instead.")
 	TSharedPtr< class ILayers >				Layers;
 
 	/** List of all viewport clients */
@@ -821,10 +875,13 @@ public:
 
 	DECLARE_EVENT_TwoParams(UEngine, FHLODActorRemovedFromClusterEvent, const AActor*, const AActor*);
 	FHLODActorRemovedFromClusterEvent& OnHLODActorRemovedFromCluster() { return HLODActorRemovedFromClusterEvent; }
-
+	   
 	/** Called by internal engine systems after an Actor is removed from a cluster */
 	void BroadcastHLODActorRemovedFromCluster(const AActor* InActor, const AActor* ParentActor) { HLODActorRemovedFromClusterEvent.Broadcast(InActor, ParentActor); }
 
+	/** Called when the editor has been asked to perform an exec command on particle systems. */
+	DECLARE_EVENT_OneParam(UEditorEngine, FExecParticleInvoked, const TCHAR*);
+	FExecParticleInvoked& OnExecParticleInvoked() { return ExecParticleInvokedEvent; }
 	/**
 	 * Called before an actor or component is about to be translated, rotated, or scaled by the editor
 	 *
@@ -879,6 +936,7 @@ public:
 	virtual bool GetMapBuildCancelled() const override { return false; }
 	virtual void SetMapBuildCancelled(bool InCancelled) override { /* Intentionally empty. */ }
 	virtual void HandleNetworkFailure(UWorld *World, UNetDriver *NetDriver, ENetworkFailure::Type FailureType, const FString& ErrorString) override;
+	virtual ERHIFeatureLevel::Type GetDefaultWorldFeatureLevel() const override { return DefaultWorldFeatureLevel; }
 
 	FString GetPlayOnTargetPlatformName() const;
 protected:
@@ -935,6 +993,7 @@ public:
 	bool	HandleDumpPublicCommand( const TCHAR* Str, FOutputDevice& Ar );
 	bool	HandleJumpToCommand( const TCHAR* Str, FOutputDevice& Ar );
 	bool	HandleBugItGoCommand( const TCHAR* Str, FOutputDevice& Ar );
+	bool	HandleBugItCommand(const TCHAR* Str, FOutputDevice& Ar);
 	bool	HandleTagSoundsCommand( const TCHAR* Str, FOutputDevice& Ar );
 	bool	HandlecheckSoundsCommand( const TCHAR* Str, FOutputDevice& Ar );
 	bool	HandleFixupBadAnimNotifiersCommand( const TCHAR* Str, FOutputDevice& Ar );
@@ -1764,7 +1823,7 @@ public:
 	 * @param	bUseMobilePreview		True to enable mobile preview mode (PC platform only)
 	 * @param	bUseVRPreview			True to enable VR preview mode (PC platform only)
 	 */
-	void RequestPlaySession( bool bAtPlayerStart, TSharedPtr<class ILevelViewport> DestinationViewport, bool bInSimulateInEditor, const FVector* StartLocation = NULL, const FRotator* StartRotation = NULL, int32 DestinationConsole = -1, bool bUseMobilePreview = false, bool bUseVRPreview = false, bool bUseVulkanPreview = false);
+	void RequestPlaySession( bool bAtPlayerStart, TSharedPtr<class IAssetViewport> DestinationViewport, bool bInSimulateInEditor, const FVector* StartLocation = NULL, const FRotator* StartRotation = NULL, int32 DestinationConsole = -1, bool bUseMobilePreview = false, bool bUseVRPreview = false, bool bUseVulkanPreview = false);
 
 	// @todo gmp: temp hack for Rocket demo
 	void RequestPlaySession(const FVector* StartLocation, const FRotator* StartRotation, bool MobilePreview, bool VulkanPreview, const FString& MobilePreviewTargetDevice, FString AdditionalStandaloneLaunchParameters = TEXT(""));
@@ -2242,14 +2301,15 @@ public:
 
 	/** The editor wrapper for UPackage::SavePackage. Auto-adds files to source control when necessary */
 	bool SavePackage( UPackage* InOuter, UObject* Base, EObjectFlags TopLevelFlags, const TCHAR* Filename, 
-		FOutputDevice* Error=GError, FLinkerLoad* Conform=NULL, bool bForceByteSwapping=false, bool bWarnOfLongFilename=true, 
+		FOutputDevice* Error=GError, FLinkerNull* Conform=NULL, bool bForceByteSwapping=false, bool bWarnOfLongFilename=true, 
 		uint32 SaveFlags=SAVE_None, const class ITargetPlatform* TargetPlatform = NULL, const FDateTime& FinalTimeStamp = FDateTime::MinValue(), bool bSlowTask = true );
 
 	/** The editor wrapper for UPackage::Save. Auto-adds files to source control when necessary */
 	FSavePackageResultStruct Save(UPackage* InOuter, UObject* Base, EObjectFlags TopLevelFlags, const TCHAR* Filename,
-		FOutputDevice* Error = GError, FLinkerLoad* Conform = NULL, bool bForceByteSwapping = false, bool bWarnOfLongFilename = true,
+		FOutputDevice* Error = GError, FLinkerNull* Conform = NULL, bool bForceByteSwapping = false, bool bWarnOfLongFilename = true,
 		uint32 SaveFlags = SAVE_None, const class ITargetPlatform* TargetPlatform = NULL, const FDateTime& FinalTimeStamp = FDateTime::MinValue(), 
-		bool bSlowTask = true, class FArchiveDiffMap* InOutDiffMap = nullptr);
+		bool bSlowTask = true, class FArchiveDiffMap* InOutDiffMap = nullptr,
+		FSavePackageContext* SavePackageContext = nullptr);
 
 	virtual bool InitializePhysicsSceneForSaveIfNecessary(UWorld* World, bool &bOutForceInitialized);
 	void CleanupPhysicsSceneThatWasInitializedForSave(UWorld* World, bool bForceInitialized);
@@ -2802,9 +2862,6 @@ private:
 	/** Delegate callback for when a streaming level is removed from world. */
 	void OnLevelRemovedFromWorld(ULevel* InLevel, UWorld* InWorld);
 
-	/** Delegate callback for when a streamed out levels going to be removed by GC. */
-	void OnGCStreamedOutLevels();
-
 	/** Puts the currently loaded project file at the top of the recents list and trims and files that fell off the list */
 	void UpdateRecentlyLoadedProjectFiles();
 
@@ -2912,6 +2969,9 @@ private:
 
 	/** Broadcasts after an Actor is removed from a cluster */
 	FHLODActorRemovedFromClusterEvent HLODActorRemovedFromClusterEvent;
+
+	/** Broadcasts after an Exec event on particles has been invoked.*/
+	FExecParticleInvoked ExecParticleInvokedEvent; 
 
 	/** Delegate to be called when a matinee is requested to be opened */
 	FShouldOpenMatineeCallback ShouldOpenMatineeCallback;
@@ -3021,7 +3081,7 @@ protected:
 	void HandleStageStarted(const FString& InStage, TWeakPtr<SNotificationItem> NotificationItemPtr);
 	void HandleStageCompleted(const FString& InStage, double StageTime, bool bHasCode, TWeakPtr<SNotificationItem> NotificationItemPtr);
 	void HandleLaunchCanceled(double TotalTime, bool bHasCode, TWeakPtr<SNotificationItem> NotificationItemPtr);
-	void HandleLaunchCompleted(bool Succeeded, double TotalTime, int32 ErrorCode, bool bHasCode, TWeakPtr<SNotificationItem> NotificationItemPtr, TSharedPtr<class FMessageLog> MessageLog);
+	void HandleLaunchCompleted(bool Succeeded, double TotalTime, int32 ErrorCode, bool bHasCode, TWeakPtr<SNotificationItem> NotificationItemPtr);
 
 	// Handle requests from slate application to open assets.
 	bool HandleOpenAsset(UObject* Asset);
@@ -3058,7 +3118,7 @@ public:
 	void OnSceneMaterialsModified();
 
 	/** Call this function to change the feature level and to override the material quality platform of the editor and PIE worlds */
-	void SetPreviewPlatform(const FName MaterialQualityPlatform, ERHIFeatureLevel::Type InPreviewFeatureLevel, const bool bSaveSettings = true);
+	void SetPreviewPlatform(const FPreviewPlatformInfo& NewPreviewPlatform, bool bSaveSettings);
 
 	/** Toggle the feature level preview */
 	void ToggleFeatureLevelPreview();
@@ -3079,14 +3139,6 @@ public:
 	FPreviewFeatureLevelChanged& OnPreviewFeatureLevelChanged() { return PreviewFeatureLevelChanged; }
 
 protected:
-	/** Call this function to change the feature level of the editor and PIE worlds */
-	void SetFeatureLevelPreview(const ERHIFeatureLevel::Type InPreviewFeatureLevel);
-
-	/** call this function to change the feature level for all materials */
-	void SetMaterialsFeatureLevel(const ERHIFeatureLevel::Type InPreviewFeatureLevel);
-
-	/** call this to recompile the materials */
-	void AllMaterialsCacheResourceShadersForRendering(ERHIFeatureLevel::Type InPreviewFeatureLevel);
 
 	/** Function pair used to save and restore the global feature level */
 	void LoadEditorFeatureLevel();

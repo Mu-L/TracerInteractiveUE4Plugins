@@ -36,7 +36,7 @@ public:
 		, ShaderOutput(InShaderOutput)
 	{
 		FString InputShaderSource;
-		if (LoadShaderSourceFile(*InShaderInput.VirtualSourceFilePath, &InputShaderSource, nullptr))
+		if (LoadShaderSourceFile(*InShaderInput.VirtualSourceFilePath, InShaderInput.Target.GetPlatform(),  &InputShaderSource, nullptr))
 		{
 			InputShaderSource = FString::Printf(TEXT("%s\n#line 1\n%s"), *ShaderInput.SourceFilePrefix, *InputShaderSource);
 			CachedFileContents.Add(InShaderInput.VirtualSourceFilePath, StringToArray<ANSICHAR>(*InputShaderSource, InputShaderSource.Len() + 1));
@@ -63,7 +63,10 @@ private:
 
 		FUTF8ToTCHAR UTF8Converter(InVirtualFilePath);
 		FString VirtualFilePath = UTF8Converter.Get();
-		
+
+		// Substitute virtual platform path here to make sure that #line directives refer to the platform-specific file.
+		ReplaceVirtualFilePathForShaderPlatform(VirtualFilePath, This->ShaderInput.Target.GetPlatform());
+
 		// Collapse any relative directories to allow #include "../MyFile.ush"
 		FPaths::CollapseRelativeDirectories(VirtualFilePath);
 
@@ -84,7 +87,7 @@ private:
 			{
 				CheckShaderHashCacheInclude(VirtualFilePath, This->ShaderInput.Target.GetPlatform());
 
-				LoadShaderSourceFile(*VirtualFilePath, &FileContents, &This->ShaderOutput.Errors);
+				LoadShaderSourceFile(*VirtualFilePath, This->ShaderInput.Target.GetPlatform(), &FileContents, &This->ShaderOutput.Errors);
 			}
 
 			if (FileContents.Len() > 0)
@@ -181,6 +184,20 @@ FMcppAllocator GMcppAlloc;
 
 #endif
 
+static void DumpShaderDefinesAsCommentedCode(const FShaderCompilerInput& ShaderInput, FString* OutDefines)
+{
+	const TMap<FString, FString>& Definitions = ShaderInput.Environment.GetDefinitions();
+
+	TArray<FString> Keys;
+	Definitions.GetKeys(/* out */ Keys);
+	Keys.Sort();
+
+	for (const FString& Key : Keys)
+	{
+		*OutDefines += FString::Printf(TEXT("// #define %s %s\n"), *Key, *Definitions[Key]);
+	}
+}
+
 //////////////////////////////////////////////////////////////////////////
 
 /**
@@ -189,13 +206,15 @@ FMcppAllocator GMcppAlloc;
  * @param ShaderOutput - ShaderOutput to which errors can be added.
  * @param ShaderInput - The shader compiler input.
  * @param AdditionalDefines - Additional defines with which to preprocess the shader.
+ * @param bShaderDumpDefinesAsCommentedCode - Whether to add shader definitions as comments.
  * @returns true if the shader is preprocessed without error.
  */
 bool PreprocessShader(
 	FString& OutPreprocessedShader,
 	FShaderCompilerOutput& ShaderOutput,
 	const FShaderCompilerInput& ShaderInput,
-	const FShaderCompilerDefinitions& AdditionalDefines
+	const FShaderCompilerDefinitions& AdditionalDefines,
+	bool bShaderDumpDefinesAsCommentedCode
 	)
 {
 	// Skip the cache system and directly load the file path (used for debugging)
@@ -208,6 +227,7 @@ bool PreprocessShader(
 		check(CheckVirtualShaderFilePath(ShaderInput.VirtualSourceFilePath));
 	}
 
+	int32 McppResult = 0;
 	FString McppOutput, McppErrors;
 
 	static FCriticalSection McppCriticalSection;
@@ -244,7 +264,7 @@ bool PreprocessShader(
 		ANSICHAR* McppOutAnsi = NULL;
 		ANSICHAR* McppErrAnsi = NULL;
 
-		int32 Result = mcpp_run(
+		McppResult = mcpp_run(
 			McppOptionsANSI.GetData(),
 			McppOptionsANSI.Num(),
 			TCHAR_TO_ANSI(*ShaderInput.VirtualSourceFilePath),
@@ -262,7 +282,23 @@ bool PreprocessShader(
 		return false;
 	}
 
-	OutPreprocessedShader = MoveTemp(McppOutput);
+	// Report unhandled mcpp failure that didn't generate any errors
+	if (McppResult != 0)
+	{
+		FShaderCompilerError* CompilerError = new(ShaderOutput.Errors) FShaderCompilerError;
+		CompilerError->ErrorVirtualFilePath = ShaderInput.VirtualSourceFilePath;
+		CompilerError->ErrorLineString = TEXT("0");
+		CompilerError->StrippedErrorMessage = FString::Printf(TEXT("PreprocessShader mcpp_run failed with error code %d"), McppResult);
+		return false;
+	}
+
+	// List the defines used for compilation in the preprocessed shaders, especially to know witch permutation vector this shader is.
+	if (bShaderDumpDefinesAsCommentedCode)
+	{
+		DumpShaderDefinesAsCommentedCode(ShaderInput, &OutPreprocessedShader);
+	}
+
+	OutPreprocessedShader += McppOutput;
 
 	return true;
 }

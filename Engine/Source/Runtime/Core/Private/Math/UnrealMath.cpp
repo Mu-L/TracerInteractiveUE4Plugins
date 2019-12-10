@@ -646,6 +646,12 @@ void FQuat::ToSwingTwist(const FVector& InTwistAxis, FQuat& OutSwing, FQuat& Out
 	OutSwing = *this * OutTwist.Inverse();
 }
 
+float FQuat::GetTwistAngle(const FVector& TwistAxis) const
+{
+	float XYZ = FVector::DotProduct(TwistAxis, FVector(X, Y, Z));
+	return FMath::UnwindRadians(2.0f * FMath::Atan2(XYZ, W));
+}
+
 FMatrix FRotationAboutPointMatrix::Make(const FQuat& Rot, const FVector& Origin)
 {
 	return FRotationAboutPointMatrix(Rot.Rotator(), Origin);
@@ -2289,7 +2295,7 @@ CORE_API FVector FMath::VInterpNormalRotationTo(const FVector& Current, const FV
 	return Target;
 }
 
-CORE_API FVector FMath::VInterpConstantTo(const FVector Current, const FVector& Target, float DeltaTime, float InterpSpeed)
+CORE_API FVector FMath::VInterpConstantTo(const FVector& Current, const FVector& Target, float DeltaTime, float InterpSpeed)
 {
 	const FVector Delta = Target - Current;
 	const float DeltaM = Delta.Size();

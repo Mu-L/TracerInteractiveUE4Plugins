@@ -22,7 +22,7 @@
 #include "IMeshMergeUtilities.h"
 #include "Kismet/GameplayStatics.h"
 #include "Kismet2/ComponentEditorUtils.h"
-#include "Layers/ILayers.h"
+#include "Layers/LayersSubsystem.h"
 #include "LevelEditorViewport.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialInterface.h"
@@ -30,7 +30,8 @@
 #include "ScopedTransaction.h"
 #include "UnrealEdGlobals.h"
 #include "LevelEditor.h"
-#include "ILevelViewport.h"
+#include "IAssetViewport.h"
+#include "SLevelViewport.h"
 
 #define LOCTEXT_NAMESPACE "EditorLevelLibrary"
 
@@ -204,7 +205,7 @@ void UEditorLevelLibrary::PilotLevelActor(AActor* ActorToPilot)
 {
 	FLevelEditorModule& LevelEditorModule = FModuleManager::GetModuleChecked<FLevelEditorModule>("LevelEditor");
 
-	TSharedPtr<ILevelViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
+	TSharedPtr<SLevelViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveLevelViewport();
 	if (ActiveLevelViewport.IsValid())
 	{
 		FLevelEditorViewportClient& LevelViewportClient = ActiveLevelViewport->GetLevelViewportClient();
@@ -221,7 +222,7 @@ void UEditorLevelLibrary::EjectPilotLevelActor()
 {
 	FLevelEditorModule& LevelEditorModule = FModuleManager::GetModuleChecked<FLevelEditorModule>("LevelEditor");
 
-	TSharedPtr<ILevelViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
+	TSharedPtr<SLevelViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveLevelViewport();
 	if (ActiveLevelViewport.IsValid())
 	{
 		FLevelEditorViewportClient& LevelViewportClient = ActiveLevelViewport->GetLevelViewportClient();
@@ -305,7 +306,7 @@ void UEditorLevelLibrary::EditorSetGameView(bool bGameView)
 {
 	FLevelEditorModule& LevelEditorModule = FModuleManager::GetModuleChecked<FLevelEditorModule>("LevelEditor");
 
-	TSharedPtr<ILevelViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
+	TSharedPtr<IAssetViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
 	if (ActiveLevelViewport.IsValid())
 	{
 		if (ActiveLevelViewport->IsInGameView() != bGameView)
@@ -319,7 +320,7 @@ void UEditorLevelLibrary::EditorPlaySimulate()
 {
 	FLevelEditorModule& LevelEditorModule = FModuleManager::GetModuleChecked<FLevelEditorModule>("LevelEditor");
 
-	TSharedPtr<ILevelViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
+	TSharedPtr<IAssetViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
 	if (ActiveLevelViewport.IsValid())
 	{
 		const bool bSimulateInEditor = true;
@@ -331,7 +332,7 @@ void UEditorLevelLibrary::EditorInvalidateViewports()
 {
 	FLevelEditorModule& LevelEditorModule = FModuleManager::GetModuleChecked<FLevelEditorModule>("LevelEditor");
 
-	TSharedPtr<ILevelViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
+	TSharedPtr<SLevelViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveLevelViewport();
 	if (ActiveLevelViewport.IsValid())
 	{
 		FLevelEditorViewportClient& LevelViewportClient = ActiveLevelViewport->GetLevelViewportClient();
@@ -464,10 +465,8 @@ bool UEditorLevelLibrary::DestroyActor(class AActor* ToDestroyActor)
 		GEditor->SelectNone(true, true, false);
 	}
 
-	if (GEditor->Layers)
-	{
-		GEditor->Layers->DisassociateActorFromLayers(ToDestroyActor);
-	}
+	ULayersSubsystem* Layers = GEditor->GetEditorSubsystem<ULayersSubsystem>();
+	Layers->DisassociateActorFromLayers(ToDestroyActor);
 	return World->EditorDestroyActor(ToDestroyActor, true);
 }
 
@@ -1094,7 +1093,7 @@ namespace InternalEditorLevelLibrary
 			OutFailureReason = TEXT("The actors were not in a valid world.");
 			return false;
 		}
-		if (CurrentWorld->WorldType != EWorldType::Editor)
+		if (CurrentWorld->WorldType != EWorldType::Editor && CurrentWorld->WorldType != EWorldType::EditorPreview)
 		{
 			OutFailureReason = TEXT("The actors were not in an editor world.");
 			return false;
@@ -1242,10 +1241,11 @@ AActor* UEditorLevelLibrary::JoinStaticMeshActors(const TArray<AStaticMeshActor*
 
 	if (JoinOptions.bDestroySourceActors)
 	{
+		ULayersSubsystem* Layers = GEditor->GetEditorSubsystem<ULayersSubsystem>();
 		UWorld* World = AllActors[0]->GetWorld();
 		for (AActor* Actor : AllActors)
 		{
-			GEditor->Layers->DisassociateActorFromLayers(Actor);
+			Layers->DisassociateActorFromLayers(Actor);
 			World->EditorDestroyActor(Actor, true);
 		}
 	}
@@ -1338,10 +1338,11 @@ bool UEditorLevelLibrary::MergeStaticMeshActors(const TArray<AStaticMeshActor*>&
 	// Remove source actors
 	if (MergeOptions.bDestroySourceActors)
 	{
+		ULayersSubsystem* Layers = GEditor->GetEditorSubsystem<ULayersSubsystem>();
 		UWorld* World = AllActors[0]->GetWorld();
 		for (AActor* Actor : AllActors)
 		{
-			GEditor->Layers->DisassociateActorFromLayers(Actor);
+			Layers->DisassociateActorFromLayers(Actor);
 			World->EditorDestroyActor(Actor, true);
 		}
 	}
@@ -1445,9 +1446,10 @@ bool UEditorLevelLibrary::CreateProxyMeshActor(const TArray<class AStaticMeshAct
 	// Remove source actors
 	if (MergeOptions.bDestroySourceActors)
 	{
+		ULayersSubsystem* Layers = GEditor->GetEditorSubsystem<ULayersSubsystem>();
 		for (AActor* Actor : AllActors)
 		{
-			GEditor->Layers->DisassociateActorFromLayers(Actor);
+			Layers->DisassociateActorFromLayers(Actor);
 			ActorWorld->EditorDestroyActor(Actor, true);
 		}
 	}

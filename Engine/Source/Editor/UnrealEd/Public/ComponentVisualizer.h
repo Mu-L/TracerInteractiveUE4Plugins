@@ -6,6 +6,7 @@
 #include "InputCoreTypes.h"
 #include "Components/ActorComponent.h"
 #include "HitProxies.h"
+#include "ConvexVolume.h"
 
 class AActor;
 class FCanvas;
@@ -34,6 +35,70 @@ struct HComponentVisProxy : public HHitProxy
 };
 
 
+struct FPropertyNameAndIndex
+{
+	FPropertyNameAndIndex()
+		: Name(NAME_None)
+		, Index(INDEX_NONE)
+	{}
+
+	explicit FPropertyNameAndIndex(FName InName, int32 InIndex = 0)
+		: Name(InName)
+		, Index(InIndex)
+	{}
+
+	bool IsValid() const { return Name != NAME_None && Index != INDEX_NONE; }
+
+	void Clear()
+	{
+		Name = NAME_None;
+		Index = INDEX_NONE;
+	}
+
+	FName Name;
+	int32 Index;
+};
+
+
+/**
+ * Describes a chain of properties from the parent actor of a given component, to the component itself.
+ */
+class UNREALED_API FComponentPropertyPath
+{
+public:
+
+	FComponentPropertyPath() = default;
+	explicit FComponentPropertyPath(const UActorComponent* Component) { Set(Component); }
+
+	/** Resets the property path */
+	void Reset()
+	{
+		ParentOwningActor = nullptr;
+		LastResortComponentPtr = nullptr;
+		PropertyChain.Reset();
+	}
+
+	/** Gets the parent owning actor for the component, or nullptr if it is not valid */
+	AActor* GetParentOwningActor() const { return ParentOwningActor.Get(); }
+
+	/** Gets a pointer to the component, or nullptr if it is not valid */
+	UActorComponent* GetComponent() const;
+
+	/** Determines whether the property path is valid or not */
+	bool IsValid() const;
+
+private:
+
+	/** Sets the component referred to by the object */
+	void Set(const UActorComponent* Component);
+
+	TWeakObjectPtr<AActor> ParentOwningActor;
+	TWeakObjectPtr<UActorComponent> LastResortComponentPtr;
+	TArray<FPropertyNameAndIndex> PropertyChain;
+};
+
+
+
 /** Base class for a component visualizer, that draw editor information for a particular component class */
 class UNREALED_API FComponentVisualizer : public TSharedFromThis<FComponentVisualizer>
 {
@@ -59,39 +124,30 @@ public:
 	virtual bool HandleInputDelta(FEditorViewportClient* ViewportClient, FViewport* Viewport, FVector& DeltaTranslate, FRotator& DeltalRotate, FVector& DeltaScale) { return false; }
 	/** */
 	virtual bool HandleInputKey(FEditorViewportClient* ViewportClient,FViewport* Viewport,FKey Key,EInputEvent Event) { return false; }
+	/** Handle click modified by Alt, Ctrl and/or Shift. The input HitProxy may not be on this component. */
+	virtual bool HandleModifiedClick(FEditorViewportClient* InViewportClient, HHitProxy* HitProxy, const FViewportClick& Click) { return false; }
+	/** Handle box select input */
+	virtual bool HandleBoxSelect(const FBox& InBox, FEditorViewportClient* InViewportClient,FViewport* InViewport) { return false; }
+	/** Handle frustum select input */
+	virtual bool HandleFrustumSelect(const FConvexVolume& InFrustum, FEditorViewportClient* InViewportClient, FViewport* InViewport) { return false; }
+	/** Return whether focus on selection should focus on bounding box defined by active visualizer */
+	virtual bool HasFocusOnSelectionBoundingBox(FBox& OutBoundingBox) { return false; }
+	/** Pass snap input to active visualizer */
+	virtual bool HandleSnapTo(const bool bInAlign, const bool bInUseLineTrace, const bool bInUseBounds, const bool bInUsePivot, AActor* InDestination) { return false;  }
 	/** */
 	virtual TSharedPtr<SWidget> GenerateContextMenu() const { return TSharedPtr<SWidget>(); }
 	/** */
 	virtual bool IsVisualizingArchetype() const { return false; }
 
-	struct FPropertyNameAndIndex
-	{
-		FPropertyNameAndIndex()
-			: Name(NAME_None)
-			, Index(INDEX_NONE)
-		{}
-
-		explicit FPropertyNameAndIndex(FName InName, int32 InIndex = 0)
-			: Name(InName)
-			, Index(InIndex)
-		{}
-
-		bool IsValid() const { return Name != NAME_None && Index != INDEX_NONE; }
-
-		void Clear()
-		{
-			Name = NAME_None;
-			Index = INDEX_NONE;
-		}
-
-		FName Name;
-		int32 Index;
-	};
+	// So deprecated code expecting this as an inner class still works
+	using FPropertyNameAndIndex = ::FPropertyNameAndIndex;
 
 	/** Find the name of the property that points to this component */
+	UE_DEPRECATED(4.24, "Please use the FComponentPropertyPath class to build property name paths for components.")
 	static FPropertyNameAndIndex GetComponentPropertyName(const UActorComponent* Component);
 
 	/** Get a component pointer from the property name */
+	UE_DEPRECATED(4.24, "Please use the FComponentPropertyPath::GetComponent() to retrieve a component pointer from a property name path.")
 	static UActorComponent* GetComponentFromPropertyName(const AActor* CompOwner, const FPropertyNameAndIndex& Property);
 
 	/** Notify that a component property has been modified */
@@ -103,11 +159,11 @@ public:
 
 struct FCachedComponentVisualizer
 {
-	TWeakObjectPtr<UActorComponent> Component;
+	FComponentPropertyPath ComponentPropertyPath;
 	TSharedPtr<FComponentVisualizer> Visualizer;
 	
 	FCachedComponentVisualizer(UActorComponent* InComponent, TSharedPtr<FComponentVisualizer>& InVisualizer)
-		: Component(InComponent)
+		: ComponentPropertyPath(InComponent)
 		, Visualizer(InVisualizer)
 	{}
 };

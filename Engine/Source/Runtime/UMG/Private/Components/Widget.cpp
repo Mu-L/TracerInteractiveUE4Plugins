@@ -16,7 +16,6 @@
 #include "Widgets/Layout/SSpacer.h"
 #include "Widgets/SToolTip.h"
 #include "Binding/PropertyBinding.h"
-#include "Blueprint/WidgetNavigation.h"
 #include "Logging/MessageLog.h"
 #include "Blueprint/UserWidget.h"
 #include "Slate/SObjectWidget.h"
@@ -155,7 +154,7 @@ UWidget::UWidget(const FObjectInitializer& ObjectInitializer)
 	bIsEnabled = true;
 	bIsVariable = true;
 #if WITH_EDITOR
-	DesignerFlags = EWidgetDesignFlags::None;
+	DesignerFlags = static_cast<uint8>(EWidgetDesignFlags::None);
 #endif
 	Visibility = ESlateVisibility::Visible;
 	RenderOpacity = 1.0f;
@@ -544,6 +543,11 @@ bool UWidget::HasUserFocusedDescendants(APlayerController* PlayerController) con
 	return false;
 }
 
+void UWidget::SetFocus()
+{
+	SetUserFocus(GetOwningPlayer());
+}
+
 void UWidget::SetUserFocus(APlayerController* PlayerController)
 {
 	if ( PlayerController == nullptr || !PlayerController->IsLocalPlayerController() || PlayerController->Player == nullptr )
@@ -584,7 +588,7 @@ void UWidget::ForceLayoutPrepass()
 	TSharedPtr<SWidget> SafeWidget = GetCachedWidget();
 	if (SafeWidget.IsValid())
 	{
-		SafeWidget->SlatePrepass(SafeWidget->GetCachedGeometry().Scale);
+		SafeWidget->SlatePrepass(SafeWidget->GetTickSpaceGeometry().Scale);
 	}
 }
 
@@ -608,7 +612,7 @@ FVector2D UWidget::GetDesiredSize() const
 	return FVector2D(0, 0);
 }
 
-void UWidget::SetNavigationRuleInternal(EUINavigation Direction, EUINavigationRule Rule, FName WidgetToFocus)
+void UWidget::SetNavigationRuleInternal(EUINavigation Direction, EUINavigationRule Rule, FName WidgetToFocus/* = NAME_None*/, UWidget* InWidget/* = nullptr*/, FCustomWidgetNavigationDelegate InCustomDelegate/* = FCustomWidgetNavigationDelegate()*/)
 {
 	if (Navigation == nullptr)
 	{
@@ -618,6 +622,8 @@ void UWidget::SetNavigationRuleInternal(EUINavigation Direction, EUINavigationRu
 	FWidgetNavigationData NavigationData;
 	NavigationData.Rule = Rule;
 	NavigationData.WidgetToFocus = WidgetToFocus;
+	NavigationData.Widget = InWidget;
+	NavigationData.CustomDelegate = InCustomDelegate;
 	switch(Direction)
 	{
 		case EUINavigation::Up:
@@ -646,6 +652,37 @@ void UWidget::SetNavigationRuleInternal(EUINavigation Direction, EUINavigationRu
 void UWidget::SetNavigationRule(EUINavigation Direction, EUINavigationRule Rule, FName WidgetToFocus)
 {
 	SetNavigationRuleInternal(Direction, Rule, WidgetToFocus);
+	BuildNavigation();
+}
+
+void UWidget::SetNavigationRuleBase(EUINavigation Direction, EUINavigationRule Rule)
+{
+	if (Rule == EUINavigationRule::Explicit || Rule == EUINavigationRule::Custom || Rule == EUINavigationRule::CustomBoundary)
+	{
+#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+		FMessageLog("PIE").Error(LOCTEXT("SetNavigationRuleBaseWrongRule", "Cannot use SetNavigationRuleBase with an Explicit or a Custom or a CustomBoundary Rule."));
+#endif
+		return;
+	}
+	SetNavigationRuleInternal(Direction, Rule);
+	BuildNavigation();
+}
+
+void UWidget::SetNavigationRuleExplicit(EUINavigation Direction, UWidget* InWidget)
+{
+	SetNavigationRuleInternal(Direction, EUINavigationRule::Explicit, NAME_None, InWidget);
+	BuildNavigation();
+}
+
+void UWidget::SetNavigationRuleCustom(EUINavigation Direction, FCustomWidgetNavigationDelegate InCustomDelegate)
+{
+	SetNavigationRuleInternal(Direction, EUINavigationRule::Custom, NAME_None, nullptr, InCustomDelegate);
+	BuildNavigation();
+}
+
+void UWidget::SetNavigationRuleCustomBoundary(EUINavigation Direction, FCustomWidgetNavigationDelegate InCustomDelegate)
+{
+	SetNavigationRuleInternal(Direction, EUINavigationRule::CustomBoundary, NAME_None, nullptr, InCustomDelegate);
 	BuildNavigation();
 }
 
@@ -695,13 +732,29 @@ void UWidget::RemoveFromParent()
 
 const FGeometry& UWidget::GetCachedGeometry() const
 {
+	return GetTickSpaceGeometry();
+}
+
+const FGeometry& UWidget::GetTickSpaceGeometry() const
+{
 	TSharedPtr<SWidget> SafeWidget = GetCachedWidget();
 	if ( SafeWidget.IsValid() )
 	{
-		return SafeWidget->GetCachedGeometry();
+		return SafeWidget->GetTickSpaceGeometry();
 	}
 
-	return SNullWidget::NullWidget->GetCachedGeometry();
+	return SNullWidget::NullWidget->GetTickSpaceGeometry();
+}
+
+const FGeometry& UWidget::GetPaintSpaceGeometry() const
+{
+	TSharedPtr<SWidget> SafeWidget = GetCachedWidget();
+	if (SafeWidget.IsValid())
+	{
+		return SafeWidget->GetPaintSpaceGeometry();
+	}
+
+	return SNullWidget::NullWidget->GetPaintSpaceGeometry();
 }
 
 #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
@@ -892,9 +945,9 @@ ULocalPlayer* UWidget::GetOwningLocalPlayer() const
 #undef LOCTEXT_NAMESPACE
 #define LOCTEXT_NAMESPACE "UMGEditor"
 
-void UWidget::SetDesignerFlags(EWidgetDesignFlags::Type NewFlags)
+void UWidget::SetDesignerFlags(EWidgetDesignFlags NewFlags)
 {
-	DesignerFlags = ( EWidgetDesignFlags::Type )( DesignerFlags | NewFlags );
+	DesignerFlags = static_cast<uint8>(GetDesignerFlags() | NewFlags);
 
 	INamedSlotInterface* NamedSlotWidget = Cast<INamedSlotInterface>(this);
 	if (NamedSlotWidget)
@@ -1071,6 +1124,7 @@ void UWidget::PreSave(const class ITargetPlatform* TargetPlatform)
 	SynchronizeAccessibleData();
 }
 
+#if WITH_EDITOR
 bool UWidget::Modify(bool bAlwaysMarkDirty)
 {
 	bool Modified = Super::Modify(bAlwaysMarkDirty);
@@ -1083,6 +1137,7 @@ bool UWidget::Modify(bool bAlwaysMarkDirty)
 
 	return Modified;
 }
+#endif
 
 bool UWidget::IsChildOf(UWidget* PossibleParent)
 {
@@ -1161,10 +1216,6 @@ void UWidget::SynchronizeProperties()
 	SafeWidget->ForceVolatile(bIsVolatile);
 
 	SafeWidget->SetRenderOpacity(RenderOpacity);
-
-#if !UE_BUILD_SHIPPING
-	SafeWidget->SetTag(GetFName());
-#endif
 
 	UpdateRenderTransform();
 	SafeWidget->SetRenderTransformPivot(RenderTransformPivot);

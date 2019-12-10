@@ -1,4 +1,4 @@
-﻿// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.Collections.Generic;
@@ -22,18 +22,18 @@ namespace BuildGraph.Tasks
 	}
 
 	/// <summary>
-	/// Parameters for a task which calls another UAT command
+	/// Parameters for a task that calls another UAT command
 	/// </summary>
 	public class CommandTaskParameters
 	{
 		/// <summary>
-		/// The command name to execute
+		/// The command name to execute.
 		/// </summary>
 		[TaskParameter]
 		public string Name;
 
 		/// <summary>
-		/// Arguments to be passed to the command
+		/// Arguments to be passed to the command.
 		/// </summary>
 		[TaskParameter(Optional = true)]
 		public string Arguments;
@@ -110,12 +110,18 @@ namespace BuildGraph.Tasks
 			CommandUtils.RunUAT(CommandUtils.CmdEnv, CommandLine.ToString(), Identifier: Parameters.Name);
 
 			// Merge in any new telemetry data that was produced
-			if (Parameters.MergeTelemetryWithPrefix != null)
+			if (TelemetryFile != null && FileReference.Exists(TelemetryFile))
 			{
+				Log.TraceLog("Merging telemetry from {0}", TelemetryFile);
+
 				TelemetryData NewTelemetry;
 				if (TelemetryData.TryRead(TelemetryFile, out NewTelemetry))
 				{
 					CommandUtils.Telemetry.Merge(Parameters.MergeTelemetryWithPrefix, NewTelemetry);
+				}
+				else
+				{
+					Log.TraceWarning("Unable to read UAT telemetry file from {0}", TelemetryFile);
 				}
 			}
 		}

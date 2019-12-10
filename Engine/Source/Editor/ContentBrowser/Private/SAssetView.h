@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "UObject/GCObject.h"
 #include "Misc/Attribute.h"
 #include "Input/Reply.h"
 #include "Layout/Visibility.h"
@@ -41,7 +42,7 @@ DECLARE_DELEGATE(FOnSearchOptionChanged);
 /**
  * A widget to display a list of filtered assets
  */
-class SAssetView : public SCompoundWidget
+class SAssetView : public SCompoundWidget, public FGCObject
 {
 public:
 	SLATE_BEGIN_ARGS( SAssetView )
@@ -57,7 +58,6 @@ public:
 		, _FilterRecursivelyWithBackendFilter(true)
 		, _CanShowRealTimeThumbnails(false)
 		, _CanShowDevelopersFolder(false)
-		, _CanShowCollections(false)
 		, _CanShowFavorites(false)
 		, _PreloadAssetsForContextMenu(true)
 		, _SelectionMode( ESelectionMode::Multi )
@@ -161,9 +161,6 @@ public:
 
 		/** Indicates if the 'Show Developers' option should be enabled or disabled */
 		SLATE_ARGUMENT( bool, CanShowDevelopersFolder )
-
-		/** Indicates if the 'Show Collections' option should be enabled or disabled */
-		SLATE_ARGUMENT( bool, CanShowCollections )
 
 		/** Indicates if the 'Show Favorites' option should be enabled or disabled */
 		SLATE_ARGUMENT(bool, CanShowFavorites)
@@ -295,6 +292,10 @@ public:
 	virtual FReply OnKeyDown( const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent ) override;
 	virtual FReply OnMouseWheel( const FGeometry& MyGeometry, const FPointerEvent& MouseEvent ) override;
 	virtual void OnFocusChanging( const FWeakWidgetPath& PreviousFocusPath, const FWidgetPath& NewWidgetPath, const FFocusEvent& InFocusEvent ) override;
+
+	//~ FGCObject inherited
+	virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
+	virtual FString GetReferencerName() const override { return TEXT("SAssetView"); }
 
 	/** Opens the selected assets or folders, depending on the selection */
 	void OnOpenAssetsOrFolders();
@@ -512,15 +513,6 @@ private:
 	/** @return true when we are showing the developers content */
 	bool IsShowingDevelopersContent() const;
 
-	/** Toggle whether collections should be shown or not */
-	void ToggleShowCollections();
-
-	/** Whether or not it's possible to toggle collections */
-	bool IsToggleShowCollectionsAllowed() const;
-
-	/** @return true when we are showing collections */
-	bool IsShowingCollections() const;
-
 	/** Toggle whether favorites should be shown or not */
 	void ToggleShowFavorites();
 
@@ -556,6 +548,15 @@ private:
 
 	/** Whether or not it's possible to include collection names in search criteria */
 	bool IsToggleIncludeCollectionNamesAllowed() const;
+
+	/** @return true when we are filtering recursively when we have an asset path */
+	bool IsFilteringRecursively() const;
+
+	/** Whether or not it's possible to toggle how to filtering recursively */
+	bool IsToggleFilteringRecursivelyAllowed() const;
+
+	/** Toggle whether we're filtering recursively */
+	void ToggleFilteringRecursively();
 
 	/** Sets the view type and updates lists accordingly */
 	void SetCurrentViewType(EAssetViewType::Type NewType);
@@ -974,9 +975,6 @@ private:
 	/** Indicates if the 'Show Developers' option should be enabled or disabled */
 	bool bCanShowDevelopersFolder;
 
-	/** Indicates if the 'Show Collections' option should be enabled or disabled */
-	bool bCanShowCollections;
-
 	/** Indicates if the 'Show Favorites' option should be enabled or disabled */
 	bool bCanShowFavorites;
 
@@ -1054,10 +1052,16 @@ private:
 
 		/** The factory to use */
 		UFactory* Factory;
+
+		void AddReferencedObjects(FReferenceCollector& Collector)
+		{
+			Collector.AddReferencedObject(AssetClass);
+			Collector.AddReferencedObject(Factory);
+		}
 	};
 
 	/** Asset pending deferred creation */
-	TSharedPtr<FCreateDeferredAssetData> DeferredAssetToCreate;
+	TUniquePtr<FCreateDeferredAssetData> DeferredAssetToCreate;
 
 	/** A struct to hold data for the deferred creation of a folder */
 	struct FCreateDeferredFolderData
@@ -1070,7 +1074,7 @@ private:
 	};
 
 	/** Folder pending deferred creation */
-	TSharedPtr<FCreateDeferredFolderData> DeferredFolderToCreate;
+	TUniquePtr<FCreateDeferredFolderData> DeferredFolderToCreate;
 
 	/** Struct holding the data for the asset quick-jump */
 	struct FQuickJumpData

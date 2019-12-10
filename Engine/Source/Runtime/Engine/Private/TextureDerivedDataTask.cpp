@@ -16,6 +16,7 @@
 #include "RenderUtils.h"
 #include "TextureResource.h"
 #include "Engine/Texture.h"
+#include "Engine/Texture2DArray.h"
 #include "DeviceProfiles/DeviceProfile.h"
 #include "DeviceProfiles/DeviceProfileManager.h"
 #include "VT/VirtualTextureBuiltData.h"
@@ -58,10 +59,11 @@ void FTextureSourceData::Init(UTexture& InTexture, const FTextureBuildSettings* 
 		switch (InTexture.Source.GetFormat(LayerIndex))
 		{
 		case TSF_G8:		LayerData->ImageFormat = ERawImageFormat::G8;		break;
+		case TSF_G16:		LayerData->ImageFormat = ERawImageFormat::G16;		break;
 		case TSF_BGRA8:		LayerData->ImageFormat = ERawImageFormat::BGRA8;	break;
 		case TSF_BGRE8:		LayerData->ImageFormat = ERawImageFormat::BGRE8;	break;
 		case TSF_RGBA16:	LayerData->ImageFormat = ERawImageFormat::RGBA16;	break;
-		case TSF_RGBA16F:	LayerData->ImageFormat = ERawImageFormat::RGBA16F; break;
+		case TSF_RGBA16F:	LayerData->ImageFormat = ERawImageFormat::RGBA16F;  break;
 		default:
 			UE_LOG(LogTexture, Fatal, TEXT("Texture %s has source art in an invalid format."), *InTexture.GetName());
 			return;
@@ -93,7 +95,7 @@ void FTextureSourceData::Init(UTexture& InTexture, const FTextureBuildSettings* 
 				BlockData->NumMips = 1;
 			}
 
-			if (!InBuildSettingsPerLayer[0].bCubemap && !InBuildSettingsPerLayer[0].bVolume)
+			if (!InBuildSettingsPerLayer[0].bCubemap && !InBuildSettingsPerLayer[0].bTextureArray && !InBuildSettingsPerLayer[0].bVolume)
 			{
 				BlockData->NumSlices = 1;
 			}
@@ -193,11 +195,14 @@ void FTextureSourceData::GetAsyncSourceMips(IImageWrapperModule* InImageWrapper)
 
 void FTextureCacheDerivedDataWorker::BuildTexture()
 {
+	const bool bHasValidMip0 = TextureData.Blocks.Num() && TextureData.Blocks[0].MipsPerLayer.Num() && TextureData.Blocks[0].MipsPerLayer[0].Num();
+
 	FFormatNamedArguments Args;
 	Args.Add(TEXT("TextureName"), FText::FromString(Texture.GetName()));
 	Args.Add(TEXT("TextureFormatName"), FText::FromString(BuildSettingsPerLayer[0].TextureFormatName.GetPlainNameString()));
-	Args.Add(TEXT("TextureResolutionX"), FText::FromString(FString::FromInt(TextureData.Blocks[0].MipsPerLayer[0][0].SizeX)));
-	Args.Add(TEXT("TextureResolutionY"), FText::FromString(FString::FromInt(TextureData.Blocks[0].MipsPerLayer[0][0].SizeY)));
+	Args.Add(TEXT("TextureResolutionX"), FText::FromString(FString::FromInt(bHasValidMip0 ? TextureData.Blocks[0].MipsPerLayer[0][0].SizeX : 0)));
+	Args.Add(TEXT("TextureResolutionY"), FText::FromString(FString::FromInt(bHasValidMip0 ? TextureData.Blocks[0].MipsPerLayer[0][0].SizeY : 0)));
+
 	FTextureStatusMessageContext StatusMessage(FText::Format(NSLOCTEXT("Engine", "BuildTextureStatus", "Building textures: {TextureName} ({TextureFormatName}, {TextureResolutionX}X{TextureResolutionY})"), Args));
 
 	if (!ensure(Compressor))
@@ -220,7 +225,7 @@ void FTextureCacheDerivedDataWorker::BuildTexture()
 		DerivedData->SizeX = DerivedData->VTData->Width;
 		DerivedData->SizeY = DerivedData->VTData->Height;
 		DerivedData->PixelFormat = DerivedData->VTData->LayerTypes[0];
-		DerivedData->NumSlices = 1;
+		DerivedData->SetNumSlices(1);
 
 		// Store it in the cache.
 		// @todo: This will remove the streaming bulk data, which we immediately reload below!
@@ -238,9 +243,7 @@ void FTextureCacheDerivedDataWorker::BuildTexture()
 			UE_LOG(LogTexture, Warning, TEXT("Failed to build %s derived data for %s"), *BuildSettingsPerLayer[0].TextureFormatName.GetPlainNameString(), *Texture.GetPathName());
 		}
 	}
-	else if (TextureData.Blocks.Num() &&
-		TextureData.Blocks[0].MipsPerLayer.Num() &&
-		TextureData.Blocks[0].MipsPerLayer[0].Num())
+	else if (bHasValidMip0)
 	{
 		// Only support single Block/Layer here (Blocks and Layers are intended for VT support)
 		ensure(TextureData.Blocks.Num() == 1);
@@ -250,14 +253,19 @@ void FTextureCacheDerivedDataWorker::BuildTexture()
 		DerivedData->SizeX = 0;
 		DerivedData->SizeY = 0;
 		DerivedData->PixelFormat = PF_Unknown;
+		DerivedData->SetIsCubemap(false);
 		DerivedData->VTData = nullptr;
+
+		FOptTexturePlatformData OptData;
 
 		// Compress the texture.
 		TArray<FCompressedImage2D> CompressedMips;
 		if (Compressor->BuildTexture(TextureData.Blocks[0].MipsPerLayer[0],
 			((bool)Texture.CompositeTexture && CompositeTextureData.Blocks.Num() && CompositeTextureData.Blocks[0].MipsPerLayer.Num()) ? CompositeTextureData.Blocks[0].MipsPerLayer[0] : TArray<FImage>(),
 			BuildSettingsPerLayer[0],
-			CompressedMips))
+			CompressedMips,
+			OptData.NumMipsInTail,
+			OptData.ExtData))
 		{
 			check(CompressedMips.Num());
 
@@ -271,7 +279,7 @@ void FTextureCacheDerivedDataWorker::BuildTexture()
 				NewMip->SizeX = CompressedImage.SizeX;
 				NewMip->SizeY = CompressedImage.SizeY;
 				NewMip->SizeZ = CompressedImage.SizeZ;
-				check(NewMip->SizeZ == 1 || BuildSettingsPerLayer[0].bVolume); // Only volume can have SizeZ != 1
+				check(NewMip->SizeZ == 1 || BuildSettingsPerLayer[0].bVolume || BuildSettingsPerLayer[0].bTextureArray); // Only volume & arrays can have SizeZ != 1
 				NewMip->BulkData.Lock(LOCK_READ_WRITE);
 				check(CompressedImage.RawData.GetTypeSize() == 1);
 				void* NewMipData = NewMip->BulkData.Realloc(CompressedImage.RawData.Num());
@@ -282,14 +290,17 @@ void FTextureCacheDerivedDataWorker::BuildTexture()
 				{
 					DerivedData->SizeX = CompressedImage.SizeX;
 					DerivedData->SizeY = CompressedImage.SizeY;
-					DerivedData->NumSlices = BuildSettingsPerLayer[0].bCubemap ? 6 : (BuildSettingsPerLayer[0].bVolume ? CompressedImage.SizeZ : 1);
 					DerivedData->PixelFormat = (EPixelFormat)CompressedImage.PixelFormat;
+					DerivedData->SetNumSlices(BuildSettingsPerLayer[0].bCubemap ? 6 : (BuildSettingsPerLayer[0].bVolume || BuildSettingsPerLayer[0].bTextureArray) ? CompressedImage.SizeZ : 1);
+					DerivedData->SetIsCubemap(BuildSettingsPerLayer[0].bCubemap);
 				}
 				else
 				{
 					check(CompressedImage.PixelFormat == DerivedData->PixelFormat);
 				}
 			}
+
+			DerivedData->SetOptData(OptData);
 
 			// Store it in the cache.
 			// @todo: This will remove the streaming bulk data, which we immediately reload below!

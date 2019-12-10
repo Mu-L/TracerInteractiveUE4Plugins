@@ -7,6 +7,7 @@
 #include "Stats/Stats.h"
 #include "VT/VirtualTexturePoolConfig.h"
 
+
 FVirtualTexturePhysicalSpace::FVirtualTexturePhysicalSpace(const FVTPhysicalSpaceDescription& InDesc, uint16 InID)
 	: Description(InDesc)
 	, NumRefs(0u)
@@ -14,24 +15,23 @@ FVirtualTexturePhysicalSpace::FVirtualTexturePhysicalSpace(const FVTPhysicalSpac
 	, bPageTableLimit(false)
 	, bGpuTextureLimit(false)
 {
-	UVirtualTexturePoolConfig* PoolConfig = GetMutableDefault<UVirtualTexturePoolConfig>();
-	const FVirtualTextureSpacePoolConfig* Config = PoolConfig->FindPoolConfig(InDesc.TileSize, InDesc.Format);
-	const uint32 PoolSizeInBytes = Config->SizeInMegabyte * 1024u * 1024u;
-	const bool bForce16BitPageTable = false;
+	// Find matching physical pool
+	FVirtualTextureSpacePoolConfig Config;
+	UVirtualTexturePoolConfig const* PoolConfig = GetDefault<UVirtualTexturePoolConfig>();
+	PoolConfig->FindPoolConfig(InDesc.Format, InDesc.NumLayers, InDesc.TileSize, Config);
+	const uint32 PoolSizeInBytes = Config.SizeInMegabyte * 1024u * 1024u;
 
-	const FPixelFormatInfo& FormatInfo = GPixelFormats[InDesc.Format];
+	const FPixelFormatInfo& FormatInfo = GPixelFormats[InDesc.Format[0]];
 	check(InDesc.TileSize % FormatInfo.BlockSizeX == 0);
 	check(InDesc.TileSize % FormatInfo.BlockSizeY == 0);
-	const SIZE_T TileSizeBytes = CalculateImageBytes(InDesc.TileSize, InDesc.TileSize, 0, InDesc.Format);
-	const uint32 MaxTiles = (uint32)(PoolSizeInBytes / TileSizeBytes);
-	
-	TextureSizeInTiles = FMath::CeilToInt(FMath::Sqrt((float)MaxTiles));
-	if (bForce16BitPageTable)
+	SIZE_T TileSizeBytes = 0;
+	for (int32 Layer = 0; Layer < InDesc.NumLayers; ++Layer)
 	{
-		// 16 bit page tables support max size of 64x64 (4096 tiles)
-		TextureSizeInTiles = FMath::Min(64u, TextureSizeInTiles);
+		TileSizeBytes += CalculateImageBytes(InDesc.TileSize, InDesc.TileSize, 0, InDesc.Format[Layer]);
 	}
-
+	const uint32 MaxTiles = FMath::Max((uint32)(PoolSizeInBytes / TileSizeBytes), 1u);
+	TextureSizeInTiles = FMath::FloorToInt(FMath::Sqrt((float)MaxTiles));
+	
 	if (TextureSizeInTiles * InDesc.TileSize > GetMax2DTextureDimension())
 	{
 		// A good option to support extremely large caches would be to allow additional slices in an array here for caches...
@@ -52,40 +52,82 @@ FVirtualTexturePhysicalSpace::~FVirtualTexturePhysicalSpace()
 {
 }
 
+EPixelFormat GetUnorderedAccessViewFormat(EPixelFormat InFormat)
+{
+	// Use alias formats for compressed textures on APIs where that is possible
+	// This allows us to compress runtime data directly to the physical texture
+	const bool bUAVAliasForCompressedTextures = GRHISupportsUAVFormatAliasing;
+
+	switch (InFormat)
+	{
+	case PF_DXT1: 
+	case PF_BC4: 
+		return bUAVAliasForCompressedTextures ? PF_R32G32_UINT : PF_Unknown;
+	case PF_DXT3: 
+	case PF_DXT5: 
+	case PF_BC5: 
+		return bUAVAliasForCompressedTextures ? PF_R32G32B32A32_UINT : PF_Unknown;
+	}
+
+	return InFormat;
+}
+
 void FVirtualTexturePhysicalSpace::InitRHI()
 {
 	FRHICommandListImmediate& RHICmdList = FRHICommandListExecutor::GetImmediateCommandList();
 
-	const uint32 TextureSize = GetTextureSize();
-	const FPooledRenderTargetDesc Desc = FPooledRenderTargetDesc::Create2DDesc(
-		FIntPoint(TextureSize, TextureSize),
-		Description.Format,
-		FClearValueBinding::None,
-		TexCreate_None,
-		TexCreate_ShaderResource | (Description.bCreateRenderTarget ? (TexCreate_RenderTargetable | TexCreate_UAV) : 0),
-		false);
+	for (int32 Layer = 0; Layer < Description.NumLayers; ++Layer)
+	{
+		const EPixelFormat FormatSRV = Description.Format[Layer];
+		const EPixelFormat FormatUAV = GetUnorderedAccessViewFormat(FormatSRV);
+		const bool bCreateAliasedUAV = (FormatUAV != PF_Unknown) && (FormatUAV != FormatSRV);
 
-	GRenderTargetPool.FindFreeElement(RHICmdList, Desc, PooledRenderTarget, TEXT("PhysicalTexture"));
-	FRHITexture* TextureRHI = PooledRenderTarget->GetRenderTargetItem().ShaderResourceTexture;
+		// Allocate physical texture from the render target pool
+		const uint32 TextureSize = GetTextureSize();
+		const FPooledRenderTargetDesc Desc = FPooledRenderTargetDesc::Create2DDesc(
+			FIntPoint(TextureSize, TextureSize),
+			FormatSRV,
+			FClearValueBinding::None,
+			TexCreate_None,
+			bCreateAliasedUAV ? TexCreate_ShaderResource | TexCreate_UAV : TexCreate_ShaderResource,
+			false);
 
-	// Create sRGB/non-sRGB views into the physical texture
-	FRHITextureSRVCreateInfo ViewInfo;
-	TextureView = RHICreateShaderResourceView(TextureRHI, ViewInfo);
+		GRenderTargetPool.FindFreeElement(RHICmdList, Desc, PooledRenderTarget[Layer], TEXT("PhysicalTexture"));
+		FRHITexture* TextureRHI = PooledRenderTarget[Layer]->GetRenderTargetItem().ShaderResourceTexture;
 
-	ViewInfo.SRGBOverride = SRGBO_ForceEnable;
-	TextureSRGBView = RHICreateShaderResourceView(TextureRHI, ViewInfo);
+		// Create sRGB and non-sRGB shader resource views into the physical texture
+		FRHITextureSRVCreateInfo SRVCreateInfo;
+		SRVCreateInfo.Format = FormatSRV;
+		TextureSRV[Layer] = RHICreateShaderResourceView(TextureRHI, SRVCreateInfo);
+
+		SRVCreateInfo.SRGBOverride = SRGBO_ForceEnable;
+		TextureSRV_SRGB[Layer] = RHICreateShaderResourceView(TextureRHI, SRVCreateInfo);
+
+		if (bCreateAliasedUAV)
+		{
+			TextureUAV[Layer] = RHICreateUnorderedAccessView(TextureRHI, 0, FormatUAV);
+		}
+	}
 }
 
 void FVirtualTexturePhysicalSpace::ReleaseRHI()
 {
-	GRenderTargetPool.FreeUnusedResource(PooledRenderTarget);
-	TextureView.SafeRelease();
-	TextureSRGBView.SafeRelease();
+	for (int32 Layer = 0; Layer < Description.NumLayers; ++Layer)
+	{
+		GRenderTargetPool.FreeUnusedResource(PooledRenderTarget[Layer]);
+		TextureSRV[Layer].SafeRelease();
+		TextureSRV_SRGB[Layer].SafeRelease();
+		TextureUAV[Layer].SafeRelease();
+	}
 }
 
 uint32 FVirtualTexturePhysicalSpace::GetSizeInBytes() const
 {
-	const SIZE_T TileSizeBytes = CalculateImageBytes(Description.TileSize, Description.TileSize, 0, Description.Format);
+	SIZE_T TileSizeBytes = 0;
+	for (int32 Layer = 0; Layer < Description.NumLayers; ++Layer)
+	{
+		TileSizeBytes += CalculateImageBytes(Description.TileSize, Description.TileSize, 0, Description.Format[Layer]);
+	}
 	return GetNumTiles() * TileSizeBytes;
 }
 

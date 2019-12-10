@@ -49,7 +49,7 @@
 //@TODO: Remove this dependency
 #include "EngineGlobals.h"
 #include "LevelEditor.h"
-#include "ILevelViewport.h"
+#include "IAssetViewport.h"
 
 #include "Logging/TokenizedMessage.h"
 #include "Logging/MessageLog.h"
@@ -296,6 +296,10 @@ FPlayWorldCommands::FPlayWorldCommands()
 		{
 			PlayPlatformName = TEXT("LinuxNoEditor");
 		}
+		else if (RunningPlatformName == TEXT("LinuxAArch64"))
+		{
+			PlayPlatformName = TEXT("LinuxAArch64NoEditor");
+		}
 
 		if (!PlayPlatformName.IsEmpty())
 		{
@@ -327,7 +331,7 @@ void FPlayWorldCommands::RegisterCommands()
 	UI_COMMAND( PlayInViewport, "Selected Viewport", "Play this level in the active level editor viewport", EUserInterfaceActionType::Check, FInputChord() );
 	UI_COMMAND( PlayInEditorFloating, "New Editor Window (PIE)", "Play this level in a new window", EUserInterfaceActionType::Check, FInputChord() );
 	UI_COMMAND( PlayInVR, "VR Preview", "Play this level in VR", EUserInterfaceActionType::Check, FInputChord() );
-	UI_COMMAND( PlayInMobilePreview, "Mobile Preview ES2 (PIE)", "Play this level as a mobile device preview in ES2 mode (runs in its own process)", EUserInterfaceActionType::Check, FInputChord());
+	UI_COMMAND( PlayInMobilePreview, "Mobile Preview ES3.1 (PIE)", "Play this level as a mobile device preview in ES3.1 mode (runs in its own process)", EUserInterfaceActionType::Check, FInputChord());
 	UI_COMMAND( PlayInVulkanPreview, "Vulkan Mobile Preview (PIE)", "Play this level using mobile Vulkan rendering (runs in its own process)", EUserInterfaceActionType::Check, FInputChord() );
 	UI_COMMAND( PlayInNewProcess, "Standalone Game", "Play this level in a new window that runs in its own process", EUserInterfaceActionType::Check, FInputChord() );
 	UI_COMMAND( PlayInCameraLocation, "Current Camera Location", "Spawn the player at the current camera location", EUserInterfaceActionType::RadioButton, FInputChord() );
@@ -819,17 +823,7 @@ TSharedRef< SWidget > FPlayWorldCommands::GeneratePlayMenuContent( TSharedRef<FU
 {
 	// Get all menu extenders for this context menu from the level editor module
 	FLevelEditorModule& LevelEditorModule = FModuleManager::GetModuleChecked<FLevelEditorModule>(TEXT("LevelEditor"));
-	TArray<FLevelEditorModule::FLevelEditorMenuExtender> MenuExtenderDelegates = LevelEditorModule.GetAllLevelEditorToolbarPlayMenuExtenders();
-
-	TArray<TSharedPtr<FExtender>> Extenders;
-	for ( int32 i = 0; i < MenuExtenderDelegates.Num(); ++i )
-	{
-		if ( MenuExtenderDelegates[i].IsBound() )
-		{
-			Extenders.Add(MenuExtenderDelegates[i].Execute(InCommandList));
-		}
-	}
-	TSharedPtr<FExtender> MenuExtender = FExtender::Combine(Extenders);
+	TSharedPtr<FExtender> MenuExtender = LevelEditorModule.AssembleExtenders(InCommandList, LevelEditorModule.GetAllLevelEditorToolbarPlayMenuExtenders());
 
 	struct FLocal
 	{
@@ -975,7 +969,7 @@ static void MakeAllDevicesSubMenu(FMenuBuilder& InMenuBuilder, const PlatformInf
 		// for an aggregate (All_<platform>_devices_on_<host>) proxy, allow only the "Android_<texture_compression>" variants
 		const PlatformInfo::FPlatformInfo* platformInfo = PlatformInfo::FindPlatformInfo(Variant);
 		if (DeviceProxy->IsAggregated() && platformInfo != NULL &&
-			(Variant == platformInfo->VanillaPlatformName || platformInfo->PlatformType != PlatformInfo::EPlatformType::Game))
+			(Variant == platformInfo->VanillaPlatformName || platformInfo->PlatformType != EBuildTargetType::Game))
 		{
 			continue;
 		}
@@ -1063,7 +1057,7 @@ TSharedRef< SWidget > FPlayWorldCommands::GenerateLaunchMenuContent( TSharedRef<
 		for (const PlatformInfo::FVanillaPlatformEntry& VanillaPlatform : VanillaPlatforms)
 		{
 			// for the Editor we are only interested in launching standalone games
-			if (VanillaPlatform.PlatformInfo->PlatformType != PlatformInfo::EPlatformType::Game || !VanillaPlatform.PlatformInfo->bEnabledForUse || !FInstalledPlatformInfo::Get().CanDisplayPlatform(VanillaPlatform.PlatformInfo->BinaryFolderName, ProjectType))
+			if (VanillaPlatform.PlatformInfo->PlatformType != EBuildTargetType::Game || !VanillaPlatform.PlatformInfo->bEnabledForUse || !FInstalledPlatformInfo::Get().CanDisplayPlatform(VanillaPlatform.PlatformInfo->BinaryFolderName, ProjectType))
 			{
 				continue;
 			}
@@ -1357,14 +1351,14 @@ void FPlayWorldCommandCallbacks::StartPlayFromHere()
 
 	FLevelEditorModule& LevelEditorModule = FModuleManager::GetModuleChecked<FLevelEditorModule>( "LevelEditor");
 
-	TSharedPtr<ILevelViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
+	TSharedPtr<IAssetViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
 
 	const bool bSimulateInEditor = false;
 	if( ActiveLevelViewport.IsValid() )
 	{
-		if( ActiveLevelViewport->GetLevelViewportClient().IsPerspective() )
+		if( ActiveLevelViewport->GetAssetViewportClient().IsPerspective() )
 		{
-			StartRotation = ActiveLevelViewport->GetLevelViewportClient().GetViewRotation();
+			StartRotation = ActiveLevelViewport->GetAssetViewportClient().GetViewRotation();
 		}
 
 		// If there is an active level view port, play the game in it.
@@ -1547,7 +1541,7 @@ void FInternalPlayWorldCommandCallbacks::Simulate_Clicked()
 
 	FLevelEditorModule& LevelEditorModule = FModuleManager::GetModuleChecked<FLevelEditorModule>( TEXT("LevelEditor") );
 
-	TSharedPtr<ILevelViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
+	TSharedPtr<IAssetViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
 	if( ActiveLevelViewport.IsValid())
 	{
 		// Start a new simulation session!
@@ -1763,7 +1757,7 @@ void FInternalPlayWorldCommandCallbacks::PlayInViewport_Clicked( )
 
 	RecordLastExecutedPlayMode();
 
-	TSharedPtr<ILevelViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
+	TSharedPtr<IAssetViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
 
 	const bool bAtPlayerStart = (GetPlayModeLocation() == PlayLocation_DefaultPlayerStart);
 	const bool bSimulateInEditor = false;
@@ -1778,8 +1772,8 @@ void FInternalPlayWorldCommandCallbacks::PlayInViewport_Clicked( )
 		if( !bAtPlayerStart )
 		{
 			// Start the player where the camera is if not forcing from player start
-			StartLoc = &ActiveLevelViewport->GetLevelViewportClient().GetViewLocation();
-			StartRot = &ActiveLevelViewport->GetLevelViewportClient().GetViewRotation();
+			StartLoc = &ActiveLevelViewport->GetAssetViewportClient().GetViewLocation();
+			StartRot = &ActiveLevelViewport->GetAssetViewportClient().GetViewRotation();
 		}
 
 		// @todo UE4: Not supported yet
@@ -1838,7 +1832,7 @@ void FInternalPlayWorldCommandCallbacks::PlayInEditorFloating_Clicked( )
 
 		if ( !bAtPlayerStart )
 		{
-			TSharedPtr<ILevelViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
+			TSharedPtr<IAssetViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
 
 			// Make sure we can find a path to the view port.  This will fail in cases where the view port widget
 			// is in a backgrounded tab, etc.  We can't currently support starting PIE in a backgrounded tab
@@ -1847,8 +1841,8 @@ void FInternalPlayWorldCommandCallbacks::PlayInEditorFloating_Clicked( )
 				FSlateApplication::Get().FindWidgetWindow( ActiveLevelViewport->AsWidget() ).IsValid() )
 			{
 				// Start the player where the camera is if not forcing from player start
-				StartLoc = &ActiveLevelViewport->GetLevelViewportClient().GetViewLocation();
-				StartRot = &ActiveLevelViewport->GetLevelViewportClient().GetViewRotation();
+				StartLoc = &ActiveLevelViewport->GetAssetViewportClient().GetViewLocation();
+				StartRot = &ActiveLevelViewport->GetAssetViewportClient().GetViewRotation();
 			}
 		}
 
@@ -1887,7 +1881,7 @@ void FInternalPlayWorldCommandCallbacks::PlayInVR_Clicked()
 
 		if (!bAtPlayerStart)
 		{
-			TSharedPtr<ILevelViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
+			TSharedPtr<IAssetViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
 
 			// Make sure we can find a path to the view port.  This will fail in cases where the view port widget
 			// is in a backgrounded tab, etc.  We can't currently support starting PIE in a backgrounded tab
@@ -1896,8 +1890,8 @@ void FInternalPlayWorldCommandCallbacks::PlayInVR_Clicked()
 				FSlateApplication::Get().FindWidgetWindow(ActiveLevelViewport->AsWidget()).IsValid())
 			{
 				// Start the player where the camera is if not forcing from player start
-				StartLoc = &ActiveLevelViewport->GetLevelViewportClient().GetViewLocation();
-				StartRot = &ActiveLevelViewport->GetLevelViewportClient().GetViewRotation();
+				StartLoc = &ActiveLevelViewport->GetAssetViewportClient().GetViewLocation();
+				StartRot = &ActiveLevelViewport->GetAssetViewportClient().GetViewRotation();
 			}
 		}
 
@@ -1947,12 +1941,12 @@ void FInternalPlayWorldCommandCallbacks::PlayInNewProcess_Clicked(EPlayModeType 
 		if (!bAtPlayerStart)
 		{
 			FLevelEditorModule& LevelEditorModule = FModuleManager::GetModuleChecked<FLevelEditorModule>(TEXT("LevelEditor"));
-			TSharedPtr<ILevelViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
+			TSharedPtr<IAssetViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
 
 			if ( ActiveLevelViewport.IsValid() && FSlateApplication::Get().FindWidgetWindow( ActiveLevelViewport->AsWidget() ).IsValid() )
 			{
-				StartLoc = &ActiveLevelViewport->GetLevelViewportClient().GetViewLocation();
-				StartRot = &ActiveLevelViewport->GetLevelViewportClient().GetViewRotation();
+				StartLoc = &ActiveLevelViewport->GetAssetViewportClient().GetViewLocation();
+				StartRot = &ActiveLevelViewport->GetAssetViewportClient().GetViewRotation();
 			}
 		}
 
@@ -2128,7 +2122,7 @@ bool FInternalPlayWorldCommandCallbacks::IsReadyToLaunchOnDevice(FString DeviceI
 	checkf(PlatformInfo, TEXT("Unable to find PlatformInfo for %s"), *PlatformName);
 
 	FGameProjectGenerationModule& GameProjectModule = FModuleManager::LoadModuleChecked<FGameProjectGenerationModule>(TEXT("GameProjectGeneration"));
-	bool bHasCode = GameProjectModule.Get().ProjectRequiresBuild(FName(*PlatformName));
+	bool bHasCode = GameProjectModule.Get().ProjectHasCodeFiles();
 
 	if (PlatformInfo->SDKStatus == PlatformInfo::EPlatformSDKStatus::NotInstalled)
 	{
@@ -2146,8 +2140,10 @@ bool FInternalPlayWorldCommandCallbacks::IsReadyToLaunchOnDevice(FString DeviceI
 		FString NotInstalledTutorialLink;
 		FString DocumentationLink;
 		FText CustomizedLogMessage;
-		FString ProjectPath = FPaths::IsProjectFilePathSet() ? FPaths::ConvertRelativePathToFull(FPaths::GetProjectFilePath()) : FPaths::RootDir() / FApp::GetProjectName() / FApp::GetProjectName() + TEXT(".uproject");
-		int32 Result = Platform->CheckRequirements(ProjectPath, bHasCode, NotInstalledTutorialLink, DocumentationLink, CustomizedLogMessage);
+
+	    EBuildConfiguration BuildConfiguration = GetDefault<ULevelEditorPlaySettings>()->GetLaunchBuildConfiguration();
+	    bool bEnableAssetNativization = false;
+		int32 Result = Platform->CheckRequirements(bHasCode, BuildConfiguration, bEnableAssetNativization, NotInstalledTutorialLink, DocumentationLink, CustomizedLogMessage);
 		
 		// report to analytics
 		FEditorAnalytics::ReportBuildRequirementsFailure(TEXT("Editor.LaunchOn.Failed"), PlatformName, bHasCode, Result);

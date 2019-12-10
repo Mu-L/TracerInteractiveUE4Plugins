@@ -11,15 +11,29 @@
 struct FVTPhysicalSpaceDescription
 {
 	uint32 TileSize;
-	TEnumAsByte<EPixelFormat> Format;
 	uint8 Dimensions;
+	uint8 NumLayers;
+	TEnumAsByte<EPixelFormat> Format[VIRTUALTEXTURE_SPACE_MAXLAYERS];
 	bool bContinuousUpdate;
-	bool bCreateRenderTarget;
 };
 
 inline bool operator==(const FVTPhysicalSpaceDescription& Lhs, const FVTPhysicalSpaceDescription& Rhs)
 {
-	return Lhs.TileSize == Rhs.TileSize && Lhs.Format == Rhs.Format && Lhs.Dimensions == Rhs.Dimensions && Lhs.bContinuousUpdate == Rhs.bContinuousUpdate && Lhs.bCreateRenderTarget == Rhs.bCreateRenderTarget;
+	if (Lhs.TileSize != Rhs.TileSize || 
+		Lhs.NumLayers != Rhs.NumLayers || 
+		Lhs.Dimensions != Rhs.Dimensions || 
+		Lhs.bContinuousUpdate != Rhs.bContinuousUpdate)
+	{
+		return false;
+	}
+	for (int32 Layer = 0; Layer < Lhs.NumLayers; ++Layer)
+	{
+		if (Lhs.Format[Layer] != Rhs.Format[Layer])
+		{
+			return false;
+		}
+	}
+	return true;
 }
 inline bool operator!=(const FVTPhysicalSpaceDescription& Lhs, const FVTPhysicalSpaceDescription& Rhs)
 {
@@ -33,7 +47,7 @@ public:
 	virtual ~FVirtualTexturePhysicalSpace();
 
 	inline const FVTPhysicalSpaceDescription& GetDescription() const { return Description; }
-	inline EPixelFormat GetFormat() const { return Description.Format; }
+	inline EPixelFormat GetFormat(int32 Layer) const { return Description.Format[Layer]; }
 	inline uint16 GetID() const { return ID; }
 	inline uint32 GetNumTiles() const { return TextureSizeInTiles * TextureSizeInTiles; }
 	inline uint32 GetSizeInTiles() const { return TextureSizeInTiles; }
@@ -41,7 +55,7 @@ public:
 	inline FIntVector GetPhysicalLocation(uint16 pAddress) const { return FIntVector(pAddress % TextureSizeInTiles, pAddress / TextureSizeInTiles, 0); }
 
 	// 16bit page tables allocate 6bits to address TileX/Y, so can only address tiles from 0-63
-	inline bool DoesSupport16BitPageTable() const { return false; }// TextureSizeInTiles <= 64u;
+	inline bool DoesSupport16BitPageTable() const { return TextureSizeInTiles <= 64u; }
 
 	uint32 GetSizeInBytes() const;
 
@@ -56,22 +70,20 @@ public:
 	inline uint32 Release() { check(NumRefs > 0u); return --NumRefs; }
 	inline uint32 GetRefCount() const { return NumRefs; }
 
-	FRHITexture* GetPhysicalTexture() const
+	FRHITexture* GetPhysicalTexture(int32 Layer) const
 	{
-		check(PooledRenderTarget.IsValid());
-		return PooledRenderTarget->GetRenderTargetItem().ShaderResourceTexture;
+		check(PooledRenderTarget[Layer].IsValid());
+		return PooledRenderTarget[Layer]->GetRenderTargetItem().ShaderResourceTexture;
 	}
 
-	TRefCountPtr<IPooledRenderTarget> GetPhysicalTexturePooledRenderTarget() const
+	FRHIShaderResourceView* GetPhysicalTextureSRV(int32 Layer, bool bSRGB) const
 	{
-		check(PooledRenderTarget.IsValid());
-		check(Description.bCreateRenderTarget);
-		return PooledRenderTarget;
+		return bSRGB ? TextureSRV_SRGB[Layer] : TextureSRV[Layer];
 	}
 
-	FRHIShaderResourceView* GetPhysicalTextureView(bool bSRGB) const
+	FRHIUnorderedAccessView* GetPhysicalTextureUAV(int32 Layer) const
 	{
-		return bSRGB ? TextureSRGBView : TextureView;
+		return TextureUAV[Layer];
 	}
 
 #if STATS
@@ -87,9 +99,10 @@ public:
 private:
 	FVTPhysicalSpaceDescription Description;
 	FTexturePagePool Pool;
-	TRefCountPtr<IPooledRenderTarget> PooledRenderTarget;
-	FShaderResourceViewRHIRef TextureView;
-	FShaderResourceViewRHIRef TextureSRGBView;
+	TRefCountPtr<IPooledRenderTarget> PooledRenderTarget[VIRTUALTEXTURE_SPACE_MAXLAYERS];
+	FShaderResourceViewRHIRef TextureSRV[VIRTUALTEXTURE_SPACE_MAXLAYERS];
+	FShaderResourceViewRHIRef TextureSRV_SRGB[VIRTUALTEXTURE_SPACE_MAXLAYERS];
+	FUnorderedAccessViewRHIRef TextureUAV[VIRTUALTEXTURE_SPACE_MAXLAYERS];
 
 	uint32 TextureSizeInTiles;
 	uint32 NumRefs;

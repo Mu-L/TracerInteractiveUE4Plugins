@@ -20,20 +20,21 @@
 
 
 #define LOCTEXT_NAMESPACE "StaticMeshActor"
+FName AStaticMeshActor::StaticMeshComponentName(TEXT("StaticMeshComponent0"));
 
 AStaticMeshActor::AStaticMeshActor(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
-	bCanBeDamaged = false;
+	SetCanBeDamaged(false);
 
-	StaticMeshComponent = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("StaticMeshComponent0"));
+	StaticMeshComponent = CreateDefaultSubobject<UStaticMeshComponent>(StaticMeshComponentName);
 	StaticMeshComponent->SetCollisionProfileName(UCollisionProfile::BlockAll_ProfileName);
 	StaticMeshComponent->Mobility = EComponentMobility::Static;
 	StaticMeshComponent->SetGenerateOverlapEvents(false);
 	StaticMeshComponent->bUseDefaultCollision = true;
 
 	RootComponent = StaticMeshComponent;
-
+	
 	// Only actors that are literally static mesh actors can be placed in clusters, native subclasses or BP subclasses are not safe by default
 	bCanBeInCluster = (GetClass() == AStaticMeshActor::StaticClass());
 }
@@ -46,7 +47,7 @@ void AStaticMeshActor::BeginPlay()
 	//
 	// This is a short term fix until we find a better play for SetReplicates to be called in AActor.
 
-	if (Role == ROLE_Authority && bStaticMeshReplicateMovement)
+	if (GetLocalRole() == ROLE_Authority && bStaticMeshReplicateMovement)
 	{
 		bReplicates = false;
 		SetRemoteRoleForBackwardsCompat(ROLE_SimulatedProxy);
@@ -99,8 +100,8 @@ void AStaticMeshActor::LoadedFromAnotherClass(const FName& OldClassName)
 			StaticMeshComponent->SetCollisionProfileName(UCollisionProfile::PhysicsActor_ProfileName);
 			StaticMeshComponent->BodyInstance.bSimulatePhysics = true;
 
-			bCanBeDamaged = true;
-			bReplicateMovement = true;
+			SetCanBeDamaged(true);
+			SetReplicatingMovement(true);
 			SetRemoteRoleForBackwardsCompat(ROLE_SimulatedProxy);
 			bReplicates = true;
 		}
@@ -117,8 +118,8 @@ void AStaticMeshActor::PostEditChangeChainProperty(FPropertyChangedChainEvent& P
 		// If we want to replicate movement, set RemoteRole to match
 		if (PropertyChangedEvent.Property->GetFName() == FName(TEXT("bStaticMeshReplicateMovement")))
 		{
-			bReplicateMovement = bStaticMeshReplicateMovement;
-			SetReplicates(bReplicateMovement);
+			SetReplicatingMovement(bStaticMeshReplicateMovement);
+			SetReplicates(IsReplicatingMovement());
 		}
 	}
 
@@ -127,7 +128,7 @@ void AStaticMeshActor::PostEditChangeChainProperty(FPropertyChangedChainEvent& P
 	static FName SimulatePhysics_NAME(TEXT("bSimulatePhysics"));
 	if(TailPropName == SimulatePhysics_NAME)
 	{
-		bCanBeDamaged = StaticMeshComponent->BodyInstance.bSimulatePhysics;
+		SetCanBeDamaged(StaticMeshComponent->BodyInstance.bSimulatePhysics);
 	}
 }
 
@@ -188,7 +189,7 @@ void AStaticMeshActor::CheckForErrors()
 			AStaticMeshActor *A = Cast<AStaticMeshActor>(Overlaps[OverlapIdx].GetActor());
 			if ( A && (A != this) && (A->GetActorLocation() - GetActorLocation()).IsNearlyZero() && A->StaticMeshComponent
 				&& (A->StaticMeshComponent->GetStaticMesh() == StaticMeshComponent->GetStaticMesh()) && (A->GetActorRotation() == GetActorRotation())
-				&& (A->StaticMeshComponent->RelativeScale3D - StaticMeshComponent->RelativeScale3D).IsNearlyZero() )
+				&& (A->StaticMeshComponent->GetRelativeScale3D() == StaticMeshComponent->GetRelativeScale3D()) )
 			{
 				FFormatNamedArguments Arguments;
 				Arguments.Add(TEXT("ActorName0"), FText::FromString(GetName()));

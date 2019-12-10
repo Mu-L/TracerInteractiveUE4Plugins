@@ -15,10 +15,14 @@
 
 #include "PreLoadSlateThreading.h"
 
+DECLARE_MULTICAST_DELEGATE_OneParam(FIsPreloadScreenResponsibleForRenderingMultiDelegate, bool);
+
 // Class that handles storing all registered PreLoadScreens and Playing/Stopping them
 class PRELOADSCREEN_API FPreLoadScreenManager
 {
 public:
+	static FIsPreloadScreenResponsibleForRenderingMultiDelegate IsResponsibleForRenderingDelegate;
+
     //Gets the single instance of this settings object. Also creates it if needed
     static FPreLoadScreenManager* Get()
     {
@@ -115,7 +119,10 @@ protected:
 	void PlatformSpecificGameLogicFrameTick();
 
     /*** These functions describe how everything is handled during an non-Early PreLoadPlay. Everything is handled asynchronously in this case with a standalone renderer ***/
-    void HandleEngineLoadingPlay();
+	void HandleEngineLoadingPlay();
+
+	/*** These functions describe the flow for showing an CustomSplashScreen ***/
+	void HandleCustomSplashScreenPlay();
 
     IPreLoadScreen* GetActivePreLoadScreen();
     const IPreLoadScreen* GetActivePreLoadScreen() const;
@@ -141,6 +148,8 @@ protected:
 
     static FCriticalSection RenderingEnabledCriticalSection;
     static bool bRenderingEnabled;
+
+	bool bIsResponsibleForRendering = false;
 
     double LastRenderTickTime;
 

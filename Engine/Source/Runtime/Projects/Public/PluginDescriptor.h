@@ -67,6 +67,9 @@ struct PROJECTS_API FPluginDescriptor
 	/** List of programs that are supported by this plugin. */
 	TArray<FString> SupportedPrograms;
 
+	/** If specified, this is the real plugin that this one is just extending */
+	FString ParentPluginName;
+
 	/** List of all modules associated with this plugin */
 	TArray<FModuleDescriptor> Modules;
 
@@ -82,6 +85,9 @@ struct PROJECTS_API FPluginDescriptor
 	/** Marks the plugin as beta in the UI */
 	bool bIsBetaVersion;
 
+	/** Marks the plugin as experimental in the UI */
+	bool bIsExperimentalVersion;
+
 	/** Signifies that the plugin was installed on top of the engine */
 	bool bInstalled;
 
@@ -91,10 +97,13 @@ struct PROJECTS_API FPluginDescriptor
 	/** For auto-generated plugins that should not be listed in the plugin browser for users to disable freely. */
 	bool bIsHidden;
 
+	/** If true, this plugin from a platform extension extending another plugin */
+	bool bIsPluginExtension;
+
 	/** Pre-build steps for each host platform */
 	FCustomBuildSteps PreBuildSteps;
 
-	/** Pre-build steps for each host platform */
+	/** Post-build steps for each host platform */
 	FCustomBuildSteps PostBuildSteps;
 
 	/** Dependent plugins */

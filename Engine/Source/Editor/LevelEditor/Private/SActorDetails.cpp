@@ -153,6 +153,8 @@ void SActorDetails::Construct(const FArguments& InArgs, const FName TabIdentifie
 		[
 			SAssignNew(DetailsSplitter, SSplitter)
 			.Orientation(Orient_Vertical)
+			.Style(FEditorStyle::Get(), "SplitterDark")
+			.PhysicalSplitterHandleSize(2.0f)
 			+ SSplitter::Slot()
 			[
 				SNew( SVerticalBox )
@@ -617,7 +619,8 @@ bool SActorDetails::IsPropertyReadOnly(const FPropertyAndParent& PropertyAndPare
 		{
 			TSet<const UProperty*> UCSModifiedProperties;
 			Component->GetUCSModifiedProperties(UCSModifiedProperties);
-			if (UCSModifiedProperties.Contains(&PropertyAndParent.Property) || (PropertyAndParent.ParentProperty && UCSModifiedProperties.Contains(PropertyAndParent.ParentProperty)))
+			if (UCSModifiedProperties.Contains(&PropertyAndParent.Property) || 
+				(PropertyAndParent.ParentProperties.Num() > 0 && UCSModifiedProperties.Contains(PropertyAndParent.ParentProperties[0])))
 			{
 				bIsReadOnly = true;
 				break;

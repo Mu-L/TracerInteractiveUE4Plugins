@@ -6,10 +6,7 @@
 #include "UObject/Package.h"
 
 #include "Framework/Threading.h"
-
-#if INCLUDE_CHAOS
 #include "ChaosSolversModule.h"
-#endif
 
 UPhysicsSettings::UPhysicsSettings(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -87,6 +84,13 @@ void UPhysicsSettings::PostInitProperties()
 	{
 		DefaultShapeComplexity = bDefaultHasComplexCollision_DEPRECATED ? CTF_UseSimpleAndComplex : CTF_UseSimpleAsComplex;
 	}
+
+	// Temporarily override dedicated thread to taskgraph. The enum selection for dedicated
+	// thread is hidden until that threading mode is made to work with the world physics system overall
+	if(ChaosSettings.DefaultThreadingModel == EChaosThreadingMode::DedicatedThread)
+	{
+		ChaosSettings.DefaultThreadingModel = EChaosThreadingMode::TaskGraph;
+	}
 }
 
 #if WITH_EDITOR
@@ -163,7 +167,7 @@ void UPhysicsSettings::LoadSurfaceType()
 #endif	// WITH_EDITOR
 
 FChaosPhysicsSettings::FChaosPhysicsSettings() 
-	: DefaultThreadingModel(EChaosThreadingMode::DedicatedThread)
+	: DefaultThreadingModel(EChaosThreadingMode::TaskGraph)
 	, DedicatedThreadTickMode(EChaosSolverTickMode::VariableCappedWithTarget)
 	, DedicatedThreadBufferMode(EChaosBufferMode::Double)
 {
@@ -172,10 +176,8 @@ FChaosPhysicsSettings::FChaosPhysicsSettings()
 
 void FChaosPhysicsSettings::OnSettingsUpdated()
 {
-#if INCLUDE_CHAOS
 	if(FChaosSolversModule* SolverModule = FChaosSolversModule::GetModule())
 	{
 		SolverModule->OnSettingsChanged();
 	}
-#endif
 }

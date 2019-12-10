@@ -2,7 +2,7 @@ Availability: NoPublish
 Title: Build Configuration Properties Page
 Crumbs:
 Description: This is a procedurally generated markdown page.
-Version: 4.23
+Version: 4.24
 
 ### Read-Only Properties
 
@@ -32,7 +32,7 @@ $ bUseStaticCRT (Boolean): Forces linking against the static CRT. This is not fu
 
 $ bDebugBuildsActuallyUseDebugCRT (Boolean): Enables the debug C++ runtime (CRT) for debug builds. By default we always use the release runtime, since the debug version isn't particularly useful when debugging Unreal Engine projects, and linking against the debug CRT libraries forces our third party library dependencies to also be compiled using the debug CRT (and often perform more slowly). Often it can be inconvenient to require a separate copy of the debug versions of third party static libraries simply so that you can debug your program's code.
 
-$ bOutputPubliclyDistributable (Boolean): Whether the output from this target can be publicly distributed, even if it has dependencies on modules that are in folders with special restrictions (eg. CarefullyRedist, NotForLicensees, NoRedist).
+$ bLegalToDistributeBinary (Boolean): Whether the output from this target can be publicly distributed, even if it has dependencies on modules that are in folders with special restrictions (eg. CarefullyRedist, NotForLicensees, NoRedist).
 
 $ UndecoratedConfiguration (UnrealTargetConfiguration): Specifies the configuration whose binaries do not require a "-Platform-Configuration" suffix.
 
@@ -64,7 +64,9 @@ $ bCompileChaos (Boolean): Whether to compile the Chaos physics plugin.
 
 $ bUseChaos (Boolean): Whether to use the Chaos physics interface. This overrides the physx flags to disable APEX and NvCloth
 
-$ bCompileImmediatePhysics (Boolean): Whether to include the immediate mode physics interface. This overrides the physx flags to disable APEX and NvCloth
+$ bUseChaosChecked (Boolean): Whether to compile in checked chaos features for debugging
+
+$ bUseChaosMemoryTracking (Boolean): Whether to compile in chaos memory tracking features
 
 $ bCustomSceneQueryStructure (Boolean): Whether scene query acceleration is done by UE4. The physx scene query structure is still created, but we do not use it.
 
@@ -77,10 +79,6 @@ $ bCompileNvCloth (Boolean): Whether to include NvCloth.
 $ bCompileICU (Boolean): Whether to include ICU unicode/i18n support in Core.
 
 $ bCompileCEF3 (Boolean): Whether to compile CEF3 support.
-
-$ bBuildRequiresCookedData (Boolean): Whether to compile code related to building assets. Consoles generally cannot build assets. Desktop platforms generally can.
-
-$ bBuildWithEditorOnlyData (Boolean): Whether to compile WITH_EDITORONLY_DATA disabled. Only Windows will use this, other platforms force this to false.
 
 $ bForceBuildTargetPlatforms (Boolean): Whether to force compiling the target platform modules, even if they wouldn't normally be built.
 
@@ -106,19 +104,15 @@ $ bForceEnableObjCExceptions (Boolean): Enable exceptions for all modules.
 
 $ bForceEnableRTTI (Boolean): Enable RTTI for all modules.
 
-$ bWithServerCode (Boolean): Compile server-only code.
-
 $ bCompileWithStatsWithoutEngine (Boolean): Whether to include stats support even without the engine.
 
 $ bCompileWithPluginSupport (Boolean): Whether to include plugin support.
 
-$ bIncludePluginsForTargetPlatforms (Boolean): Whether to allow plugins which support all target platforms.
-
 $ bCompileWithAccessibilitySupport (Boolean): Whether to allow accessibility code in both Slate and the OS layer.
 
-$ bWithPerfCounters (Boolean): Whether to include PerfCounters support.
-
 $ bUseDebugLiveCodingConsole (Boolean): Whether to enable support for live coding
+
+$ bWithDirectXMath (Boolean): Whether to enable support for DirectX Math
 
 $ bUseLoggingInShipping (Boolean): Whether to turn on logging for test/shipping builds.
 
@@ -140,21 +134,15 @@ $ bEventDrivenLoader (Boolean): If true, event driven loader will be used in coo
 
 $ bUseXGEController (Boolean): Whether the XGE controller worker and modules should be included in the engine build. These are required for distributed shader compilation using the XGE interception interface.
 
-$ bUseBackwardsCompatibleDefaults (Boolean): Whether to use backwards compatible defaults for this module. By default, engine modules always use the latest default settings, while project modules do not (to support an easier migration path).
-
-$ bIWYU (Boolean): Enables "include what you use" by default for modules in this target. Changes the default PCH mode for any module in this project to PCHUsageModule.UseExplicitOrSharedPCHs.
+$ bIWYU (Boolean): Enables "include what you use" by default for modules in this target. Changes the default PCH mode for any module in this project to PCHUsageMode.UseExplicitOrSharedPCHs.
 
 $ bEnforceIWYU (Boolean): Enforce "include what you use" rules; warns if monolithic headers (Engine.h, UnrealEd.h, etc...) are used, and checks that source files include their matching header first.
-
-$ bHasExports (Boolean): Whether the final executable should export symbols.
 
 $ bPrecompile (Boolean): Make static libraries for all engine modules as intermediates for this target.
 
 $ bEnableOSX109Support (Boolean): Whether we should compile with support for OS X 10.9 Mavericks. Used for some tools that we need to be compatible with this version of OS X.
 
 $ bIsBuildingConsoleApplication (Boolean): True if this is a console application that's being built.
-
-$ bBuildAdditionalConsoleApp (Boolean): If true, creates an additional console application. Hack for Windows, where it's not possible to conditionally inherit a parent's console Window depending on how the application is invoked; you have to link the same executable with a different subsystem setting.
 
 $ bDisableSymbolCache (Boolean): True if debug symbols that are cached for some platforms should not be created.
 
@@ -174,7 +162,7 @@ $ bAdaptiveUnityEnablesEditAndContinue (Boolean): Creates a dedicated PCH for ea
 
 $ MinGameModuleSourceFilesForUnityBuild (Int32): The number of source files in a game module before unity build will be activated for that module.  This allows small game modules to have faster iterative compile times for single files, at the expense of slower full rebuild times.  This setting can be overridden by the bFasterWithoutUnity option in a module's Build.cs file.
 
-$ bShadowVariableErrors (Boolean): Forces shadow variable warnings to be treated as errors on platforms that support it.
+$ ShadowVariableWarningLevel (WarningLevel): Forces shadow variable warnings to be treated as errors on platforms that support it.
 
 $ bUndefinedIdentifierErrors (Boolean): Forces the use of undefined identifiers in conditional expressions to be treated as errors.
 
@@ -197,6 +185,8 @@ $ bOmitPCDebugInfoInDevelopment (Boolean): Whether to disable debug info on PC i
 $ bUsePDBFiles (Boolean): Whether PDB files should be used for Visual C++ builds.
 
 $ bUsePCHFiles (Boolean): Whether PCH files should be used.
+
+$ bPreprocessOnly (Boolean): Whether to just preprocess source files for this target, and skip compilation
 
 $ MinFilesUsingPrecompiledHeader (Int32): The minimum number of files that must use a pre-compiled header before it will be created and used.
 
@@ -232,6 +222,8 @@ $ bUseFastPDBLinking (Nullable&lt;Boolean&gt;): Whether to use the :FASTLINK opt
 
 $ bCreateMapFile (Boolean): Outputs a map file as part of the build.
 
+$ bAllowRuntimeSymbolFiles (Boolean): True if runtime symbols files should be generated as a post build step for some platforms. These files are used by the engine to resolve symbol names of callstack backtraces in logs.
+
 $ BundleVersion (String): Bundle version for Mac apps.
 
 $ bDeployAfterCompile (Boolean): Whether to deploy the executable after compilation on platforms that require deployment.
@@ -260,8 +252,6 @@ $ bAllowGeneratedIniWhenCooked (Boolean): Whether to load generated ini files in
 
 $ bAllowNonUFSIniWhenCooked (Boolean): Whether to load non-ufs ini files in cooked build, (GameUserSettings.ini loaded either way)
 
-$ bLegacyPublicIncludePaths (Boolean): Add all the public folders as include paths for the compile environment.
-
 $ CppStandard (CppStandardVersion): Which C++ stanard to use for compiling this target
 
 $ BuildVersion (String): The build version string
@@ -289,6 +279,12 @@ $ AdditionalBuildProducts (List&lt;String&gt;): Specifies additional build produ
 $ AdditionalCompilerArguments (String): Additional arguments to pass to the compiler
 
 $ AdditionalLinkerArguments (String): Additional arguments to pass to the linker
+
+$ DisableUnityBuildForModules (String[]): List of modules to disable unity builds for
+
+$ EnableOptimizeCodeForModules (String[]): List of modules to enable optimizations for
+
+$ DisableOptimizeCodeForModules (String[]): List of modules to disable optimizations for
 
 $ GeneratedProjectName (String): When generating project files, specifies the name of the project file to use when there are multiple targets of the same type.
 

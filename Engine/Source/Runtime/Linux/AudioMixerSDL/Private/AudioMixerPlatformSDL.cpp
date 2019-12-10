@@ -6,9 +6,13 @@
 #include "AudioMixerDevice.h"
 #include "CoreGlobals.h"
 #include "Misc/ConfigCacheIni.h"
+
+#if WITH_ENGINE
+#include "AudioPluginUtilities.h"
 #include "OpusAudioInfo.h"
 #include "VorbisAudioInfo.h"
 #include "ADPCMAudioInfo.h"
+#endif // WITH_ENGINE
 
 DECLARE_LOG_CATEGORY_EXTERN(LogAudioMixerSDL, Log, All);
 DEFINE_LOG_CATEGORY(LogAudioMixerSDL);
@@ -105,14 +109,8 @@ namespace Audio
 		SDL_AudioSpec DesiredSpec;
 		DesiredSpec.freq = PlatformSettings.SampleRate;
 
-#if PLATFORM_UNIX
-		DesiredSpec.format = AUDIO_F32;
-		DesiredSpec.channels = 6;
-#else
-		// HTML5 supports s16 format only
-		DesiredSpec.format = AUDIO_S16;
-		DesiredSpec.channels = 2;
-#endif
+		DesiredSpec.format = GetPlatformAudioFormat();
+		DesiredSpec.channels = GetPlatformChannels();
 
 		DesiredSpec.samples = PlatformSettings.CallbackBufferFrameSize;
 		DesiredSpec.callback = OnBufferEnd;
@@ -147,12 +145,7 @@ namespace Audio
 		OutInfo.Name = OutInfo.DeviceId;
 		OutInfo.SampleRate = ActualSpec.freq;
 		
-#if PLATFORM_UNIX
-		OutInfo.Format = EAudioMixerStreamDataFormat::Float;
-#else
-		// HTML5 supports s16 format only
-		OutInfo.Format = EAudioMixerStreamDataFormat::Int16;
-#endif
+		OutInfo.Format = GetAudioStreamFormat();
 		OutInfo.NumChannels = ActualSpec.channels;
 
 		// Assume default channel map order, SDL doesn't support us querying it directly
@@ -194,12 +187,7 @@ namespace Audio
 			return false;
 		}
 
-#if PLATFORM_UNIX
-		AudioSpecPrefered.format = AUDIO_F32;
-#else
-		// HTML5 supports s16 format only
-		AudioSpecPrefered.format = AUDIO_S16;
-#endif
+		AudioSpecPrefered.format = GetPlatformAudioFormat();
 		AudioSpecPrefered.freq = Params.SampleRate;
 		AudioSpecPrefered.channels = AudioStreamInfo.DeviceInfo.NumChannels;
 		AudioSpecPrefered.samples = OpenStreamParams.NumFrames;
@@ -234,22 +222,12 @@ namespace Audio
 		check(AudioSpecReceived.samples == OpenStreamParams.NumFrames);
 
 		// Compute the expected output byte length
-#if PLATFORM_UNIX
-		OutputBufferByteLength = OpenStreamParams.NumFrames * AudioStreamInfo.DeviceInfo.NumChannels * sizeof(float);
-#else
-		// HTML5 supports s16 format only
-		OutputBufferByteLength = OpenStreamParams.NumFrames * AudioStreamInfo.DeviceInfo.NumChannels * sizeof(int16);
-#endif
+		OutputBufferByteLength = OpenStreamParams.NumFrames * AudioStreamInfo.DeviceInfo.NumChannels * GetAudioStreamChannelSize();
 		check(OutputBufferByteLength == AudioSpecReceived.size);
 
 		AudioStreamInfo.StreamState = EAudioOutputStreamState::Open;
 
 		return true;
-	}
-
-	FString FMixerPlatformSDL::GetCurrentDeviceName() const
-	{
-		return {};
 	}
 
 	bool FMixerPlatformSDL::CloseAudioStream()
@@ -345,6 +323,7 @@ namespace Audio
 
 	FName FMixerPlatformSDL::GetRuntimeFormat(USoundWave* InSoundWave)
 	{
+#if WITH_ENGINE
 		static FName NAME_OGG(TEXT("OGG"));
 		static FName NAME_OPUS(TEXT("OPUS"));
 		static FName NAME_ADPCM(TEXT("ADPCM"));
@@ -359,6 +338,10 @@ namespace Audio
 			return NAME_OPUS;
 		}
 		return NAME_OGG;
+#else
+		checkNoEntry();
+		return FName();
+#endif // WITH_ENGINE
 	}
 
 	bool FMixerPlatformSDL::HasCompressedAudioInfoClass(USoundWave* InSoundWave)
@@ -368,6 +351,7 @@ namespace Audio
 
 	ICompressedAudioInfo* FMixerPlatformSDL::CreateCompressedAudioInfo(USoundWave* InSoundWave)
 	{
+#if WITH_ENGINE
 		check(InSoundWave);
 
 		if (InSoundWave->IsStreaming())
@@ -387,6 +371,10 @@ namespace Audio
 		}
 
 		return new FADPCMAudioInfo();
+#else
+		checkNoEntry();
+		return nullptr;
+#endif // WITH_ENGINE
 	}
 
 	FString FMixerPlatformSDL::GetDefaultDeviceName()
@@ -418,9 +406,9 @@ namespace Audio
 	FAudioPlatformSettings FMixerPlatformSDL::GetPlatformSettings() const
 	{
 #if PLATFORM_UNIX
-		return FAudioPlatformSettings::GetPlatformSettings(TEXT("/Script/LinuxTargetPlatform.LinuxTargetSettings"));
+		return FAudioPlatformSettings::GetPlatformSettings(FPlatformProperties::GetRuntimeSettingsClassName());
 #else
-		// On HTML5 and Windows, use default parameters.
+		// On Windows, use default parameters.
 		return FAudioPlatformSettings();
 #endif
 	}

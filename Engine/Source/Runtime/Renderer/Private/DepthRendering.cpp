@@ -44,6 +44,14 @@ static TAutoConsoleVariable<int32> CVarRHICmdFlushRenderThreadTasksPrePass(
 	0,
 	TEXT("Wait for completion of parallel render thread tasks at the end of the pre pass.  A more granular version of r.RHICmdFlushRenderThreadTasks. If either r.RHICmdFlushRenderThreadTasks or r.RHICmdFlushRenderThreadTasksPrePass is > 0 we will flush."));
 
+static int32 GEarlyZSortMasked = 1;
+static FAutoConsoleVariableRef CVarSortPrepassMasked(
+	TEXT("r.EarlyZSortMasked"),
+	GEarlyZSortMasked,
+	TEXT("Sort EarlyZ masked draws to the end of the draw order.\n"),
+	ECVF_Default
+);
+
 const TCHAR* GetDepthDrawingModeString(EDepthDrawingMode Mode)
 {
 	switch (Mode)
@@ -315,17 +323,18 @@ bool FDeferredShadingSceneRenderer::RenderPrePassViewParallel(const FViewInfo& V
 class FDitheredTransitionStencilPS : public FGlobalShader
 {
 	DECLARE_SHADER_TYPE(FDitheredTransitionStencilPS, Global);
+
 public:
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
 	{ 
-		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM4);
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
 	}
 
 	FDitheredTransitionStencilPS(const ShaderMetaType::CompiledShaderInitializerType& Initializer)
 	: FGlobalShader(Initializer)
 	{
-		DitheredTransitionFactorParameter.Bind(Initializer.ParameterMap, TEXT("DitheredTransitionFactor"));
+		DitheredTransitionFactorParameter.Bind(Initializer.ParameterMap, TEXT("DitheredTransitionFactor"), EShaderParameterFlags::SPF_Mandatory);
 	}
 
 	FDitheredTransitionStencilPS()
@@ -349,25 +358,161 @@ public:
 
 	FShaderParameter DitheredTransitionFactorParameter;
 };
-
 IMPLEMENT_SHADER_TYPE(, FDitheredTransitionStencilPS, TEXT("/Engine/Private/DitheredTransitionStencil.usf"), TEXT("Main"), SF_Pixel);
+
+/** A compute shader used to fill the stencil buffer with the current dithered transition mask. */
+class FDitheredTransitionStencilCS : public FGlobalShader
+{
+	DECLARE_SHADER_TYPE(FDitheredTransitionStencilCS, Global);
+
+public:
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+
+	FDitheredTransitionStencilCS(const ShaderMetaType::CompiledShaderInitializerType& Initializer)
+		: FGlobalShader(Initializer)
+	{
+		DitheredTransitionFactorParameter.Bind(Initializer.ParameterMap, TEXT("DitheredTransitionFactor"), EShaderParameterFlags::SPF_Mandatory);
+		StencilOffsetAndValuesParameter.Bind(Initializer.ParameterMap, TEXT("StencilOffsetAndValues"), EShaderParameterFlags::SPF_Mandatory);
+		StencilOutputParameter.Bind(Initializer.ParameterMap, TEXT("StencilOutput"), EShaderParameterFlags::SPF_Mandatory);
+	}
+
+	FDitheredTransitionStencilCS()
+	{
+	}
+
+	template <typename TRHICmdList>
+	void SetParameters(TRHICmdList& RHICmdList, const FSceneView& View, FRHIUnorderedAccessView* StencilOutputUAV, FIntPoint BufferSizeXY, FIntPoint ViewOffsetXY, uint32 StencilValue)
+	{
+		FRHIComputeShader* ComputeShader = GetComputeShader();
+
+		FGlobalShader::SetParameters<FViewUniformShaderParameters>(RHICmdList, ComputeShader, View.ViewUniformBuffer);
+
+		const float DitherFactor = View.GetTemporalLODTransition();
+		SetShaderValue(RHICmdList, ComputeShader, DitheredTransitionFactorParameter, DitherFactor);
+
+		const uint32 MaskedValue = (StencilValue & 0xFF);
+		const uint32 ClearedValue = 0;
+
+		const FIntVector4 StencilOffsetAndValues(
+			ViewOffsetXY.X,
+			ViewOffsetXY.Y,
+			int32(MaskedValue),
+			int32(ClearedValue));
+
+		SetShaderValue(RHICmdList, ComputeShader, StencilOffsetAndValuesParameter, StencilOffsetAndValues);
+		SetUAVParameter(RHICmdList, ComputeShader, StencilOutputParameter, StencilOutputUAV);
+	}
+
+	template <typename TRHICmdList>
+	void UnsetParameters(TRHICmdList& RHICmdList)
+	{
+		FRHIComputeShader* ComputeShader = GetComputeShader();
+		if (StencilOutputParameter.IsBound())
+		{
+			RHICmdList.SetUAVParameter(ComputeShader, StencilOutputParameter.GetBaseIndex(), nullptr);
+		}
+	}
+
+	virtual bool Serialize(FArchive& Ar) override
+	{
+		bool bShaderHasOutdatedParameters = FGlobalShader::Serialize(Ar);
+		Ar << DitheredTransitionFactorParameter << StencilOffsetAndValuesParameter << StencilOutputParameter;
+		return bShaderHasOutdatedParameters;
+	}
+
+	FShaderParameter DitheredTransitionFactorParameter;
+	FShaderParameter StencilOffsetAndValuesParameter;
+	FShaderResourceParameter StencilOutputParameter;
+};
+IMPLEMENT_SHADER_TYPE(, FDitheredTransitionStencilCS, TEXT("/Engine/Private/DitheredTransitionStencil.usf"), TEXT("MainCS"), SF_Compute);
 
 /** Possibly do the FX prerender and setup the prepass*/
 bool FDeferredShadingSceneRenderer::PreRenderPrePass(FRHICommandListImmediate& RHICmdList)
 {
-	SCOPED_GPU_MASK(RHICmdList, FRHIGPUMask::All()); // Required otherwise emulatestereo gets broken.
+	// This can be called from within RenderPrePassViewParallel, so we need to reset
+	// the current GPU mask to the AllViews mask before iterating over Views again.
+	// Otherwise emulate stereo gets broken.
+	SCOPED_GPU_MASK(RHICmdList, AllViewsGPUMask);
 
 	RHICmdList.SetCurrentStat(GET_STATID(STAT_CLM_PrePass));
+
 	// RenderPrePassHMD clears the depth buffer. If this changes we must change RenderPrePass to maintain the correct behavior!
 	bool bDepthWasCleared = RenderPrePassHMD(RHICmdList);
 
 	FSceneRenderTargets& SceneContext = FSceneRenderTargets::Get(RHICmdList);
 
-	SceneContext.BeginRenderingPrePass(RHICmdList, !bDepthWasCleared);
+	// Both compute approaches run earlier, so skip clearing stencil here, just load existing.
+	const bool bNoStencilClear = bDitheredLODTransitionsUseStencil && (StencilLODMode == 1 || StencilLODMode == 2);
+
+	SceneContext.BeginRenderingPrePass(RHICmdList, !bDepthWasCleared, !bNoStencilClear);
 	bDepthWasCleared = true;
 
-	// Dithered transition stencil mask fill
-	if (bDitheredLODTransitionsUseStencil)
+	// Dithered transition stencil mask fill (graphics path)
+	if (bDitheredLODTransitionsUseStencil && StencilLODMode == 0)
+	{
+		PreRenderDitherFill(RHICmdList, SceneContext, nullptr);
+	}
+
+	// Need to close the render pass here since we may call BeginRenderingPrePass later
+	RHICmdList.EndRenderPass();
+
+	return bDepthWasCleared;
+}
+
+void FDeferredShadingSceneRenderer::PreRenderDitherFill(FRHIAsyncComputeCommandListImmediate& RHICmdList, FSceneRenderTargets& SceneContext, FRHIUnorderedAccessView* StencilTextureUAV)
+{
+	SCOPED_GPU_EVENT(RHICmdList, DitheredStencilPrePass);
+
+	FIntPoint BufferSizeXY = SceneContext.GetBufferSizeXY();
+
+	for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ++ViewIndex)
+	{
+		SCOPED_CONDITIONAL_GPU_EVENTF(RHICmdList, EventView, Views.Num() > 1, TEXT("View%d"), ViewIndex);
+
+		FViewInfo& View = Views[ViewIndex];
+
+		TShaderMapRef<FDitheredTransitionStencilCS> ComputeShader(View.ShaderMap);
+		RHICmdList.SetComputeShader(ComputeShader->GetComputeShader());
+		ComputeShader->SetParameters(RHICmdList, View, StencilTextureUAV, BufferSizeXY, View.ViewRect.Min, STENCIL_SANDBOX_MASK);
+		const int32 SubWidth = FMath::Min(BufferSizeXY.X, View.ViewRect.Width());
+		const int32 SubHeight = FMath::Min(BufferSizeXY.Y, View.ViewRect.Height());
+		check(SubWidth > 0 && SubHeight > 0);
+
+		DispatchComputeShader(RHICmdList, *ComputeShader, FMath::DivideAndRoundUp(SubWidth, 8), FMath::DivideAndRoundUp(SubHeight, 8), 1);
+		ComputeShader->UnsetParameters(RHICmdList);
+	}
+}
+
+
+void FDeferredShadingSceneRenderer::PreRenderDitherFill(FRHICommandListImmediate& RHICmdList, FSceneRenderTargets& SceneContext, FRHIUnorderedAccessView* StencilTextureUAV)
+{
+	SCOPED_DRAW_EVENT(RHICmdList, DitheredStencilPrePass);
+
+	FIntPoint BufferSizeXY = SceneContext.GetBufferSizeXY();
+	if (StencilLODMode == 1 || StencilLODMode == 2)
+	{
+		for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ++ViewIndex)
+		{
+			SCOPED_CONDITIONAL_DRAW_EVENTF(RHICmdList, EventView, Views.Num() > 1, TEXT("View%d"), ViewIndex);
+
+			FViewInfo& View = Views[ViewIndex];
+
+			TShaderMapRef<FDitheredTransitionStencilCS> ComputeShader(View.ShaderMap);
+			RHICmdList.SetComputeShader(ComputeShader->GetComputeShader());
+			ComputeShader->SetParameters(RHICmdList, View, StencilTextureUAV, BufferSizeXY, View.ViewRect.Min, STENCIL_SANDBOX_MASK);
+			const int32 SubWidth = FMath::Min(BufferSizeXY.X, View.ViewRect.Width());
+			const int32 SubHeight = FMath::Min(BufferSizeXY.Y, View.ViewRect.Height());
+			check(SubWidth > 0 && SubHeight > 0);
+
+			DispatchComputeShader(RHICmdList, *ComputeShader, FMath::DivideAndRoundUp(SubWidth, 8), FMath::DivideAndRoundUp(SubHeight, 8), 1);
+			ComputeShader->UnsetParameters(RHICmdList);
+		}
+	}
+	else
 	{
 		FGraphicsPipelineStateInitializer GraphicsPSOInit;
 		RHICmdList.ApplyCachedRenderTargets(GraphicsPSOInit);
@@ -378,14 +523,13 @@ bool FDeferredShadingSceneRenderer::PreRenderPrePass(FRHICommandListImmediate& R
 			false, CF_Always, SO_Keep, SO_Keep, SO_Keep,
 			STENCIL_SANDBOX_MASK, STENCIL_SANDBOX_MASK>::GetRHI();
 
-		SCOPED_DRAW_EVENT(RHICmdList, DitheredStencilPrePass);
-		FIntPoint BufferSizeXY = SceneContext.GetBufferSizeXY();
-
 		for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ++ViewIndex)
 		{
+			FViewInfo& View = Views[ViewIndex];
+
+			SCOPED_GPU_MASK(RHICmdList, View.GPUMask);
 			SCOPED_CONDITIONAL_DRAW_EVENTF(RHICmdList, EventView, Views.Num() > 1, TEXT("View%d"), ViewIndex);
 
-			FViewInfo& View = Views[ViewIndex];
 			RHICmdList.SetViewport(View.ViewRect.Min.X, View.ViewRect.Min.Y, 0.0f, View.ViewRect.Max.X, View.ViewRect.Max.Y, 1.0f);
 
 			// Set shaders, states
@@ -415,10 +559,6 @@ bool FDeferredShadingSceneRenderer::PreRenderPrePass(FRHICommandListImmediate& R
 				EDRF_UseTriangleOptimization);
 		}
 	}
-	// Need to close the renderpass here since we may call BeginRenderingPrePass later
-	RHICmdList.EndRenderPass();
-
-	return bDepthWasCleared;
 }
 
 void FDeferredShadingSceneRenderer::RenderPrePassEditorPrimitives(FRHICommandList& RHICmdList, const FViewInfo& View, const FMeshPassProcessorRenderState& DrawRenderState, EDepthDrawingMode DepthDrawingMode, bool bRespectUseAsOccluderFlag) 
@@ -558,9 +698,10 @@ bool FDeferredShadingSceneRenderer::RenderPrePass(FRHICommandListImmediate& RHIC
 
 		for(int32 ViewIndex = 0;ViewIndex < Views.Num();ViewIndex++)
 		{
-			SCOPED_CONDITIONAL_DRAW_EVENTF(RHICmdList, EventView, Views.Num() > 1, TEXT("View%d"), ViewIndex);
 			const FViewInfo& View = Views[ViewIndex];
+
 			SCOPED_GPU_MASK(RHICmdList, !View.IsInstancedStereoPass() ? View.GPUMask : (Views[0].GPUMask | Views[1].GPUMask));
+			SCOPED_CONDITIONAL_DRAW_EVENTF(RHICmdList, EventView, Views.Num() > 1, TEXT("View%d"), ViewIndex);
 
 			TUniformBufferRef<FSceneTexturesUniformParameters> PassUniformBuffer;
 			CreateDepthPassUniformBuffer(RHICmdList, View, PassUniformBuffer);
@@ -633,23 +774,12 @@ bool FDeferredShadingSceneRenderer::RenderPrePass(FRHICommandListImmediate& RHIC
 	return bDepthWasCleared;
 }
 
-/**
- * Returns true if there's a hidden area mask available
- */
-static FORCEINLINE bool HasHiddenAreaMask()
-{
-	static const auto* const HiddenAreaMaskCVar = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("vr.HiddenAreaMask"));
-	return (HiddenAreaMaskCVar != nullptr &&
-		HiddenAreaMaskCVar->GetValueOnRenderThread() == 1 &&
-		GEngine &&
-		GEngine->XRSystem.IsValid() && GEngine->XRSystem->GetHMDDevice() &&
-		GEngine->XRSystem->GetHMDDevice()->HasHiddenAreaMesh());
-}
+extern bool IsHMDHiddenAreaMaskActive();
 
 bool FDeferredShadingSceneRenderer::RenderPrePassHMD(FRHICommandListImmediate& RHICmdList)
 {
 	// Early out before we change any state if there's not a mask to render
-	if (!HasHiddenAreaMask())
+	if (!IsHMDHiddenAreaMaskActive())
 	{
 		return false;
 	}
@@ -671,8 +801,9 @@ bool FDeferredShadingSceneRenderer::RenderPrePassHMD(FRHICommandListImmediate& R
 	for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ++ViewIndex)
 	{
 		const FViewInfo& View = Views[ViewIndex];
-		if (View.StereoPass != eSSP_FULL)
+		if (IStereoRendering::IsStereoEyeView(View))
 		{
+			SCOPED_GPU_MASK(RHICmdList, View.GPUMask);
 			RHICmdList.SetViewport(View.ViewRect.Min.X, View.ViewRect.Min.Y, 0.0f, View.ViewRect.Max.X, View.ViewRect.Max.Y, 1.0f);
 			RenderHiddenAreaMaskView(RHICmdList, GraphicsPSOInit, View);
 		}
@@ -683,11 +814,30 @@ bool FDeferredShadingSceneRenderer::RenderPrePassHMD(FRHICommandListImmediate& R
 	return true;
 }
 
+FMeshDrawCommandSortKey CalculateDepthPassMeshStaticSortKey(EBlendMode BlendMode, const FMeshMaterialShader* VertexShader, const FMeshMaterialShader* PixelShader)
+{
+	FMeshDrawCommandSortKey SortKey;
+	if (GEarlyZSortMasked)
+	{
+		SortKey.BasePass.VertexShaderHash = PointerHash(VertexShader) & 0xFFFF;
+		SortKey.BasePass.PixelShaderHash = PointerHash(PixelShader);
+		SortKey.BasePass.Masked = BlendMode == EBlendMode::BLEND_Masked ? 1 : 0;
+	}
+	else
+	{
+		SortKey.Generic.VertexShaderHash = PointerHash(VertexShader);
+		SortKey.Generic.PixelShaderHash = PointerHash(PixelShader);
+	}
+	
+	return SortKey;
+}
+
 template<bool bPositionOnly>
 void FDepthPassMeshProcessor::Process(
 	const FMeshBatch& RESTRICT MeshBatch,
 	uint64 BatchElementMask,
 	int32 StaticMeshId,
+	EBlendMode BlendMode,
 	const FPrimitiveSceneProxy* RESTRICT PrimitiveSceneProxy,
 	const FMaterialRenderProxy& RESTRICT MaterialRenderProxy,
 	const FMaterial& RESTRICT MaterialResource,
@@ -723,7 +873,7 @@ void FDepthPassMeshProcessor::Process(
 	FDepthOnlyShaderElementData ShaderElementData(0.0f);
 	ShaderElementData.InitializeMeshMaterialData(ViewIfDynamicMeshCommand, PrimitiveSceneProxy, MeshBatch, StaticMeshId, true);
 
-	const FMeshDrawCommandSortKey SortKey = CalculateMeshStaticSortKey(DepthPassShaders.VertexShader, DepthPassShaders.PixelShader);
+	const FMeshDrawCommandSortKey SortKey = CalculateDepthPassMeshStaticSortKey(BlendMode, DepthPassShaders.VertexShader, DepthPassShaders.PixelShader);
 
 	BuildMeshDrawCommands(
 		MeshBatch,
@@ -782,8 +932,9 @@ void FDepthPassMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshBatch,
 		const bool bIsTranslucent = IsTranslucentBlendMode(BlendMode);
 
 		if (!bIsTranslucent
-			&& (!PrimitiveSceneProxy || PrimitiveSceneProxy->ShouldRenderInMainPass())
-			&& ShouldIncludeDomainInMeshPass(Material.GetMaterialDomain()))
+			&& (!PrimitiveSceneProxy || PrimitiveSceneProxy->ShouldRenderInDepthPass())
+			&& ShouldIncludeDomainInMeshPass(Material.GetMaterialDomain())
+			&& ShouldIncludeMaterialInDefaultOpaquePass(Material))
 		{
 			if (BlendMode == BLEND_Opaque
 				&& MeshBatch.VertexFactory->SupportsPositionOnlyStream()
@@ -792,7 +943,7 @@ void FDepthPassMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshBatch,
 			{
 				const FMaterialRenderProxy& DefaultProxy = *UMaterial::GetDefaultMaterial(MD_Surface)->GetRenderProxy();
 				const FMaterial& DefaultMaterial = *DefaultProxy.GetMaterial(FeatureLevel);
-				Process<true>(MeshBatch, BatchElementMask, StaticMeshId, PrimitiveSceneProxy, DefaultProxy, DefaultMaterial, MeshFillMode, MeshCullMode);
+				Process<true>(MeshBatch, BatchElementMask, StaticMeshId, BlendMode, PrimitiveSceneProxy, DefaultProxy, DefaultMaterial, MeshFillMode, MeshCullMode);
 			}
 			else
 			{
@@ -810,7 +961,7 @@ void FDepthPassMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshBatch,
 						EffectiveMaterial = EffectiveMaterialRenderProxy->GetMaterial(FeatureLevel);
 					}
 
-					Process<false>(MeshBatch, BatchElementMask, StaticMeshId, PrimitiveSceneProxy, *EffectiveMaterialRenderProxy, *EffectiveMaterial, MeshFillMode, MeshCullMode);
+					Process<false>(MeshBatch, BatchElementMask, StaticMeshId, BlendMode, PrimitiveSceneProxy, *EffectiveMaterialRenderProxy, *EffectiveMaterial, MeshFillMode, MeshCullMode);
 				}
 			}
 		}

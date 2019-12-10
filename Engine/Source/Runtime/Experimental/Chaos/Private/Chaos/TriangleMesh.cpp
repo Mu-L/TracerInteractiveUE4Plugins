@@ -71,6 +71,7 @@ void TTriangleMesh<T>::InitHelper(const int32 StartIdx, const int32 EndIdx)
 				MaxIdx = FMath::Max(MaxIdx, MElements[i][Axis]);
 			}
 			check(MElements[i][0] != MElements[i][1]);
+			check(MElements[i][0] != MElements[i][2]);
 			check(MElements[i][1] != MElements[i][2]);
 		}
 		// This assumes vertices are contiguous in the vertex buffer. Assumption is held throughout TTriangleMesh
@@ -98,6 +99,7 @@ TSet<int32> TTriangleMesh<T>::GetVertices() const
 template<class T>
 void TTriangleMesh<T>::GetVertexSet(TSet<int32>& VertexSet) const
 {
+	VertexSet.Reset();
 	VertexSet.Reserve(MNumIndices);
 	for (const TVector<int32, 3>& Element : MElements)
 	{
@@ -238,20 +240,21 @@ TArray<TVector<T, 3>> TTriangleMesh<T>::GetFaceNormals(const TArrayView<const TV
 template<class T>
 void TTriangleMesh<T>::GetFaceNormals(TArray<TVector<T, 3>>& Normals, const TArrayView<const TVector<T, 3>>& Points, const bool ReturnEmptyOnError) const
 {
-	Normals.Reserve(MElements.Num());
+	Normals.Reset(MElements.Num());
 	if (ReturnEmptyOnError)
 	{
 		for (const TVector<int32, 3>& Tri : MElements)
 		{
 			TVector<T, 3> p10 = Points[Tri[1]] - Points[Tri[0]];
 			TVector<T, 3> p20 = Points[Tri[2]] - Points[Tri[0]];
-			TVector<T, 3> Cross = TVector<T, 3>::CrossProduct(p20, p10);
+			TVector<T, 3> Cross = TVector<T, 3>::CrossProduct(p10, p20);
 			const T Size2 = Cross.SizeSquared();
 			if (Size2 < SMALL_NUMBER)
 			{
 				//particles should not be coincident by the time they get here. Return empty to signal problem to caller
 				check(false);
 				Normals.Empty();
+				return;
 			}
 			else
 			{
@@ -265,39 +268,41 @@ void TTriangleMesh<T>::GetFaceNormals(TArray<TVector<T, 3>>& Normals, const TArr
 		{
 			TVector<T, 3> p10 = Points[Tri[1]] - Points[Tri[0]];
 			TVector<T, 3> p20 = Points[Tri[2]] - Points[Tri[0]];
-			TVector<T, 3> Cross = TVector<T, 3>::CrossProduct(p20, p10);
+			TVector<T, 3> Cross = TVector<T, 3>::CrossProduct(p10, p20);
 			Normals.Add(Cross.GetSafeNormal());
 		}
 	}
 }
 
 template<class T>
-TArray<TVector<T, 3>> TTriangleMesh<T>::GetPointNormals(const TArrayView<const TVector<T, 3>>& Points, const bool ReturnEmptyOnError)
+TArray<TVector<T, 3>> TTriangleMesh<T>::GetPointNormals(const TArrayView<const TVector<T, 3>>& Points, const bool bReturnEmptyOnError, const bool bUseGlobalArray)
 {
-	TArray<TVector<T, 3>> FaceNormals = GetFaceNormals(Points, ReturnEmptyOnError);
+	TArray<TVector<T, 3>> FaceNormals = GetFaceNormals(Points, bReturnEmptyOnError);
 	TArray<TVector<T, 3>> PointNormals;
-	GetPointNormals(PointNormals, FaceNormals, ReturnEmptyOnError);
+	GetPointNormals(PointNormals, FaceNormals, bReturnEmptyOnError, bUseGlobalArray);
 	return PointNormals;
 }
 
 template<class T>
-void TTriangleMesh<T>::GetPointNormals(TArray<TVector<T, 3>>& PointNormals, const TArray<TVector<T, 3>>& FaceNormals, const bool ReturnEmptyOnError)
+void TTriangleMesh<T>::GetPointNormals(TArray<TVector<T, 3>>& PointNormals, const TArray<TVector<T, 3>>& FaceNormals, const bool bReturnEmptyOnError, const bool bUseGlobalArray)
 {
 	GetPointToTriangleMap(); // build MPointToTriangleMap
 	const TTriangleMesh<T>* ConstThis = this;
-	ConstThis->GetPointNormals(PointNormals, FaceNormals, ReturnEmptyOnError);
+	ConstThis->GetPointNormals(PointNormals, FaceNormals, bReturnEmptyOnError, bUseGlobalArray);
 }
 
 template<class T>
-void TTriangleMesh<T>::GetPointNormals(TArray<TVector<T, 3>>& PointNormals, const TArray<TVector<T, 3>>& FaceNormals, const bool ReturnEmptyOnError) const
+void TTriangleMesh<T>::GetPointNormals(TArray<TVector<T, 3>>& PointNormals, const TArray<TVector<T, 3>>& FaceNormals, const bool bReturnEmptyOnError, const bool bUseGlobalArray) const
 {
 	check(MPointToTriangleMap.Num() != 0);
 	PointNormals.SetNum(MNumIndices);
 	for (auto Element : MPointToTriangleMap)
 	{
-		if (PointNormals.Num() <= Element.Key)
+		checkSlow(Element.Key >= MStartIdx);
+		const int32 NormalIndex = bUseGlobalArray ? Element.Key : GlobalToLocal(Element.Key);  // Select whether the points normal indices match the points indices or start at 0
+		if (PointNormals.Num() <= NormalIndex)
 		{
-			PointNormals.SetNum(Element.Key);
+			PointNormals.SetNum(NormalIndex);
 		}
 		TVector<T, 3> Normal(0);
 		for (int32 k = 0; k < Element.Value.Num(); ++k)
@@ -306,13 +311,13 @@ void TTriangleMesh<T>::GetPointNormals(TArray<TVector<T, 3>>& PointNormals, cons
 			{
 				Normal += FaceNormals[Element.Value[k]];
 			}
-			else if (ReturnEmptyOnError)
+			else if (bReturnEmptyOnError)
 			{
 				PointNormals.Reset();
 				return;
 			}
 		}
-		PointNormals[Element.Key] = Normal.GetSafeNormal();
+		PointNormals[NormalIndex] = Normal.GetSafeNormal();
 	}
 }
 

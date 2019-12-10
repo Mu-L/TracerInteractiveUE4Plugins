@@ -114,10 +114,11 @@ protected:
 	uint64 LastFrameFenceCounter = 0;
 
 	void CreateSwapchain(struct FVulkanSwapChainRecreateInfo* RecreateInfo);
+	void DestroySwapchain(struct FVulkanSwapChainRecreateInfo* RecreateInfo);
 	void AcquireImageIndex();
 	bool TryAcquireImageIndex();
 
-	void RecreateSwapchain(void* NewNativeWindow, bool bForce = false);
+	void RecreateSwapchain(void* NewNativeWindow);
 	void RecreateSwapchainFromRT(EPixelFormat PreferredPixelFormat);
 	void Resize(uint32 InSizeX, uint32 InSizeY, bool bIsFullscreen, EPixelFormat PreferredPixelFormat);
 

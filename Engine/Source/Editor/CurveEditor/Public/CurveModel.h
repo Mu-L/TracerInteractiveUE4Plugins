@@ -10,6 +10,8 @@
 #include "CurveEditorTypes.h"
 #include "Math/TransformCalculus2D.h"
 
+#include "IBufferedCurveModel.h"
+
 struct FKeyHandle;
 struct FKeyDrawInfo;
 struct FCurveDrawParams;
@@ -36,6 +38,7 @@ public:
 
 	FCurveModel()
 		: Color(FLinearColor::White)
+		, bKeyDrawEnabled(1)
 		, SupportedViews(ECurveEditorViewID::ANY_BUILT_IN)
 	{}
 
@@ -194,6 +197,14 @@ public:
 	}
 
 	/**
+	 * Retrieve this curve's color
+	 */
+	virtual FLinearColor GetColor() const
+	{
+		return IsReadOnly() ? Color.Desaturate(.6f) : Color;
+	}
+
+	/**
 	 * Create key proxy objects for the specified key handles. One object should be assigned to OutObjects per index within InKeyHandles
 	 *
 	 * @param InKeyHandles           Array of key handles to create edit objects for
@@ -201,6 +212,26 @@ public:
 	 */
 	virtual void CreateKeyProxies(TArrayView<const FKeyHandle> InKeyHandles, TArrayView<UObject*> OutObjects)
 	{}
+
+	/**
+	 * Creates a copy of this curve, stored in a minimal buffered curve object.
+	 * Buffered curves are used to cache the positions and attributes of a curve's keys. After creation, a buffered curve 
+	 * can be applied to any curve to set it to its saved state. Each curve must implement its own buffered curve which 
+	 * inherits IBufferedCurve and implements the DrawCurve method in order for it to be drawn on screen.
+	 * Optionally implemented
+	 */
+	virtual TUniquePtr<IBufferedCurveModel> CreateBufferedCurveCopy() const
+	{
+		return nullptr;
+	}
+
+	/** 
+	 * Returns whether the curve model should be edited or not
+	 */
+	virtual bool IsReadOnly() const
+	{
+		return false;
+	}
 
 	/**
 	 * Helper function for assigning a the same attributes to a number of keys
@@ -283,19 +314,26 @@ public:
 	}
 
 	/**
-	 * Retrieve this curve's color
-	 */
-	FORCEINLINE const FLinearColor& GetColor() const
-	{
-		return Color;
-	}
-
-	/**
-	 * Assign a new color to this curve
 	 */
 	FORCEINLINE void SetColor(const FLinearColor& InColor)
 	{
 		Color = InColor;
+	}
+
+	/**
+ * Retrieves whether or not to disable drawing keys
+ */
+	FORCEINLINE bool IsKeyDrawEnabled() const
+	{
+		return bKeyDrawEnabled != 0;
+	}
+
+	/**
+	 * Assign whether or not to disable drawing keys
+	 */
+	FORCEINLINE void SetIsKeyDrawEnabled(bool bInKeyDrawEnabled)
+	{
+		bKeyDrawEnabled = bInKeyDrawEnabled ? 1 : 0;
 	}
 
 	/**
@@ -319,6 +357,9 @@ protected:
 
 	/** This curve's display color */
 	FLinearColor Color;
+
+	/** Whether or not to draw curve's keys */
+	uint8 bKeyDrawEnabled : 1;
 
 	/** A set of views supported by this curve */
 	ECurveEditorViewID SupportedViews;

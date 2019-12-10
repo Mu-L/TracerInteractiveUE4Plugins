@@ -19,6 +19,7 @@
 #include "SSequencerTreeView.h"
 #include "Widgets/Colors/SColorPicker.h"
 #include "SequencerSectionPainter.h"
+#include "ObjectBindingTagCache.h"
 #include "Widgets/Text/SInlineEditableTextBlock.h"
 #include "Framework/SlateDelegates.h"
 
@@ -66,12 +67,33 @@ void SAnimationOutlinerTreeNode::Construct( const FArguments& InArgs, TSharedRef
 		.IsReadOnly(this, &SAnimationOutlinerTreeNode::IsNodeLabelReadOnly)
 		.Font(NodeFont)
 		.ColorAndOpacity(this, &SAnimationOutlinerTreeNode::GetDisplayNameColor)
+		.OnVerifyTextChanged(this, &SAnimationOutlinerTreeNode::VerifyNodeTextChanged)
 		.OnTextCommitted(this, &SAnimationOutlinerTreeNode::HandleNodeLabelTextCommitted)
 		.Text(this, &SAnimationOutlinerTreeNode::GetDisplayName)
 		.ToolTipText(this, &SAnimationOutlinerTreeNode::GetDisplayNameToolTipText)
 		.Clipping(EWidgetClipping::ClipToBounds)
 		.IsSelected(FIsSelected::CreateSP(InTableRow, &SSequencerTreeViewRow::IsSelectedExclusively));
 
+	TSharedRef<SWidget> LabelContent = EditableLabel.ToSharedRef();
+
+	if (TSharedPtr<SWidget> AdditionalLabelContent = Node->GetAdditionalOutlinerLabel())
+	{
+		LabelContent = SNew(SHorizontalBox)
+
+		+ SHorizontalBox::Slot()
+		.AutoWidth()
+		.Padding(FMargin(0.f, 0.f, 5.f, 0.f))
+		[
+			LabelContent
+		]
+
+		+ SHorizontalBox::Slot()
+		[
+			AdditionalLabelContent.ToSharedRef()
+		];
+
+		LabelContent->SetClipping(EWidgetClipping::ClipToBounds);
+	}
 
 	Node->OnRenameRequested().AddRaw(this, &SAnimationOutlinerTreeNode::EnterRenameMode);
 
@@ -151,7 +173,7 @@ void SAnimationOutlinerTreeNode::Construct( const FArguments& InArgs, TSharedRef
 							.VAlign(VAlign_Center)
 							.Padding(FMargin(0.f, 0.f, 4.f, 0.f))
 							[
-								EditableLabel.ToSharedRef()
+								LabelContent
 							]
 
 							// Arbitrary customization slot
@@ -425,6 +447,10 @@ bool SAnimationOutlinerTreeNode::IsNodeLabelReadOnly() const
 	return DisplayNode->GetSequencer().IsReadOnly() || !DisplayNode->CanRenameNode();
 }
 
+bool SAnimationOutlinerTreeNode::VerifyNodeTextChanged(const FText& NewLabel, FText& OutErrorMessage)
+{
+	return DisplayNode->ValidateDisplayName(NewLabel, OutErrorMessage);
+}
 
 void SAnimationOutlinerTreeNode::HandleNodeLabelTextCommitted(const FText& NewLabel, ETextCommit::Type CommitType)
 {

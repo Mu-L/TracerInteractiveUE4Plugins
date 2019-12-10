@@ -39,7 +39,7 @@ static FWidgetStyle NullStyle;
 
 FSlateWindowElementList& GetNullElementList()
 {
-	static FSlateWindowElementList NullElementList;
+	static FSlateWindowElementList NullElementList(nullptr);
 	return NullElementList;
 }
 
@@ -374,12 +374,16 @@ bool UUserWidget::Initialize()
 
 void UUserWidget::InitializeNamedSlots(bool bReparentToWidgetTree)
 {
-	for ( FNamedSlotBinding& Binding : NamedSlotBindings )
+	for (const FNamedSlotBinding& Binding : NamedSlotBindings )
 	{
 		if ( UWidget* BindingContent = Binding.Content )
 		{
 			UObjectPropertyBase* NamedSlotProperty = FindField<UObjectPropertyBase>(GetClass(), Binding.Name);
-			if ( ensure(NamedSlotProperty) )
+#if !WITH_EDITOR
+			// In editor, renaming a NamedSlot widget will cause this ensure in UpdatePreviewWidget of widget that use that namedslot
+			ensure(NamedSlotProperty);
+#endif
+			if ( NamedSlotProperty ) 
 			{
 				UNamedSlot* NamedSlot = Cast<UNamedSlot>(NamedSlotProperty->GetObjectPropertyValue_InContainer(this));
 				if ( ensure(NamedSlot) )
@@ -453,6 +457,14 @@ void UUserWidget::PostDuplicate(bool bDuplicateForPIE)
 	
 	if ( bInitializingFromWidgetTree )
 	{
+		// If this is a sub-widget of another UserWidget, default designer flags to match those of the owning widget before initialize.
+		if (UUserWidget* OwningUserWidget = GetTypedOuter<UUserWidget>())
+		{
+#if WITH_EDITOR
+			SetDesignerFlags(OwningUserWidget->GetDesignerFlags());	
+#endif
+			SetPlayerContext(OwningUserWidget->GetPlayerContext());
+		}
 		Initialize();
 	}
 }
@@ -618,20 +630,19 @@ void UUserWidget::Invalidate(EInvalidateWidget InvalidateReason)
 	TSharedPtr<SWidget> CachedWidget = GetCachedWidget();
 	if (CachedWidget.IsValid())
 	{
+		UpdateCanTick();
 		CachedWidget->Invalidate(InvalidateReason);
 	}
 }
 
-UUMGSequencePlayer* UUserWidget::PlayAnimation(UWidgetAnimation* InAnimation, float StartAtTime, int32 NumberOfLoops, EUMGSequencePlayMode::Type PlayMode, float PlaybackSpeed)
+UUMGSequencePlayer* UUserWidget::PlayAnimation(UWidgetAnimation* InAnimation, float StartAtTime, int32 NumberOfLoops, EUMGSequencePlayMode::Type PlayMode, float PlaybackSpeed, bool bRestoreState)
 {
 	SCOPED_NAMED_EVENT_TEXT("Widget::PlayAnimation", FColor::Emerald);
 
 	UUMGSequencePlayer* Player = GetOrAddSequencePlayer(InAnimation);
 	if (Player)
 	{
-		Player->Play(StartAtTime, NumberOfLoops, PlayMode, PlaybackSpeed);
-
-		Invalidate(EInvalidateWidget::Volatility);
+		Player->Play(StartAtTime, NumberOfLoops, PlayMode, PlaybackSpeed, bRestoreState);
 
 		OnAnimationStartedPlaying(*Player);
 
@@ -641,16 +652,14 @@ UUMGSequencePlayer* UUserWidget::PlayAnimation(UWidgetAnimation* InAnimation, fl
 	return Player;
 }
 
-UUMGSequencePlayer* UUserWidget::PlayAnimationTimeRange(UWidgetAnimation* InAnimation, float StartAtTime, float EndAtTime, int32 NumberOfLoops, EUMGSequencePlayMode::Type PlayMode, float PlaybackSpeed)
+UUMGSequencePlayer* UUserWidget::PlayAnimationTimeRange(UWidgetAnimation* InAnimation, float StartAtTime, float EndAtTime, int32 NumberOfLoops, EUMGSequencePlayMode::Type PlayMode, float PlaybackSpeed, bool bRestoreState)
 {
 	SCOPED_NAMED_EVENT_TEXT("Widget::PlayAnimationTimeRange", FColor::Emerald);
 
 	UUMGSequencePlayer* Player = GetOrAddSequencePlayer(InAnimation);
 	if (Player)
 	{
-		Player->PlayTo(StartAtTime, EndAtTime, NumberOfLoops, PlayMode, PlaybackSpeed);
-
-		Invalidate(EInvalidateWidget::Volatility);
+		Player->PlayTo(StartAtTime, EndAtTime, NumberOfLoops, PlayMode, PlaybackSpeed, bRestoreState);
 
 		OnAnimationStartedPlaying(*Player);
 
@@ -660,7 +669,7 @@ UUMGSequencePlayer* UUserWidget::PlayAnimationTimeRange(UWidgetAnimation* InAnim
 	return Player;
 }
 
-UUMGSequencePlayer* UUserWidget::PlayAnimationForward(UWidgetAnimation* InAnimation, float PlaybackSpeed)
+UUMGSequencePlayer* UUserWidget::PlayAnimationForward(UWidgetAnimation* InAnimation, float PlaybackSpeed, bool bRestoreState)
 {
 	// Don't create the player, only search for it.
 	UUMGSequencePlayer* Player = GetSequencePlayer(InAnimation);
@@ -675,10 +684,10 @@ UUMGSequencePlayer* UUserWidget::PlayAnimationForward(UWidgetAnimation* InAnimat
 		return Player;
 	}
 
-	return PlayAnimation(InAnimation, 0.0f, 1.0f, EUMGSequencePlayMode::Forward, PlaybackSpeed);
+	return PlayAnimation(InAnimation, 0.0f, 1.0f, EUMGSequencePlayMode::Forward, PlaybackSpeed, bRestoreState);
 }
 
-UUMGSequencePlayer* UUserWidget::PlayAnimationReverse(UWidgetAnimation* InAnimation, float PlaybackSpeed)
+UUMGSequencePlayer* UUserWidget::PlayAnimationReverse(UWidgetAnimation* InAnimation, float PlaybackSpeed, bool bRestoreState)
 {
 	// Don't create the player, only search for it.
 	UUMGSequencePlayer* Player = GetSequencePlayer(InAnimation);
@@ -693,7 +702,7 @@ UUMGSequencePlayer* UUserWidget::PlayAnimationReverse(UWidgetAnimation* InAnimat
 		return Player;
 	}
 
-	return PlayAnimation(InAnimation, 0.0f, 1.0f, EUMGSequencePlayMode::Reverse, PlaybackSpeed);
+	return PlayAnimation(InAnimation, 0.0f, 1.0f, EUMGSequencePlayMode::Reverse, PlaybackSpeed, bRestoreState);
 }
 
 void UUserWidget::StopAnimation(const UWidgetAnimation* InAnimation)
@@ -932,18 +941,13 @@ void UUserWidget::OnWidgetRebuilt()
 
 TSharedPtr<SWidget> UUserWidget::GetSlateWidgetFromName(const FName& Name) const
 {
-	UWidget* WidgetObject = WidgetTree->FindWidget(Name);
-	if ( WidgetObject )
-	{
-		return WidgetObject->GetCachedWidget();
-	}
-
-	return TSharedPtr<SWidget>();
+	UWidget* WidgetObject = GetWidgetFromName(Name);
+	return WidgetObject ? WidgetObject->GetCachedWidget() : TSharedPtr<SWidget>();
 }
 
 UWidget* UUserWidget::GetWidgetFromName(const FName& Name) const
 {
-	return WidgetTree->FindWidget(Name);
+	return WidgetTree ? WidgetTree->FindWidget(Name) : nullptr;
 }
 
 void UUserWidget::GetSlotNames(TArray<FName>& SlotNames) const
@@ -953,13 +957,12 @@ void UUserWidget::GetSlotNames(TArray<FName>& SlotNames) const
 	{
 		SlotNames.Append(BGClass->NamedSlots);
 	}
-	else // For non-blueprint widget blueprints we have to go through the widget tree to locate the named slots dynamically.
+	else if (WidgetTree) // For non-blueprint widget blueprints we have to go through the widget tree to locate the named slots dynamically.
 	{
-		TArray<FName> NamedSlots;
-		WidgetTree->ForEachWidget([&] (UWidget* Widget) {
+		WidgetTree->ForEachWidget([&SlotNames] (UWidget* Widget) {
 			if ( Widget && Widget->IsA<UNamedSlot>() )
 			{
-				NamedSlots.Add(Widget->GetFName());
+				SlotNames.Add(Widget->GetFName());
 			}
 		});
 	}
@@ -1139,7 +1142,7 @@ void UUserWidget::RemoveFromParent()
 		{
 			TSharedPtr<SWidget> WidgetHost = FullScreenWidget.Pin();
 
-			// If this is a game world add the widget to the current worlds viewport.
+			// If this is a game world remove the widget from the current world's viewport.
 			UWorld* World = GetWorld();
 			if (World && World->IsGameWorld())
 			{
@@ -1321,7 +1324,7 @@ const FText UUserWidget::GetPaletteCategory()
 	return PaletteCategory;
 }
 
-void UUserWidget::SetDesignerFlags(EWidgetDesignFlags::Type NewFlags)
+void UUserWidget::SetDesignerFlags(EWidgetDesignFlags NewFlags)
 {
 	UWidget::SetDesignerFlags(NewFlags);
 
@@ -1503,6 +1506,14 @@ void UUserWidget::TickActionsAndAnimation(const FGeometry& MyGeometry, float InD
 	}
 
 	const bool bWasPlayingAnimation = IsPlayingAnimation();
+	if(bWasPlayingAnimation)
+	{ 
+		TSharedPtr<SWidget> CachedWidget = GetCachedWidget();
+		if (CachedWidget.IsValid())
+		{
+			CachedWidget->InvalidatePrepass();
+		}
+	}
 
 	// The process of ticking the players above can stop them so we remove them after all players have ticked
 	for ( UUMGSequencePlayer* StoppedPlayer : StoppedSequencePlayers )
@@ -1511,12 +1522,6 @@ void UUserWidget::TickActionsAndAnimation(const FGeometry& MyGeometry, float InD
 	}
 
 	StoppedSequencePlayers.Empty();
-
-	// If we're no longer playing animations invalidate layout so that we recache the volatility of the widget.
-	if ( bWasPlayingAnimation && IsPlayingAnimation() == false )
-	{
-		Invalidate(EInvalidateWidget::Volatility);
-	}
 
 	UWorld* World = GetWorld();
 	if (World)
@@ -1533,6 +1538,7 @@ void UUserWidget::CancelLatentActions()
 	{
 		World->GetLatentActionManager().RemoveActionsForObject(this);
 		World->GetTimerManager().ClearAllTimersForObject(this);
+		UpdateCanTick();
 	}
 }
 
@@ -2134,6 +2140,12 @@ UUserWidget* UUserWidget::CreateInstanceInternal(UObject* Outer, TSubclassOf<UUs
 	// Only do this on a non-shipping or test build.
 	if (!CreateWidgetHelpers::ValidateUserWidgetClass(UserWidgetClass))
 	{
+		return nullptr;
+	}
+#else
+	if (!UserWidgetClass)
+	{
+		UE_LOG(LogUMG, Error, TEXT("CreateWidget called with a null class."));
 		return nullptr;
 	}
 #endif

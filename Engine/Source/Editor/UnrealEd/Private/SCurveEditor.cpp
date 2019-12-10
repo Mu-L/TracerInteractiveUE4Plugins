@@ -38,8 +38,8 @@
 #include "Framework/Notifications/NotificationManager.h"
 
 #define LOCTEXT_NAMESPACE "SCurveEditor"
-
-DEFINE_LOG_CATEGORY_STATIC(LogCurveEditor, Log, All);
+ 
+DEFINE_LOG_CATEGORY(LogCurveEditor);
 
 const static FVector2D	CONST_KeySize		= FVector2D(11,11);
 const static FVector2D	CONST_TangentSize	= FVector2D(7,7);
@@ -3091,7 +3091,7 @@ SCurveEditor::FSelectedTangent SCurveEditor::HitTestCubicTangents( const FGeomet
 {
 	FSelectedTangent Tangent;
 
-	if( AreCurvesVisible() && CurveOwner->HasRichCurves() )
+	if( AreCurvesVisible() && CurveOwner && CurveOwner->HasRichCurves() )
 	{
 		FTrackScaleInfo ScaleInfo(ViewMinInput.Get(),  ViewMaxInput.Get(), ViewMinOutput.Get(), ViewMaxOutput.Get(), InMyGeometry.GetLocalSize());
 
@@ -3712,7 +3712,7 @@ TArray<SCurveEditor::FSelectedTangent> SCurveEditor::GetEditableTangentsWithinMa
 	MarqueeBox.Max = FVector(MarqueeBottomRight.X, MarqueeBottomRight.Y, 0);
 
 	TArray<FSelectedTangent> TangentsWithinMarquee;
-	if (AreCurvesVisible() && CurveOwner->HasRichCurves())
+	if (AreCurvesVisible() && CurveOwner && CurveOwner->HasRichCurves())
 	{
 		FTrackScaleInfo ScaleInfo(ViewMinInput.Get(), ViewMaxInput.Get(), ViewMinOutput.Get(), ViewMaxOutput.Get(), InMyGeometry.GetLocalSize());
 		for (auto CurveViewModel : CurveViewModels)

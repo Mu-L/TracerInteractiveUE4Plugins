@@ -206,7 +206,6 @@
 #include "Async/TaskGraphInterfaces.h"
 #include "Serialization/BufferReader.h"
 #include "Misc/SecureHash.h"
-#include "Templates/ScopedPointer.h"
 #include "Containers/StaticArray.h"
 #include "Misc/Paths.h"
 #include "Misc/CoreStats.h"
@@ -642,7 +641,7 @@
 #include "Editor/UnrealEdEngine.h"
 #include "IPackageAutoSaver.h"
 #include "ComponentVisualizerManager.h"
-#include "Toolkits/AssetEditorManager.h"
+
 #include "Factories/FbxAnimSequenceImportData.h"
 #include "Factories/FbxSceneImportFactory.h"
 #include "EditorModeManager.h"

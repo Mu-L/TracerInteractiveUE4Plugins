@@ -22,9 +22,11 @@ class SDataprepOperation : public SDataprepActionBlock, public FGCObject
 protected:
 
 	virtual FText GetBlockTitle() const override;
-	virtual TSharedRef<SWidget> GetContentWidget() const override;
+	virtual TSharedRef<SWidget> GetContentWidget() override;
 
 private:
+
+	FText GetTooltipText() const;
 
 	//~ FGCObject interface
 	virtual void AddReferencedObjects(FReferenceCollector& Collector) override;

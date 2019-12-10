@@ -7,13 +7,13 @@
 
 void FRigUnit_AimConstraint::Execute(const FRigUnitContext& Context)
 {
-	FRigHierarchyRef& HierarchyRef = ExecuteContext.HierarchyReference;
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 
 	if (Context.State == EControlRigState::Init)
 	{
 		ConstraintData.Reset();
 
-		FRigHierarchy* Hierarchy = HierarchyRef.Get();
+		FRigBoneHierarchy* Hierarchy = ExecuteContext.GetBones();
 		if (Hierarchy)
 		{
 			int32 BoneIndex = Hierarchy->GetIndex(Joint);
@@ -44,7 +44,7 @@ void FRigUnit_AimConstraint::Execute(const FRigUnitContext& Context)
 	}
 	else if (Context.State == EControlRigState::Update)
 	{
-		FRigHierarchy* Hierarchy = HierarchyRef.Get();
+		FRigBoneHierarchy* Hierarchy = ExecuteContext.GetBones();
 		if (Hierarchy)
 		{
 			int32 BoneIndex = Hierarchy->GetIndex(Joint);
@@ -70,7 +70,7 @@ void FRigUnit_AimConstraint::Execute(const FRigUnitContext& Context)
 					}
 
 					FTransform BaseTransform = FTransform::Identity;
-					int32 ParentIndex = Hierarchy->GetParentIndex(BoneIndex);
+					int32 ParentIndex = (*Hierarchy)[BoneIndex].ParentIndex;
 					if (ParentIndex != INDEX_NONE)
 					{
 						BaseTransform = Hierarchy->GetGlobalTransform(ParentIndex);

@@ -62,13 +62,12 @@ public class LandscapeEditor : ModuleRules
 			//@todo: remove when no longer neeeded (no other code changes should be necessary).
 			if (Target.WindowsPlatform.bNeedsLegacyStdioDefinitionsLib)
 			{
-				PublicAdditionalLibraries.Add("legacy_stdio_definitions.lib");
+				PublicSystemLibraries.Add("legacy_stdio_definitions.lib");
 			}
 		}
 
 		// KissFFT is used by the smooth tool.
-		if (Target.bBuildDeveloperTools &&
-			(Target.Platform == UnrealTargetPlatform.Win64 || Target.Platform == UnrealTargetPlatform.Win32 || Target.Platform == UnrealTargetPlatform.Mac || Target.Platform == UnrealTargetPlatform.Linux))
+		if (Target.Platform == UnrealTargetPlatform.Win64 || Target.Platform == UnrealTargetPlatform.Win32 || Target.Platform == UnrealTargetPlatform.Mac || Target.Platform == UnrealTargetPlatform.Linux)
 		{
 			AddEngineThirdPartyPrivateStaticDependencies(Target, "Kiss_FFT");
 		}

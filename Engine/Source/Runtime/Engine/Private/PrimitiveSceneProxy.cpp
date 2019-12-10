@@ -15,6 +15,9 @@
 #include "Materials/Material.h"
 #include "SceneManagement.h"
 #include "VT/RuntimeVirtualTexture.h"
+#if WITH_EDITOR
+#include "FoliageHelper.h"
+#endif
 
 static TAutoConsoleVariable<int32> CVarForceSingleSampleShadowingFromStationary(
 	TEXT("r.Shadow.ForceSingleSampleShadowingFromStationary"),
@@ -86,7 +89,7 @@ FPrimitiveSceneProxy::FPrimitiveSceneProxy(const UPrimitiveComponent* InComponen
 ,	LightmapType(InComponent->LightmapType)
 ,	StatId()
 ,	DrawInGame(InComponent->IsVisible())
-,	DrawInEditor(InComponent->bVisible)
+,	DrawInEditor(InComponent->GetVisibleFlag())
 ,	bReceivesDecals(InComponent->bReceivesDecals)
 ,	bOnlyOwnerSee(InComponent->bOnlyOwnerSee)
 ,	bOwnerNoSee(InComponent->bOwnerNoSee)
@@ -100,6 +103,7 @@ FPrimitiveSceneProxy::FPrimitiveSceneProxy(const UPrimitiveComponent* InComponen
 ,	bStaticLighting(InComponent->HasStaticLighting())
 ,	bVisibleInReflectionCaptures(InComponent->bVisibleInReflectionCaptures)
 ,	bVisibleInRayTracing(InComponent->bVisibleInRayTracing)
+,	bRenderInDepthPass(InComponent->bRenderInDepthPass)
 ,	bRenderInMainPass(InComponent->bRenderInMainPass)
 ,	bRequiresVisibleLevelToRender(false)
 ,	bIsComponentLevelVisible(false)
@@ -145,11 +149,11 @@ FPrimitiveSceneProxy::FPrimitiveSceneProxy(const UPrimitiveComponent* InComponen
 ,	CustomDepthStencilWriteMask(FRendererStencilMaskEvaluation::ToStencilMask(InComponent->CustomDepthStencilWriteMask))
 ,	LightingChannelMask(GetLightingChannelMaskForStruct(InComponent->LightingChannels))
 ,	IndirectLightingCacheQuality(InComponent->IndirectLightingCacheQuality)
-,	LpvBiasMultiplier(InComponent->LpvBiasMultiplier)
-,	DynamicIndirectShadowMinVisibility(0)
 ,	VirtualTextureLodBias(InComponent->VirtualTextureLodBias)
 ,	VirtualTextureCullMips(InComponent->VirtualTextureCullMips)
 ,	VirtualTextureMinCoverage(InComponent->VirtualTextureMinCoverage)
+,	LpvBiasMultiplier(InComponent->LpvBiasMultiplier)
+,	DynamicIndirectShadowMinVisibility(0)
 ,	PrimitiveComponentId(InComponent->ComponentId)
 ,	Scene(InComponent->GetScene())
 ,	PrimitiveSceneInfo(NULL)
@@ -160,6 +164,7 @@ FPrimitiveSceneProxy::FPrimitiveSceneProxy(const UPrimitiveComponent* InComponen
 // by default we are always drawn
 ,	HiddenEditorViews(0)
 ,	DrawInAnyEditMode(0)
+,   bIsFoliage(false)
 #endif
 ,	VisibilityId(InComponent->VisibilityId)
 ,	MaxDrawDistance(InComponent->CachedMaxDrawDistance > 0 ? InComponent->CachedMaxDrawDistance : FLT_MAX)
@@ -191,7 +196,7 @@ FPrimitiveSceneProxy::FPrimitiveSceneProxy(const UPrimitiveComponent* InComponen
 	
 	if(InComponent->GetOwner())
 	{
-		DrawInGame &= !(InComponent->GetOwner()->bHidden);
+		DrawInGame &= !(InComponent->GetOwner()->IsHidden());
 		#if WITH_EDITOR
 			DrawInEditor &= !InComponent->GetOwner()->IsHiddenEd();
 		#endif
@@ -209,6 +214,7 @@ FPrimitiveSceneProxy::FPrimitiveSceneProxy(const UPrimitiveComponent* InComponen
 		// cache the actor's group membership
 		HiddenEditorViews = InComponent->GetHiddenEditorViews();
 		DrawInAnyEditMode = InComponent->GetOwner()->IsEditorOnly();
+		bIsFoliage = FFoliageHelper::IsOwnedByFoliage(InComponent->GetOwner());
 #endif
 	}
 	
@@ -219,7 +225,7 @@ FPrimitiveSceneProxy::FPrimitiveSceneProxy(const UPrimitiveComponent* InComponen
 	bRequiresVisibleLevelToRender = (ComponentLevel && ComponentLevel->bRequireFullVisibilityToRender);
 	bIsComponentLevelVisible = (!ComponentLevel || ComponentLevel->bIsVisible);
 
-	// Setup the runtime virtual texture information and flush the virtual texture if necessary
+	// Setup the runtime virtual texture information
 	if (UseVirtualTexturing(GetScene().GetFeatureLevel()))
 	{
 		for (URuntimeVirtualTexture* VirtualTexture : InComponent->GetRuntimeVirtualTextures())
@@ -227,11 +233,7 @@ FPrimitiveSceneProxy::FPrimitiveSceneProxy(const UPrimitiveComponent* InComponen
 			if (VirtualTexture != nullptr && VirtualTexture->GetEnabled())
 			{
 				RuntimeVirtualTextures.Add(VirtualTexture);
-				RuntimeVirtualTextureMaterialTypes.Add(VirtualTexture->GetMaterialType());
-			
-				//todo[vt]: Only flush this specific virtual texture
-				//todo[vt]: Only flush primitive bounds 
-				GetRendererModule().FlushVirtualTextureCache();
+				RuntimeVirtualTextureMaterialTypes.AddUnique(VirtualTexture->GetMaterialType());
 			}
 		}
 	}
@@ -244,6 +246,12 @@ FPrimitiveSceneProxy::FPrimitiveSceneProxy(const UPrimitiveComponent* InComponen
 		(MainPassType == ERuntimeVirtualTextureMainPassType::Exclusive && bUseVirtualTexture))
 	{
 		bRenderInMainPass = false;
+	}
+
+	// Modify max draw distance for main pass if we are using virtual texturing
+	if (bUseVirtualTexture && bRenderInMainPass && InComponent->GetVirtualTextureMainPassMaxDrawDistance() > 0.f)
+	{
+		MaxDrawDistance = FMath::Min(MaxDrawDistance, InComponent->GetVirtualTextureMainPassMaxDrawDistance());
 	}
 
 #if WITH_EDITOR
@@ -264,13 +272,6 @@ void FPrimitiveSceneProxy::SetUsedMaterialForVerification(const TArray<UMaterial
 FPrimitiveSceneProxy::~FPrimitiveSceneProxy()
 {
 	check(IsInRenderingThread());
-
-	for (URuntimeVirtualTexture* VirtualTexture : RuntimeVirtualTextures)
-	{
-		//todo[vt]: Only flush Bounds 
-		//todo[vt]: Only flush specific virtual textures
-		GetRendererModule().FlushVirtualTextureCache();
-	}
 }
 
 HHitProxy* FPrimitiveSceneProxy::CreateHitProxies(UPrimitiveComponent* Component,TArray<TRefCountPtr<HHitProxy> >& OutHitProxies)
@@ -628,6 +629,11 @@ bool FPrimitiveSceneProxy::IsShown(const FSceneView* View) const
 		{
 			return false;
 		}
+	}
+
+	if (bIsFoliage && !View->Family->EngineShowFlags.InstancedFoliage)
+	{
+		return false;
 	}
 
 	// After checking for VR/Desktop Edit mode specific actors, check for Editor vs. Game

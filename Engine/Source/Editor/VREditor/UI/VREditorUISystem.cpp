@@ -40,6 +40,7 @@
 #include "VREditorFloatingUI.h"
 #include "VREditorRadialFloatingUI.h"
 #include "VREditorDockableWindow.h"
+#include "VREditorDockableCameraWindow.h"
 #include "ViewportInteractionTypes.h"
 #include "IHeadMountedDisplay.h"
 #include "ViewportWorldInteraction.h"
@@ -69,7 +70,7 @@
 
 // Actor Details, Modes
 #include "SEditorViewport.h"
-#include "Toolkits/AssetEditorManager.h"
+
 #include "ILevelEditor.h"
 #include "LevelEditor.h"
 
@@ -104,6 +105,7 @@
 #include "Engine/Selection.h"
 #include "VREditorFloatingCameraUI.h"
 #include "ScopedTransaction.h"
+#include "Subsystems/AssetEditorSubsystem.h"
 
 #define LOCTEXT_NAMESPACE "VREditor"
 
@@ -141,7 +143,7 @@ namespace VREd
 	static const FTransform DefaultActorPreviewTransform(FRotator(-20, 120, 0), FVector(50, -60, 0), FVector(1));
 	static FAutoConsoleVariable DefaultCameraUIResolutionX( TEXT( "VREd.DefaultCameraUIResolutionX" ), 1400, TEXT( "Horizontal resolution to use for VR editor UI render targets" ) );
 	static FAutoConsoleVariable DefaultCameraUIResolutionY( TEXT( "VREd.DefaultCameraUIResolutionY" ), 787, TEXT( "Vertical resolution to use for VR editor UI render targets" ) );
-	static FAutoConsoleVariable CameraPreviewUISize( TEXT( "VREd.CameraPreviewUISize" ), 80.0f, TEXT( "How big camera preview UIs should be" ) );
+	static FAutoConsoleVariable CameraPreviewUISize( TEXT( "VREd.CameraPreviewUISize" ), 50.0f, TEXT( "How big camera preview UIs should be" ) );
 }
 
 const VREditorPanelID UVREditorUISystem::ContentBrowserPanelID = VREditorPanelID("ContentBrowser");
@@ -212,7 +214,9 @@ void UVREditorUISystem::Init(UVREditorMode* InVRMode)
 	FVREditorActionCallbacks::UpdateSelectingCandidateActorsText(VRMode);
 	FVREditorActionCallbacks::SelectingCandidateActorsText = FVREditorActionCallbacks::GetSelectingCandidateActorsText();
 
-	GLevelEditorModeTools().OnEditorModeChanged().AddUObject(this, &UVREditorUISystem::HandleEditorModeChanged);
+	GLevelEditorModeTools().OnEditorModeIDChanged().AddUObject(this, &UVREditorUISystem::HandleEditorModeChanged);
+	AssetEditorCloseDelegate = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OnAssetEditorRequestClose().AddUObject(this, &UVREditorUISystem::OnCloseAssetEditor);
+
 }
 
 void UVREditorUISystem::UpdateInteractors( )
@@ -246,7 +250,7 @@ void UVREditorUISystem::Shutdown()
 		VRMode->OnToggleDebugMode().RemoveAll(this);
 	}
 
-	GLevelEditorModeTools().OnEditorModeChanged().RemoveAll(this);
+	GLevelEditorModeTools().OnEditorModeIDChanged().RemoveAll(this);
 
 	// Unbind the color picker creation & destruction overrides
 	SColorPicker::OnColorPickerNonModalCreateOverride.Unbind();
@@ -292,8 +296,8 @@ void UVREditorUISystem::Shutdown()
 
 	// Remove the proxy tab manager, we don't want to steal tabs any more.
 	FGlobalTabmanager::Get()->SetProxyTabManager(TSharedPtr<FProxyTabmanager>());
-	FAssetEditorManager::Get().OnAssetEditorOpened().RemoveAll(this);
-
+	GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OnAssetEditorOpened().RemoveAll(this);
+	GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OnAssetEditorRequestClose().RemoveAll(this);
 	VRMode = nullptr;
 	DraggingUI = nullptr;
 	ColorPickerUI = nullptr;
@@ -523,7 +527,7 @@ void UVREditorUISystem::OnPreviewInputAction(FEditorViewportClient& ViewportClie
 									// If we are clicking on an editable text field and the radial menu is not a numpad, show the numpad
 									if (WidgetPathUnderFinger.Widgets.Last().Widget->GetTypeAsString() == TEXT("SEditableText") && (bRadialMenuIsNumpad == false))
 									{
-										if (!QuickRadialMenu->bHidden)
+										if (!QuickRadialMenu->IsHidden())
 										{
 											bRadialMenuVisibleAtSwap = true;
 										}
@@ -952,16 +956,11 @@ void UVREditorUISystem::CreateUIs()
 			Config.ThumbnailScale = 0.4f;
 			Config.bCanShowFilters = true;
 			Config.bUsePathPicker = true;
-			Config.bShowAssetPathTree = true;
-			Config.bAlwaysShowCollections = false;
 			Config.bShowBottomToolbar = true;
 			Config.bCanShowLockButton = false;
 
 			if( GIsDemoMode )
 			{
-				Config.bShowAssetPathTree = false;
-				Config.bAlwaysShowCollections = true;
-
 				Config.SelectedCollectionName.Name = TEXT( "Demo" );
 				Config.SelectedCollectionName.Type = ECollectionShareType::CST_Shared;
 			}
@@ -1081,7 +1080,7 @@ void UVREditorUISystem::CreateUIs()
 			// We're going to start stealing tabs from the global tab manager inserting them into the world instead.
 			FGlobalTabmanager::Get()->SetProxyTabManager( ProxyTabManager );
 
-			FAssetEditorManager::Get().OnAssetEditorOpened().AddUObject( this, &UVREditorUISystem::OnAssetEditorOpened );
+			GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OnAssetEditorOpened().AddUObject( this, &UVREditorUISystem::OnAssetEditorOpened );
 		}
 		// create the world settings menu
 		{
@@ -1139,7 +1138,7 @@ void UVREditorUISystem::OnAssetEditorOpened(UObject* Asset)
 	
 	{
 		// We need to disable drag drop on the tabs spawned in VR mode.
-		TArray<IAssetEditorInstance*> Editors = FAssetEditorManager::Get().FindEditorsForAsset(Asset);
+		TArray<IAssetEditorInstance*> Editors = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->FindEditorsForAsset(Asset);
 		for ( IAssetEditorInstance* Editor : Editors )
 		{
 			if (Editor->GetAssociatedTabManager().IsValid())
@@ -1198,7 +1197,7 @@ void UVREditorUISystem::ShowEditorUIPanel(AVREditorFloatingUI* Panel, UVREditorI
 			Panel->SetScale(Panel->GetInitialScale(), false);
 
 			// Make sure to set the panel to dock to the room if it is docked to nothing. Otherwise it will show up in world space.
-			if (DockedTo == AVREditorFloatingUI::EDockedTo::Nothing)
+			if (DockedTo == AVREditorFloatingUI::EDockedTo::Nothing && Panel->CreationContext.ParentActor == nullptr)
 			{
 				Panel->SetDockedTo(AVREditorBaseActor::EDockedTo::Room);
 			}
@@ -1250,6 +1249,16 @@ void UVREditorUISystem::ShowEditorUIPanel(AVREditorFloatingUI* Panel, UVREditorI
 					VRMode->GetWorldInteraction().SetDraggedInteractable(DockableWindow, Interactor);
 				}
 			}
+			//Attach to parent actor if it has been assigned
+			else if (Panel->CreationContext.ParentActor != nullptr)
+			{
+				FVector TransformedOffset = Panel->CreationContext.ParentActor->GetTransform().TransformVector(Panel->CreationContext.PanelSpawnOffset.GetLocation());
+				FVector NewLocation = Panel->CreationContext.ParentActor->GetActorLocation() + TransformedOffset;
+				FQuat NewRotation = Panel->CreationContext.ParentActor->GetActorRotation().Quaternion() * Panel->CreationContext.PanelSpawnOffset.GetRotation();
+				Panel->SetActorLocationAndRotation(NewLocation, NewRotation);
+				Panel->AttachToActor(Panel->CreationContext.ParentActor, FAttachmentTransformRules::KeepWorldTransform);
+			}
+			//else attach to room
 			else
 			{
 				if (DockedTo != AVREditorFloatingUI::EDockedTo::Room)
@@ -1264,18 +1273,18 @@ void UVREditorUISystem::ShowEditorUIPanel(AVREditorFloatingUI* Panel, UVREditorI
 				const FQuat RoomSpaceWindowRotation = WindowToRoomTransform.GetRotation();
 				Panel->SetRelativeOffset(RoomSpaceWindowLocation);
 				FRotator Rotation;
-				
+
 				if (bOpenAtControllerPosition)
 				{
 					Rotation = RoomSpaceWindowRotation.Rotator();
 				}
 				else
-				{					
+				{
 					Rotation = WindowToRoomTransform.Rotator();
 					Rotation.Yaw += 180;
-					Rotation.Yaw += Panel->CreationContext.PanelSpawnOffset.GetRotation().Rotator().Yaw;								
-				}				
-				
+					Rotation.Yaw += Panel->CreationContext.PanelSpawnOffset.GetRotation().Rotator().Yaw;
+				}
+
 				Panel->SetLocalRotation(Rotation);
 			}
 		}
@@ -1330,7 +1339,7 @@ bool UVREditorUISystem::IsShowingRadialMenu(const UVREditorInteractor* Interacto
 	{
 		const EControllerHand DockedToHand = QuickRadialMenu->GetDockedTo() == AVREditorFloatingUI::EDockedTo::LeftArm ? EControllerHand::Left : EControllerHand::Right;
 		const UVREditorInteractor* DockedToInteractor = GetOwner().GetHandInteractor(DockedToHand);
-		return DockedToInteractor == Interactor && !QuickRadialMenu->bHidden;
+		return DockedToInteractor == Interactor && !QuickRadialMenu->IsHidden();
 	}
 	else
 	{
@@ -2259,19 +2268,20 @@ void UVREditorUISystem::SequencerRadialMenuGenerator(FMenuBuilder& MenuBuilder, 
 	);
 }
 
-void UVREditorUISystem::HandleEditorModeChanged(FEdMode* Mode, bool IsEnabled)
+void UVREditorUISystem::HandleEditorModeChanged(const FEditorModeID& EditorModeID, bool IsEnabled)
 {
 	if (IsEnabled == true &&
-		(Mode->GetID() == FBuiltinEditorModes::EM_Foliage ||
-		 Mode->GetID() == FBuiltinEditorModes::EM_Landscape ||
-		 Mode->GetID() == FBuiltinEditorModes::EM_MeshPaint))
+		(EditorModeID == FBuiltinEditorModes::EM_Foliage ||
+		 EditorModeID == FBuiltinEditorModes::EM_Landscape ||
+		 EditorModeID == FBuiltinEditorModes::EM_MeshPaint))
 	{
 		AVREditorFloatingUI* Panel = GetPanel(ModesPanelID);
 		if (Panel != nullptr && UIInteractor != nullptr && !Panel->IsUIVisible())
 		{
 			const bool bShouldShow = true;
 			const bool bSpawnInFront = true;
-			const bool bDragFromOpen = ShouldPreviewPanel();
+			bool bDragFromOpen = false;
+			bDragFromOpen = ShouldPreviewPanel();
 			ShowEditorUIPanel(Panel, UIInteractor, bShouldShow, bSpawnInFront, bDragFromOpen);
 		}
 	}
@@ -2507,6 +2517,8 @@ void UVREditorUISystem::UpdateActorPreviewUI( TSharedRef<SWidget> InWidget, int3
 		return;
 	}
 
+	const FIntPoint ViewfinderSize = FIntPoint(VREd::DefaultCameraUIResolutionX->GetFloat(), VREd::DefaultCameraUIResolutionY->GetFloat());
+
 	// If a widget is sent but no panel exists, create one.
 	if (Actor && PreviewPanel == nullptr)
 	{
@@ -2538,10 +2550,10 @@ void UVREditorUISystem::UpdateActorPreviewUI( TSharedRef<SWidget> InWidget, int3
 		PreviewWindowInfo.Add( PreviewPanelID, Actor );
 		Cast<AVREditorFloatingCameraUI>( PreviewPanel )->SetLinkedActor( Actor );
 
-		PreviewPanel->SetSlateWidget( *this, PreviewPanelID, SNullWidget::NullWidget, FIntPoint( VREd::DefaultCameraUIResolutionX->GetFloat(), VREd::DefaultCameraUIResolutionY->GetFloat() ), VREd::CameraPreviewUISize->GetFloat(), AVREditorFloatingUI::EDockedTo::Nothing );
+		PreviewPanel->SetSlateWidget( *this, PreviewPanelID, SNullWidget::NullWidget, ViewfinderSize, VREd::CameraPreviewUISize->GetFloat(), AVREditorFloatingUI::EDockedTo::Nothing );
 		PreviewPanel->ShowUI( true );
 	}
-
+	
 	// Once a panel exists:
 	if (PreviewPanel != nullptr)
 	{
@@ -2552,14 +2564,8 @@ void UVREditorUISystem::UpdateActorPreviewUI( TSharedRef<SWidget> InWidget, int3
 				InWidget
 			]
 		;
-		TSharedRef<SWidget> TestWidget = FindWidgetOfType( InWidget, FName( TEXT( "SButton" ) ) );
-		if (TestWidget != SNullWidget::NullWidget)
-		{
-			TSharedRef<SButton> Button = StaticCastSharedRef<SButton>( TestWidget );
-			Button->SetVisibility( EVisibility::Hidden );
-		}
 
-		PreviewPanel->SetSlateWidget( *this, PreviewPanelID, WidgetToDraw, FIntPoint( VREd::DefaultCameraUIResolutionX->GetFloat(), VREd::DefaultCameraUIResolutionY->GetFloat() ), VREd::CameraPreviewUISize->GetFloat(), AVREditorFloatingUI::EDockedTo::Nothing );
+		PreviewPanel->SetSlateWidget( *this, PreviewPanelID, WidgetToDraw, ViewfinderSize, VREd::CameraPreviewUISize->GetFloat(), AVREditorFloatingUI::EDockedTo::Nothing );
 
 		// If we are not using the global preview, spawn the UI and dock it to the camera
 		const bool bDragFromOpen = false;
@@ -2570,6 +2576,77 @@ void UVREditorUISystem::UpdateActorPreviewUI( TSharedRef<SWidget> InWidget, int3
 		PreviewPanel->SetDockedTo( AVREditorFloatingUI::EDockedTo::Custom );
 		// We don't want the camera outline to show through the UI
 		GetOwner().GetLevelViewportPossessedForVR().GetLevelViewportClient().EngineShowFlags.SetSelectionOutline( false );
+	}
+}
+
+void UVREditorUISystem::UpdateDetachedActorPreviewUI(TSharedRef<SWidget> InWidget, int32 Index)
+{
+	FString PanelString = ActorPreviewPrefix + FString::FromInt(Index);
+	const VREditorPanelID PreviewPanelID = FName(*PanelString);
+	AVREditorFloatingUI* PreviewPanel = GetPanel(PreviewPanelID);
+
+	// Cleanup the UI if no widget is sent for update.
+	if (PreviewPanel && InWidget == SNullWidget::NullWidget)
+	{
+		FloatingUIs.Remove(PreviewPanelID);
+		PreviewWindowInfo.Remove(PreviewPanelID);
+		VRMode->DestroyTransientActor(PreviewPanel);
+		return;
+	}
+	FIntPoint ViewfinderSize = FIntPoint(VREd::DefaultCameraUIResolutionX->GetFloat(), VREd::DefaultCameraUIResolutionY->GetFloat());
+
+	// If a widget is sent but no panel exists, create one.
+	if (PreviewPanel == nullptr)
+	{
+		const FName TabIdentifier = NAME_None;	// No tab for us!
+		const bool bWithSceneComponent = false;
+		PreviewPanel = GetOwner().SpawnTransientSceneActor<AVREditorDockableCameraWindow>(TEXT("ActorDetachablePreviewUI"), bWithSceneComponent);
+		PreviewPanel->CreationContext.bNoCloseButton = true;
+		FloatingUIs.Add(PreviewPanelID, PreviewPanel);
+		AActor* Actor = GEditor->GetSelectedActors()->GetBottom<AActor>();
+		if (Actor)
+		{
+			PreviewWindowInfo.Add(PreviewPanelID, Actor);
+		}
+		PreviewPanel->SetSlateWidget(*this, PreviewPanelID, SNullWidget::NullWidget, ViewfinderSize, VREd::ContentBrowserUISize->GetFloat(), AVREditorFloatingUI::EDockedTo::Nothing);
+		PreviewPanel->ShowUI(true);
+	}
+
+	// Once a panel exists:
+	if (PreviewPanel != nullptr)
+	{
+		TSharedRef<SWidget> WidgetToDraw =
+			SNew(SDPIScaler)
+			.DPIScale(3.0f)
+			[
+				InWidget
+			]
+		;
+	
+		PreviewPanel->SetSlateWidget(*this, PreviewPanelID, WidgetToDraw, ViewfinderSize, VREd::ContentBrowserUISize->GetFloat(), AVREditorFloatingUI::EDockedTo::Nothing);
+		const bool bDragFromOpen = false;
+		const bool bShouldShow = true;
+		const bool bSpawnInFront = true;
+		ShowEditorUIPanel(PreviewPanel, UIInteractor, bShouldShow, bSpawnInFront, bDragFromOpen);
+		// Make sure the UIs are centered around the direction your head is looking (yaw only!)
+		const FVector RoomSpaceHeadLocation = VRMode->GetRoomSpaceHeadTransform().GetLocation() / VRMode->GetWorldScaleFactor();
+		FRotator RoomSpaceHeadYawRotator = VRMode->GetRoomSpaceHeadTransform().GetRotation().Rotator();
+		RoomSpaceHeadYawRotator.Pitch = 0.0f;
+		RoomSpaceHeadYawRotator.Roll = 0.0f;
+
+		FTransform NewTransform = VREd::DefaultActorPreviewTransform;
+		// Offset slightly for each new window
+		FVector Translation = NewTransform.GetTranslation();
+		Translation.X -= Index;
+		Translation.Y += Index;
+		NewTransform.SetTranslation(Translation);
+		if (GetDefault<UVRModeSettings>()->InteractorHand == EInteractorHand::Left)
+		{
+			NewTransform.Mirror(EAxis::Y, EAxis::Y);
+		}
+		NewTransform *= FTransform(RoomSpaceHeadYawRotator.Quaternion(), FVector::ZeroVector);
+		PreviewPanel->SetLocalRotation(NewTransform.GetRotation().Rotator());
+		PreviewPanel->SetRelativeOffset(RoomSpaceHeadLocation + NewTransform.GetTranslation());
 	}
 }
 
@@ -2591,8 +2668,16 @@ void UVREditorUISystem::UpdateExternalUMGUI(const FVREditorFloatingUICreationCon
 	{
 		const FName TabIdentifier = NAME_None;	// No tab for us!
 		const bool bWithSceneComponent = false;
-  		ExternalPanel = GetOwner().SpawnTransientSceneActor<AVREditorDockableWindow>(TEXT("ActorPreviewUI"), bWithSceneComponent);	
-		ExternalPanel->CreationContext = CreationContext;
+  		ExternalPanel = GetOwner().SpawnTransientSceneActor<AVREditorDockableWindow>(TEXT("ActorPreviewUMGUI"), bWithSceneComponent);	
+		
+		// AVREditorDockableWindow does most of its setup in PostActorCreated(), but the CreationContext hasn't been set yet. 
+		// We let it set its defaults, then override the custom settings here.
+		ExternalPanel->CreationContext = CreationContext;				
+		if (CreationContext.PanelMesh != nullptr)
+		{
+			ExternalPanel->SetWindowMesh(CreationContext.PanelMesh);
+		}
+				
 		FloatingUIs.Add(PreviewPanelID, ExternalPanel);
 		ExternalPanel->SetUMGWidget(*this, PreviewPanelID, nullptr, FIntPoint(VREd::DefaultEditorUIResolutionX->GetFloat(), VREd::DefaultEditorUIResolutionY->GetFloat()), VREd::EditorUISize->GetFloat(), AVREditorFloatingUI::EDockedTo::Nothing);
 		ExternalPanel->ShowUI(true);
@@ -2718,6 +2803,16 @@ void UVREditorUISystem::ToggledDebugMode(bool bDebugModeEnabled)
 	if (QuickRadialMenu != nullptr)
 	{
 		QuickRadialMenu->ShowUI(bShowAllFloatingUIs, false);
+	}
+}
+
+void UVREditorUISystem::OnCloseAssetEditor(UObject* Asset, EAssetEditorCloseReason CloseReason)
+{
+	AVREditorFloatingUI* AssetEditorPanel = GetPanel(TabManagerPanelID);
+	if(AssetEditorPanel)
+	{
+		AssetEditorPanel->SetSlateWidget(SNullWidget::NullWidget);
+		AssetEditorPanel->ShowUI(false);
 	}
 }
 

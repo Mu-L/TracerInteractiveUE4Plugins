@@ -1,7 +1,7 @@
 // Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
-	PlayerInput.cpp: Unreal input system.
+	AudioSettings.cpp: Unreal audio settings
 =============================================================================*/
 
 #include "Sound/AudioSettings.h"
@@ -13,40 +13,6 @@
 #include "UObject/UObjectIterator.h"
 
 #define LOCTEXT_NAMESPACE "AudioSettings"
-
-FAudioPlatformSettings FAudioPlatformSettings::GetPlatformSettings(const TCHAR* PlatformSettingsConfigFile)
-{
-	FAudioPlatformSettings Settings;
-
-	FString TempString;
-
-	if (GConfig->GetString(PlatformSettingsConfigFile, TEXT("AudioSampleRate"), TempString, GEngineIni))
-	{
-		Settings.SampleRate = FMath::Max(FCString::Atoi(*TempString), 8000);
-	}
-
-	if (GConfig->GetString(PlatformSettingsConfigFile, TEXT("AudioCallbackBufferFrameSize"), TempString, GEngineIni))
-	{
-		Settings.CallbackBufferFrameSize = FMath::Max(FCString::Atoi(*TempString), 256);
-	}
-
-	if (GConfig->GetString(PlatformSettingsConfigFile, TEXT("AudioNumBuffersToEnqueue"), TempString, GEngineIni))
-	{
-		Settings.NumBuffers = FMath::Max(FCString::Atoi(*TempString), 1);
-	}
-
-	if (GConfig->GetString(PlatformSettingsConfigFile, TEXT("AudioMaxChannels"), TempString, GEngineIni))
-	{
-		Settings.MaxChannels = FMath::Max(FCString::Atoi(*TempString), 0);
-	}
-
-	if (GConfig->GetString(PlatformSettingsConfigFile, TEXT("AudioNumSourceWorkers"), TempString, GEngineIni))
-	{
-		Settings.NumSourceWorkers = FMath::Max(FCString::Atoi(*TempString), 0);
-	}
-
-	return Settings;
-}
 
 UAudioSettings::UAudioSettings(const FObjectInitializer& ObjectInitializer)
 : Super(ObjectInitializer)
@@ -135,6 +101,8 @@ void UAudioSettings::PostEditChangeChainProperty(FPropertyChangedChainEvent& Pro
 				It->ReconcileNode(true);
 			}
 		}
+
+		AudioSettingsChanged.Broadcast();
 	}
 }
 #endif
@@ -149,6 +117,12 @@ const FAudioQualitySettings& UAudioSettings::GetQualityLevelSettings(int32 Quali
 	check(QualityLevels.Num() > 0);
 	return QualityLevels[FMath::Clamp(QualityLevel, 0, QualityLevels.Num() - 1)];
 }
+
+int32 UAudioSettings::GetQualityLevelSettingsNum() const
+{
+	return QualityLevels.Num();
+}
+
 
 void UAudioSettings::SetAudioMixerEnabled(const bool bInAudioMixerEnabled)
 {
@@ -174,6 +148,13 @@ int32 UAudioSettings::GetHighestMaxChannels() const
 	}
 
 	return HighestMaxChannels;
+}
+
+FString UAudioSettings::FindQualityNameByIndex(int32 Index) const
+{
+	return QualityLevels.IsValidIndex(Index) ?
+		   QualityLevels[Index].DisplayName.ToString() :
+		   TEXT("");
 }
 
 #undef LOCTEXT_NAMESPACE

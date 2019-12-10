@@ -20,6 +20,8 @@
 void SPropertyMenuAssetPicker::Construct( const FArguments& InArgs )
 {
 	CurrentObject = InArgs._InitialObject;
+	PropertyHandle = InArgs._PropertyHandle;
+	const TArray<FAssetData>& OwnerAssetArray = InArgs._OwnerAssetArray;
 	bAllowClear = InArgs._AllowClear;
 	bAllowCopyPaste = InArgs._AllowCopyPaste;
 	AllowedClasses = InArgs._AllowedClasses;
@@ -143,6 +145,10 @@ void SPropertyMenuAssetPicker::Construct( const FArguments& InArgs )
 		AssetPickerConfig.bAllowDragging = false;
 		// Save the settings into a special section for asset pickers for properties
 		AssetPickerConfig.SaveSettingsName = TEXT("AssetPropertyPicker");
+		// Populate the referencing assets via property handle
+		AssetPickerConfig.PropertyHandle = PropertyHandle;
+		// Populate the additional referencing assets with the Owner asset data
+		AssetPickerConfig.AdditionalReferencingAssets = OwnerAssetArray;
 
 		MenuContent =
 			SNew(SBox)
@@ -285,12 +291,15 @@ void SPropertyMenuAssetPicker::OnCreateNewAssetSelected(TWeakObjectPtr<UFactory>
 	if (FactoryPtr.IsValid())
 	{
 		UFactory* FactoryInstance = DuplicateObject<UFactory>(FactoryPtr.Get(), GetTransientPackage());
+		// Ensure this object is not GC for the duration of CreateAssetWithDialog
+		FactoryInstance->AddToRoot();
 		FAssetToolsModule& AssetToolsModule = FAssetToolsModule::GetModule();
 		UObject* NewAsset = AssetToolsModule.Get().CreateAssetWithDialog(FactoryInstance->GetSupportedClass(), FactoryInstance);
 		if (NewAsset != nullptr)
 		{
 			SetValue(NewAsset);
 		}
+		FactoryInstance->RemoveFromRoot();
 	}
 }
 

@@ -23,6 +23,8 @@
 using namespace gvr;
 #endif
 
+DECLARE_LOG_CATEGORY_EXTERN(LogGoogleVRMotionController, Log, All);
+
 /** Total number of controllers in a set */
 #define CONTROLLERS_PER_PLAYER	2
 
@@ -59,6 +61,7 @@ public:
 	{
 		enum Type
 		{
+			// Deprecated buttons
 			ApplicationMenu,
 			TouchPadLeft,
 			TouchPadUp,
@@ -69,6 +72,11 @@ public:
 			Grip,
 			TouchPadPress,
 			TouchPadTouch,
+
+			// New buttons
+			SelectClick,
+			TrackpadClick,
+			TrackpadTouch,
 
 			/** Max number of controller buttons.  Must be < 256 */
 			TotalButtonCount

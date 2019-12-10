@@ -21,6 +21,7 @@
 #if WITH_EDITOR
 #include "BlueprintCompilationManager.h"
 #include "Editor/UnrealEd/Classes/Settings/ProjectPackagingSettings.h"
+#include "Editor/UnrealEd/Classes/Settings/EditorExperimentalSettings.h"
 #include "Engine/SimpleConstructionScript.h"
 #include "Engine/SCS_Node.h"
 #include "Kismet2/BlueprintEditorUtils.h"
@@ -39,6 +40,7 @@
 #include "Interfaces/ITargetPlatform.h"
 #include "UObject/MetaData.h"
 #include "BlueprintAssetHandler.h"
+#include "Blueprint/BlueprintExtension.h"
 #endif
 #include "Engine/InheritableComponentHandler.h"
 
@@ -462,6 +464,7 @@ void UBlueprint::Serialize(FArchive& Ar)
 
 		if (Ar.IsLoading())
 		{
+#if WITH_EDITORONLY_DATA
 			if (bNativize_DEPRECATED)
 			{
 				// Migrate to the new transient flag.
@@ -472,6 +475,7 @@ void UBlueprint::Serialize(FArchive& Ar)
 				bSettingsChanged |= PackagingSettings->AddBlueprintAssetToNativizationList(this);
 			}
 			else
+#endif
 			{
 				// Cache whether or not this Blueprint asset was selected for exclusive nativization in the Project Settings.
 				for (int AssetIndex = 0; AssetIndex < PackagingSettings->NativizeBlueprintAssets.Num(); ++AssetIndex)
@@ -507,12 +511,28 @@ bool UBlueprint::RenameGeneratedClasses( const TCHAR* InName, UObject* NewOuter,
 
 	if(bRenameGeneratedClasses)
 	{
+		const auto TryFreeCDOName = [](UClass* ForClass, UObject* ToOuter, ERenameFlags InFlags)
+		{
+			if(ForClass->ClassDefaultObject)
+			{
+				FName CDOName = ForClass->GetDefaultObjectName();
+				
+				if(UObject* Obj = StaticFindObjectFast(UObject::StaticClass(), ToOuter, CDOName))
+				{
+					FName NewName = MakeUniqueObjectName(ToOuter, Obj->GetClass(), CDOName);
+					Obj->Rename(*(NewName.ToString()), ToOuter, InFlags|REN_ForceNoResetLoaders|REN_DontCreateRedirectors);
+				}
+			}
+		};
+
 		FName SkelClassName, GenClassName;
 		GetBlueprintClassNames(GenClassName, SkelClassName, FName(InName));
 
 		UPackage* NewTopLevelObjectOuter = NewOuter ? NewOuter->GetOutermost() : NULL;
 		if (GeneratedClass != NULL)
 		{
+			// check for collision of CDO name, move aside if necessary:
+			TryFreeCDOName(GeneratedClass, NewTopLevelObjectOuter, Flags);
 			bool bMovedOK = GeneratedClass->Rename(*GenClassName.ToString(), NewTopLevelObjectOuter, Flags);
 			if (!bMovedOK)
 			{
@@ -523,6 +543,7 @@ bool UBlueprint::RenameGeneratedClasses( const TCHAR* InName, UObject* NewOuter,
 		// Also move skeleton class, if different from generated class, to new package (again, to create redirector)
 		if (SkeletonGeneratedClass != NULL && SkeletonGeneratedClass != GeneratedClass)
 		{
+			TryFreeCDOName(SkeletonGeneratedClass, NewTopLevelObjectOuter, Flags);
 			bool bMovedOK = SkeletonGeneratedClass->Rename(*SkelClassName.ToString(), NewTopLevelObjectOuter, Flags);
 			if (!bMovedOK)
 			{
@@ -578,69 +599,66 @@ void UBlueprint::PostDuplicate(bool bDuplicateForPIE)
 	}
 }
 
-extern COREUOBJECT_API bool GBlueprintUseCompilationManager;
-
 UClass* UBlueprint::RegenerateClass(UClass* ClassToRegenerate, UObject* PreviousCDO)
 {
 	LoadModulesRequiredForCompilation();
 
-	if(GBlueprintUseCompilationManager)
+	// ensure that we have UProperties for any properties declared in the blueprint:
+	if(!GeneratedClass || !HasAnyFlags(RF_BeingRegenerated) || bIsRegeneratingOnLoad || bHasBeenRegenerated)
 	{
-		// ensure that we have UProperties for any properties declared in the blueprint:
-		if(!GeneratedClass || !HasAnyFlags(RF_BeingRegenerated) || bIsRegeneratingOnLoad || bHasBeenRegenerated)
-		{
-			return GeneratedClass;
-		}
-		
-		// tag ourself as bIsRegeneratingOnLoad so that any reentrance via ForceLoad calls doesn't recurse:
-		bIsRegeneratingOnLoad = true;
-		
-		UPackage* Package = GetOutermost();
-		bool bIsPackageDirty = Package ? Package->IsDirty() : false;
-
-		UClass* GeneratedClassResolved = GeneratedClass;
-
-		UBlueprint::ForceLoadMetaData(this);
-		if (ensure(GeneratedClassResolved->ClassDefaultObject ))
-		{
-			UBlueprint::ForceLoadMembers(GeneratedClassResolved);
-			UBlueprint::ForceLoadMembers(GeneratedClassResolved->ClassDefaultObject);
-		}
-		UBlueprint::ForceLoadMembers(this);
-		
-		FBlueprintEditorUtils::PreloadConstructionScript( this );
-
-		FBlueprintEditorUtils::LinkExternalDependencies( this );
-
-		FBlueprintEditorUtils::RefreshVariables(this);
-		
-		// Preload Overridden Components
-		if (InheritableComponentHandler)
-		{
-			InheritableComponentHandler->PreloadAll();
-		}
-
-		FBlueprintCompilationManager::NotifyBlueprintLoaded( this ); 
-		
-		FBlueprintEditorUtils::PreloadBlueprintSpecificData( this );
-
-		FBlueprintEditorUtils::UpdateOutOfDateAnimBlueprints(this);
-
-		// clear this now that we're not in a re-entrrant context - bHasBeenRegenerated will guard against 'real' 
-		// double regeneration calls:
-		bIsRegeneratingOnLoad = false;
-
-		if( Package )
-		{
-			Package->SetDirtyFlag(bIsPackageDirty);
-		}
-
-		return GeneratedClassResolved;
+		return GeneratedClass;
 	}
-	else
+		
+	// tag ourself as bIsRegeneratingOnLoad so that any reentrance via ForceLoad calls doesn't recurse:
+	bIsRegeneratingOnLoad = true;
+		
+	UPackage* Package = GetOutermost();
+	bool bIsPackageDirty = Package ? Package->IsDirty() : false;
+
+	UClass* GeneratedClassResolved = GeneratedClass;
+
+	UBlueprint::ForceLoadMetaData(this);
+	if (ensure(GeneratedClassResolved->ClassDefaultObject ))
 	{
-		return FBlueprintEditorUtils::RegenerateBlueprintClass(this, ClassToRegenerate, PreviousCDO);
+		UBlueprint::ForceLoadMembers(GeneratedClassResolved);
+		UBlueprint::ForceLoadMembers(GeneratedClassResolved->ClassDefaultObject);
 	}
+	UBlueprint::ForceLoadMembers(this);
+
+	for (UBlueprintExtension* Extension : Extensions)
+	{
+		ForceLoad(Extension);
+		Extension->PreloadObjectsForCompilation(this);
+	}
+
+	FBlueprintEditorUtils::PreloadConstructionScript( this );
+
+	FBlueprintEditorUtils::LinkExternalDependencies( this );
+
+	FBlueprintEditorUtils::RefreshVariables(this);
+		
+	// Preload Overridden Components
+	if (InheritableComponentHandler)
+	{
+		InheritableComponentHandler->PreloadAll();
+	}
+
+	FBlueprintCompilationManager::NotifyBlueprintLoaded( this ); 
+		
+	FBlueprintEditorUtils::PreloadBlueprintSpecificData( this );
+
+	FBlueprintEditorUtils::UpdateOutOfDateAnimBlueprints(this);
+
+	// clear this now that we're not in a re-entrrant context - bHasBeenRegenerated will guard against 'real' 
+	// double regeneration calls:
+	bIsRegeneratingOnLoad = false;
+
+	if( Package )
+	{
+		Package->SetDirtyFlag(bIsPackageDirty);
+	}
+
+	return GeneratedClassResolved;
 }
 
 void UBlueprint::RemoveChildRedirectors()
@@ -894,6 +912,11 @@ void UBlueprint::SetWorldBeingDebugged(UWorld *NewWorld)
 void UBlueprint::GetReparentingRules(TSet< const UClass* >& AllowedChildrenOfClasses, TSet< const UClass* >& DisallowedChildrenOfClasses) const
 {
 
+}
+
+bool UBlueprint::CanRecompileWhilePlayingInEditor() const
+{
+	return GetDefault<UEditorExperimentalSettings>()->IsClassAllowedToRecompileDuringPIE(ParentClass);
 }
 
 void UBlueprint::GetAssetRegistryTags(TArray<FAssetRegistryTag>& OutTags) const
@@ -1880,11 +1903,13 @@ void UBlueprint::PostLoadSubobjects(FObjectInstancingGraph* OuterInstanceGraph)
 	ConformNativeComponents(this);
 }
 
+#if WITH_EDITOR
 bool UBlueprint::Modify(bool bAlwaysMarkDirty)
 {
 	bCachedDependenciesUpToDate = false;
 	return Super::Modify(bAlwaysMarkDirty);
 }
+#endif
 
 void UBlueprint::GatherDependencies(TSet<TWeakObjectPtr<UBlueprint>>& InDependencies) const
 {
@@ -2006,8 +2031,12 @@ UEdGraph* UBlueprint::GetLastEditedUberGraph() const
 #if WITH_EDITORONLY_DATA
 void UBlueprint::LoadModulesRequiredForCompilation()
 {
-	static const FName ModuleName(TEXT("KismetCompiler"));
-	FModuleManager::Get().LoadModule(ModuleName);
+	static const FName KismetCompilerModuleName("KismetCompiler");
+	static const FName MovieSceneToolsModuleName("MovieSceneTools");
+
+	FModuleManager::Get().LoadModule(KismetCompilerModuleName);
+	FModuleManager::Get().LoadModule(MovieSceneToolsModuleName);
 }
 #endif //WITH_EDITORONLY_DATA
+
 

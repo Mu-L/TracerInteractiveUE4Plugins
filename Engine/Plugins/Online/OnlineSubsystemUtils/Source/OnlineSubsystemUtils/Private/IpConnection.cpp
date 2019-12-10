@@ -16,7 +16,7 @@ Notes:
 #include "Net/NetworkProfiler.h"
 #include "Net/DataChannel.h"
 
-#include "PacketAudit.h"
+#include "Net/Core/Misc/PacketAudit.h"
 
 /*-----------------------------------------------------------------------------
 	Declarations.
@@ -72,7 +72,7 @@ void UIpConnection::InitLocalConnection(UNetDriver* InDriver, class FSocket* InS
 	RemoteAddr->SetIp(*InURL.Host, bIsValid);
 
 	// If the protocols do not match, attempt to synthesize the address so they do.
-	if (bIsValid && InSocket->GetProtocol() != RemoteAddr->GetProtocolType())
+	if ((bIsValid && InSocket->GetProtocol() != RemoteAddr->GetProtocolType()) || !bIsValid)
 	{
 		SCOPE_CYCLE_COUNTER(STAT_IpConnection_AddressSynthesis);
 
@@ -84,12 +84,14 @@ void UIpConnection::InitLocalConnection(UNetDriver* InDriver, class FSocket* InS
 		if (MapRequest.ReturnCode == SE_NO_ERROR && MapRequest.Results.Num() > 0)
 		{
 			RemoteAddr = MapRequest.Results[0].Address->Clone();
+			bIsValid = true;
 		}
 		else
 		{
 			UE_LOG(LogNet, Warning, TEXT("IpConnection::InitConnection: Address protocols do not match and cannot be synthesized to a similar address, this will likely lead to issues!"));
 		}
 	}
+
 	RemoteAddr->SetPort(InURL.Port);
 
 	// Try to resolve it if it failed

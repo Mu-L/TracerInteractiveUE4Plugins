@@ -60,8 +60,8 @@ FConcertVirtualCameraCameraData::FConcertVirtualCameraCameraData(const AActor* I
 {
 	CameraActorLocation = InOwner->GetActorLocation();
 	CameraActorRotation = InOwner->GetActorRotation();
-	CameraComponentLocation = InCineCameraComponent->RelativeLocation;
-	CameraComponentRotation = InCineCameraComponent->RelativeRotation;
+	CameraComponentLocation = InCineCameraComponent->GetRelativeLocation();
+	CameraComponentRotation = InCineCameraComponent->GetRelativeRotation();
 
 	CurrentAperture = InCineCameraComponent->CurrentAperture;
 	CurrentFocalLength = InCineCameraComponent->CurrentFocalLength;
@@ -74,7 +74,7 @@ FConcertVirtualCameraCameraData::FConcertVirtualCameraCameraData(const AActor* I
 	}
 	else
 	{
-		FilmbackSettings = InCineCameraComponent->FilmbackSettings;
+		FilmbackSettings = InCineCameraComponent->Filmback;
 	}
 }
 
@@ -90,7 +90,7 @@ void FConcertVirtualCameraCameraData::ApplyTo(AActor* InOwner, UCineCameraCompon
 	InCineCameraComponent->CurrentFocalLength = CurrentFocalLength;
 	InCineCameraComponent->FocusSettings = FocusSettings.ToCameraFocusSettings();
 	InCineCameraComponent->LensSettings = LensSettings;
-	InCineCameraComponent->FilmbackSettings = FilmbackSettings;
+	InCineCameraComponent->Filmback = FilmbackSettings;
 
 	if (UVirtualCameraCineCameraComponent* VCCineCamCmp = Cast<UVirtualCameraCineCameraComponent>(InCineCameraComponent))
 	{

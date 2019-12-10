@@ -59,7 +59,7 @@ FVoiceChatResult ResultFromVivoxStatus(const VivoxClientApi::VCSStatus& Status)
 	return { !Status.IsError(), Status.GetStatusCode(), ErrorString };
 }
 
-FVoiceChatResult ResultFromErrorString(const FString& Error, int ErrorCode = -1)
+FVoiceChatResult ResultFromErrorString(const FString& Error, int ErrorCode)
 {
 	return { false, ErrorCode, Error };
 }
@@ -280,6 +280,8 @@ bool FVivoxVoiceChat::Uninitialize()
 	if (IsInitialized())
 	{
 		VivoxClientConnection.Uninitialize();
+		ConnectionState = EConnectionState::Disconnected;
+		LoginSession = FLoginSession();
 		bInitialized = false;
 	}
 
@@ -289,6 +291,15 @@ bool FVivoxVoiceChat::Uninitialize()
 bool FVivoxVoiceChat::IsInitialized() const
 {
 	return bInitialized;
+}
+
+void FVivoxVoiceChat::SetSetting(const FString& Name, const FString& Value)
+{
+}
+
+FString FVivoxVoiceChat::GetSetting(const FString& Name)
+{
+	return FString();
 }
 
 void FVivoxVoiceChat::SetAudioInputVolume(float InVolume)
@@ -477,7 +488,7 @@ void FVivoxVoiceChat::Connect(const FOnVoiceChatConnectCompleteDelegate& Delegat
 	}
 	else if (ConnectionState == EConnectionState::Disconnecting)
 	{
-		Result = ResultFromErrorString("Disconnect in progress");
+		Result = ResultFromErrorString("Disconnect in progress", -1);
 	}
 
 	if (!Result.bSuccess)
@@ -499,7 +510,7 @@ void FVivoxVoiceChat::Connect(const FOnVoiceChatConnectCompleteDelegate& Delegat
 			if (VivoxServerUrl.IsEmpty() || VivoxDomain.IsEmpty() || VivoxNamespace.IsEmpty())
 			{
 				UE_LOG(LogVivoxVoiceChat, Warning, TEXT("[VoiceChat.Vivox] ServerUrl, Domain, or Issuer is not set. Vivox voice chat will not work"));
-				Result = ResultFromErrorString(TEXT("Vivox config missing"));
+				Result = ResultFromErrorString(TEXT("Vivox config missing"), -1);
 			}
 			else
 			{
@@ -563,7 +574,7 @@ void FVivoxVoiceChat::Login(FPlatformUserId PlatformId, const FString& PlayerNam
 	}
 	else if (!IsConnected())
 	{
-		Result = ResultFromErrorString(TEXT("Not Connected"));
+		Result = ResultFromErrorString(TEXT("Not Connected"), -2);
 	}
 	else if (IsLoggedIn())
 	{
@@ -588,7 +599,7 @@ void FVivoxVoiceChat::Login(FPlatformUserId PlatformId, const FString& PlayerNam
 	else if (PlayerName.Len() > 60 - VivoxNamespace.Len())
 	{
 		// Name must be between 3-63 characters long and start and end with a '.'. It also must contain the issuer and another '.' separating issuer and name
-		Result = ResultFromErrorString(TEXT("PlayerName is too long"));
+		Result = ResultFromErrorString(TEXT("PlayerName is too long"), -1);
 	}
 
 	if (!Result.bSuccess)
@@ -638,7 +649,7 @@ void FVivoxVoiceChat::Logout(const FOnVoiceChatLogoutCompleteDelegate& Delegate)
 	}
 	else if (!IsConnected())
 	{
-		Result = ResultFromErrorString(TEXT("Not Connected"));
+		Result = ResultFromErrorString(TEXT("Not Connected"), -2);
 	}
 	else if (!IsLoggedIn())
 	{
@@ -735,7 +746,7 @@ void FVivoxVoiceChat::JoinChannel(const FString& ChannelName, const FString& Cha
 	}
 	else if (!IsConnected())
 	{
-		Result = ResultFromErrorString(TEXT("Not Connected"));
+		Result = ResultFromErrorString(TEXT("Not Connected"), -2);
 	}
 	else if (!IsLoggedIn())
 	{
@@ -770,12 +781,12 @@ void FVivoxVoiceChat::JoinChannel(const FString& ChannelName, const FString& Cha
 	}
 	else if (ChannelSession.State == FChannelSession::EState::Connecting)
 	{
-		Delegate.ExecuteIfBound(ChannelName, ResultFromErrorString("Join in progress"));
+		Delegate.ExecuteIfBound(ChannelName, ResultFromErrorString("Join in progress", -1));
 		return;
 	}
 	else if (ChannelSession.State == FChannelSession::EState::Disconnecting)
 	{
-		Delegate.ExecuteIfBound(ChannelName, ResultFromErrorString("Leave in progress"));
+		Delegate.ExecuteIfBound(ChannelName, ResultFromErrorString("Leave in progress", -1));
 		return;
 	}
 
@@ -805,7 +816,7 @@ void FVivoxVoiceChat::LeaveChannel(const FString& ChannelName, const FOnVoiceCha
 	}
 	else if (!IsConnected())
 	{
-		Result = ResultFromErrorString(TEXT("Not Connected"));
+		Result = ResultFromErrorString(TEXT("Not Connected"), -2);
 	}
 	else if (!IsLoggedIn())
 	{
@@ -819,7 +830,7 @@ void FVivoxVoiceChat::LeaveChannel(const FString& ChannelName, const FOnVoiceCha
 	FChannelSession& ChannelSession = GetChannelSession(ChannelName);
 	if (ChannelSession.State != FChannelSession::EState::Connected)
 	{
-		Result = ResultFromErrorString("Not in channel");
+		Result = ResultFromErrorString("Not in channel", -1);
 	}
 
 	if (!Result.bSuccess)
@@ -1138,26 +1149,65 @@ void FVivoxVoiceChat::InvokeOnUIThread(void (Func)(void* Arg0), void* Arg0)
 	FEmbeddedCommunication::WakeGameThread();
 }
 
-void FVivoxVoiceChat::onLogStatementEmitted(LogLevel Level, long long NativeMillisecondsSinceEpoch, long ThreadId, const char* LogMessage)
+FString GetLogLevelString(VivoxClientApi::IClientApiEventHandler::LogLevel Level)
 {
-	if (Level == LogLevelError)
+	FString LogLevelString;
+	switch (Level)
 	{
-		UE_LOG(LogVivoxVoiceChat, Warning, TEXT("vivox: Error: %s"), ANSI_TO_TCHAR(LogMessage));
+	case VivoxClientApi::IClientApiEventHandler::LogLevel::LogLevelError:		LogLevelString = TEXT("Error"); break;
+	case VivoxClientApi::IClientApiEventHandler::LogLevel::LogLevelWarning:		LogLevelString = TEXT("Warning"); break;
+	case VivoxClientApi::IClientApiEventHandler::LogLevel::LogLevelInfo:		LogLevelString = TEXT("Info"); break;
+	case VivoxClientApi::IClientApiEventHandler::LogLevel::LogLevelDebug:		LogLevelString = TEXT("Debug"); break;
+	case VivoxClientApi::IClientApiEventHandler::LogLevel::LogLevelTrace:		LogLevelString = TEXT("Trace"); break;
+	default:																	LogLevelString = TEXT("Unknown"); break;
 	}
-	else
+	return LogLevelString;
+}
+
+void FVivoxVoiceChat::onLogStatementEmitted(LogLevel Level, long long NativeMillisecondsSinceEpoch, long ThreadId, const char* LogMessageCStr)
+{
+	FString LogMessage = ANSI_TO_TCHAR(LogMessageCStr);
+	bool bLogMatches = false;
+
+	// Don't spam the log if we receive repeated log messages
+	if (!LastLogMessage.IsEmpty())
 	{
-		FString LogLevelString;
-		switch (Level)
+		bLogMatches = LogMessage == LastLogMessage && Level == LastLogLevel;
+		if (bLogMatches)
 		{
-		case LogLevelError:		LogLevelString = TEXT("Error"); break;
-		case LogLevelWarning:	LogLevelString = TEXT("Warning"); break;
-		case LogLevelInfo:		LogLevelString = TEXT("Info"); break;
-		case LogLevelDebug:		LogLevelString = TEXT("Debug"); break;
-		case LogLevelTrace:		LogLevelString = TEXT("Trace"); break;
-		default:				LogLevelString = TEXT("Unknown"); break;
+			LogSpamCount++;
+		}
+		
+		const bool bLogSpamCountPowerOfTwo = FMath::IsPowerOfTwo(LogSpamCount);
+		const bool bLogDueToPot = bLogMatches && bLogSpamCountPowerOfTwo;
+		const bool bLogDueToChange = !bLogMatches && LogSpamCount > 0 && !bLogSpamCountPowerOfTwo; // Don't log on change if POT, as we already logged it.
+		if(bLogDueToChange || bLogDueToPot)
+		{
+			if (LastLogLevel == LogLevelError)
+			{
+				UE_LOG(LogVivoxVoiceChat, Warning, TEXT("vivox: Error: %s (seen %d times)"), *LastLogMessage, LogSpamCount);
+			}
+			else
+			{
+				UE_LOG(LogVivoxVoiceChat, Log, TEXT("vivox: %s: %s (seen %d times)"), *GetLogLevelString(LastLogLevel), *LastLogMessage, LogSpamCount);
+			}
+		}
+	}
+
+	if (!bLogMatches)
+	{
+		if (Level == LogLevelError)
+		{
+			UE_LOG(LogVivoxVoiceChat, Log, TEXT("vivox: Error: %s"), *LogMessage);
+		}
+		else
+		{
+			UE_LOG(LogVivoxVoiceChat, Log, TEXT("vivox: %s: %s"), *GetLogLevelString(Level), *LogMessage);
 		}
 
-		UE_LOG(LogVivoxVoiceChat, Log, TEXT("vivox: %s: %s"), *LogLevelString, ANSI_TO_TCHAR(LogMessage));
+		LogSpamCount = 0;
+		LastLogMessage = MoveTemp(LogMessage);
+		LastLogLevel = Level;
 	}
 }
 
@@ -1226,7 +1276,7 @@ void FVivoxVoiceChat::onInvalidLoginCredentials(const VivoxClientApi::AccountNam
 
 	FString PlayerName = GetPlayerNameFromAccountName(AccountName);
 
-	TriggerCompletionDelegate(OnVoiceChatLoginCompleteDelegate, PlayerName, ResultFromErrorString(TEXT("Invalid login credentials")));
+	TriggerCompletionDelegate(OnVoiceChatLoginCompleteDelegate, PlayerName, ResultFromErrorString(TEXT("Invalid login credentials"), -1));
 }
 
 void FVivoxVoiceChat::onLoginFailed(const VivoxClientApi::AccountName& AccountName, const VivoxClientApi::VCSStatus& Status)
@@ -1281,7 +1331,7 @@ void FVivoxVoiceChat::onInvalidChannelCredentials(const VivoxClientApi::AccountN
 
 	FChannelSession& ChannelSession = GetChannelSession(ChannelUri);
 	ChannelSession.State = FChannelSession::EState::Disconnected;
-	TriggerCompletionDelegate(ChannelSession.JoinDelegate, ChannelSession.ChannelName, ResultFromErrorString(TEXT("Invalid join credentials")));
+	TriggerCompletionDelegate(ChannelSession.JoinDelegate, ChannelSession.ChannelName, ResultFromErrorString(TEXT("Invalid join credentials"), -1));
 
 	RemoveChannelSession(ChannelSession.ChannelName);
 }
@@ -1309,7 +1359,6 @@ void FVivoxVoiceChat::onChannelExited(const VivoxClientApi::AccountName& Account
 	}
 
 	FChannelSession& ChannelSession = GetChannelSession(ChannelUri);
-	const bool bWasConnected = ChannelSession.State == FChannelSession::EState::Connected;
 	const bool bWasConnecting = ChannelSession.State == FChannelSession::EState::Connecting;
 	const bool bWasDisconnecting = ChannelSession.State == FChannelSession::EState::Disconnecting;
 	ChannelSession.State = FChannelSession::EState::Disconnected;
@@ -1567,12 +1616,12 @@ void FVivoxVoiceChat::onAudioUnitAfterCaptureAudioRead(const VivoxClientApi::Uri
 	if (InitialTargetUri.IsValid())
 	{
 		FScopeLock Lock(&AfterCaptureAudioReadLock);
-		OnVoiceChatAfterCaptureAudioReadDelegate.Broadcast(MakeArrayView(PcmFrames, PcmFrameCount), AudioFrameRate, ChannelsPerFrame);
+		OnVoiceChatAfterCaptureAudioReadDelegate.Broadcast(MakeArrayView(PcmFrames, PcmFrameCount * ChannelsPerFrame), AudioFrameRate, ChannelsPerFrame);
 	}
 	else
 	{
 		FScopeLock Lock(&AudioRecordLock);
-		OnVoiceChatRecordSamplesAvailableDelegate.Broadcast(MakeArrayView(PcmFrames, PcmFrameCount), AudioFrameRate, ChannelsPerFrame);
+		OnVoiceChatRecordSamplesAvailableDelegate.Broadcast(MakeArrayView(PcmFrames, PcmFrameCount * ChannelsPerFrame), AudioFrameRate, ChannelsPerFrame);
 	}
 }
 
@@ -1581,7 +1630,7 @@ void FVivoxVoiceChat::onAudioUnitBeforeCaptureAudioSent(const VivoxClientApi::Ur
 	if (InitialTargetUri.IsValid())
 	{
 		FScopeLock Lock(&BeforeCaptureAudioSentLock);
-		OnVoiceChatBeforeCaptureAudioSentDelegate.Broadcast(MakeArrayView(PcmFrames, PcmFrameCount), AudioFrameRate, ChannelsPerFrame, bSpeaking);
+		OnVoiceChatBeforeCaptureAudioSentDelegate.Broadcast(MakeArrayView(PcmFrames, PcmFrameCount * ChannelsPerFrame), AudioFrameRate, ChannelsPerFrame, bSpeaking);
 	}
 }
 
@@ -1590,7 +1639,7 @@ void FVivoxVoiceChat::onAudioUnitBeforeRecvAudioRendered(const VivoxClientApi::U
 	if (InitialTargetUri.IsValid())
 	{
 		FScopeLock Lock(&BeforeRecvAudioRenderedLock);
-		OnVoiceChatBeforeRecvAudioRenderedDelegate.Broadcast(MakeArrayView(PcmFrames, PcmFrameCount), AudioFrameRate, ChannelsPerFrame, bSilence);
+		OnVoiceChatBeforeRecvAudioRenderedDelegate.Broadcast(MakeArrayView(PcmFrames, PcmFrameCount * ChannelsPerFrame), AudioFrameRate, ChannelsPerFrame, bSilence);
 	}
 }
 
@@ -1606,6 +1655,11 @@ void FVivoxVoiceChat::SetVivoxSdkConfigHints(vx_sdk_config_t& Hints)
 	bool bEnableAudioDucking = false;
 	GConfig->GetBool(TEXT("VoiceChat.Vivox"), TEXT("bEnableAudioDucking"), bEnableAudioDucking, GEngineIni);
 	Hints.disable_audio_ducking = !bEnableAudioDucking;
+
+	GConfig->GetInt(TEXT("VoiceChat.Vivox"), TEXT("RtpConnectTimeoutMs"), Hints.never_rtp_timeout_ms, GEngineIni);
+	GConfig->GetInt(TEXT("VoiceChat.Vivox"), TEXT("RtpTimeoutMs"), Hints.lost_rtp_timeout_ms, GEngineIni);
+
+	UE_LOG(LogVivoxVoiceChat, Verbose, TEXT("Rtp timeouts configured to: %ims %ims"), Hints.never_rtp_timeout_ms, Hints.lost_rtp_timeout_ms);
 }
 
 VivoxClientApi::AccountName FVivoxVoiceChat::CreateAccountName(const FString& PlayerName)

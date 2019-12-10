@@ -4,12 +4,15 @@
 #include "NiagaraEditorModule.h"
 #include "INiagaraEditorTypeUtilities.h"
 #include "NiagaraNodeInput.h"
+#include "NiagaraNodeFunctionCall.h"
+#include "NiagaraNodeParameterMapSet.h"
 #include "NiagaraDataInterface.h"
 #include "NiagaraComponent.h"
 #include "Modules/ModuleManager.h"
 #include "UObject/StructOnScope.h"
 #include "NiagaraGraph.h"
 #include "NiagaraSystem.h"
+#include "NiagaraSystemEditorData.h"
 #include "NiagaraScriptSource.h"
 #include "NiagaraScript.h"
 #include "NiagaraNodeOutput.h"
@@ -32,9 +35,12 @@
 #include "Misc/FileHelper.h"
 #include "EdGraph/EdGraphPin.h"
 #include "NiagaraNodeWriteDataSet.h"
+#include "ViewModels/Stack/NiagaraParameterHandle.h"
 #include "NiagaraNodeStaticSwitch.h"
 #include "NiagaraNodeFunctionCall.h"
 #include "NiagaraParameterMapHistory.h"
+#include "ScopedTransaction.h"
+#include "NiagaraStackEditorData.h"
 
 #define LOCTEXT_NAMESPACE "FNiagaraEditorUtilities"
 
@@ -97,7 +103,7 @@ void FNiagaraEditorUtilities::InitializeParameterInputNode(UNiagaraNodeInput& In
 			InputNode.SetDataInterface(nullptr);
 		}
 	}
-	else
+	else if(Type.IsDataInterface())
 	{
 		InputNode.Input.AllocateData(); // Frees previously used memory if we're switching from a struct to a class type.
 		InputNode.SetDataInterface(NewObject<UNiagaraDataInterface>(&InputNode, const_cast<UClass*>(Type.GetClass()), NAME_None, RF_Transactional));
@@ -139,7 +145,7 @@ void FNiagaraEditorUtilities::GetParameterVariablesFromSystem(UNiagaraSystem& Sy
 }
 
 // TODO: This is overly complicated.
-void FNiagaraEditorUtilities::FixUpPastedInputNodes(UEdGraph* Graph, TSet<UEdGraphNode*> PastedNodes)
+void FNiagaraEditorUtilities::FixUpPastedNodes(UEdGraph* Graph, TSet<UEdGraphNode*> PastedNodes)
 {
 	// Collect existing inputs.
 	TArray<UNiagaraNodeInput*> CurrentInputs;
@@ -237,6 +243,55 @@ void FNiagaraEditorUtilities::FixUpPastedInputNodes(UEdGraph* Graph, TSet<UEdGra
 			for (UNiagaraNodeInput* PastedNodeForInput : PastedNodesForInput)
 			{
 				PastedNodeForInput->CallSortPriority = NewSortOrder;
+			}
+		}
+	}
+
+	// Fix up pasted function call nodes
+	TArray<UNiagaraNodeFunctionCall*> FunctionCallNodes;
+	Graph->GetNodesOfClass<UNiagaraNodeFunctionCall>(FunctionCallNodes);
+	TSet<FName> ExistingNames;
+	for (UNiagaraNodeFunctionCall* FunctionCallNode : FunctionCallNodes)
+	{
+		if (PastedNodes.Contains(FunctionCallNode) == false)
+		{
+			ExistingNames.Add(*FunctionCallNode->GetFunctionName());
+		}
+	}
+
+	TMap<FName, FName> OldFunctionToNewFunctionNameMap;
+	for (UEdGraphNode* PastedNode : PastedNodes)
+	{
+		UNiagaraNodeFunctionCall* PastedFunctionCallNode = Cast<UNiagaraNodeFunctionCall>(PastedNode);
+		if (PastedFunctionCallNode != nullptr)
+		{
+			if (ExistingNames.Contains(*PastedFunctionCallNode->GetFunctionName()))
+			{
+				FName FunctionCallName = *PastedFunctionCallNode->GetFunctionName();
+				FName UniqueFunctionCallName = FNiagaraUtilities::GetUniqueName(FunctionCallName, ExistingNames);
+				PastedFunctionCallNode->SuggestName(UniqueFunctionCallName.ToString());
+				FName ActualPastedFunctionCallName = *PastedFunctionCallNode->GetFunctionName();
+				ExistingNames.Add(ActualPastedFunctionCallName);
+				OldFunctionToNewFunctionNameMap.Add(FunctionCallName, ActualPastedFunctionCallName);
+			}
+		}
+	}
+
+	for (UEdGraphNode* PastedNode : PastedNodes)
+	{
+		UNiagaraNodeParameterMapSet* ParameterMapSetNode = Cast<UNiagaraNodeParameterMapSet>(PastedNode);
+		if (ParameterMapSetNode != nullptr)
+		{
+			TArray<UEdGraphPin*> InputPins;
+			ParameterMapSetNode->GetInputPins(InputPins);
+			for (UEdGraphPin* InputPin : InputPins)
+			{
+				FNiagaraParameterHandle InputHandle(InputPin->PinName);
+				if (OldFunctionToNewFunctionNameMap.Contains(InputHandle.GetNamespace()))
+				{
+					// Rename any inputs pins on parameter map sets who's function calls were renamed.
+					InputPin->PinName = FNiagaraParameterHandle(OldFunctionToNewFunctionNameMap[InputHandle.GetNamespace()], InputHandle.GetName()).GetParameterHandleString();
+				}
 			}
 		}
 	}
@@ -499,7 +554,7 @@ void FNiagaraEditorUtilities::CompileExistingEmitters(const TArray<UNiagaraEmitt
 	for (UNiagaraEmitter* Emitter : AffectedEmitters)
 	{
 		// If we've already compiled this emitter, or it's invalid skip it.
-		if (CompiledEmitters.Contains(Emitter) || Emitter->IsPendingKillOrUnreachable())
+		if (Emitter == nullptr || CompiledEmitters.Contains(Emitter) || Emitter->IsPendingKillOrUnreachable())
 		{
 			continue;
 		}
@@ -1080,6 +1135,132 @@ TArray<UNiagaraComponent*> FNiagaraEditorUtilities::GetComponentsThatReferenceSy
 		}
 	}
 	return ReferencingComponents;
+}
+
+const FGuid FNiagaraEditorUtilities::AddEmitterToSystem(UNiagaraSystem& InSystem, UNiagaraEmitter& InEmitterToAdd)
+{
+	// Kill all system instances before modifying the emitter handle list to prevent accessing deleted data.
+	KillSystemInstances(InSystem);
+
+	TSet<FName> EmitterHandleNames;
+	for (const FNiagaraEmitterHandle& EmitterHandle : InSystem.GetEmitterHandles())
+	{
+		EmitterHandleNames.Add(EmitterHandle.GetName());
+	}
+
+	UNiagaraSystemEditorData* SystemEditorData = CastChecked<UNiagaraSystemEditorData>(InSystem.GetEditorData(), ECastCheckedType::NullChecked);
+	FNiagaraEmitterHandle EmitterHandle;
+	if (SystemEditorData->GetOwningSystemIsPlaceholder() == false)
+	{
+		InSystem.Modify();
+		EmitterHandle = InSystem.AddEmitterHandle(InEmitterToAdd, FNiagaraUtilities::GetUniqueName(InEmitterToAdd.GetFName(), EmitterHandleNames));
+	}
+	else
+	{
+		// When editing an emitter asset we add the emitter as a duplicate so that the parent emitter is duplicated, but it's parent emitter
+		// information is maintained.
+		checkf(InSystem.GetNumEmitters() == 0, TEXT("Can not add multiple emitters to a system being edited in emitter asset mode."));
+		FNiagaraEmitterHandle TemporaryEmitterHandle(InEmitterToAdd);
+		EmitterHandle = InSystem.DuplicateEmitterHandle(TemporaryEmitterHandle, *InEmitterToAdd.GetUniqueEmitterName());
+	}
+	
+	FNiagaraStackGraphUtilities::RebuildEmitterNodes(InSystem);
+	SystemEditorData->SynchronizeOverviewGraphWithSystem(InSystem);
+
+	return EmitterHandle.GetId();
+}
+
+void FNiagaraEditorUtilities::RemoveEmittersFromSystemByEmitterHandleId(UNiagaraSystem& InSystem, TSet<FGuid> EmitterHandleIdsToDelete)
+{
+	// Kill all system instances before modifying the emitter handle list to prevent accessing deleted data.
+	KillSystemInstances(InSystem);
+
+	const FScopedTransaction DeleteTransaction(EmitterHandleIdsToDelete.Num() == 1
+		? LOCTEXT("DeleteEmitter", "Delete emitter")
+		: LOCTEXT("DeleteEmitters", "Delete emitters"));
+
+	InSystem.Modify();
+	InSystem.RemoveEmitterHandlesById(EmitterHandleIdsToDelete);
+
+	FNiagaraStackGraphUtilities::RebuildEmitterNodes(InSystem);
+	UNiagaraSystemEditorData* SystemEditorData = CastChecked<UNiagaraSystemEditorData>(InSystem.GetEditorData(), ECastCheckedType::NullChecked);
+	SystemEditorData->SynchronizeOverviewGraphWithSystem(InSystem);
+}
+
+void FNiagaraEditorUtilities::KillSystemInstances(const UNiagaraSystem& System)
+{
+	TArray<UNiagaraComponent*> ReferencingComponents = FNiagaraEditorUtilities::GetComponentsThatReferenceSystem(System);
+	for (auto Component : ReferencingComponents)
+	{
+		Component->DestroyInstance();
+	}
+}
+
+bool FNiagaraEditorUtilities::VerifyNameChangeForInputOrOutputNode(const UNiagaraNode& NodeBeingChanged, FName OldName, FName NewName, FText& OutErrorMessage)
+{
+	if (NewName == NAME_None)
+	{
+		OutErrorMessage = LOCTEXT("EmptyNameError", "Name can not be empty.");
+		return false;
+	}
+
+	if (GetSystemConstantNames().Contains(NewName))
+	{
+		OutErrorMessage = LOCTEXT("SystemConstantNameError", "Name can not be the same as a system constant");
+	}
+
+	if (NodeBeingChanged.IsA<UNiagaraNodeInput>())
+	{
+		TArray<UNiagaraNodeInput*> InputNodes;
+		NodeBeingChanged.GetGraph()->GetNodesOfClass<UNiagaraNodeInput>(InputNodes);
+		for (UNiagaraNodeInput* InputNode : InputNodes)
+		{
+			if (InputNode->Input.GetName() != OldName && InputNode->Input.GetName() == NewName)
+			{
+				OutErrorMessage = LOCTEXT("DuplicateInputNameError", "Name can not match an existing input name.");
+				return false;
+			}
+		}
+	}
+
+	if (NodeBeingChanged.IsA<UNiagaraNodeOutput>())
+	{
+		const UNiagaraNodeOutput* OutputNodeBeingChanged = CastChecked<const UNiagaraNodeOutput>(&NodeBeingChanged);
+		for (const FNiagaraVariable& Output : OutputNodeBeingChanged->GetOutputs())
+		{
+			if (Output.GetName() != OldName && Output.GetName() == NewName)
+			{
+				OutErrorMessage = LOCTEXT("DuplicateOutputNameError", "Name can not match an existing output name.");
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
+
+bool FNiagaraEditorUtilities::AddParameter(FNiagaraVariable& NewParameterVariable, FNiagaraParameterStore& TargetParameterStore, UObject& ParameterStoreOwner, UNiagaraStackEditorData& StackEditorData)
+{
+	FScopedTransaction AddTransaction(LOCTEXT("AddParameter", "Add Parameter"));
+	ParameterStoreOwner.Modify();
+
+	TSet<FName> ExistingParameterStoreNames;
+	TArray<FNiagaraVariable> ParameterStoreVariables;
+	TargetParameterStore.GetParameters(ParameterStoreVariables);
+	for (const FNiagaraVariable& Var : ParameterStoreVariables)
+	{
+		ExistingParameterStoreNames.Add(Var.GetName());
+	}
+
+	FNiagaraEditorUtilities::ResetVariableToDefaultValue(NewParameterVariable);
+	NewParameterVariable.SetName(FNiagaraUtilities::GetUniqueName(NewParameterVariable.GetName(), ExistingParameterStoreNames));
+
+	bool bSuccess = TargetParameterStore.AddParameter(NewParameterVariable);
+	if (bSuccess)
+	{
+		StackEditorData.SetModuleInputIsRenamePending(NewParameterVariable.GetName().ToString(), true);
+	}
+	return bSuccess;
 }
 
 #undef LOCTEXT_NAMESPACE

@@ -12,7 +12,7 @@
 #include "EditorStyleSet.h"
 #include "EditorFontGlyphs.h"
 #include "EditorDirectories.h"
-#include "Toolkits/AssetEditorManager.h"
+
 #include "IFontEditor.h"
 #include "Widgets/Text/SInlineEditableTextBlock.h"
 #include "Widgets/Input/SNumericEntryBox.h"
@@ -27,6 +27,9 @@
 #include "Misc/FileHelper.h"
 #include "IContentBrowserSingleton.h"
 #include "FileHelpers.h"
+#include "Subsystems/ImportSubsystem.h"
+#include "Subsystems/AssetEditorSubsystem.h"
+#include "Factories/FontFileImportFactory.h"
 
 #define LOCTEXT_NAMESPACE "FontEditor"
 
@@ -925,7 +928,7 @@ void STypefaceEntryEditor::OnTypefaceEntryFontPathPicked(const FString& InNewFon
 			if (NewFontFaceAsset)
 			{
 				OnFontFaceAssetChanged(FAssetData(NewFontFaceAsset));
-				FAssetEditorManager::Get().OpenEditorForAsset(NewFontFaceAsset);
+				GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(NewFontFaceAsset);
 			}
 		}
 	}
@@ -1056,7 +1059,7 @@ FReply STypefaceEntryEditor::OnUpgradeDataClicked()
 		if (NewFontFaceAsset)
 		{
 			OnFontFaceAssetChanged(FAssetData(NewFontFaceAsset));
-			FAssetEditorManager::Get().OpenEditorForAsset(NewFontFaceAsset);
+			GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(NewFontFaceAsset);
 		}
 	}
 
@@ -1099,8 +1102,10 @@ UFontFace* STypefaceEntryEditor::SaveFontFaceAsAsset(const UFontFace* InFontFace
 	{
 		const FString NewFaceAssetName = FPackageName::GetLongPackageAssetName(NewPackageName);
 		UPackage* NewFaceAssetPackage = CreatePackage(nullptr, *NewPackageName);
-		UFontFace* NewFaceAsset = Cast<UFontFace>(StaticDuplicateObject(InFontFace, NewFaceAssetPackage, *NewFaceAssetName));
 
+		GEditor->GetEditorSubsystem<UImportSubsystem>()->BroadcastAssetPreImport(GetMutableDefault<UFontFileImportFactory>(), UFontFace::StaticClass(), NewFaceAssetPackage, *NewFaceAssetName, *FPaths::GetExtension(InFontFace->GetFontFilename()));
+
+		UFontFace* NewFaceAsset = Cast<UFontFace>(StaticDuplicateObject(InFontFace, NewFaceAssetPackage, *NewFaceAssetName));
 		if (NewFaceAsset)
 		{
 			// Make sure the new object is flagged correctly
@@ -1109,6 +1114,8 @@ UFontFace* STypefaceEntryEditor::SaveFontFaceAsAsset(const UFontFace* InFontFace
 			NewFaceAsset->MarkPackageDirty();
 			FAssetRegistryModule::AssetCreated(NewFaceAsset);
 		}
+
+		GEditor->GetEditorSubsystem<UImportSubsystem>()->BroadcastAssetPostImport(GetMutableDefault<UFontFileImportFactory>(), NewFaceAsset);
 
 		return NewFaceAsset;
 	}
@@ -1761,7 +1768,7 @@ void SFontScalingFactorEditor::Construct(const FArguments& InArgs)
 		.AutoWidth()
 		[
 			SNew(SNumericEntryBox<float>)
-			.ToolTipText(LOCTEXT("ScalingFactorTooltip", "The scaling factor will adjust the size of the rendered glyphs so that you can tweak their size to match that of the default font family"))
+			.ToolTipText(LOCTEXT("ScalingFactorTooltip", "The scaling factor will adjust the size of the rendered glyphs so that you can tweak their size to match that of the default font family\nNote: Only applies to scalable font formats (ie, not to bitmap fonts)"))
 			.Value(this, &SFontScalingFactorEditor::GetScalingFactorAsOptional)
 			.OnValueCommitted(this, &SFontScalingFactorEditor::OnScalingFactorCommittedAsNumeric)
 		]
@@ -1808,6 +1815,7 @@ void SFontOverrideSelector::Construct(const FArguments& InArgs)
 		.OptionsSource(&FontOverrideComboData)
 		.ContentPadding(FMargin(4.0, 2.0))
 		.Visibility(this, &SFontOverrideSelector::GetAddFontOverrideVisibility)
+		.IsEnabled(this, &SFontOverrideSelector::IsFontOverrideComboEnabled)
 		.OnComboBoxOpening(this, &SFontOverrideSelector::OnAddFontOverrideComboOpening)
 		.OnSelectionChanged(this, &SFontOverrideSelector::OnAddFontOverrideSelectionChanged)
 		.OnGenerateWidget(this, &SFontOverrideSelector::MakeAddFontOverrideWidget)
@@ -1822,6 +1830,31 @@ void SFontOverrideSelector::Construct(const FArguments& InArgs)
 EVisibility SFontOverrideSelector::GetAddFontOverrideVisibility() const
 {
 	return (ParentTypeface.Get(nullptr)) ? EVisibility::Visible : EVisibility::Collapsed;
+}
+
+bool SFontOverrideSelector::IsFontOverrideComboEnabled() const
+{
+	FTypeface* const TypefacePtr = Typeface.Get(nullptr);
+	const FTypeface* const ParentTypefacePtr = ParentTypeface.Get(nullptr);
+
+	if (TypefacePtr && ParentTypefacePtr)
+	{
+		// Check whether our parent font has any entries that haven't already got a local entry
+		for (const FTypefaceEntry& ParentTypefaceEntry : ParentTypefacePtr->Fonts)
+		{
+			const bool bIsOverridden = TypefacePtr->Fonts.ContainsByPredicate([&ParentTypefaceEntry](const FTypefaceEntry& LocalTypefaceEntry)
+			{
+				return LocalTypefaceEntry.Name == ParentTypefaceEntry.Name;
+			});
+
+			if (!bIsOverridden)
+			{
+				return true;
+			}
+		}
+	}
+
+	return false;
 }
 
 void SFontOverrideSelector::OnAddFontOverrideComboOpening()

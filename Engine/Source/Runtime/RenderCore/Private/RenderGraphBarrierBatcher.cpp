@@ -5,6 +5,26 @@
 
 namespace
 {
+	TAutoConsoleVariable<int32> CVarRDGTransitionLogEnable(
+		TEXT("r.RDG.TransitionLog.Enable"), 0,
+		TEXT("Logs resource transitions to the console.\n"),
+		ECVF_RenderThreadSafe);
+
+	TAutoConsoleVariable<int32> CVarRDGTransitionLogEnableBreakpoint(
+		TEXT("r.RDG.TransitionLog.EnableBreakpoint"), 0,
+		TEXT("Breaks on a transition log event (set filters first!).\n"),
+		ECVF_RenderThreadSafe);
+
+	// TODO: String CVars don't support ECVF_RenderThreadSafe. Use with caution.
+	TAutoConsoleVariable<FString> CVarRDGLogTransitionsPassFilter(
+		TEXT("r.RDG.TransitionLog.PassFilter"), TEXT(""),
+		TEXT("Filters logs to passes with names containing the filter string.\n"),
+		ECVF_Default);
+
+	TAutoConsoleVariable<FString> CVarRDGLogTransitionsResourceFilter(
+		TEXT("r.RDG.TransitionLog.ResourceFilter"), TEXT(""),
+		TEXT("Filters logs to resources with names containing the filter string.\n"),
+		ECVF_Default);
 
 	/** Number of entries to reserve in the batch array. */
 	const uint32 kBatchReservationSize = 8;
@@ -48,6 +68,43 @@ namespace
 		return EResourceTransitionPipeline::EGfxToGfx;
 	}
 
+	inline const TCHAR* GetTransitionPipelineName(EResourceTransitionPipeline Pipeline)
+	{
+		switch (Pipeline)
+		{
+		case EResourceTransitionPipeline::EGfxToCompute:
+			return TEXT("GfxToCompute");
+		case EResourceTransitionPipeline::EComputeToGfx:
+			return TEXT("ComputeToGfx");
+		case EResourceTransitionPipeline::EGfxToGfx:
+			return TEXT("GfxToGfx");
+		case EResourceTransitionPipeline::EComputeToCompute:
+			return TEXT("ComputeToCompute");
+		}
+		check(false);
+		return TEXT("");
+	}
+
+	inline const TCHAR* GetTransitionAccessName(EResourceTransitionAccess Access)
+	{
+		switch (Access)
+		{
+		case EResourceTransitionAccess::EReadable:
+			return TEXT("Readable");
+		case EResourceTransitionAccess::EWritable:
+			return TEXT("Writable");
+		case EResourceTransitionAccess::ERWBarrier:
+			return TEXT("RWBarrier");
+		case EResourceTransitionAccess::ERWNoBarrier:
+			return TEXT("RWNoBarrier");
+		case EResourceTransitionAccess::ERWSubResBarrier:
+			return TEXT("RWSubResBarrier");
+		case EResourceTransitionAccess::EMetaData:
+			return TEXT("MetaData");
+		}
+		check(false);
+		return TEXT("");
+	}
 } //! namespace
 
 FRDGBarrierBatcher::FRDGBarrierBatcher(FRHICommandList& InRHICmdList, const FRDGPass* InPass)
@@ -56,13 +113,22 @@ FRDGBarrierBatcher::FRDGBarrierBatcher(FRHICommandList& InRHICmdList, const FRDG
 {
 	if (Pass)
 	{
-		bIsGeneratingMips = Pass->IsGenerateMips();
 		Pipeline = Pass->IsCompute() ? FRDGResourceState::EPipeline::Compute : FRDGResourceState::EPipeline::Graphics;
 	}
 }
 
 FRDGBarrierBatcher::~FRDGBarrierBatcher()
 {
+#if WITH_MGPU
+	// Wait for the temporal effect before executing the first pass in the graph. This
+	// will be a no-op for every pass after the first since we don't broadcast in
+	// between passes.
+	if (Pass != nullptr && NameForTemporalEffect != NAME_None)
+	{
+		RHICmdList.WaitForTemporalEffect(NameForTemporalEffect);
+	}
+#endif
+
 	for (FRHITexture* RHITexture : TextureUpdateMultiFrameBegins)
 	{
 		RHICmdList.BeginUpdateMultiFrameResource(RHITexture);
@@ -96,18 +162,19 @@ FRDGBarrierBatcher::~FRDGBarrierBatcher()
 	{
 		RHICmdList.EndUpdateMultiFrameResource(RHIUAV);
 	}
+
+#if WITH_MGPU
+	// Broadcast all multi-frame resources when processing deferred resource queries.
+	if (Pass == nullptr && NameForTemporalEffect != NAME_None)
+	{
+		RHICmdList.BroadcastTemporalEffect(NameForTemporalEffect, TexturesToCopyForTemporalEffect);
+	}
+#endif
 }
 
 void FRDGBarrierBatcher::QueueTransitionTexture(FRDGTexture* Texture, FRDGResourceState::EAccess AccessAfter)
 {
 	check(Texture);
-
-	// Texture transitions are ignored when generating mips, since the render target binding call or UAV will
-	// perform the subresource transition.
-	if (bIsGeneratingMips)
-	{
-		return;
-	}
 
 	const FRDGResourceState StateBefore = Texture->State;
 	const FRDGResourceState StateAfter(Pass, Pipeline, AccessAfter);
@@ -116,7 +183,13 @@ void FRDGBarrierBatcher::QueueTransitionTexture(FRDGTexture* Texture, FRDGResour
 
 	if (StateBefore != StateAfter)
 	{
-		FRHITexture* RHITexture = Texture->GetRHIUnchecked();
+		FRHITexture* RHITexture = Texture->PooledRenderTarget->GetRenderTargetItem().TargetableTexture;
+
+		// This particular texture does not have a targetable texture. It's effectively read-only.
+		if (!RHITexture)
+		{
+			return;
+		}
 
 		const bool bIsMultiFrameResource = (Texture->Flags & ERDGResourceFlags::MultiFrame) == ERDGResourceFlags::MultiFrame;
 
@@ -141,6 +214,8 @@ void FRDGBarrierBatcher::QueueTransitionTexture(FRDGTexture* Texture, FRDGResour
 			}
 			#endif
 
+			LogTransition(Texture, TransitionParameters);
+
 			TextureBatch.Add(RHITexture);
 		}
 
@@ -149,26 +224,36 @@ void FRDGBarrierBatcher::QueueTransitionTexture(FRDGTexture* Texture, FRDGResour
 			TextureUpdateMultiFrameEnds.AddUnique(RHITexture);
 		}
 
+#if WITH_MGPU
+		// Broadcast all multi-frame resources when processing deferred resource queries.
+		if (bIsMultiFrameResource && Pass == nullptr)
+		{
+			TexturesToCopyForTemporalEffect.AddUnique(RHITexture);
+		}
+#endif
+
 		Texture->State = StateAfter;
 	}
 }
 
 void FRDGBarrierBatcher::QueueTransitionUAV(
 	FRHIUnorderedAccessView* UAV,
-	FRDGTrackedResource* UnderlyingResource,
-	FRDGResourceState::EAccess AccessAfter)
+	FRDGParentResource* ParentResource,
+	FRDGResourceState::EAccess AccessAfter,
+	bool bIsGeneratingMips,
+	FRDGResourceState::EPipeline PipelineAfter)
 {
 	check(UAV);
-	check(UnderlyingResource);
+	check(ParentResource);
 
-	const FRDGResourceState StateBefore = UnderlyingResource->State;
-	const FRDGResourceState StateAfter(Pass, Pipeline, AccessAfter);
+	const FRDGResourceState StateBefore = ParentResource->State;
+	const FRDGResourceState StateAfter(Pass, PipelineAfter == FRDGResourceState::EPipeline::MAX ? Pipeline : PipelineAfter, AccessAfter);
 
-	ValidateTransition(UnderlyingResource, StateBefore, StateAfter);
+	ValidateTransition(ParentResource, StateBefore, StateAfter);
 
 	if (StateBefore != StateAfter)
 	{
-		const bool bIsMultiFrameResource = (UnderlyingResource->Flags & ERDGResourceFlags::MultiFrame) == ERDGResourceFlags::MultiFrame;
+		const bool bIsMultiFrameResource = (ParentResource->Flags & ERDGResourceFlags::MultiFrame) == ERDGResourceFlags::MultiFrame;
 
 		if (bIsMultiFrameResource && IsWriteAccessBegin(StateBefore.Access, StateAfter.Access))
 		{
@@ -178,7 +263,7 @@ void FRDGBarrierBatcher::QueueTransitionUAV(
 		// Add transition to the correct batch bucket.
 		{
 			FTransitionParameters TransitionParameters;
-			TransitionParameters.TransitionAccess = GetResourceTransitionAccessForUAV(StateBefore.Access, StateAfter.Access);
+			TransitionParameters.TransitionAccess = GetResourceTransitionAccessForUAV(StateBefore.Access, StateAfter.Access, bIsGeneratingMips);
 			TransitionParameters.TransitionPipeline = GetResourceTransitionPipeline(StateBefore.Pipeline, StateAfter.Pipeline);
 
 			FUAVBatch& UAVBatch = UAVBatchMap.FindOrAdd(TransitionParameters);
@@ -191,6 +276,8 @@ void FRDGBarrierBatcher::QueueTransitionUAV(
 			}
 			#endif
 
+			LogTransition(ParentResource, TransitionParameters);
+
 			UAVBatch.Add(UAV);
 		}
 
@@ -199,11 +286,11 @@ void FRDGBarrierBatcher::QueueTransitionUAV(
 			UAVUpdateMultiFrameEnds.AddUnique(UAV);
 		}
 
-		UnderlyingResource->State = StateAfter;
+		ParentResource->State = StateAfter;
 	}
 }
 
-void FRDGBarrierBatcher::ValidateTransition(const FRDGTrackedResource* Resource, FRDGResourceState StateBefore, FRDGResourceState StateAfter)
+void FRDGBarrierBatcher::ValidateTransition(const FRDGParentResource* Resource, FRDGResourceState StateBefore, FRDGResourceState StateAfter) const
 {
 #if RDG_ENABLE_DEBUG
 	check(StateAfter.Pipeline != FRDGResourceState::EPipeline::MAX);
@@ -222,12 +309,41 @@ void FRDGBarrierBatcher::ValidateTransition(const FRDGTrackedResource* Resource,
 #endif
 }
 
+void FRDGBarrierBatcher::LogTransition(const FRDGParentResource* Resource, FTransitionParameters Parameters) const
+{
+#if RDG_ENABLE_DEBUG
+	if (CVarRDGTransitionLogEnable.GetValueOnRenderThread() != 0)
+	{
+		const FString PassName = Pass ? Pass->GetName() : TEXT("None");
+		const FString PassFilterText = CVarRDGLogTransitionsPassFilter.GetValueOnRenderThread();
+
+		if (PassFilterText.IsEmpty() || PassName.Contains(*PassFilterText))
+		{
+			const FString ResourceName = Resource->Name;
+			const FString ResourceFilterText = CVarRDGLogTransitionsResourceFilter.GetValueOnRenderThread();
+
+			if (ResourceFilterText.IsEmpty() || ResourceName.Contains(*ResourceFilterText))
+			{
+				const TCHAR* PipeName = GetTransitionPipelineName(Parameters.TransitionPipeline);
+				const TCHAR* AccessName = GetTransitionAccessName(Parameters.TransitionAccess);
+				UE_LOG(LogRendererCore, Display, TEXT("RDG Transition:\tPass('%s'), Resource('%s'), Access(%s), Pipe(%s)"), *PassName, *ResourceName, AccessName, PipeName);
+
+				if (CVarRDGTransitionLogEnableBreakpoint.GetValueOnRenderThread() != 0)
+				{
+					UE_DEBUG_BREAK();
+				}
+			}
+		}
+	}
+#endif
+}
+
 EResourceTransitionAccess FRDGBarrierBatcher::GetResourceTransitionAccess(FRDGResourceState::EAccess AccessAfter) const
 {
 	return AccessAfter == FRDGResourceState::EAccess::Write ? EResourceTransitionAccess::EWritable : EResourceTransitionAccess::EReadable;
 }
 
-EResourceTransitionAccess FRDGBarrierBatcher::GetResourceTransitionAccessForUAV(FRDGResourceState::EAccess AccessBefore, FRDGResourceState::EAccess AccessAfter) const
+EResourceTransitionAccess FRDGBarrierBatcher::GetResourceTransitionAccessForUAV(FRDGResourceState::EAccess AccessBefore, FRDGResourceState::EAccess AccessAfter, bool bIsGeneratingMips) const
 {
 	switch (AccessAfter)
 	{

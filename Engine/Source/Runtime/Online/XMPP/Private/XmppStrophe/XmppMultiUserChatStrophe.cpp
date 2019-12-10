@@ -10,13 +10,15 @@
 #include "Logging/LogScopedVerbosityOverride.h"
 #include "Misc/Guid.h"
 #include "Misc/EmbeddedCommunication.h"
+#include "Containers/BackgroundableTicker.h"
 
 #if WITH_XMPP_STROPHE
 
-const FName FXmppMultiUserChatStrophe::TickRequesterId = FName("StropheMultichat");
+#define TickRequesterId FName("StropheMultichat")
 
 FXmppMultiUserChatStrophe::FXmppMultiUserChatStrophe(FXmppConnectionStrophe& InConnectionManager)
-	: ConnectionManager(InConnectionManager)
+	: FTickerObjectBase(0.0f, FBackgroundableTicker::GetCoreTicker())
+	, ConnectionManager(InConnectionManager)
 {
 
 }
@@ -1371,5 +1373,7 @@ void FXmppMultiUserChatStrophe::CleanupMessages()
 		FEmbeddedCommunication::AllowSleep(TickRequesterId);
 	}
 }
+
+#undef TickRequesterId
 
 #endif

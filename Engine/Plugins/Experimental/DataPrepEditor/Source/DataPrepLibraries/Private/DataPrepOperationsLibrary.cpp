@@ -20,16 +20,13 @@
 #include "IMeshBuilderModule.h"
 #include "Interfaces/ITargetPlatform.h"
 #include "Interfaces/ITargetPlatformManagerModule.h"
-#include "Layers/ILayers.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialInterface.h"
 #include "Math/Vector2D.h"
-#include "MeshAttributeArray.h"
-#include "MeshDescription.h"
 #include "MeshDescriptionOperations.h"
-#include "MeshTypes.h"
 #include "Misc/FileHelper.h"
 #include "ObjectTools.h"
+#include "StaticMeshAttributes.h"
 #include "TessellationRendering.h"
 #include "UObject/SoftObjectPath.h"
 
@@ -41,7 +38,7 @@ extern UNREALED_API UEditorEngine* GEditor;
 
 namespace DataprepOperationsLibraryUtil
 {
-	TArray<UStaticMesh*> GetSelectedMeshes(const TArray<AActor*>& SelectedActors)
+	TSet<UStaticMesh*> GetSelectedMeshes(const TArray<AActor*>& SelectedActors)
 	{
 		TSet<UStaticMesh*> SelectedMeshes;
 
@@ -52,37 +49,49 @@ namespace DataprepOperationsLibraryUtil
 				TInlineComponentArray<UStaticMeshComponent*> StaticMeshComponents(Actor);
 				for (UStaticMeshComponent* StaticMeshComponent : StaticMeshComponents)
 				{
-					SelectedMeshes.Add(StaticMeshComponent->GetStaticMesh());
+					if(UStaticMesh* StaticMesh = StaticMeshComponent->GetStaticMesh())
+					{
+						SelectedMeshes.Add( StaticMesh );
+					}
 				}
 			}
 		}
 
-		return SelectedMeshes.Array();
+		return SelectedMeshes;
 	}
 
-	TArray<UStaticMesh*> GetSelectedMeshes(const TArray<UObject*>& SelectedObjects)
+	TSet<UStaticMesh*> GetSelectedMeshes(const TArray<UObject*>& SelectedObjects)
 	{
 		TSet<UStaticMesh*> SelectedMeshes;
 		TArray<AActor*> SelectedActors;
 
-		// Create LODs but do not commit changes
 		for (UObject* Object : SelectedObjects)
 		{
-			if (Object->IsA(UStaticMesh::StaticClass()))
+			if ( UStaticMesh* StaticMesh = Cast<UStaticMesh>(Object) )
 			{
-				SelectedMeshes.Add(Cast<UStaticMesh>(Object));
+				SelectedMeshes.Add( StaticMesh );
 			}
-			else if (Object->IsA(AActor::StaticClass()))
+			else if ( Object->IsA(UStaticMeshComponent::StaticClass()) )
 			{
-				TInlineComponentArray<UStaticMeshComponent*> StaticMeshComponents(Cast<AActor>(Object));
+				if ((StaticMesh = Cast<UStaticMeshComponent>(Object)->GetStaticMesh()) != nullptr )
+				{
+					SelectedMeshes.Add(StaticMesh);
+				}
+			}
+			else if (AActor* Actor = Cast<AActor>(Object) )
+			{
+				TInlineComponentArray<UStaticMeshComponent*> StaticMeshComponents( Actor );
 				for (UStaticMeshComponent* StaticMeshComponent : StaticMeshComponents)
 				{
-					SelectedMeshes.Add(StaticMeshComponent->GetStaticMesh());
+					if((StaticMesh = StaticMeshComponent->GetStaticMesh()) != nullptr)
+					{
+						SelectedMeshes.Add( StaticMesh );
+					}
 				}
 			}
 		}
 
-		return SelectedMeshes.Array();
+		return SelectedMeshes;
 	}
 
 	TArray<UMaterialInterface*> GetUsedMaterials(const TArray<UObject*>& SelectedObjects)
@@ -115,6 +124,29 @@ namespace DataprepOperationsLibraryUtil
 		}
 
 		return MaterialSet.Array();
+	}
+
+	TArray<UStaticMesh*> GetUsedMeshes(const TArray<UObject*>& SelectedObjects)
+	{
+		TSet<UStaticMesh*> MeshesSet;
+
+		for (UObject* Object : SelectedObjects)
+		{
+			if (AActor* Actor = Cast< AActor >(Object))
+			{
+				// Find the meshes by iterating over every mesh component.
+				TInlineComponentArray<UStaticMeshComponent*> MeshComponents(Actor);
+				for (UStaticMeshComponent* MeshComponent : MeshComponents)
+				{
+					if(MeshComponent && MeshComponent->GetStaticMesh())
+					{
+						MeshesSet.Add( MeshComponent->GetStaticMesh() );
+					}
+				}
+			}
+		}
+
+		return MeshesSet.Array();
 	}
 
 	class FScopedStaticMeshEdit final
@@ -157,6 +189,7 @@ namespace DataprepOperationsLibraryUtil
 				SourceModel.BuildSettings.bRecomputeTangents = false;
 				SourceModel.BuildSettings.bBuildAdjacencyBuffer = false;
 				SourceModel.BuildSettings.bBuildReversedIndexBuffer = false;
+				SourceModel.BuildSettings.bComputeWeightedNormals = false;
 			}
 
 			return BuildSettingsBackup;
@@ -184,6 +217,7 @@ namespace DataprepOperationsLibraryUtil
 					BuildSettings.bRecomputeTangents = CachedBuildSettings.bRecomputeTangents;
 					BuildSettings.bBuildAdjacencyBuffer = CachedBuildSettings.bBuildAdjacencyBuffer;
 					BuildSettings.bBuildReversedIndexBuffer = CachedBuildSettings.bBuildReversedIndexBuffer;
+					BuildSettings.bComputeWeightedNormals = CachedBuildSettings.bComputeWeightedNormals;
 				}
 			}
 		}
@@ -192,11 +226,6 @@ namespace DataprepOperationsLibraryUtil
 		TArray< FMeshBuildSettings > BuildSettingsBackup;
 		UStaticMesh* StaticMesh;
 	};
-
-	int32 GetActorDepth(AActor* Actor)
-	{
-		return Actor ? 1 + GetActorDepth(Actor->GetAttachParentActor()) : 0;
-	}
 
 	/** Customized version of UStaticMesh::SetMaterial avoiding the triggering of UStaticMesh::Build and its side-effects */
 	void SetMaterial( UStaticMesh* StaticMesh, int32 MaterialIndex, UMaterialInterface* NewMaterial )
@@ -224,46 +253,132 @@ namespace DataprepOperationsLibraryUtil
 		}
 	}
 
-	// Replacement of UStaticMesh::CacheDerivedData() which performs too much operations for our purpose
-	// And displays unwanted progress bar
-	// #ueent_todo: Work with Geometry team to find the proper replacement
-	void BuildRenderData( UStaticMesh* StaticMesh, IMeshBuilderModule& MeshBuilderModule )
+	FStaticMeshBuilder::FStaticMeshBuilder(const TSet<UStaticMesh *>& InStaticMeshes)
 	{
-		FStaticMeshSourceModel& SourceModel = StaticMesh->GetSourceModel(0);
+		StaticMeshes = BuildStaticMeshes( InStaticMeshes );
+	}
 
-		FMeshBuildSettings PrevBuildSettings = SourceModel.BuildSettings;
-		SourceModel.BuildSettings.bGenerateLightmapUVs = false;
-		SourceModel.BuildSettings.bRecomputeNormals = false;
-		SourceModel.BuildSettings.bRecomputeTangents = false;
-		SourceModel.BuildSettings.bBuildAdjacencyBuffer = false;
-		SourceModel.BuildSettings.bBuildReversedIndexBuffer = false;
-
-		FMeshDescription* StaticMeshDescription = SourceModel.MeshDescription.Get();
-		check( StaticMeshDescription );
-
-		// Create render data
-		StaticMesh->RenderData.Reset( new(FMemory::Malloc(sizeof(FStaticMeshRenderData)))FStaticMeshRenderData() );
-
-		ITargetPlatformManagerModule& TargetPlatformManager = GetTargetPlatformManagerRef();
-		ITargetPlatform* RunningPlatform = TargetPlatformManager.GetRunningTargetPlatform();
-		check(RunningPlatform);
-		const FStaticMeshLODSettings& LODSettings = RunningPlatform->GetStaticMeshLODSettings();
-
-		const FStaticMeshLODGroup& LODGroup = LODSettings.GetLODGroup(StaticMesh->LODGroup);
-
-		if ( !MeshBuilderModule.BuildMesh( *StaticMesh->RenderData, StaticMesh, LODGroup ) )
+	FStaticMeshBuilder::~FStaticMeshBuilder()
+	{
+		// Release render data of built static meshes
+		for(UStaticMesh* StaticMesh : StaticMeshes)
 		{
-			UE_LOG(LogDataprep, Error, TEXT("Failed to build static mesh. See previous line(s) for details."));
-			return;
+			if(StaticMesh)
+			{
+				StaticMesh->RenderData.Reset();
+			}
+		}
+	}
+
+	TArray<UStaticMesh*> BuildStaticMeshes(const TSet<UStaticMesh*>& StaticMeshes, bool bForceBuild)
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(DataprepOperationsLibraryUtil::BuildStaticMeshes);
+
+		TArray<UStaticMesh*> BuiltMeshes;
+		BuiltMeshes.Reserve( StaticMeshes.Num() );
+
+		if(bForceBuild)
+		{
+			BuiltMeshes.Append( StaticMeshes.Array() );
+		}
+		else
+		{
+			for(UStaticMesh* StaticMesh : StaticMeshes)
+			{
+				if(StaticMesh && (!StaticMesh->RenderData.IsValid() || !StaticMesh->RenderData->IsInitialized()))
+				{
+					BuiltMeshes.Add( StaticMesh );
+				}
+			}
 		}
 
-		SourceModel.BuildSettings = PrevBuildSettings;
+		if(BuiltMeshes.Num() > 0)
+		{
+			// Start with the biggest mesh first to help balancing tasks on threads
+			BuiltMeshes.Sort(
+				[](const UStaticMesh& Lhs, const UStaticMesh& Rhs) 
+			{ 
+				int32 LhsVerticesNum = Lhs.IsMeshDescriptionValid(0) ? Lhs.GetMeshDescription(0)->Vertices().Num() : 0;
+				int32 RhsVerticesNum = Rhs.IsMeshDescriptionValid(0) ? Rhs.GetMeshDescription(0)->Vertices().Num() : 0;
+
+				return LhsVerticesNum > RhsVerticesNum;
+			}
+			);
+
+			//Cache the BuildSettings and update them before building the meshes.
+			TArray< TArray<FMeshBuildSettings> > StaticMeshesSettings;
+			StaticMeshesSettings.Reserve( BuiltMeshes.Num() );
+
+			for (UStaticMesh* StaticMesh : BuiltMeshes)
+			{
+				TArray<FStaticMeshSourceModel>& SourceModels = StaticMesh->GetSourceModels();
+				TArray<FMeshBuildSettings> BuildSettings;
+				BuildSettings.Reserve(SourceModels.Num());
+
+				for(int32 Index = 0; Index < SourceModels.Num(); ++Index)
+				{
+					FStaticMeshSourceModel& SourceModel = SourceModels[Index];
+
+					BuildSettings.Add( SourceModel.BuildSettings );
+
+					if(FMeshDescription* MeshDescription = StaticMesh->GetMeshDescription(Index))
+					{
+						FStaticMeshAttributes Attributes(*MeshDescription);
+						if(SourceModel.BuildSettings.DstLightmapIndex != -1)
+						{
+							TVertexInstanceAttributesConstRef<FVector2D> VertexInstanceUVs = Attributes.GetVertexInstanceUVs();
+							SourceModel.BuildSettings.bGenerateLightmapUVs = VertexInstanceUVs.IsValid() && VertexInstanceUVs.GetNumIndices() > SourceModel.BuildSettings.DstLightmapIndex;
+						}
+						else
+						{
+							SourceModel.BuildSettings.bGenerateLightmapUVs = false;
+						}
+
+						SourceModel.BuildSettings.bRecomputeNormals = !(Attributes.GetVertexInstanceNormals().IsValid() && Attributes.GetVertexInstanceNormals().GetNumIndices() > 0);
+						SourceModel.BuildSettings.bRecomputeTangents = false;
+						//SourceModel.BuildSettings.bBuildAdjacencyBuffer = false;
+						//SourceModel.BuildSettings.bBuildReversedIndexBuffer = false;
+					}
+				}
+
+				StaticMeshesSettings.Add(MoveTemp(BuildSettings));				
+			}
+
+			// Disable warnings from LogStaticMesh. Not useful
+			ELogVerbosity::Type PrevLogStaticMeshVerbosity = LogStaticMesh.GetVerbosity();
+			LogStaticMesh.SetVerbosity( ELogVerbosity::Error );
+
+			UStaticMesh::BatchBuild(BuiltMeshes, true );
+
+			// Restore LogStaticMesh verbosity
+			LogStaticMesh.SetVerbosity( PrevLogStaticMeshVerbosity );
+
+			for(int32 Index = 0; Index < BuiltMeshes.Num(); ++Index)
+			{
+				UStaticMesh* StaticMesh = BuiltMeshes[Index];
+				TArray<FMeshBuildSettings>& PrevBuildSettings = StaticMeshesSettings[Index];
+
+				TArray<FStaticMeshSourceModel>& SourceModels = StaticMesh->GetSourceModels();
+
+				for(int32 SourceModelIndex = 0; SourceModelIndex < SourceModels.Num(); ++SourceModelIndex)
+				{
+					SourceModels[SourceModelIndex].BuildSettings = PrevBuildSettings[SourceModelIndex];
+				}
+
+				for ( FStaticMeshLODResources& LODResources : StaticMesh->RenderData->LODResources )
+				{
+					LODResources.bHasColorVertexData = true;
+				}
+			}
+		}
+
+		return BuiltMeshes;
 	}
 } // ns DataprepOperationsLibraryUtil
 
-void UDataprepOperationsLibrary::SetLods(const TArray<UObject*>& SelectedObjects, const FEditorScriptingMeshReductionOptions& ReductionOptions)
+void UDataprepOperationsLibrary::SetLods(const TArray<UObject*>& SelectedObjects, const FEditorScriptingMeshReductionOptions& ReductionOptions, TArray<UObject*>& ModifiedObjects)
 {
-	TArray<UStaticMesh*> SelectedMeshes = DataprepOperationsLibraryUtil::GetSelectedMeshes(SelectedObjects);
+	TSet<UStaticMesh*> SelectedMeshes = DataprepOperationsLibraryUtil::GetSelectedMeshes(SelectedObjects);
 
 	// Create LODs but do not commit changes
 	for (UStaticMesh* StaticMesh : SelectedMeshes)
@@ -273,15 +388,36 @@ void UDataprepOperationsLibrary::SetLods(const TArray<UObject*>& SelectedObjects
 			DataprepOperationsLibraryUtil::FScopedStaticMeshEdit StaticMeshEdit( StaticMesh );
 
 			UEditorStaticMeshLibrary::SetLodsWithNotification(StaticMesh, ReductionOptions, false);
+
+			ModifiedObjects.Add( StaticMesh );
 		}
 	}
 }
 
-void UDataprepOperationsLibrary::SetSimpleCollision(const TArray<UObject*>& SelectedObjects, const EScriptingCollisionShapeType ShapeType)
+void UDataprepOperationsLibrary::SetSimpleCollision(const TArray<UObject*>& SelectedObjects, const EScriptingCollisionShapeType ShapeType, TArray<UObject*>& ModifiedObjects)
 {
-	TArray<UStaticMesh*> SelectedMeshes = DataprepOperationsLibraryUtil::GetSelectedMeshes(SelectedObjects);
+	TSet<UStaticMesh*> SelectedMeshes = DataprepOperationsLibraryUtil::GetSelectedMeshes(SelectedObjects);
 
-	IMeshBuilderModule& MeshBuilderModule = FModuleManager::LoadModuleChecked< IMeshBuilderModule >( TEXT("MeshBuilder") );
+	// Make sure all static meshes to be processed have render data for NDOP types
+	bool bNeedRenderData = false;
+	switch (ShapeType)
+	{
+		case EScriptingCollisionShapeType::NDOP10_X:
+		case EScriptingCollisionShapeType::NDOP10_Y:
+		case EScriptingCollisionShapeType::NDOP10_Z:
+		case EScriptingCollisionShapeType::NDOP18:
+		case EScriptingCollisionShapeType::NDOP26:
+		{
+			bNeedRenderData = true;
+			break;
+		}
+		default:
+		{
+			break;
+		}
+	}
+
+	DataprepOperationsLibraryUtil::FStaticMeshBuilder StaticMeshBuilder( bNeedRenderData ? SelectedMeshes : TSet<UStaticMesh*>() );
 
 	// Create LODs but do not commit changes
 	for (UStaticMesh* StaticMesh : SelectedMeshes)
@@ -293,42 +429,19 @@ void UDataprepOperationsLibrary::SetSimpleCollision(const TArray<UObject*>& Sele
 			// Remove existing simple collisions
 			UEditorStaticMeshLibrary::RemoveCollisionsWithNotification( StaticMesh, false );
 
-			// Check that render data is available if k-DOP type of collision is required
-			bool bFreeRenderData = false;
-			switch (ShapeType)
-			{
-				case EScriptingCollisionShapeType::NDOP10_X:
-				case EScriptingCollisionShapeType::NDOP10_Y:
-				case EScriptingCollisionShapeType::NDOP10_Z:
-				case EScriptingCollisionShapeType::NDOP18:
-				case EScriptingCollisionShapeType::NDOP26:
-				{
-					if( StaticMesh->RenderData == nullptr )
-					{
-						DataprepOperationsLibraryUtil::BuildRenderData( StaticMesh, MeshBuilderModule );
-						bFreeRenderData = true;
-					}
-					break;
-				}
-				default:
-				{
-					break;
-				}
-			}
-
 			UEditorStaticMeshLibrary::AddSimpleCollisionsWithNotification( StaticMesh, ShapeType, false );
 
-			if( bFreeRenderData )
-			{
-				StaticMesh->RenderData = nullptr;
-			}
+			ModifiedObjects.Add( StaticMesh );
 		}
 	}
 }
 
-void UDataprepOperationsLibrary::SetConvexDecompositionCollision(const TArray<UObject*>& SelectedObjects, int32 HullCount, int32 MaxHullVerts, int32 HullPrecision)
+void UDataprepOperationsLibrary::SetConvexDecompositionCollision(const TArray<UObject*>& SelectedObjects, int32 HullCount, int32 MaxHullVerts, int32 HullPrecision, TArray<UObject*>& ModifiedObjects)
 {
-	TArray<UStaticMesh*> SelectedMeshes = DataprepOperationsLibraryUtil::GetSelectedMeshes(SelectedObjects);
+	TSet<UStaticMesh*> SelectedMeshes = DataprepOperationsLibraryUtil::GetSelectedMeshes(SelectedObjects);
+
+	// Make sure all static meshes to be processed have render data
+	DataprepOperationsLibraryUtil::FStaticMeshBuilder StaticMeshBuilder(SelectedMeshes);
 
 	// Build complex collision
 	for (UStaticMesh* StaticMesh : SelectedMeshes)
@@ -338,38 +451,8 @@ void UDataprepOperationsLibrary::SetConvexDecompositionCollision(const TArray<UO
 			DataprepOperationsLibraryUtil::FScopedStaticMeshEdit StaticMeshEdit( StaticMesh );
 
 			UEditorStaticMeshLibrary::SetConvexDecompositionCollisionsWithNotification(StaticMesh, HullCount, MaxHullVerts, HullPrecision, false);
-		}
-	}
-}
 
-void UDataprepOperationsLibrary::SetGenerateLightmapUVs( const TArray< UObject* >& Assets, bool bGenerateLightmapUVs )
-{
-	TArray<UStaticMesh*> SelectedMeshes = DataprepOperationsLibraryUtil::GetSelectedMeshes(Assets);
-
-	for (UStaticMesh* StaticMesh : SelectedMeshes)
-	{
-		if (StaticMesh)
-		{
-			bool bDidChangeSettings = false;
-
-			// 3 is the maximum that lightmass accept
-			int32 MinBiggestUVChannel = 3;
-			for ( FStaticMeshSourceModel& SourceModel : StaticMesh->GetSourceModels() )
-			{
-				bDidChangeSettings |= SourceModel.BuildSettings.bGenerateLightmapUVs != bGenerateLightmapUVs;
-				SourceModel.BuildSettings.bGenerateLightmapUVs = bGenerateLightmapUVs;
-				if( FMeshDescription* MeshDescription = SourceModel.MeshDescription.Get() )
-				{
-					int32 UVChannelCount = MeshDescription->VertexInstanceAttributes().GetAttributesRef< FVector2D >( MeshAttribute::VertexInstance::TextureCoordinate ).GetNumIndices();
-					MinBiggestUVChannel = FMath::Min( MinBiggestUVChannel, UVChannelCount - 1 );
-				}
-			}
-
-			if ( StaticMesh->LightMapCoordinateIndex > MinBiggestUVChannel && bDidChangeSettings )
-			{
-				// Correct the coordinate index if it was invalid
-				StaticMesh->LightMapCoordinateIndex = MinBiggestUVChannel;
-			}
+			ModifiedObjects.Add( StaticMesh );
 		}
 	}
 }
@@ -498,108 +581,101 @@ void UDataprepOperationsLibrary::SetMaterial( const TArray< UObject* >& Selected
 	}
 }
 
-void UDataprepOperationsLibrary::SetLODGroup( const TArray<UObject*>& SelectedObjects, FName& LODGroupName )
+void UDataprepOperationsLibrary::SetLODGroup( const TArray<UObject*>& SelectedObjects, FName& LODGroupName, TArray<UObject*>& ModifiedObjects )
 {
 	TArray<FName> LODGroupNames;
 	UStaticMesh::GetLODGroups( LODGroupNames );
 
 	if ( LODGroupNames.Find( LODGroupName ) != INDEX_NONE )
 	{
-		TArray<UStaticMesh*> SelectedMeshes = DataprepOperationsLibraryUtil::GetSelectedMeshes(SelectedObjects);
+		TSet<UStaticMesh*> SelectedMeshes = DataprepOperationsLibraryUtil::GetSelectedMeshes(SelectedObjects);
 
 		// Apply the new LODGroup without rebuilding the static mesh
 		for (UStaticMesh* StaticMesh : SelectedMeshes)
 		{
-			StaticMesh->SetLODGroup( LODGroupName, false);
+			if(StaticMesh)
+			{
+				StaticMesh->SetLODGroup( LODGroupName, false);
+				ModifiedObjects.Add( StaticMesh );
+			}
 		}
 	}
 }
 
-void UDataprepOperationsLibrary::RemoveObjects(const TArray< UObject* >& Objects)
+void UDataprepOperationsLibrary::SetMesh(const TArray<UObject*>& SelectedObjects, UStaticMesh* MeshSubstitute)
 {
-	// Implementation based on DatasmithImporterImpl::DeleteActorsMissingFromScene, UEditorLevelLibrary::DestroyActor
-	struct FActorAndDepth
+	for (UObject* Object : SelectedObjects)
 	{
-		AActor* Actor;
-		int32 Depth;
-	};
-
-	TArray<FActorAndDepth> ActorsToDelete;
-	ActorsToDelete.Reserve(Objects.Num());
-
-	TArray<UObject*> AssetsToDelete;
-	AssetsToDelete.Reserve(Objects.Num());
-
-	for (UObject* Object : Objects)
-	{
-		if ( !ensure(Object) || Object->IsPendingKill() )
+		if (AActor* Actor = Cast< AActor >(Object))
 		{
-			continue;
-		}
-
-		if (AActor* Actor = Cast< AActor >( Object ))
-		{
-			ActorsToDelete.Add(FActorAndDepth{Actor, DataprepOperationsLibraryUtil::GetActorDepth(Actor)});
-			// #ueent_todo if rem children option, add them here
-		}
-		else
-		{
-			AssetsToDelete.Add(Object);
-		}
-	}
-
-	// Sort actors by decreasing depth (in order to delete children first)
-	ActorsToDelete.Sort([](const FActorAndDepth& Lhs, const FActorAndDepth& Rhs){ return Lhs.Depth > Rhs.Depth; });
-
-	bool bSelectionAffected = false;
-	for (const FActorAndDepth& ActorInfo : ActorsToDelete)
-	{
-		AActor* Actor = ActorInfo.Actor;
-
-		// Reattach our children to our parent
-		TArray< USceneComponent* > AttachChildren = Actor->GetRootComponent()->GetAttachChildren(); // Make a copy because the array in RootComponent will get modified during the process
-		USceneComponent* AttachParent = Actor->GetRootComponent()->GetAttachParent();
-
-		for ( USceneComponent* ChildComponent : AttachChildren )
-		{
-			// skip component with invalid or condemned owner
-			AActor* Owner = ChildComponent->GetOwner();
-			if ( Owner == nullptr || Owner == Actor || Owner->IsPendingKill() || Objects.Contains(Owner))
+			// Find the meshes by iterating over every mesh component.
+			TInlineComponentArray<UStaticMeshComponent*> MeshComponents(Actor);
+			for (UStaticMeshComponent* MeshComponent : MeshComponents)
 			{
-				continue;
-			}
-
-			ChildComponent->AttachToComponent( AttachParent, FAttachmentTransformRules::KeepWorldTransform );
-		}
-
-		// Actual deletion of the actor
-		{
-			Actor->Rename();
-			if (Actor->IsSelected())
-			{
-				GEditor->SelectActor(Actor, false, false);
-				bSelectionAffected = true;
-			}
-
-			if (GEditor->Layers)
-			{
-				GEditor->Layers->DisassociateActorFromLayers(Actor);
-			}
-
-			if (UWorld* World = Actor->GetWorld())
-			{
-				World->EditorDestroyActor(Actor, true);
+				if(MeshComponent)
+				{
+					MeshComponent->SetStaticMesh( MeshSubstitute );
+				}
 			}
 		}
 	}
+}
 
-	if (bSelectionAffected)
+void UDataprepOperationsLibrary::SubstituteMesh(const TArray<UObject*>& SelectedObjects, const FString& MeshSearch, EEditorScriptingStringMatchType StringMatch, UStaticMesh* MeshSubstitute)
+{
+	TArray<UStaticMesh*> MeshesUsed = DataprepOperationsLibraryUtil::GetUsedMeshes(SelectedObjects);
+
+	SubstituteMesh( SelectedObjects, MeshSearch, StringMatch, MeshesUsed, MeshSubstitute );
+}
+
+void UDataprepOperationsLibrary::SubstituteMeshesByTable(const TArray<UObject*>& SelectedObjects, const UDataTable * DataTable)
+{
+	if (DataTable == nullptr || DataTable->GetRowStruct() == nullptr || !DataTable->GetRowStruct()->IsChildOf(FMeshSubstitutionDataTable::StaticStruct()))
 	{
-		GEditor->NoteSelectionChange();
+		return;
 	}
 
-	FDataprepCoreUtils::PurgeObjects( MoveTemp( AssetsToDelete ) );
+	TArray<UStaticMesh*> MeshesUsed = DataprepOperationsLibraryUtil::GetUsedMeshes(SelectedObjects);
 
+	const TMap<FName, uint8*>&  MeshTableRowMap = DataTable->GetRowMap();
+	for (auto& MeshTableRowEntry : MeshTableRowMap)
+	{
+		const FMeshSubstitutionDataTable* MeshRow = (const FMeshSubstitutionDataTable*)MeshTableRowEntry.Value;
+		if (MeshRow != nullptr && MeshRow->MeshReplacement != nullptr)
+		{
+			SubstituteMesh( SelectedObjects, MeshRow->SearchString, MeshRow->StringMatch, MeshesUsed, MeshRow->MeshReplacement );
+		}
+	}
+}
+
+void UDataprepOperationsLibrary::SubstituteMesh(const TArray<UObject*>& SelectedObjects, const FString& MeshSearch, EEditorScriptingStringMatchType StringMatch, const TArray<UStaticMesh*>& MeshList, UStaticMesh* MeshSubstitute)
+{
+	TArray<UObject*> MatchingObjects = UEditorFilterLibrary::ByIDName(TArray<UObject*>(MeshList), MeshSearch, StringMatch, EEditorScriptingFilterType::Include);
+
+	TSet<UStaticMesh*> MeshesToReplace;
+	for (UObject* Object : MatchingObjects)
+	{
+		if (UStaticMesh* StaticMesh = Cast<UStaticMesh>(Object))
+		{
+			MeshesToReplace.Add(StaticMesh);
+		}
+	}
+
+	for (UObject* Object : SelectedObjects)
+	{
+		if (AActor* Actor = Cast< AActor >(Object))
+		{
+			// Find the meshes by iterating over every mesh component.
+			TInlineComponentArray<UStaticMeshComponent*> MeshComponents(Actor);
+			for (UStaticMeshComponent* MeshComponent : MeshComponents)
+			{
+				if( MeshesToReplace.Contains( MeshComponent->GetStaticMesh() ) )
+				{
+					MeshComponent->SetStaticMesh( MeshSubstitute );
+				}
+			}
+		}
+	}
 }
 
 #undef LOCTEXT_NAMESPACE

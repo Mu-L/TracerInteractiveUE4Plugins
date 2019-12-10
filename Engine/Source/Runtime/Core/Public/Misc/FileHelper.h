@@ -53,7 +53,7 @@ struct CORE_API FFileHelper
 	 * @param Filename     Name of the file to load
 	 * @param VerifyFlags  Flags controlling the hash verification behavior ( see EHashOptions )
 	 */
-	static bool LoadFileToString( FString& Result, const TCHAR* Filename, EHashOptions VerifyFlags = EHashOptions::None );
+	static bool LoadFileToString( FString& Result, const TCHAR* Filename, EHashOptions VerifyFlags = EHashOptions::None, uint32 ReadFlags = 0 );
 
 	/**
 	 * Load a text file to an array of strings. Supports all combination of ANSI/Unicode files and platforms.
@@ -108,6 +108,17 @@ struct CORE_API FFileHelper
 	 * @return true if success
 	 */
 	static bool GenerateNextBitmapFilename(const FString& Pattern, const FString& Extension, FString& OutFilename, IFileManager* FileManager = &IFileManager::Get());
+
+	/**
+	 * Generates the next unique bitmap filename with a specified extension
+	 *
+	 * @param Pattern		Filename with path, but without extension.
+	 * @param Extension		File extension to be appended
+	 * @param OutFilename	Reference to an FString where the newly generated filename will be placed
+	 *
+	 * @return true if success
+	 */
+	static void GenerateDateTimeBasedBitmapFilename(const FString& Pattern, const FString& Extension, FString& OutFilename);
 	
 	/**
 	 *	Load the given ANSI text file to an array of strings - one FString per line of the file.

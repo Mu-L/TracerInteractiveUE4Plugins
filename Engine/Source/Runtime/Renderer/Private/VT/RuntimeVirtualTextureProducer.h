@@ -5,8 +5,9 @@
 #include "CoreMinimal.h"
 #include "UObject/ObjectMacros.h"
 #include "VirtualTexturing.h"
+#include "VT/RuntimeVirtualTextureEnum.h"
 
-enum class ERuntimeVirtualTextureMaterialType;
+enum class ERuntimeVirtualTextureMaterialType : uint8;
 class FRHITexture2D;
 class FSceneInterface;
 
@@ -14,24 +15,22 @@ class FSceneInterface;
 class FRuntimeVirtualTextureFinalizer : public IVirtualTextureFinalizer
 {
 public:
-	FRuntimeVirtualTextureFinalizer(FVTProducerDescription const& InDesc, uint32 InProducerId, ERuntimeVirtualTextureMaterialType InMaterialType, FSceneInterface* InScene, FTransform const& InUVToWorld);
+	FRuntimeVirtualTextureFinalizer(FVTProducerDescription const& InDesc, uint32 InProducerId, ERuntimeVirtualTextureMaterialType InMaterialType, bool InClearTextures, FSceneInterface* InScene, FTransform const& InUVToWorld);
 	virtual ~FRuntimeVirtualTextureFinalizer() {}
 
 	/** A description for a single tile to render. */
 	struct FTileEntry
 	{
-		FRHITexture2D* Texture0 = nullptr;
-		FRHITexture2D* Texture1 = nullptr;
-		int32 DestX0 = 0;
-		int32 DestY0 = 0;
-		int32 DestX1 = 0;
-		int32 DestY1 = 0;
+		FVTProduceTargetLayer Targets[RuntimeVirtualTexture::MaxTextureLayers];
 		uint32 vAddress = 0;
 		uint8 vLevel = 0;
 	};
 
 	/** Returns false if we don't yet have everything we need to render a VT page. */
 	bool IsReady();
+
+	/** Does some one time work at the first call to set up the Producer */
+	void InitProducer(const FVirtualTextureProducerHandle& ProducerHandle);
 
 	/** Add a tile to the finalize queue. */
 	void AddTile(FTileEntry& Tile);
@@ -49,6 +48,8 @@ private:
 	uint32 RuntimeVirtualTextureMask;
 	/** Contents of virtual texture layer stack. */
 	ERuntimeVirtualTextureMaterialType MaterialType;
+	/** Clear before render flag. */
+	bool bClearTextures;
 	/** Scene that the virtual texture is placed within. */
 	FSceneInterface* Scene;
 	/** Transform from UV space to world space. */
@@ -61,7 +62,7 @@ private:
 class FRuntimeVirtualTextureProducer : public IVirtualTexture
 {
 public:
-	RENDERER_API FRuntimeVirtualTextureProducer(FVTProducerDescription const& InDesc, uint32 InProducerId, ERuntimeVirtualTextureMaterialType InMaterialType, FSceneInterface* InScene, FTransform const& InUVToWorld);
+	RENDERER_API FRuntimeVirtualTextureProducer(FVTProducerDescription const& InDesc, uint32 InProducerId, ERuntimeVirtualTextureMaterialType InMaterialType, bool InClearTextures, FSceneInterface* InScene, FTransform const& InUVToWorld);
 	RENDERER_API virtual ~FRuntimeVirtualTextureProducer() {}
 
 	//~ Begin IVirtualTexture Interface.

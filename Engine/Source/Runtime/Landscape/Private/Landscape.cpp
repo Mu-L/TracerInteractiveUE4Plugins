@@ -56,11 +56,13 @@ Landscape.cpp: Terrain rendering
 #include "MaterialUtilities.h"
 #include "Editor.h"
 #include "Algo/Transform.h"
+#include "Engine/Texture2D.h"
 #endif
 #include "LandscapeVersion.h"
 #include "UObject/FortniteMainBranchObjectVersion.h"
 #include "LandscapeDataAccess.h"
 #include "UObject/EditorObjectVersion.h"
+#include "Algo/BinarySearch.h"
 
 /** Landscape stats */
 
@@ -146,6 +148,7 @@ ULandscapeComponent::ULandscapeComponent(const FObjectInitializer& ObjectInitial
 , CachedEditingLayerData(nullptr)
 , LayerUpdateFlagPerMode(0)
 , WeightmapsHash(0)
+, SplineHash(0)
 #endif
 , GrassData(MakeShareable(new FLandscapeComponentGrassData()))
 , ChangeTag(0)
@@ -699,8 +702,9 @@ void ULandscapeComponent::PostLoad()
 		UpdatedSharedPropertiesFromActor();	
 
 		// check SectionBaseX/Y are correct
-		int32 CheckSectionBaseX = FMath::RoundToInt(RelativeLocation.X) + LandscapeProxy->LandscapeSectionOffset.X;
-		int32 CheckSectionBaseY = FMath::RoundToInt(RelativeLocation.Y) + LandscapeProxy->LandscapeSectionOffset.Y;
+		const FVector LocalRelativeLocation = GetRelativeLocation();
+		int32 CheckSectionBaseX = FMath::RoundToInt(LocalRelativeLocation.X) + LandscapeProxy->LandscapeSectionOffset.X;
+		int32 CheckSectionBaseY = FMath::RoundToInt(LocalRelativeLocation.Y) + LandscapeProxy->LandscapeSectionOffset.Y;
 		if (CheckSectionBaseX != SectionBaseX ||
 			CheckSectionBaseY != SectionBaseY)
 		{
@@ -715,15 +719,18 @@ void ULandscapeComponent::PostLoad()
 	if (GIsEditor && !HasAnyFlags(RF_ClassDefaultObject))
 	{
 		// This is to ensure that component relative location is exact section base offset value
+		FVector LocalRelativeLocation = GetRelativeLocation();
 		float CheckRelativeLocationX = float(SectionBaseX - LandscapeProxy->LandscapeSectionOffset.X);
 		float CheckRelativeLocationY = float(SectionBaseY - LandscapeProxy->LandscapeSectionOffset.Y);
-		if (CheckRelativeLocationX != RelativeLocation.X || 
-			CheckRelativeLocationY != RelativeLocation.Y)
+		if (CheckRelativeLocationX != LocalRelativeLocation.X ||
+			CheckRelativeLocationY != LocalRelativeLocation.Y)
 		{
 			UE_LOG(LogLandscape, Warning, TEXT("LandscapeComponent RelativeLocation disagrees with its section base, attempted automated fix: '%s', %f,%f vs %f,%f."),
-				*GetFullName(), RelativeLocation.X, RelativeLocation.Y, CheckRelativeLocationX, CheckRelativeLocationY);
-			RelativeLocation.X = CheckRelativeLocationX;
-			RelativeLocation.Y = CheckRelativeLocationY;
+				*GetFullName(), LocalRelativeLocation.X, LocalRelativeLocation.Y, CheckRelativeLocationX, CheckRelativeLocationY);
+			LocalRelativeLocation.X = CheckRelativeLocationX;
+			LocalRelativeLocation.Y = CheckRelativeLocationY;
+
+			SetRelativeLocation_Direct(LocalRelativeLocation);
 		}
 
 		// Remove standalone flags from data textures to ensure data is unloaded in the editor when reverting an unsaved level.
@@ -978,8 +985,8 @@ void ULandscapeComponent::PostLoad()
 	{
 		UWorld* World = GetWorld();
 
-		// If we're loading on a platform that doesn't require cooked data, but *only* supports OpenGL ES, generate or preload data from the DDC
-		if (!FPlatformProperties::RequiresCookedData() && ((GMaxRHIFeatureLevel <= ERHIFeatureLevel::ES3_1) || (World && (World->FeatureLevel <= ERHIFeatureLevel::ES3_1))))
+		// If we're loading on a platform that doesn't require cooked data, but defaults to a mobile feature level, generate or preload data from the DDC
+		if (!FPlatformProperties::RequiresCookedData() && ((GEngine->GetDefaultWorldFeatureLevel() <= ERHIFeatureLevel::ES3_1) || (World && (World->FeatureLevel <= ERHIFeatureLevel::ES3_1))))
 		{
 			CheckGenerateLandscapePlatformData(false, nullptr);
 		}
@@ -989,6 +996,10 @@ void ULandscapeComponent::PostLoad()
 }
 
 #endif // WITH_EDITOR
+
+#if WITH_EDITORONLY_DATA
+TArray<ALandscapeProxy*> ALandscapeProxy::LandscapeProxies;
+#endif
 
 ALandscapeProxy::ALandscapeProxy(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -1005,16 +1016,16 @@ ALandscapeProxy::ALandscapeProxy(const FObjectInitializer& ObjectInitializer)
 
 	bReplicates = false;
 	NetUpdateFrequency = 10.0f;
-	bHidden = false;
-	bReplicateMovement = false;
-	bCanBeDamaged = false;
+	SetHidden(false);
+	SetReplicatingMovement(false);
+	SetCanBeDamaged(false);
 	// by default we want to see the Landscape shadows even in the far shadow cascades
 	bCastFarShadow = true;
 	bAffectDistanceFieldLighting = true;
 
 	USceneComponent* SceneComponent = CreateDefaultSubobject<USceneComponent>(TEXT("RootComponent0"));
 	RootComponent = SceneComponent;
-	RootComponent->RelativeScale3D = FVector(128.0f, 128.0f, 256.0f); // Old default scale, preserved for compatibility. See ULandscapeEditorObject::NewLandscape_Scale
+	RootComponent->SetRelativeScale3D(FVector(128.0f, 128.0f, 256.0f)); // Old default scale, preserved for compatibility. See ULandscapeEditorObject::NewLandscape_Scale
 	RootComponent->Mobility = EComponentMobility::Static;
 	LandscapeSectionOffset = FIntPoint::ZeroValue;
 
@@ -1031,9 +1042,9 @@ ALandscapeProxy::ALandscapeProxy(const FObjectInitializer& ObjectInitializer)
 	ComponentScreenSizeToUseSubSections = 0.65f;
 	UseTessellationComponentScreenSizeFalloff = true;
 	TessellationComponentScreenSizeFalloff = 0.75f;
-	LOD0ScreenSize = 1.0f;
-	LOD0DistributionSetting = 1.75f;
-	LODDistributionSetting = 2.0f;
+	LOD0ScreenSize = 0.5f;
+	LOD0DistributionSetting = 1.25f;
+	LODDistributionSetting = 3.0f;
 	bCastStaticShadow = true;
 	bCastShadowAsTwoSided = false;
 	bUsedForNavigation = true;
@@ -1046,6 +1057,10 @@ ALandscapeProxy::ALandscapeProxy(const FObjectInitializer& ObjectInitializer)
 #endif
 
 #if WITH_EDITOR
+	NumComponentsNeedingGrassMapRender = 0;
+	NumTexturesToStreamForVisibleGrassMapRender = 0;
+	NumComponentsNeedingTextureBaking = 0;
+
 	if (VisibilityLayer == nullptr)
 	{
 		// Structure to hold one-time initialization
@@ -1078,6 +1093,10 @@ ALandscapeProxy::ALandscapeProxy(const FObjectInitializer& ObjectInitializer)
 
 	static uint32 FrameOffsetForTickIntervalInc = 0;
 	FrameOffsetForTickInterval = FrameOffsetForTickIntervalInc++;
+
+#if WITH_EDITORONLY_DATA
+	LandscapeProxies.Add(this);
+#endif
 }
 
 #if WITH_EDITORONLY_DATA
@@ -1095,12 +1114,14 @@ ALandscape::ALandscape(const FObjectInitializer& ObjectInitializer)
 	bLockLocation = false;
 	WasCompilingShaders = false;
 	LayerContentUpdateModes = 0;
+	bSplineLayerUpdateRequested = false;
 	CombinedLayersWeightmapAllMaterialLayersResource = nullptr;
 	CurrentLayersWeightmapAllMaterialLayersResource = nullptr;
 	WeightmapScratchExtractLayerTextureResource = nullptr;
 	WeightmapScratchPackLayerTextureResource = nullptr;
 	bLandscapeLayersAreInitialized = false;
 	LandscapeEdMode = nullptr;	
+	bIntermediateRender = false;
 	bGrassUpdateEnabled = true;
 #endif // WITH_EDITORONLY_DATA
 }
@@ -1133,16 +1154,13 @@ ALandscape* ALandscapeStreamingProxy::GetLandscapeActor()
 	return LandscapeActor.Get();
 }
 
-#if WITH_EDITOR
 ULandscapeInfo* ALandscapeProxy::CreateLandscapeInfo()
 {
 	ULandscapeInfo* LandscapeInfo = nullptr;
 
-	check(GIsEditor);
 	check(LandscapeGuid.IsValid());
 	UWorld* OwningWorld = GetWorld();
 	check(OwningWorld);
-	check(!OwningWorld->IsGameWorld());
 	
 	auto& LandscapeInfoMap = ULandscapeInfoMap::GetLandscapeInfoMap(OwningWorld);
 	LandscapeInfo = LandscapeInfoMap.Map.FindRef(LandscapeGuid);
@@ -1164,18 +1182,24 @@ ULandscapeInfo* ALandscapeProxy::GetLandscapeInfo() const
 {
 	ULandscapeInfo* LandscapeInfo = nullptr;
 
-	check(GIsEditor);
 	check(LandscapeGuid.IsValid());
 	UWorld* OwningWorld = GetWorld();
 
-	if (OwningWorld != nullptr && !OwningWorld->IsGameWorld())
+	if (OwningWorld != nullptr)
 	{
 		auto& LandscapeInfoMap = ULandscapeInfoMap::GetLandscapeInfoMap(OwningWorld);
 		LandscapeInfo = LandscapeInfoMap.Map.FindRef(LandscapeGuid);
 	}
 	return LandscapeInfo;
 }
-#endif
+
+FTransform ALandscapeProxy::LandscapeActorToWorld() const
+{
+	FTransform TM = ActorToWorld();
+	// Add this proxy landscape section offset to obtain landscape actor transform
+	TM.AddToTranslation(TM.TransformVector(-FVector(LandscapeSectionOffset)));
+	return TM;
+}
 
 ALandscape* ULandscapeComponent::GetLandscapeActor() const
 {
@@ -1320,12 +1344,10 @@ ERuntimeVirtualTextureMainPassType ULandscapeComponent::GetVirtualTextureRenderP
 	return GetLandscapeProxy()->VirtualTextureRenderPassType;
 }
 
-#if WITH_EDITOR
 ULandscapeInfo* ULandscapeComponent::GetLandscapeInfo() const
 {
 	return GetLandscapeProxy()->GetLandscapeInfo();
 }
-#endif
 
 void ULandscapeComponent::BeginDestroy()
 {
@@ -1369,7 +1391,7 @@ FPrimitiveSceneProxy* ULandscapeComponent::CreateSceneProxy()
 {
 	const auto FeatureLevel = GetWorld()->FeatureLevel;
 	FPrimitiveSceneProxy* Proxy = nullptr;
-	if (FeatureLevel >= ERHIFeatureLevel::SM4)
+	if (FeatureLevel >= ERHIFeatureLevel::SM5)
 	{
 		Proxy = new FLandscapeComponentSceneProxy(this);
 	}
@@ -1409,6 +1431,25 @@ FBoxSphereBounds ULandscapeComponent::CalcBounds(const FTransform& LocalToWorld)
 	return FBoxSphereBounds(MyBounds);
 }
 
+static void OnStaticMeshLODDistanceScaleChanged()
+{
+	extern RENDERER_API TAutoConsoleVariable<float> CVarStaticMeshLODDistanceScale;
+
+	static float LastValue = 1.0f;
+
+	if (LastValue != CVarStaticMeshLODDistanceScale.GetValueOnAnyThread())
+	{
+		LastValue = CVarStaticMeshLODDistanceScale.GetValueOnAnyThread();
+
+		for (auto* LandscapeComponent : TObjectRange<ULandscapeComponent>(RF_ClassDefaultObject | RF_ArchetypeObject, true, EInternalObjectFlags::PendingKill))
+		{
+			LandscapeComponent->MarkRenderStateDirty();
+		}
+	}
+}
+
+FAutoConsoleVariableSink OnStaticMeshLODDistanceScaleChangedSink(FConsoleCommandDelegate::CreateStatic(&OnStaticMeshLODDistanceScaleChanged));
+
 void ULandscapeComponent::OnRegister()
 {
 	Super::OnRegister();
@@ -1426,10 +1467,9 @@ void ULandscapeComponent::OnRegister()
 			}
 		}
 
-#if WITH_EDITOR
 		// AActor::GetWorld checks for Unreachable and BeginDestroyed
 		UWorld* World = GetLandscapeProxy()->GetWorld();
-		if (World && !World->IsGameWorld())
+		if (World)
 		{
 			ULandscapeInfo* Info = GetLandscapeInfo();
 			if (Info)
@@ -1437,7 +1477,6 @@ void ULandscapeComponent::OnRegister()
 				Info->RegisterActorComponent(this);
 			}
 		}
-#endif
 	}
 }
 
@@ -1453,7 +1492,6 @@ void ULandscapeComponent::OnUnregister()
 			MaterialInstancesDynamic.Empty();
 		}
 
-#if WITH_EDITOR
 		// AActor::GetWorld checks for Unreachable and BeginDestroyed
 		UWorld* World = GetLandscapeProxy()->GetWorld();
 
@@ -1466,7 +1504,6 @@ void ULandscapeComponent::OnUnregister()
 				Info->UnregisterActorComponent(this);
 			}
 		}
-#endif
 	}
 }
 
@@ -1523,6 +1560,21 @@ const TArray<FWeightmapLayerAllocationInfo>& ULandscapeComponent::GetWeightmapLa
 		if (const FLandscapeLayerComponentData* EditingLayer = GetEditingLayer())
 		{
 			return EditingLayer->WeightmapData.LayerAllocations;
+		}
+	}
+#endif
+
+	return WeightmapLayerAllocations;
+}
+
+TArray<FWeightmapLayerAllocationInfo>& ULandscapeComponent::GetWeightmapLayerAllocations(const FGuid& InLayerGuid)
+{
+#if WITH_EDITORONLY_DATA
+	if (InLayerGuid.IsValid())
+	{
+		if (FLandscapeLayerComponentData* LayerData = GetLayerData(InLayerGuid))
+		{
+			return LayerData->WeightmapData.LayerAllocations;
 		}
 	}
 #endif
@@ -1587,6 +1639,44 @@ const FLandscapeLayerComponentData* ULandscapeComponent::GetEditingLayer() const
 	return CachedEditingLayerData;
 }
 
+void ULandscapeComponent::CopyFinalLayerIntoEditingLayer(FLandscapeEditDataInterface& DataInterface, TSet<UTexture2D*>& ProcessedHeightmaps)
+{
+	Modify();
+	GetLandscapeProxy()->Modify();
+	
+	// Heightmap	
+	UTexture2D* EditingTexture = GetHeightmap(true);
+	if (!ProcessedHeightmaps.Contains(EditingTexture))
+	{
+		DataInterface.CopyTextureFromHeightmap(EditingTexture, this, 0);	
+		ProcessedHeightmaps.Add(EditingTexture);
+	}
+
+	// Weightmap
+	TArray<FWeightmapLayerAllocationInfo>& FinalWeightmapLayerAllocations = GetWeightmapLayerAllocations();
+	TArray<FWeightmapLayerAllocationInfo>& EditingLayerWeightmapLayerAllocations = GetWeightmapLayerAllocations(GetEditingLayerGUID());
+
+	// Add missing Alloc Infos
+	for (const FWeightmapLayerAllocationInfo& FinalAllocInfo : FinalWeightmapLayerAllocations)
+	{
+		int32 Index = EditingLayerWeightmapLayerAllocations.IndexOfByPredicate([&FinalAllocInfo](const FWeightmapLayerAllocationInfo& EditingAllocInfo) { return EditingAllocInfo.LayerInfo == FinalAllocInfo.LayerInfo; });
+		if (Index == INDEX_NONE)
+		{
+			new (EditingLayerWeightmapLayerAllocations) FWeightmapLayerAllocationInfo(FinalAllocInfo.LayerInfo);
+		}
+	}
+
+	const bool bEditingWeighmaps = true;
+	const bool bSaveToTransactionBuffer = true;
+	ReallocateWeightmaps(&DataInterface, bEditingWeighmaps, bSaveToTransactionBuffer);
+
+	TArray<UTexture2D*>& EditingWeightmapTextures = GetWeightmapTextures(true);
+	for (const FWeightmapLayerAllocationInfo& AllocInfo : EditingLayerWeightmapLayerAllocations)
+	{
+		DataInterface.CopyTextureFromWeightmap(EditingWeightmapTextures[AllocInfo.WeightmapTextureIndex], AllocInfo.WeightmapTextureChannel, this, AllocInfo.LayerInfo, 0);
+	}
+}
+
 FGuid ULandscapeComponent::GetEditingLayerGUID() const
 {
 	ALandscape* Landscape = GetLandscapeActor();
@@ -1622,6 +1712,8 @@ void ULandscapeComponent::AddLayerData(const FGuid& InLayerGuid, const FLandscap
 	check(!LandscapeEditingLayer.IsValid());
 	FLandscapeLayerComponentData& Data = LayersData.FindOrAdd(InLayerGuid);
 	Data = InData;
+	CachedEditingLayer.Invalidate();
+	CachedEditingLayerData = nullptr;
 }
 
 void ULandscapeComponent::AddDefaultLayerData(const FGuid& InLayerGuid, const TArray<ULandscapeComponent*>& InComponentsUsingHeightmap, TMap<UTexture2D*, UTexture2D*>& InOutCreatedHeightmapTextures)
@@ -1707,6 +1799,8 @@ void ULandscapeComponent::RemoveLayerData(const FGuid& InLayerGuid)
 	Modify();
 	check(!LandscapeEditingLayer.IsValid());
 	LayersData.Remove(InLayerGuid);
+	CachedEditingLayer.Invalidate();
+	CachedEditingLayerData = nullptr;
 }
 
 void ULandscapeComponent::SetHeightmap(UTexture2D* NewHeightmap)
@@ -1789,16 +1883,21 @@ void ULandscapeComponent::SetWeightmapTexturesUsage(const TArray<ULandscapeWeigh
 void ALandscapeProxy::PostRegisterAllComponents()
 {
 	Super::PostRegisterAllComponents();
-
-#if WITH_EDITOR
-	// Game worlds don't have landscape infos
-	if (!GetWorld()->IsGameWorld() && !IsPendingKillPending())
+	ULandscapeInfo* LandscapeInfo = nullptr;
+	if (!IsPendingKillPending())
 	{
 		// Duplicated Landscapes don't have a valid guid until PostEditImport is called, we'll register then
 		if (LandscapeGuid.IsValid())
 		{
-			ULandscapeInfo* LandscapeInfo = CreateLandscapeInfo();
-
+			LandscapeInfo = CreateLandscapeInfo();
+		}
+	}
+#if WITH_EDITOR
+	// Game worlds don't have landscape infos
+	if (!GetWorld()->IsGameWorld() && !IsPendingKillPending())
+	{
+		if (LandscapeGuid.IsValid())
+		{
 			LandscapeInfo->FixupProxiesTransform();
 		}
 	}
@@ -1937,6 +2036,16 @@ void ALandscapeProxy::PreSave(const class ITargetPlatform* TargetPlatform)
 	if (!HasAnyFlags(RF_ClassDefaultObject))
 	{
 		bHasLandscapeGrass = LandscapeComponents.ContainsByPredicate([](ULandscapeComponent* Component) { return Component->MaterialHasGrass(); });
+
+		UpdateGrassData();
+	}
+
+	if (ALandscape* Landscape = GetLandscapeActor())
+	{
+		for (ULandscapeComponent* LandscapeComponent : LandscapeComponents)
+		{
+			Landscape->ClearDirtyData(LandscapeComponent);
+		}
 	}
 #endif
 }
@@ -2275,6 +2384,12 @@ void ALandscapeProxy::PostLoad()
 		BodyInstance.FixupData(this);
 	}
 
+	if ((GetLinker() && (GetLinker()->UE4Ver() < VER_UE4_LANDSCAPE_COMPONENT_LAZY_REFERENCES)) ||
+		LandscapeComponents.Num() != CollisionComponents.Num() ||
+		LandscapeComponents.ContainsByPredicate([](ULandscapeComponent* Comp) { return ((Comp != nullptr) && !Comp->CollisionComponent.IsValid()); }))
+	{
+		CreateLandscapeInfo();
+	}
 #if WITH_EDITOR
 	if (GIsEditor && !GetWorld()->IsGameWorld())
 	{
@@ -2283,7 +2398,6 @@ void ALandscapeProxy::PostLoad()
 			LandscapeComponents.ContainsByPredicate([](ULandscapeComponent* Comp) { return ((Comp != nullptr) && !Comp->CollisionComponent.IsValid()); }))
 		{
 			// Need to clean up invalid collision components
-			CreateLandscapeInfo();
 			RecreateCollisionComponents();
 		}
 	}
@@ -2503,13 +2617,6 @@ void ALandscapeProxy::FixupSharedData(ALandscape* Landscape)
 	}
 }
 
-FTransform ALandscapeProxy::LandscapeActorToWorld() const
-{
-	FTransform TM = ActorToWorld();
-	// Add this proxy landscape section offset to obtain landscape actor transform
-	TM.AddToTranslation(TM.TransformVector(-FVector(LandscapeSectionOffset)));
-	return TM;
-}
 
 void ALandscapeProxy::SetAbsoluteSectionBase(FIntPoint InSectionBase)
 {
@@ -2753,192 +2860,6 @@ void ULandscapeInfo::ForAllLandscapeProxies(TFunctionRef<void(ALandscapeProxy*)>
 	}
 }
 
-void ULandscapeInfo::RegisterActor(ALandscapeProxy* Proxy, bool bMapCheck)
-{
-	// do not pass here invalid actors
-	checkSlow(Proxy);
-	check(Proxy->GetLandscapeGuid().IsValid());
-	UWorld* OwningWorld = Proxy->GetWorld();
-
-	// in case this Info object is not initialized yet
-	// initialized it with properties from passed actor
-	if (LandscapeGuid.IsValid() == false ||
-		(GetLandscapeProxy() == nullptr && ensure(LandscapeGuid == Proxy->GetLandscapeGuid())))
-	{
-		LandscapeGuid = Proxy->GetLandscapeGuid();
-		ComponentSizeQuads = Proxy->ComponentSizeQuads;
-		ComponentNumSubsections = Proxy->NumSubsections;
-		SubsectionSizeQuads = Proxy->SubsectionSizeQuads;
-		DrawScale = Proxy->GetRootComponent() != nullptr ? Proxy->GetRootComponent()->RelativeScale3D : FVector(100.0f);
-	}
-
-	// check that passed actor matches all shared parameters
-	check(LandscapeGuid == Proxy->GetLandscapeGuid());
-	check(ComponentSizeQuads == Proxy->ComponentSizeQuads);
-	check(ComponentNumSubsections == Proxy->NumSubsections);
-	check(SubsectionSizeQuads == Proxy->SubsectionSizeQuads);
-
-	if (Proxy->GetRootComponent() != nullptr && !DrawScale.Equals(Proxy->GetRootComponent()->RelativeScale3D))
-	{
-		UE_LOG(LogLandscape, Warning, TEXT("Landscape proxy (%s) scale (%s) does not match to main actor scale (%s)."),
-			*Proxy->GetName(), *Proxy->GetRootComponent()->RelativeScale3D.ToCompactString(), *DrawScale.ToCompactString());
-	}
-
-	// register
-	if (ALandscape* Landscape = Cast<ALandscape>(Proxy))
-	{
-		checkf(!LandscapeActor || LandscapeActor == Landscape, TEXT("Multiple landscapes with the same GUID detected: %s vs %s"), *LandscapeActor->GetPathName(), *Landscape->GetPathName());
-		LandscapeActor = Landscape;
-		// In world composition user is not allowed to move landscape in editor, only through WorldBrowser 
-		LandscapeActor->bLockLocation = OwningWorld != nullptr ? OwningWorld->WorldComposition != nullptr : false;
-
-		// update proxies reference actor
-		for (ALandscapeStreamingProxy* StreamingProxy : Proxies)
-		{
-			StreamingProxy->LandscapeActor = LandscapeActor;
-			StreamingProxy->FixupSharedData(Landscape);
-		}
-	}
-	else
-	{
-		ALandscapeStreamingProxy* StreamingProxy = CastChecked<ALandscapeStreamingProxy>(Proxy);
-
-		Proxies.Add(StreamingProxy);
-		StreamingProxy->LandscapeActor = LandscapeActor;
-		StreamingProxy->FixupSharedData(LandscapeActor.Get());
-	}
-
-	if (LandscapeActor && LandscapeActor->HasLayersContent())
-	{
-		LandscapeActor->RequestLayersInitialization();		
-	}
-
-	UpdateLayerInfoMap(Proxy);
-	UpdateAllAddCollisions();
-
-	//
-	// add proxy components to the XY map
-	//
-	for (int32 CompIdx = 0; CompIdx < Proxy->LandscapeComponents.Num(); ++CompIdx)
-	{
-		RegisterActorComponent(Proxy->LandscapeComponents[CompIdx], bMapCheck);
-	}
-}
-
-void ULandscapeInfo::UnregisterActor(ALandscapeProxy* Proxy)
-{
-	if (ALandscape* Landscape = Cast<ALandscape>(Proxy))
-	{
-		// Note: UnregisterActor sometimes gets triggered twice, e.g. it has been observed to happen during redo
-		// Note: In some cases LandscapeActor could be updated to a new landscape actor before the old landscape is unregistered/destroyed
-		// e.g. this has been observed when merging levels in the editor
-
-		if (LandscapeActor.Get() == Landscape)
-		{
-		LandscapeActor = nullptr;
-		}
-
-		// update proxies reference to landscape actor
-		for (ALandscapeStreamingProxy* StreamingProxy : Proxies)
-		{
-			StreamingProxy->LandscapeActor = LandscapeActor;
-		}
-	}
-	else
-	{
-		ALandscapeStreamingProxy* StreamingProxy = CastChecked<ALandscapeStreamingProxy>(Proxy);
-		Proxies.Remove(StreamingProxy);
-		StreamingProxy->LandscapeActor = nullptr;
-	}
-
-	// remove proxy components from the XY map
-	for (int32 CompIdx = 0; CompIdx < Proxy->LandscapeComponents.Num(); ++CompIdx)
-	{
-		ULandscapeComponent* Component = Proxy->LandscapeComponents[CompIdx];
-		if (Component) // When a landscape actor is being GC'd it's possible the components were already GC'd and are null
-		{
-			UnregisterActorComponent(Component);
-		}
-	}
-	XYtoComponentMap.Compact();
-
-	UpdateLayerInfoMap();
-	UpdateAllAddCollisions();
-}
-
-void ULandscapeInfo::RegisterActorComponent(ULandscapeComponent* Component, bool bMapCheck)
-{
-	// Do not register components which are not part of the world
-	if (Component == nullptr ||
-		Component->IsRegistered() == false)
-	{
-		return;
-	}
-
-	check(Component);
-
-	FIntPoint ComponentKey = Component->GetSectionBase() / Component->ComponentSizeQuads;
-	auto RegisteredComponent = XYtoComponentMap.FindRef(ComponentKey);
-
-	if (RegisteredComponent != Component)
-	{
-		if (RegisteredComponent == nullptr)
-		{
-			XYtoComponentMap.Add(ComponentKey, Component);
-		}
-		else if (bMapCheck)
-		{
-			ALandscapeProxy* OurProxy = Component->GetLandscapeProxy();
-			ALandscapeProxy* ExistingProxy = RegisteredComponent->GetLandscapeProxy();
-			FFormatNamedArguments Arguments;
-			Arguments.Add(TEXT("ProxyName1"), FText::FromString(OurProxy->GetName()));
-			Arguments.Add(TEXT("LevelName1"), FText::FromString(OurProxy->GetLevel()->GetOutermost()->GetName()));
-			Arguments.Add(TEXT("ProxyName2"), FText::FromString(ExistingProxy->GetName()));
-			Arguments.Add(TEXT("LevelName2"), FText::FromString(ExistingProxy->GetLevel()->GetOutermost()->GetName()));
-			Arguments.Add(TEXT("XLocation"), Component->GetSectionBase().X);
-			Arguments.Add(TEXT("YLocation"), Component->GetSectionBase().Y);
-			FMessageLog("MapCheck").Warning()
-				->AddToken(FUObjectToken::Create(OurProxy))
-				->AddToken(FTextToken::Create(FText::Format(LOCTEXT("MapCheck_Message_LandscapeComponentPostLoad_Warning", "Landscape {ProxyName1} of {LevelName1} has overlapping render components with {ProxyName2} of {LevelName2} at location ({XLocation}, {YLocation})."), Arguments)))
-				->AddToken(FActionToken::Create(LOCTEXT("MapCheck_RemoveDuplicateLandscapeComponent", "Delete Duplicate"), LOCTEXT("MapCheck_RemoveDuplicateLandscapeComponentDesc", "Deletes the duplicate landscape component."), FOnActionTokenExecuted::CreateUObject(OurProxy, &ALandscapeProxy::RemoveOverlappingComponent, Component), true))
-				->AddToken(FMapErrorToken::Create(FMapErrors::LandscapeComponentPostLoad_Warning));
-
-			// Show MapCheck window
-			FMessageLog("MapCheck").Open(EMessageSeverity::Warning);
-		}
-	}
-
-	// Update Selected Components/Regions
-	if (Component->EditToolRenderData.SelectedType)
-	{
-		if (Component->EditToolRenderData.SelectedType & FLandscapeEditToolRenderData::ST_COMPONENT)
-		{
-			SelectedComponents.Add(Component);
-		}
-		else if (Component->EditToolRenderData.SelectedType & FLandscapeEditToolRenderData::ST_REGION)
-		{
-			SelectedRegionComponents.Add(Component);
-		}
-	}
-}
-
-void ULandscapeInfo::UnregisterActorComponent(ULandscapeComponent* Component)
-{
-	if (ensure(Component))
-	{
-	FIntPoint ComponentKey = Component->GetSectionBase() / Component->ComponentSizeQuads;
-	auto RegisteredComponent = XYtoComponentMap.FindRef(ComponentKey);
-
-	if (RegisteredComponent == Component)
-	{
-		XYtoComponentMap.Remove(ComponentKey);
-	}
-
-	SelectedComponents.Remove(Component);
-	SelectedRegionComponents.Remove(Component);
-}
-}
-
 void ULandscapeInfo::Reset()
 {
 	LandscapeActor.Reset();
@@ -3076,6 +2997,269 @@ void ULandscapeInfo::RecreateLandscapeInfo(UWorld* InWorld, bool bMapCheck)
 
 
 #endif
+
+void ULandscapeInfo::RegisterActor(ALandscapeProxy* Proxy, bool bMapCheck)
+{
+#if WITH_EDITOR
+	if (!Proxy->GetWorld()->IsGameWorld())
+	{
+		// do not pass here invalid actors
+		checkSlow(Proxy);
+		check(Proxy->GetLandscapeGuid().IsValid());
+		UWorld* OwningWorld = Proxy->GetWorld();
+
+		// in case this Info object is not initialized yet
+		// initialized it with properties from passed actor
+		if (LandscapeGuid.IsValid() == false ||
+			(GetLandscapeProxy() == nullptr && ensure(LandscapeGuid == Proxy->GetLandscapeGuid())))
+		{
+			LandscapeGuid = Proxy->GetLandscapeGuid();
+			ComponentSizeQuads = Proxy->ComponentSizeQuads;
+			ComponentNumSubsections = Proxy->NumSubsections;
+			SubsectionSizeQuads = Proxy->SubsectionSizeQuads;
+			DrawScale = Proxy->GetRootComponent() != nullptr ? Proxy->GetRootComponent()->GetRelativeScale3D() : FVector(100.0f);
+		}
+
+		// check that passed actor matches all shared parameters
+		check(LandscapeGuid == Proxy->GetLandscapeGuid());
+		check(ComponentSizeQuads == Proxy->ComponentSizeQuads);
+		check(ComponentNumSubsections == Proxy->NumSubsections);
+		check(SubsectionSizeQuads == Proxy->SubsectionSizeQuads);
+
+		if (Proxy->GetRootComponent() != nullptr && !DrawScale.Equals(Proxy->GetRootComponent()->GetRelativeScale3D()))
+		{
+			UE_LOG(LogLandscape, Warning, TEXT("Landscape proxy (%s) scale (%s) does not match to main actor scale (%s)."),
+				*Proxy->GetName(), *Proxy->GetRootComponent()->GetRelativeScale3D().ToCompactString(), *DrawScale.ToCompactString());
+		}
+
+		// register
+		if (ALandscape* Landscape = Cast<ALandscape>(Proxy))
+		{
+			checkf(!LandscapeActor || LandscapeActor == Landscape, TEXT("Multiple landscapes with the same GUID detected: %s vs %s"), *LandscapeActor->GetPathName(), *Landscape->GetPathName());
+			LandscapeActor = Landscape;
+			// In world composition user is not allowed to move landscape in editor, only through WorldBrowser 
+			LandscapeActor->bLockLocation = OwningWorld != nullptr ? OwningWorld->WorldComposition != nullptr : false;
+
+			// update proxies reference actor
+			for (ALandscapeStreamingProxy* StreamingProxy : Proxies)
+			{
+				StreamingProxy->LandscapeActor = LandscapeActor;
+				StreamingProxy->FixupSharedData(Landscape);
+			}
+		}
+		else
+		{
+			// Insert Proxies in a sorted fashion for generating determisnitic results in the Layer system
+			ALandscapeStreamingProxy* StreamingProxy = CastChecked<ALandscapeStreamingProxy>(Proxy);
+			if (!Proxies.Contains(Proxy))
+			{
+				uint32 InsertIndex = Algo::LowerBound(Proxies, Proxy, [](ALandscapeProxy* A, ALandscapeProxy* B)
+				{
+					FIntPoint SectionBaseA = A->GetSectionBaseOffset();
+					FIntPoint SectionBaseB = B->GetSectionBaseOffset();
+
+					if (SectionBaseA.X != SectionBaseB.X)
+					{
+						return SectionBaseA.X < SectionBaseB.X;
+					}
+
+					return SectionBaseA.Y < SectionBaseB.Y;
+				});
+
+				Proxies.Insert(StreamingProxy, InsertIndex);
+			}
+			StreamingProxy->LandscapeActor = LandscapeActor;
+			StreamingProxy->FixupSharedData(LandscapeActor.Get());
+		}
+
+		if (LandscapeActor && LandscapeActor->HasLayersContent())
+		{
+			const bool bInRequestContentUpdate = false;
+			LandscapeActor->RequestLayersInitialization(bInRequestContentUpdate);
+		}
+
+		UpdateLayerInfoMap(Proxy);
+		UpdateAllAddCollisions();
+	}
+#endif
+	//
+	// add proxy components to the XY map
+	//
+	for (int32 CompIdx = 0; CompIdx < Proxy->LandscapeComponents.Num(); ++CompIdx)
+	{
+		RegisterActorComponent(Proxy->LandscapeComponents[CompIdx], bMapCheck);
+	}
+
+	for (ULandscapeHeightfieldCollisionComponent* CollComp: Proxy->CollisionComponents)
+	{
+		RegisterCollisionComponent(CollComp);
+	}
+}
+
+void ULandscapeInfo::UnregisterActor(ALandscapeProxy* Proxy)
+{
+#if WITH_EDITOR
+	if (ALandscape* Landscape = Cast<ALandscape>(Proxy))
+	{
+		// Note: UnregisterActor sometimes gets triggered twice, e.g. it has been observed to happen during redo
+		// Note: In some cases LandscapeActor could be updated to a new landscape actor before the old landscape is unregistered/destroyed
+		// e.g. this has been observed when merging levels in the editor
+
+		if (LandscapeActor.Get() == Landscape)
+		{
+			LandscapeActor = nullptr;
+		}
+
+		// update proxies reference to landscape actor
+		for (ALandscapeStreamingProxy* StreamingProxy : Proxies)
+		{
+			StreamingProxy->LandscapeActor = LandscapeActor;
+		}
+	}
+	else
+	{
+		ALandscapeStreamingProxy* StreamingProxy = CastChecked<ALandscapeStreamingProxy>(Proxy);
+		Proxies.Remove(StreamingProxy);
+		StreamingProxy->LandscapeActor = nullptr;
+	}
+#endif
+
+	// remove proxy components from the XY map
+	for (int32 CompIdx = 0; CompIdx < Proxy->LandscapeComponents.Num(); ++CompIdx)
+	{
+		ULandscapeComponent* Component = Proxy->LandscapeComponents[CompIdx];
+		if (Component) // When a landscape actor is being GC'd it's possible the components were already GC'd and are null
+		{
+			UnregisterActorComponent(Component);
+		}
+	}
+	XYtoComponentMap.Compact();
+
+	for (ULandscapeHeightfieldCollisionComponent* CollComp : Proxy->CollisionComponents)
+	{
+		if (CollComp)
+		{
+			UnregisterCollisionComponent(CollComp);
+		}
+	}
+	XYtoCollisionComponentMap.Compact();
+
+#if WITH_EDITOR
+	UpdateLayerInfoMap();
+	UpdateAllAddCollisions();
+#endif
+}
+
+void ULandscapeInfo::RegisterCollisionComponent(ULandscapeHeightfieldCollisionComponent* Component)
+{
+	if (Component == nullptr || !Component->IsRegistered())
+	{
+		return;
+	}
+
+	FIntPoint ComponentKey = Component->GetSectionBase() / Component->CollisionSizeQuads;
+	auto RegisteredComponent = XYtoCollisionComponentMap.FindRef(ComponentKey);
+
+	if (RegisteredComponent != Component)
+	{
+		if (RegisteredComponent == nullptr)
+		{
+			XYtoCollisionComponentMap.Add(ComponentKey, Component);
+		}
+	}
+}
+
+void ULandscapeInfo::UnregisterCollisionComponent(ULandscapeHeightfieldCollisionComponent* Component)
+{
+	if (ensure(Component))
+	{
+		FIntPoint ComponentKey = Component->GetSectionBase() / Component->CollisionSizeQuads;
+		auto RegisteredComponent = XYtoCollisionComponentMap.FindRef(ComponentKey);
+
+		if (RegisteredComponent == Component)
+		{
+			XYtoCollisionComponentMap.Remove(ComponentKey);
+		}
+	}
+}
+
+void ULandscapeInfo::RegisterActorComponent(ULandscapeComponent* Component, bool bMapCheck)
+{
+	// Do not register components which are not part of the world
+	if (Component == nullptr ||
+		Component->IsRegistered() == false)
+	{
+		return;
+	}
+
+	check(Component);
+
+	FIntPoint ComponentKey = Component->GetSectionBase() / Component->ComponentSizeQuads;
+	auto RegisteredComponent = XYtoComponentMap.FindRef(ComponentKey);
+
+	if (RegisteredComponent != Component)
+	{
+		if (RegisteredComponent == nullptr)
+		{
+			XYtoComponentMap.Add(ComponentKey, Component);
+		}
+		else if (bMapCheck)
+		{
+#if WITH_EDITOR
+			ALandscapeProxy* OurProxy = Component->GetLandscapeProxy();
+			ALandscapeProxy* ExistingProxy = RegisteredComponent->GetLandscapeProxy();
+			FFormatNamedArguments Arguments;
+			Arguments.Add(TEXT("ProxyName1"), FText::FromString(OurProxy->GetName()));
+			Arguments.Add(TEXT("LevelName1"), FText::FromString(OurProxy->GetLevel()->GetOutermost()->GetName()));
+			Arguments.Add(TEXT("ProxyName2"), FText::FromString(ExistingProxy->GetName()));
+			Arguments.Add(TEXT("LevelName2"), FText::FromString(ExistingProxy->GetLevel()->GetOutermost()->GetName()));
+			Arguments.Add(TEXT("XLocation"), Component->GetSectionBase().X);
+			Arguments.Add(TEXT("YLocation"), Component->GetSectionBase().Y);
+			FMessageLog("MapCheck").Warning()
+				->AddToken(FUObjectToken::Create(OurProxy))
+				->AddToken(FTextToken::Create(FText::Format(LOCTEXT("MapCheck_Message_LandscapeComponentPostLoad_Warning", "Landscape {ProxyName1} of {LevelName1} has overlapping render components with {ProxyName2} of {LevelName2} at location ({XLocation}, {YLocation})."), Arguments)))
+				->AddToken(FActionToken::Create(LOCTEXT("MapCheck_RemoveDuplicateLandscapeComponent", "Delete Duplicate"), LOCTEXT("MapCheck_RemoveDuplicateLandscapeComponentDesc", "Deletes the duplicate landscape component."), FOnActionTokenExecuted::CreateUObject(OurProxy, &ALandscapeProxy::RemoveOverlappingComponent, Component), true))
+				->AddToken(FMapErrorToken::Create(FMapErrors::LandscapeComponentPostLoad_Warning));
+
+			// Show MapCheck window
+			FMessageLog("MapCheck").Open(EMessageSeverity::Warning);
+#endif
+		}
+	}
+
+
+#if WITH_EDITOR
+	// Update Selected Components/Regions
+	if (Component->EditToolRenderData.SelectedType)
+	{
+		if (Component->EditToolRenderData.SelectedType & FLandscapeEditToolRenderData::ST_COMPONENT)
+		{
+			SelectedComponents.Add(Component);
+		}
+		else if (Component->EditToolRenderData.SelectedType & FLandscapeEditToolRenderData::ST_REGION)
+		{
+			SelectedRegionComponents.Add(Component);
+		}
+	}
+#endif
+}
+
+void ULandscapeInfo::UnregisterActorComponent(ULandscapeComponent* Component)
+{
+	if (ensure(Component))
+	{
+		FIntPoint ComponentKey = Component->GetSectionBase() / Component->ComponentSizeQuads;
+		auto RegisteredComponent = XYtoComponentMap.FindRef(ComponentKey);
+
+		if (RegisteredComponent == Component)
+		{
+			XYtoComponentMap.Remove(ComponentKey);
+		}
+
+		SelectedComponents.Remove(Component);
+		SelectedRegionComponents.Remove(Component);
+	}
+}
 
 void ULandscapeComponent::PostInitProperties()
 {
@@ -3262,6 +3446,10 @@ ALandscapeProxy::~ALandscapeProxy()
 	TotalTexturesToStreamForVisibleGrassMapRender -= NumTexturesToStreamForVisibleGrassMapRender;
 	NumTexturesToStreamForVisibleGrassMapRender = 0;
 #endif
+
+#if WITH_EDITORONLY_DATA
+	LandscapeProxies.Remove(this);
+#endif
 }
 
 //
@@ -3270,7 +3458,7 @@ ALandscapeProxy::~ALandscapeProxy()
 ALandscapeMeshProxyActor::ALandscapeMeshProxyActor(const FObjectInitializer& ObjectInitializer)
 : Super(ObjectInitializer)
 {
-	bCanBeDamaged = false;
+	SetCanBeDamaged(false);
 
 	LandscapeMeshProxyComponent = CreateDefaultSubobject<ULandscapeMeshProxyComponent>(TEXT("LandscapeMeshProxyComponent0"));
 	LandscapeMeshProxyComponent->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
@@ -3367,7 +3555,7 @@ void ALandscapeProxy::UpdateBakedTextures()
 {
 	// See if we can render
 	UWorld* World = GetWorld();
-	if (!GIsEditor || GUsingNullRHI || !World || World->IsGameWorld() || World->FeatureLevel < ERHIFeatureLevel::SM4)
+	if (!GIsEditor || GUsingNullRHI || !World || World->IsGameWorld() || World->FeatureLevel < ERHIFeatureLevel::SM5)
 	{
 		return;
 	}

@@ -39,6 +39,8 @@ public:
 		return TakeMetaData;
 	}
 
+	FFrameRate GetFrameRate() const;
+
 	bool Reviewing() const;
 
 	bool Recording() const;
@@ -70,20 +72,21 @@ private:
 	EVisibility GetCountdownVisibility() const;
 	FText GetCountdownText() const;
 
-	FText GetDurationText() const;
-	void SetDurationText(const FText& InNewText, ETextCommit::Type);
+	FText GetTimecodeText() const;
 
 	FText GetUserDescriptionText() const;
 	void SetUserDescriptionText(const FText& InNewText, ETextCommit::Type);
 
+	FReply SetFrameRate();
 	FText GetFrameRateText() const;
-	FFrameRate GetFrameRate() const;
+	FText GetFrameRateTooltipText() const;
 	bool IsFrameRateCompatible(FFrameRate InFrameRate) const;
 
 	FText GetSlateText() const;
 	void SetSlateText(const FText& InNewText, ETextCommit::Type InCommitType);
 
 	FText GetTimestampText() const;
+	FText GetTimestampTooltipText() const;
 
 	int32 GetTakeNumber() const;
 

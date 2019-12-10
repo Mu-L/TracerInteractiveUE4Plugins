@@ -73,7 +73,7 @@ void SControlRigEditModeTools::Construct(const FArguments& InArgs, UWorld* InWor
 		+ SScrollBox::Slot()
 		[
 			SNew(SVerticalBox)
-
+			/*
 			+ SVerticalBox::Slot()
 			.AutoHeight()
 			[
@@ -87,6 +87,7 @@ void SControlRigEditModeTools::Construct(const FArguments& InArgs, UWorld* InWor
 					SAssignNew(ControlPicker, SControlPicker, InWorld)
 				]
 			]
+			*/
 
 			+SVerticalBox::Slot()
 			.AutoHeight()
@@ -95,13 +96,6 @@ void SControlRigEditModeTools::Construct(const FArguments& InArgs, UWorld* InWor
 			]
 		]
 	];
-
-	// Bind notification when edit mode selection changes, so we can update picker
-	FControlRigEditMode* ControlRigEditMode = static_cast<FControlRigEditMode*>(GLevelEditorModeTools().GetActiveMode(FControlRigEditMode::ModeName));
-	if (ControlRigEditMode)
-	{
-		ControlRigEditMode->OnModified().AddSP(this, &SControlRigEditModeTools::HandleModelModified);
-	}	
 }
 
 void SControlRigEditModeTools::SetDetailsObjects(const TArray<TWeakObjectPtr<>>& InObjects)
@@ -119,10 +113,8 @@ void SControlRigEditModeTools::SetDetailsObjects(const TArray<TWeakObjectPtr<>>&
 		}
 	}
 
-	ControlPicker->SetControlRig(Rig);
+	//ControlPicker->SetControlRig(Rig);
 
-	// Expand when you have a rig, collapse when set to null
-	PickerExpander->SetExpanded(Rig != nullptr);
 }
 
 void SControlRigEditModeTools::SetSequencer(TSharedPtr<ISequencer> InSequencer)
@@ -217,7 +209,8 @@ bool SControlRigEditModeTools::ShouldShowPropertyOnDetailCustomization(const FPr
 		}
 	}
 
-	return ShouldPropertyBeVisible(InPropertyAndParent.Property) || (InPropertyAndParent.ParentProperty && ShouldPropertyBeVisible(*InPropertyAndParent.ParentProperty));
+	return ShouldPropertyBeVisible(InPropertyAndParent.Property) || 
+		(InPropertyAndParent.ParentProperties.Num() > 0 && ShouldPropertyBeVisible(*InPropertyAndParent.ParentProperties[0]));
 }
 
 bool SControlRigEditModeTools::IsReadOnlyPropertyOnDetailCustomization(const FPropertyAndParent& InPropertyAndParent) const
@@ -245,12 +238,13 @@ bool SControlRigEditModeTools::IsReadOnlyPropertyOnDetailCustomization(const FPr
 		}
 	}
 
-	return !(ShouldPropertyBeEnabled(InPropertyAndParent.Property) || (InPropertyAndParent.ParentProperty && ShouldPropertyBeEnabled(*InPropertyAndParent.ParentProperty)));
+	return !(ShouldPropertyBeEnabled(InPropertyAndParent.Property) || 
+		(InPropertyAndParent.ParentProperties.Num() > 0 && ShouldPropertyBeEnabled(*InPropertyAndParent.ParentProperties[0])));
 }
 
 static bool bPickerChangingSelection = false;
 
-void SControlRigEditModeTools::OnManipulatorsPicked(const TArray<FString>& Manipulators)
+void SControlRigEditModeTools::OnManipulatorsPicked(const TArray<FName>& Manipulators)
 {
 	FControlRigEditMode* ControlRigEditMode = static_cast<FControlRigEditMode*>(GLevelEditorModeTools().GetActiveMode(FControlRigEditMode::ModeName));
 	if (ControlRigEditMode)
@@ -258,36 +252,8 @@ void SControlRigEditModeTools::OnManipulatorsPicked(const TArray<FString>& Manip
 		if (!bPickerChangingSelection)
 		{
 			TGuardValue<bool> SelectGuard(bPickerChangingSelection, true);
-			ControlRigEditMode->ClearControlSelection();
-			ControlRigEditMode->SetControlSelection(Manipulators, true);
-		}
-	}
-}
-
-void SControlRigEditModeTools::HandleModelModified(const UControlRigModel* InModel, EControlRigModelNotifType InType, const void* InPayload)
-{
-	if (bPickerChangingSelection)
-	{
-		return;
-	}
-
-	TGuardValue<bool> SelectGuard(bPickerChangingSelection, true);
-	switch (InType)
-	{
-		case EControlRigModelNotifType::NodeSelected:
-		case EControlRigModelNotifType::NodeDeselected:
-		{
-			const FControlRigModelNode* Node = (const FControlRigModelNode*)InPayload;
-			if (Node)
-			{
-				// those are not yet implemented yet
-				// ControlPicker->SelectManipulator(Node->Name, InType == EControlRigModelNotifType::NodeSelected);
-			}
-			break;
-		}
-		default:
-		{
-			break;
+			ControlRigEditMode->ClearRigElementSelection((uint32)ERigElementType::Control);
+			ControlRigEditMode->SetRigElementSelection(ERigElementType::Control, Manipulators, true);
 		}
 	}
 }

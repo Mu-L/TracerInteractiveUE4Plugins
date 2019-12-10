@@ -13,10 +13,38 @@
 #include "DataPrepOperationsLibrary.generated.h"
 
 class AActor;
+class IMeshBuilderModule;
 class UMaterialInterface;
 class UStaticMesh;
 
 DECLARE_LOG_CATEGORY_EXTERN( LogDataprep, Log, All );
+
+namespace DataprepOperationsLibraryUtil
+{
+	class FStaticMeshBuilder
+	{
+	public:
+		FStaticMeshBuilder(const TSet<UStaticMesh*>& InStaticMeshes);
+		~FStaticMeshBuilder();
+	private:
+		TArray<UStaticMesh*> StaticMeshes;
+	};
+
+	/*
+	 * Builds render data of a set of static meshes.
+	 * @param StaticMeshes	Set of static meshes to build if render data is missing or a forced build is required
+	 * @param bForceBuild	Indicates if all static meshes should be built or only the incomplete ones
+	 * @returns the array of static meshes which have actually been built
+	 */
+	TArray<UStaticMesh*> BuildStaticMeshes( const TSet<UStaticMesh*>& StaticMeshes, bool bForceBuild = false );
+
+	/*
+	 * Find the set of static meshes in or referenced by a given array of objects.
+	 * @param SelectedObjects	Array of UObjects to go through
+	 * @returns a set of static meshes
+	 */
+	TSet<UStaticMesh*> GetSelectedMeshes(const TArray<UObject*>& SelectedObjects);
+}
 
 /*
  * Simple struct for the table row used for UDataprepOperationsLibrary::SubstituteMaterials
@@ -26,17 +54,38 @@ struct FMaterialSubstitutionDataTable : public FTableRowBase
 {
 	GENERATED_BODY()
 
-	/** Tag specified in the table */
+	/** Name of the material(s) to search for. Wildcard is supported */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "MaterialSubstitutionTable")
 	FString SearchString;
 
-	/** Developer comment clarifying the usage of a particular tag, not user facing */
+	/** Type of matching to perform with SearchString string */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "MaterialSubstitutionTable")
 	EEditorScriptingStringMatchType StringMatch;
 
-	/** Developer comment clarifying the usage of a particular tag, not user facing */
+	/** Material to use for the substitution */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "MaterialSubstitutionTable")
 	UMaterialInterface* MaterialReplacement;
+};
+
+/*
+* Simple struct for the table row used for UDataprepOperationsLibrary::SubstituteMaterials
+*/
+USTRUCT(BlueprintType)
+struct FMeshSubstitutionDataTable : public FTableRowBase
+{
+	GENERATED_BODY()
+
+	/** Name of the mesh(es) to search for. Wildcard is supported */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "MeshSubstitutionTable")
+	FString SearchString;
+
+	/** Type of matching to perform with SearchString string */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "MeshSubstitutionTable")
+	EEditorScriptingStringMatchType StringMatch;
+
+	/** Mesh to use for the substitution */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "MeshSubstitutionTable")
+	UStaticMesh* MeshReplacement;
 };
 
 /*
@@ -107,7 +156,7 @@ public:
 	 * Calls UEditorStaticMeshLibrary::SetLods on each static mesh of the resulting array.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Dataprep | Operation")
-	static void SetLods(const TArray<UObject*>& SelectedObjects, const FEditorScriptingMeshReductionOptions& ReductionOptions);
+	static void SetLods(const TArray<UObject*>& SelectedObjects, const FEditorScriptingMeshReductionOptions& ReductionOptions, TArray<UObject*>& ModifiedObjects);
 
 	/**
 	 * Set one simple collision of the given shape type on the static meshes contained in the
@@ -123,7 +172,7 @@ public:
 	 * Calls UEditorStaticMeshLibrary::AddSimpleCollisions on each static mesh of the resulting array.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Dataprep | Operation")
-	static void SetSimpleCollision(const TArray<UObject*>& SelectedObjects, const EScriptingCollisionShapeType ShapeType);
+	static void SetSimpleCollision(const TArray<UObject*>& SelectedObjects, const EScriptingCollisionShapeType ShapeType, TArray<UObject*>& ModifiedObjects);
 
 	/**
 	 * Add complex collision on the static meshes contained in the input array
@@ -140,16 +189,7 @@ public:
 	 * Note that any simple collisions on each static mesh of the resulting array will be removed.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Dataprep | Operation")
-	static void SetConvexDecompositionCollision(const TArray<UObject*>& SelectedObjects, int32 HullCount, int32 MaxHullVerts, int32 HullPrecision);
-
-	/**
-	 * Sets the Generate Lightmap UVs flag on the static meshes found in the Assets list
-	 *
-	 * @param	Assets					List of assets to set the generate lightmap uvs flag on. Only Static Meshes will be affected.
-	 * @param	bGenerateLightmapUVs	The value to set for the generate lightmap uvs flag.
-	 */
-	UFUNCTION(BlueprintCallable, Category = "Dataprep | Operation")
-	static void SetGenerateLightmapUVs( const TArray< UObject* >& Assets, bool bGenerateLightmapUVs );
+	static void SetConvexDecompositionCollision(const TArray<UObject*>& SelectedObjects, int32 HullCount, int32 MaxHullVerts, int32 HullPrecision, TArray<UObject*>& ModifiedObjects);
 
 	/**
 	 * Replaces designated materials in all or specific content folders with specific ones
@@ -158,7 +198,7 @@ public:
 	 * @param StringMatch: Type of matching to perform with MaterialSearch string
 	 * @param MaterialSubstitute: Material to use for the substitution
 	 * @remark: A material override will be added to static mesh components if their attached
-	 *			static mesh uses the searched material but not not themselves
+	 *			static mesh uses the searched material but not themselves
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Dataprep | Operation")
 	static void SubstituteMaterial(const TArray<UObject*>& SelectedObjects, const FString& MaterialSearch, EEditorScriptingStringMatchType StringMatch, UMaterialInterface* MaterialSubstitute);
@@ -178,7 +218,7 @@ public:
 	 * @remark: Static meshes are not re-built after the new LOD groups are set
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Dataprep | Operation")
-	static void SetLODGroup( const TArray< UObject* >& SelectedObjects, FName& LODGroupName );
+	static void SetLODGroup( const TArray< UObject* >& SelectedObjects, FName& LODGroupName, TArray<UObject*>& ModifiedObjects );
 
 	/**
 	 * Set the material to all elements of a set of Static Meshes or Static Mesh Actors
@@ -198,12 +238,33 @@ public:
 	static void SetMobility( const TArray< UObject* >& SelectedObjects, EComponentMobility::Type MobilityType );
 
 	/**
-	* Remove inputs content
-	* @param Objects Objects to remove
-	*/
-	UFUNCTION(BlueprintCallable, Category = "Datasmith | Operation")
-	static void RemoveObjects( const TArray< UObject* >& Objects );
+	 * Set the mesh to all elements of a set of Actors containing StaticMeshComponents
+	 * @param SelectedObjects	Objects to set the input mesh on
+	 * @param MeshSubstitute	Mesh to use
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Dataprep | Operation")
+	static void SetMesh( const TArray< UObject* >& SelectedObjects, UStaticMesh* MeshSubstitute );
+
+	/**
+	 * Replaces designated meshes in all or specific content folders with specific ones
+	 * @param SelectedObjects:	Objects to consider for the substitution
+	 * @param MeshSearch:		Name of the mesh(es) to search for. Wildcard is supported
+	 * @param StringMatch:		Type of matching to perform with MeshSearch string
+	 * @param MeshSubstitute:	Mesh to use for the substitution
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Dataprep | Operation")
+	static void SubstituteMesh(const TArray<UObject*>& SelectedObjects, const FString& MeshSearch, EEditorScriptingStringMatchType StringMatch, UStaticMesh* MeshSubstitute);
+
+	/**
+	 * Replaces designated meshes in all or specific content folders with requested ones
+	 * @param SelectedObjects:	Objects to consider for the substitution
+	 * @param DataTable:		Data table to use for the substitution
+	 * @remark: SubstituteMesh is called for each entry of the input data table
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Dataprep | Operation")
+	static void SubstituteMeshesByTable(const TArray<UObject*>& SelectedObjects, const UDataTable* DataTable);
 
 private:
 	static void SubstituteMaterial(const TArray<UObject*>& SelectedObjects, const FString& MaterialSearch, EEditorScriptingStringMatchType StringMatch, const TArray<UMaterialInterface*>& MaterialList, UMaterialInterface* MaterialSubstitute);
+	static void SubstituteMesh(const TArray<UObject*>& SelectedObjects, const FString& MeshSearch, EEditorScriptingStringMatchType StringMatch, const TArray<UStaticMesh*>& MeshList, UStaticMesh* MeshSubstitute);
 };

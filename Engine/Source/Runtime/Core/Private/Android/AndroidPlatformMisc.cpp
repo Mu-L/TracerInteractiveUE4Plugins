@@ -119,7 +119,7 @@ void FAndroidMisc::RequestExit( bool Force )
 	}
 	else
 	{
-		GIsRequestingExit = 1;
+		RequestEngineExit(TEXT("Android RequestExit"));
 	}
 }
 
@@ -664,7 +664,7 @@ int32 FAndroidMisc::NumberOfCores()
 					char LineBuffer[256] = { 0 };
 					do
 					{
-						char *Line = fgets(LineBuffer, ARRAY_COUNT(LineBuffer), FileGlobalCpuStats);
+						char *Line = fgets(LineBuffer, UE_ARRAY_COUNT(LineBuffer), FileGlobalCpuStats);
 						if (Line == nullptr)
 						{
 							break;	// eof or an error
@@ -897,7 +897,7 @@ const int32 TargetSignals[] =
 	SIGSYS
 };
 
-const int32 NumTargetSignals = ARRAY_COUNT(TargetSignals);
+const int32 NumTargetSignals = UE_ARRAY_COUNT(TargetSignals);
 
 struct sigaction PrevActions[NumTargetSignals];
 static bool PreviousSignalHandlersValid = false;
@@ -1133,6 +1133,20 @@ FString FAndroidMisc::LoadTextFileFromPlatformPackage(const FString& RelativePat
 	}
 #endif
 	return FString();
+}
+
+bool FAndroidMisc::FileExistsInPlatformPackage(const FString& RelativePath)
+{
+#if USE_ANDROID_JNI
+	AAssetManager* AssetMgr = AndroidThunkCpp_GetAssetManager();
+	AAsset* asset = AAssetManager_open(AssetMgr, TCHAR_TO_UTF8(*RelativePath), AASSET_MODE_UNKNOWN);
+	if (asset)
+	{
+		AAsset_close(asset);
+		return true;
+	}
+#endif
+	return false;
 }
 
 void FAndroidMisc::SetVersionInfo( FString InAndroidVersion, FString InDeviceMake, FString InDeviceModel, FString InDeviceBuildNumber, FString InOSLanguage )
@@ -2180,6 +2194,18 @@ void FAndroidMisc::SetOnReInitWindowCallback(FAndroidMisc::ReInitWindowCallbackT
 	OnReInitWindowCallback = InOnReInitWindowCallback;
 }
 
+static FAndroidMisc::ReleaseWindowCallbackType OnReleaseWindowCallback;
+
+FAndroidMisc::ReleaseWindowCallbackType FAndroidMisc::GetOnReleaseWindowCallback()
+{
+	return OnReleaseWindowCallback;
+}
+
+void FAndroidMisc::SetOnReleaseWindowCallback(FAndroidMisc::ReleaseWindowCallbackType InOnReleaseWindowCallback)
+{
+	OnReleaseWindowCallback = InOnReleaseWindowCallback;
+}
+
 static FAndroidMisc::OnPauseCallBackType OnPauseCallback;
 
 FAndroidMisc::OnPauseCallBackType FAndroidMisc::GetOnPauseCallback()
@@ -2275,7 +2301,7 @@ uint32 FAndroidMisc::GetCoreFrequency(int32 CoreIndex, ECoreFrequencyProperty Co
 	if (FILE* CoreFreqStateFile = fopen(QueryFile, "r"))
 	{
 		char curr_corefreq[32] = { 0 };
-		if( fgets(curr_corefreq, ARRAY_COUNT(curr_corefreq), CoreFreqStateFile) != nullptr)
+		if( fgets(curr_corefreq, UE_ARRAY_COUNT(curr_corefreq), CoreFreqStateFile) != nullptr)
 		{
 			ReturnFrequency = atol(curr_corefreq);
 		}

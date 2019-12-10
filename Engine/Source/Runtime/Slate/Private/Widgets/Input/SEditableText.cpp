@@ -12,7 +12,8 @@
 SEditableText::SEditableText()
 {
 #if WITH_ACCESSIBILITY
-	AccessibleData = FAccessibleWidgetData(EAccessibleBehavior::Auto, EAccessibleBehavior::Auto, false);
+	AccessibleBehavior = EAccessibleBehavior::Auto;
+	bCanChildrenBeAccessible = false;
 #endif
 }
 
@@ -387,12 +388,17 @@ void SEditableText::GoTo(const FTextLocation& NewLocation)
 	EditableTextLayout->GoTo(NewLocation);
 }
 
-void SEditableText::GoTo(ETextLocation GoToLocation)
+void SEditableText::GoTo(const ETextLocation NewLocation)
 {
-	EditableTextLayout->GoTo(GoToLocation);
+	EditableTextLayout->GoTo(NewLocation);
 }
 
 void SEditableText::ScrollTo(const FTextLocation& NewLocation)
+{
+	EditableTextLayout->ScrollTo(NewLocation);
+}
+
+void SEditableText::ScrollTo(const ETextLocation NewLocation)
 {
 	EditableTextLayout->ScrollTo(NewLocation);
 }
@@ -593,6 +599,7 @@ void SEditableText::OnTextCommitted(const FText& InText, const ETextCommit::Type
 
 void SEditableText::OnCursorMoved(const FTextLocation& InLocation)
 {
+	Invalidate(EInvalidateWidgetReason::Layout);
 }
 
 float SEditableText::UpdateAndClampHorizontalScrollBar(const float InViewOffset, const float InViewFraction, const EVisibility InVisiblityOverride)
@@ -611,9 +618,8 @@ TSharedRef<FSlateAccessibleWidget> SEditableText::CreateAccessibleWidget()
 	return MakeShareable<FSlateAccessibleWidget>(new FSlateAccessibleEditableText(SharedThis(this)));
 }
 
-void SEditableText::SetDefaultAccessibleText(EAccessibleType AccessibleType)
+TOptional<FText> SEditableText::GetDefaultAccessibleText(EAccessibleType AccessibleType) const
 {
-	TAttribute<FText>& Text = (AccessibleType == EAccessibleType::Main) ? AccessibleData.AccessibleText : AccessibleData.AccessibleSummaryText;
-	Text.Bind(this, &SEditableText::GetHintText);
+	return GetHintText();
 }
 #endif

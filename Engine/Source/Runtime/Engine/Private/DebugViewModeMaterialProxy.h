@@ -129,7 +129,8 @@ public:
 	virtual const FMaterial& GetMaterialWithFallback(ERHIFeatureLevel::Type InFeatureLevel, const FMaterialRenderProxy*& OutFallbackMaterialRenderProxy) const override;
 	virtual bool GetVectorValue(const FMaterialParameterInfo& ParameterInfo, FLinearColor* OutValue, const FMaterialRenderContext& Context) const override;
 	virtual bool GetScalarValue(const FMaterialParameterInfo& ParameterInfo, float* OutValue, const FMaterialRenderContext& Context) const override;
-	virtual bool GetTextureValue(const FMaterialParameterInfo& ParameterInfo,const UTexture** OutValue, const FMaterialRenderContext& Context) const override;
+	virtual bool GetTextureValue(const FMaterialParameterInfo& ParameterInfo, const UTexture** OutValue, const FMaterialRenderContext& Context) const override;
+	virtual bool GetTextureValue(const FMaterialParameterInfo& ParameterInfo, const URuntimeVirtualTexture** OutValue, const FMaterialRenderContext& Context) const override;
 
 	virtual EMaterialDomain GetMaterialDomain() const override;
 	virtual bool IsTwoSided() const  override;
@@ -147,6 +148,10 @@ public:
 	virtual bool GetCastDynamicShadowAsMasked() const override;
 	virtual void GatherCustomOutputExpressions(TArray<class UMaterialExpressionCustomOutput*>& OutCustomOutputs) const override;
 	virtual void GatherExpressionsForCustomInterpolators(TArray<class UMaterialExpression*>& OutExpressions) const override;
+	virtual enum EMaterialTessellationMode GetTessellationMode() const override;
+	virtual bool IsCrackFreeDisplacementEnabled() const override;
+	virtual bool IsAdaptiveTessellationEnabled() const override;
+	virtual float GetMaxDisplacement() const override;
 
 	// Cached material usage.
 	virtual bool IsUsedWithSkeletalMesh() const override { return bIsUsedWithSkeletalMesh; }
@@ -162,6 +167,7 @@ public:
 	virtual bool IsUsedWithSplineMeshes() const override { return bIsUsedWithSplineMeshes; }
 	virtual bool IsUsedWithInstancedStaticMeshes() const override { return bIsUsedWithInstancedStaticMeshes; }
 	virtual bool IsUsedWithAPEXCloth() const override { return bIsUsedWithAPEXCloth; }
+	virtual bool IsUsedWithWater() const override { return bIsUsedWithWater; }
 
 	virtual EMaterialShaderMapUsage::Type GetMaterialShaderMapUsage() const { return Usage; }
 
@@ -169,7 +175,8 @@ private:
 
 	/** The material interface for this proxy */
 	UMaterialInterface* MaterialInterface;
-	UMaterial* Material;	
+	UMaterial* Material;
+	ERHIFeatureLevel::Type FeatureLevel;
 	TArray<UObject*> ReferencedTextures;
 	EMaterialShaderMapUsage::Type Usage;
 	EDebugViewShaderMode DebugViewMode;
@@ -194,6 +201,7 @@ private:
 			uint32 bIsUsedWithSplineMeshes : 1;
 			uint32 bIsUsedWithInstancedStaticMeshes : 1;
 			uint32 bIsUsedWithAPEXCloth : 1;
+			uint32 bIsUsedWithWater : 1;
 		};
 	};
 

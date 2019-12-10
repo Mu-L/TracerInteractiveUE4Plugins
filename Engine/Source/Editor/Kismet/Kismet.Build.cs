@@ -18,7 +18,7 @@ public class Kismet : ModuleRules
                 "DerivedDataCache",
                 "LevelEditor",
 				"GameProjectGeneration",
-				"Sequencer",
+				"SourceCodeAccess",
 			}
 			);
 
@@ -55,7 +55,8 @@ public class Kismet : ModuleRules
                 "BlueprintNativeCodeGen",
                 "UMGEditor",
                 "UMG", // for SBlueprintDiff
-                "WorkspaceMenuStructure"
+                "WorkspaceMenuStructure",
+				"ToolMenus",
             }
 			);
 

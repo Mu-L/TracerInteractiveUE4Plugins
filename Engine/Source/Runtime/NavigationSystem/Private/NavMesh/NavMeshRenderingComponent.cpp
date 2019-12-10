@@ -234,6 +234,7 @@ void FNavMeshSceneProxyData::Reset()
 	NavMeshEdgeLines.Reset();
 	NavLinkLines.Reset();
 	ClusterLinkLines.Reset();
+	AuxBoxes.Reset();
 	DebugLabels.Reset();
 	OctreeBounds.Reset();
 	Bounds.Init();
@@ -279,7 +280,7 @@ void FNavMeshSceneProxyData::Serialize(FArchive& Ar)
 	}
 
 	TArray<FDebugRenderSceneProxy::FDebugLine>* LineArraysToSerialize[] = { &ThickLineItems, &TileEdgeLines, &NavMeshEdgeLines, &NavLinkLines, &ClusterLinkLines };
-	for (int32 ArrIdx = 0; ArrIdx < ARRAY_COUNT(LineArraysToSerialize); ArrIdx++)
+	for (int32 ArrIdx = 0; ArrIdx < UE_ARRAY_COUNT(LineArraysToSerialize); ArrIdx++)
 	{
 		int32 NumItems = LineArraysToSerialize[ArrIdx]->Num();
 		Ar << NumItems;
@@ -295,6 +296,31 @@ void FNavMeshSceneProxyData::Serialize(FArchive& Ar)
 			Ar << (*LineArraysToSerialize[ArrIdx])[Idx].Start;
 			Ar << (*LineArraysToSerialize[ArrIdx])[Idx].End;
 			Ar << (*LineArraysToSerialize[ArrIdx])[Idx].Color;
+		}
+	}
+
+	int32 NumBoxes = AuxBoxes.Num();
+	Ar << NumBoxes;
+	if (Ar.IsLoading())
+	{
+		FDebugRenderSceneProxy::FDebugBox TmpBox = FDebugRenderSceneProxy::FDebugBox(FBox(), FColor());
+		AuxBoxes.Reserve(NumBoxes);
+		for (int32 Idx = 0; Idx < NumBoxes; Idx++)
+		{	
+			Ar << TmpBox.Box;
+			Ar << TmpBox.Color;
+			Ar << TmpBox.Transform;
+
+			AuxBoxes.Add(TmpBox);
+		}
+	}
+	else
+	{
+		for (int32 Idx = 0; Idx < NumBoxes; Idx++)
+		{
+			Ar << AuxBoxes[Idx].Box;
+			Ar << AuxBoxes[Idx].Color;
+			Ar << AuxBoxes[Idx].Transform;
 		}
 	}
 
@@ -342,6 +368,7 @@ uint32 FNavMeshSceneProxyData::GetAllocatedSize() const
 		NavMeshEdgeLines.GetAllocatedSize() +
 		NavLinkLines.GetAllocatedSize() +
 		ClusterLinkLines.GetAllocatedSize() +
+		AuxBoxes.GetAllocatedSize() +
 		DebugLabels.GetAllocatedSize() +
 		OctreeBounds.GetAllocatedSize();
 }
@@ -824,9 +851,12 @@ FNavMeshSceneProxy::FNavMeshSceneProxy(const UPrimitiveComponent* InComponent, F
 	, bRequestedData(false)
 	, bForceRendering(ForceToRender)
 {
+	DrawType = EDrawType::SolidAndWireMeshes;
+
 	if (InProxyData)
 	{
 		ProxyData = *InProxyData;
+		Boxes.Append(InProxyData->AuxBoxes);
 	}
 
 	RenderingComponent = MakeWeakObjectPtr(const_cast<UNavMeshRenderingComponent*>(Cast<UNavMeshRenderingComponent>(InComponent)));
@@ -944,6 +974,8 @@ void FNavMeshSceneProxy::DrawDebugBox(FPrimitiveDrawInterface* PDI, FVector cons
 void FNavMeshSceneProxy::GetDynamicMeshElements(const TArray<const FSceneView*>& Views, const FSceneViewFamily& ViewFamily, uint32 VisibilityMap, FMeshElementCollector& Collector) const
 {
 	QUICK_SCOPE_CYCLE_COUNTER(STAT_RecastRenderingSceneProxy_GetDynamicMeshElements);
+
+	FDebugRenderSceneProxy::GetDynamicMeshElements(Views, ViewFamily, VisibilityMap, Collector);
 
 	for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ViewIndex++)
 	{
@@ -1270,6 +1302,13 @@ void UNavMeshRenderingComponent::OnUnregister()
 	Super::OnUnregister();
 }
 
+void UNavMeshRenderingComponent::GatherData(const ARecastNavMesh& NavMesh, FNavMeshSceneProxyData& OutProxyData) const
+{
+	const int32 DetailFlags = OutProxyData.GetDetailFlags(&NavMesh);
+	TArray<int32> EmptyTileSet;
+	OutProxyData.GatherData(&NavMesh, DetailFlags, EmptyTileSet);
+}
+
 FPrimitiveSceneProxy* UNavMeshRenderingComponent::CreateSceneProxy()
 {
 #if WITH_RECAST && !UE_BUILD_SHIPPING && !UE_BUILD_TEST
@@ -1285,10 +1324,7 @@ FPrimitiveSceneProxy* UNavMeshRenderingComponent::CreateSceneProxy()
 		if (NavMesh && NavMesh->IsDrawingEnabled())
 		{
 			FNavMeshSceneProxyData ProxyData;
-
-			const int32 DetailFlags = ProxyData.GetDetailFlags(NavMesh);
-			TArray<int32> EmptyTileSet;
-			ProxyData.GatherData(NavMesh, DetailFlags, EmptyTileSet);
+			GatherData(*NavMesh, ProxyData);
 
 			NavMeshSceneProxy = new FNavMeshSceneProxy(this, &ProxyData);
 		}

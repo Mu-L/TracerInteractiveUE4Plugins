@@ -59,7 +59,7 @@
 #include "Editor.h"
 #include "MatineeExporter.h"
 #include "FbxExporter.h"
-#include "MeshDescription.h"
+#include "StaticMeshAttributes.h"
 #include "MeshDescriptionOperations.h"
 #include "MaterialUtilities.h"
 #include "InstancedFoliageActor.h"
@@ -1751,11 +1751,7 @@ bool UStaticMeshExporterOBJ::ExportText(const FExportObjectInnerContext* Context
 		FMeshDescription* MeshDescription = StaticMesh->GetMeshDescription(0);
 		if (MeshDescription != nullptr)
 		{
-			uint32 TriangleCount = 0;
-			for (const FPolygonID PolygonID : MeshDescription->Polygons().GetElementIDs())
-			{
-				TriangleCount += MeshDescription->GetPolygonTriangles(PolygonID).Num();
-			}
+			uint32 TriangleCount = MeshDescription->Triangles().Num();
 			if (Count == TriangleCount)
 			{
 				SmoothingMasks.AddZeroed(TriangleCount);

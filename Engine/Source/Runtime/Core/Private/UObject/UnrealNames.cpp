@@ -22,7 +22,6 @@
 #include "Misc/OutputDeviceRedirector.h"
 #include "HAL/IConsoleManager.h"
 #include "HAL/LowLevelMemTracker.h"
-#include "Serialization/ArchiveFromStructuredArchive.h"
 #include "Hash/CityHash.h"
 
 // Page protection to catch FNameEntry stomps
@@ -265,7 +264,16 @@ public:
 	/** Initializes all member variables. */
 	FNameEntryAllocator()
 	{
+		LLM_SCOPE(ELLMTag::FName);
 		Blocks[0] = (uint8*)FMemory::Malloc(BlockSizeBytes, FPlatformMemory::GetConstants().PageSize);
+	}
+
+	~FNameEntryAllocator()
+	{
+		for (uint32 Index = 0; Index <= CurrentBlock; ++Index)
+		{
+			FMemory::Free(Blocks[Index]);
+		}
 	}
 
 	/**
@@ -368,6 +376,7 @@ private:
 	/** Allocates a new pool. */
 	void AllocateNewBlock()
 	{
+		LLM_SCOPE(ELLMTag::FName);
 		// Null-terminate final entry to allow DebugDump() entry iteration
 		if (CurrentByteCursor + FNameEntry::GetDataOffset() <= BlockSizeBytes)
 		{
@@ -540,11 +549,22 @@ class alignas(PLATFORM_CACHE_LINE_SIZE) FNamePoolShardBase : FNoncopyable
 public:
 	void Initialize(FNameEntryAllocator& InEntries)
 	{
+		LLM_SCOPE(ELLMTag::FName);
 		Entries = &InEntries;
 
 		Slots = (FNameSlot*)FMemory::Malloc(FNamePoolInitialSlotsPerShard * sizeof(FNameSlot), alignof(FNameSlot));
 		memset(Slots, 0, FNamePoolInitialSlotsPerShard * sizeof(FNameSlot));
 		CapacityMask = FNamePoolInitialSlotsPerShard - 1;
+	}
+
+	// This and ~FNamePool() is not called during normal shutdown
+	// but only via explicit FName::TearDown() call
+	~FNamePoolShardBase()
+	{
+		FMemory::Free(Slots);
+		UsedSlots = 0;
+		CapacityMask = 0;
+		Slots = nullptr;
 	}
 
 	uint32 Capacity() const { return CapacityMask + 1; }
@@ -624,6 +644,7 @@ private:
 
 	void Grow()
 	{
+		LLM_SCOPE(ELLMTag::FName);
 		FNameSlot* const OldSlots = Slots;
 		const uint32 OldUsedSlots = UsedSlots;
 		const uint32 OldCapacity = Capacity();
@@ -1162,7 +1183,7 @@ int32 FNameEntry::GetSize(const TCHAR* Name)
 
 int32 FNameEntry::GetSize(int32 Length, bool bIsPureAnsi)
 {
-	int32 Bytes = GetDataOffset() + (Length + 1) * (bIsPureAnsi ? sizeof(ANSICHAR) : sizeof(TCHAR));
+	int32 Bytes = GetDataOffset() + Length * (bIsPureAnsi ? sizeof(ANSICHAR) : sizeof(WIDECHAR));
 	return Align(Bytes, alignof(FNameEntry));
 }
 
@@ -1331,7 +1352,7 @@ FString FName::NameToDisplayString( const FString& InDisplayName, const bool bIs
 
 			// Search for a word that needs case repaired
 			bool bIsArticle = false;
-			for( int32 CurArticleIndex = 0; CurArticleIndex < ARRAY_COUNT( Articles ); ++CurArticleIndex )
+			for( int32 CurArticleIndex = 0; CurArticleIndex < UE_ARRAY_COUNT( Articles ); ++CurArticleIndex )
 			{
 				// Make sure the character following the string we're testing is not lowercase (we don't want to match "in" with "instance")
 				const int32 ArticleLength = FCString::Strlen( Articles[ CurArticleIndex ] );
@@ -1410,7 +1431,7 @@ static bool StringAndNumberEqualsString(const CharType1* Name, uint32 NameLen, i
 	return Str[NameLen] == '_' && NumberEqualsString(Number, Str + NameLen + 1);
 }
 
-struct FAnsiStringView
+struct FNameAnsiStringView
 {
 	using CharType = ANSICHAR;
 
@@ -1427,12 +1448,12 @@ struct FWideStringViewWithWidth
 	bool bIsWide;
 };
 
-static FAnsiStringView MakeUnconvertedView(const ANSICHAR* Str, int32 Len)
+static FNameAnsiStringView MakeUnconvertedView(const ANSICHAR* Str, int32 Len)
 {
 	return { Str, Len };
 }
 
-static FAnsiStringView MakeUnconvertedView(const ANSICHAR* Str)
+static FNameAnsiStringView MakeUnconvertedView(const ANSICHAR* Str)
 {
 	return { Str, Str ? FCStringAnsi::Strlen(Str) : 0 };
 }
@@ -1488,11 +1509,15 @@ struct FNameHelper
 		{
 			return FName();
 		}
-
-		using CharType = typename ViewType::CharType;
-		const CharType* Name = View.Str;
-		const int32 Len = View.Len;
 		
+		uint32 InternalNumber = ParseNumber(View.Str, /* may be shortened */ View.Len);
+		return MakeWithNumber(View, FindType, InternalNumber);
+	}
+
+	template<typename CharType>
+	static uint32 ParseNumber(const CharType* Name, int32& InOutLen)
+	{
+		const int32 Len = InOutLen;
 		int32 Digits = 0;
 		for (const CharType* It = Name + Len - 1; It >= Name && *It >= '0' && *It <= '9'; --It)
 		{
@@ -1512,16 +1537,16 @@ struct FNameHelper
 				int64 Number = TCString<CharType>::Atoi64(Name + Len - Digits);
 				if (Number < MAX_int32)
 				{
-					View.Len -= 1 + Digits;
-					return MakeWithNumber(View, FindType, static_cast<uint32>(NAME_EXTERNAL_TO_INTERNAL(Number)));
+					InOutLen -= 1 + Digits;
+					return static_cast<uint32>(NAME_EXTERNAL_TO_INTERNAL(Number));
 				}
 			}
 		}
 
-		return MakeWithNumber(View, FindType, NAME_NO_NUMBER_INTERNAL);
+		return NAME_NO_NUMBER_INTERNAL;
 	}
 
-	static FName MakeWithNumber(FAnsiStringView View, EFindName FindType, int32 InternalNumber)
+	static FName MakeWithNumber(FNameAnsiStringView	 View, EFindName FindType, int32 InternalNumber)
 	{
 		// Ignore the supplied number if the name string is empty
 		// to keep the semantics of the old FName implementation
@@ -1608,7 +1633,6 @@ struct FNameHelper
 			: FNameStringView(LoadedEntry.AnsiName, FCStringAnsi::Strlen(LoadedEntry.AnsiName));
 
 		return Make(View, FNAME_Add, NAME_NO_NUMBER_INTERNAL);
-
 	}
 
 	template<class CharType>
@@ -1695,20 +1719,6 @@ FName::FName(const TCHAR* Name, int32 InNumber, EFindName FindType, bool bSplitN
 
 FName::FName(const FNameEntrySerialized& LoadedEntry)
 	: FName(FNameHelper::MakeFromLoaded(LoadedEntry))
-{}
-
-FName::FName(EName Ename, int32 InNumber)
-	: ComparisonIndex(GetNamePool().Find(Ename))
-#if WITH_CASE_PRESERVING_NAME
-	, DisplayIndex(ComparisonIndex)
-#endif
-	, Number(InNumber)
-{
-	check(Ename < NAME_MaxHardcodedNameIndex);
-}
-
-FName::FName(EName Ename)
-	: FName(Ename, NAME_NO_NUMBER_INTERNAL)
 {}
 
 bool FName::operator==(const ANSICHAR* Str) const
@@ -1897,6 +1907,19 @@ bool FName::IsValidXName(const FString& InName, const FString& InInvalidChars, F
 	return true;
 }
 
+template <typename CharType, int N>
+void CheckLazyName(const CharType(&Literal)[N])
+{
+	check(FName(Literal) == FLazyName(Literal));
+	check(FLazyName(Literal) == FName(Literal));
+	check(FLazyName(Literal) == FLazyName(Literal));
+	check(FName(Literal) == FLazyName(Literal).Resolve());
+
+	CharType Literal2[N];
+	FMemory::Memcpy(Literal2, Literal);
+	check(FLazyName(Literal) == FLazyName(Literal2));
+}
+
 void FName::AutoTest()
 {
 #if DO_CHECK
@@ -2068,6 +2091,23 @@ void FName::AutoTest()
 	check(Names[5] == "FooC");
 	check(Names[6] == FooWide);
 
+	
+	CheckLazyName("Hej");
+	CheckLazyName(TEXT("Hej"));
+	CheckLazyName("Hej_0");
+	CheckLazyName("Hej_00");
+	CheckLazyName("Hej_1");
+	CheckLazyName("Hej_01");
+	CheckLazyName("Hej_-1");
+	CheckLazyName("Hej__0");
+	CheckLazyName("Hej_2147483647");
+	CheckLazyName("Hej_123");
+	CheckLazyName("None");
+	CheckLazyName("none");
+	CheckLazyName("None_0");
+	CheckLazyName("None_1");
+
+
 #if 0
 	// Check hash table growth still yields the same unique FName ids
 	static int32 OverflowAtLeastTwiceCount = 4 * FNamePoolInitialSlotsPerShard * FNamePoolShards;
@@ -2108,15 +2148,7 @@ void FNameEntry::Write( FArchive& Ar ) const
 	Ar << EntrySerialized;
 }
 
-void FNameEntry::Write(FStructuredArchive::FSlot Slot) const
-{
-	// This path should be unused - since FNameEntry structs are allocated with a dynamic size, we can only save them. Use FNameEntrySerialized to read them back into an intermediate buffer.
-	checkf(!Slot.GetUnderlyingArchive().IsLoading(), TEXT("FNameEntry does not support reading from an archive. Serialize into a FNameEntrySerialized and construct a FNameEntry from that."));
-
-	// Convert to our serialized type
-	FNameEntrySerialized EntrySerialized(*this);
-	Slot << EntrySerialized;
-}
+static_assert(PLATFORM_LITTLE_ENDIAN, "FNameEntrySerialized serialization needs updating to support big-endian platforms!");
 
 FArchive& operator<<(FArchive& Ar, FNameEntrySerialized& E)
 {
@@ -2157,12 +2189,15 @@ FArchive& operator<<(FArchive& Ar, FNameEntrySerialized& E)
 			// get the pointer to the wide array 
 			WIDECHAR* WideName = const_cast<WIDECHAR*>(E.GetWideName());
 
-			// read in the UCS2CHAR string and byteswap it, etc
+			// read in the UCS2CHAR string
 			auto Sink = StringMemoryPassthru<UCS2CHAR>(WideName, StringLen, StringLen);
 			Ar.Serialize(Sink.Get(), StringLen * sizeof(UCS2CHAR));
 			Sink.Apply();
 
-			INTEL_ORDER_TCHARARRAY(WideName)
+#if PLATFORM_TCHAR_IS_4_BYTES
+			// Inline combine any surrogate pairs in the data when loading into a UTF-32 string
+			StringLen = StringConv::InlineCombineSurrogates_Buffer(WideName, StringLen);
+#endif	// PLATFORM_TCHAR_IS_4_BYTES
 		}
 		else
 		{
@@ -2201,30 +2236,79 @@ FArchive& operator<<(FArchive& Ar, FNameEntrySerialized& E)
 	return Ar;
 }
 
-void operator<<(FStructuredArchive::FSlot Slot, FNameEntrySerialized& E)
+FNameEntryId FNameEntryId::FromValidEName(EName Ename)
 {
-	if (Slot.GetUnderlyingArchive().IsTextFormat())
-	{
-		FString Str = E.GetPlainNameString();
-		Slot << Str;
+	return GetNamePool().Find(Ename);
+}
 
-		if (Slot.GetUnderlyingArchive().IsLoading())
-		{
-			// mark the name will be wide
-			E.bIsWide = true;
 
-			// get the pointer to the wide array 
-			WIDECHAR* WideName = const_cast<WIDECHAR*>(E.GetWideName());
-			FCString::Strcpy(WideName, 1024, *Str);
-		}
-	}
-	else
+void FName::TearDown()
+{
+	check(IsInGameThread());
+
+	if (bNamePoolInitialized)
 	{
-		FArchiveFromStructuredArchive Ar(Slot);
-		Ar << E;
+		GetNamePoolPostInit().~FNamePool();
+		bNamePoolInitialized = false;
 	}
 }
 
+FName FLazyName::Resolve() const
+{
+	// Make a stack copy to ensure thread-safety
+	FLiteralOrName Copy = Either;
+
+	if (Copy.IsName())
+	{
+		FNameEntryId Id = Copy.AsName();
+		return FName(Id, Id, Number);
+	}
+
+	// Resolve to FName but throw away the number part
+	FNameEntryId Id = bLiteralIsWide ? FName(Copy.AsWideLiteral()).GetComparisonIndex()
+										: FName(Copy.AsAnsiLiteral()).GetComparisonIndex();
+
+	// Deliberately unsynchronized write of word-sized int, ok if multiple threads resolve same lazy name
+	Either = FLiteralOrName(Id);
+
+	return FName(Id, Id, Number);		
+}
+
+uint32 FLazyName::ParseNumber(const ANSICHAR* Str, int32 Len)
+{
+	return FNameHelper::ParseNumber(Str, Len);
+}
+
+uint32 FLazyName::ParseNumber(const WIDECHAR* Str, int32 Len)
+{
+	return FNameHelper::ParseNumber(Str, Len);
+}
+
+bool operator==(const FLazyName& A, const FLazyName& B)
+{
+	// If we have started creating FNames we might as well resolve and cache both lazy names
+	if (A.Either.IsName() || B.Either.IsName())
+	{
+		return A.Resolve() == B.Resolve();
+	}
+
+	// Literal pointer comparison, can ignore width
+	if (A.Either.AsAnsiLiteral() == B.Either.AsAnsiLiteral())
+	{
+		return true;
+	}
+
+	if (A.bLiteralIsWide)
+	{
+		return B.bLiteralIsWide ? FPlatformString::Stricmp(A.Either.AsWideLiteral(), B.Either.AsWideLiteral()) == 0
+								: FPlatformString::Stricmp(A.Either.AsWideLiteral(), B.Either.AsAnsiLiteral()) == 0;
+	}
+	else
+	{
+		return B.bLiteralIsWide ? FPlatformString::Stricmp(A.Either.AsAnsiLiteral(), B.Either.AsWideLiteral()) == 0
+								: FPlatformString::Stricmp(A.Either.AsAnsiLiteral(), B.Either.AsAnsiLiteral()) == 0;	
+	}
+}
 
 #if !UE_BUILD_SHIPPING && !UE_BUILD_TEST
 

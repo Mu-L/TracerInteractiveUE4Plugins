@@ -60,6 +60,7 @@
 #include "IContentBrowserSingleton.h"
 #include "ContentBrowserModule.h"
 #include "Widgets/Docking/SDockTab.h"
+#include "Subsystems/AssetEditorSubsystem.h"
 
 #define LOCTEXT_NAMESPACE "BehaviorTreeEditor"
 
@@ -77,7 +78,6 @@ FBehaviorTreeEditor::FBehaviorTreeEditor()
 	bShowDecoratorRangeSelf = false;
 	bSelectedNodeIsInjected = false;
 	bSelectedNodeIsRootLevel = false;
-	SelectedNodesCount = 0;
 
 	bHasMultipleTaskBP = false;
 	bHasMultipleDecoratorBP = false;
@@ -560,12 +560,6 @@ TSharedRef<SGraphEditor> FBehaviorTreeEditor::CreateGraphEditorWidget(UEdGraph* 
 			FIsActionChecked(),
 			FIsActionButtonVisible::CreateSP( this, &FBehaviorTreeEditor::CanToggleBreakpoint )
 			);
-
-		GraphEditorCommands->MapAction(
-			FGraphEditorCommands::Get().CreateComment,
-			FExecuteAction::CreateSP(this, &FBehaviorTreeEditor::OnCreateComment),
-			FCanExecuteAction::CreateSP(this, &FBehaviorTreeEditor::CanCreateComment)
-			);
 	}
 
 	SGraphEditor::FGraphEditorEvents InEvents;
@@ -731,8 +725,6 @@ TSharedRef<SWidget> FBehaviorTreeEditor::SpawnBlackboardDetails()
 
 void FBehaviorTreeEditor::OnSelectedNodesChanged(const TSet<class UObject*>& NewSelection)
 {
-	SelectedNodesCount = NewSelection.Num();
-
 	BehaviorTreeEditorUtils::FPropertySelectionInfo SelectionInfo;
 	TArray<UObject*> Selection = BehaviorTreeEditorUtils::GetSelectionForPropertyEditor(NewSelection, SelectionInfo);
 
@@ -1156,9 +1148,9 @@ void FBehaviorTreeEditor::OnNodeDoubleClicked(class UEdGraphNode* Node)
 		UBTTask_RunBehavior* SubtreeTask = MyNode->ParentNode ? Cast<UBTTask_RunBehavior>(MyNode->ParentNode->NodeInstance) : NULL;
 		if (SubtreeTask && SubtreeTask->GetSubtreeAsset())
 		{
-			FAssetEditorManager::Get().OpenEditorForAsset(SubtreeTask->GetSubtreeAsset());
+			GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(SubtreeTask->GetSubtreeAsset());
 
-			IBehaviorTreeEditor* ChildNodeEditor = static_cast<IBehaviorTreeEditor*>(FAssetEditorManager::Get().FindEditorForAsset(SubtreeTask->GetSubtreeAsset(), true));
+			IBehaviorTreeEditor* ChildNodeEditor = static_cast<IBehaviorTreeEditor*>(GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->FindEditorForAsset(SubtreeTask->GetSubtreeAsset(), true));
 			if (ChildNodeEditor)
 			{
 				ChildNodeEditor->InitializeDebuggerState(Debugger.Get());
@@ -1211,9 +1203,9 @@ void FBehaviorTreeEditor::OnNodeDoubleClicked(class UEdGraphNode* Node)
 		{
 			if (RunTask->GetSubtreeAsset())
 			{
-				FAssetEditorManager::Get().OpenEditorForAsset(RunTask->GetSubtreeAsset());
+				GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(RunTask->GetSubtreeAsset());
 
-				IBehaviorTreeEditor* ChildNodeEditor = static_cast<IBehaviorTreeEditor*>(FAssetEditorManager::Get().FindEditorForAsset(RunTask->GetSubtreeAsset(), true));
+				IBehaviorTreeEditor* ChildNodeEditor = static_cast<IBehaviorTreeEditor*>(GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->FindEditorForAsset(RunTask->GetSubtreeAsset(), true));
 				if (ChildNodeEditor)
 				{
 					ChildNodeEditor->InitializeDebuggerState(Debugger.Get());
@@ -1231,7 +1223,7 @@ void FBehaviorTreeEditor::OnNodeDoubleClicked(class UEdGraphNode* Node)
 		UBlueprint* BlueprintOb = FindObject<UBlueprint>(Pkg, *ClassName);
 		if(BlueprintOb)
 		{
-			FAssetEditorManager::Get().OpenEditorForAsset(BlueprintOb);
+			GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(BlueprintOb);
 		}
 	}
 }
@@ -1598,12 +1590,6 @@ void FBehaviorTreeEditor::OnNodeTitleCommitted(const FText& NewText, ETextCommit
 	}
 }
 
-bool FBehaviorTreeEditor::GetBoundsForSelectedNodes(FSlateRect& Rect, float Padding) const
-{
-	TSharedPtr<SGraphEditor> FocusedGraphEd = UpdateGraphEdPtr.Pin();
-	return FocusedGraphEd.IsValid() && FocusedGraphEd->GetBoundsForSelectedNodes(Rect, Padding);
-}
-
 void FBehaviorTreeEditor::InitializeDebuggerState(class FBehaviorTreeDebugger* ParentDebugger) const
 {
 	if (Debugger.IsValid())
@@ -1616,9 +1602,9 @@ void FBehaviorTreeEditor::DebuggerSwitchAsset(UBehaviorTree* NewAsset)
 {
 	if (NewAsset)
 	{
-		FAssetEditorManager::Get().OpenEditorForAsset(NewAsset);
+		GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(NewAsset);
 
-		IBehaviorTreeEditor* ChildNodeEditor = static_cast<IBehaviorTreeEditor*>(FAssetEditorManager::Get().FindEditorForAsset(NewAsset, true));
+		IBehaviorTreeEditor* ChildNodeEditor = static_cast<IBehaviorTreeEditor*>(GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->FindEditorForAsset(NewAsset, true));
 		if (ChildNodeEditor)
 		{
 			ChildNodeEditor->InitializeDebuggerState(Debugger.Get());
@@ -1761,7 +1747,7 @@ void FBehaviorTreeEditor::HandleNewNodeClassPicked(UClass* InClass) const
 			// Create and init a new Blueprint
 			if (UBlueprint* NewBP = FKismetEditorUtilities::CreateBlueprint(InClass, Package, FName(*Name), BPTYPE_Normal, UBlueprint::StaticClass(), UBlueprintGeneratedClass::StaticClass()))
 			{
-				FAssetEditorManager::Get().OpenEditorForAsset(NewBP);
+				GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(NewBP);
 
 				// Notify the asset registry
 				FAssetRegistryModule::AssetCreated(NewBP);
@@ -1837,23 +1823,6 @@ void FBehaviorTreeEditor::CreateNewBlackboard()
 bool FBehaviorTreeEditor::CanCreateNewBlackboard() const
 {
 	return !IsDebuggerReady();
-}
-
-bool FBehaviorTreeEditor::CanCreateComment() const
-{
-	return (SelectedNodesCount > 0);
-}
-
-void FBehaviorTreeEditor::OnCreateComment()
-{
-	if (BehaviorTree && BehaviorTree->BTGraph)
-	{
-		TSharedPtr<FEdGraphSchemaAction> Action = BehaviorTree->BTGraph->GetSchema()->GetCreateCommentAction();
-		if (Action.IsValid())
-		{
-			Action->PerformAction(BehaviorTree->BTGraph, nullptr, FVector2D());
-		}
-	}
 }
 
 #undef LOCTEXT_NAMESPACE

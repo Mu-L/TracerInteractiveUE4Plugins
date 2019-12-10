@@ -9,7 +9,7 @@
 #include "Settings/LevelEditorPlaySettings.h"
 #include "Editor/PropertyEditor/Public/PropertyEditorModule.h"
 #include "Editor/LevelEditor/Public/ILevelEditor.h"
-#include "Editor/LevelEditor/Public/ILevelViewport.h"
+#include "Editor/UnrealEd/Public/IAssetViewport.h"
 #include "Editor/LevelEditor/Public/LevelEditor.h"
 #include "Framework/Application/SlateApplication.h"
 #include "IDetailsView.h"
@@ -277,6 +277,7 @@ void RenameSpawnableRecursive(FSequencer* Sequencer, FMovieSceneSequenceIDRef Se
 				AActor* Actor = Cast<AActor>(WeakObject.Get());
 				if (Actor && Actor == ChangedActor)
 				{
+					MovieScene->Modify();
 					MovieScene->GetSpawnable(Index).SetName(ChangedActor->GetActorLabel());
 				}
 			}

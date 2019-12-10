@@ -49,6 +49,7 @@ FTransform FAnimNode_Fabrik::GetTargetTransform(const FTransform& InComponentTra
 
 void FAnimNode_Fabrik::EvaluateSkeletalControl_AnyThread(FComponentSpacePoseContext& Output, TArray<FBoneTransform>& OutBoneTransforms)
 {
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_ANIMNODE(EvaluateSkeletalControl_AnyThread)
 	const FBoneContainer& BoneContainer = Output.Pose.GetPose().GetBoneContainer();
 
 	// Update EffectorLocation if it is based off a bone position
@@ -83,7 +84,7 @@ void FAnimNode_Fabrik::EvaluateSkeletalControl_AnyThread(FComponentSpacePoseCont
 	OutBoneTransforms.AddUninitialized(NumTransforms);
 
 	// Gather chain links. These are non zero length bones.
-	TArray<FABRIKChainLink> Chain;
+	TArray<FFABRIKChainLink> Chain;
 	Chain.Reserve(NumTransforms);
 
 	// Start with Root Bone
@@ -92,7 +93,7 @@ void FAnimNode_Fabrik::EvaluateSkeletalControl_AnyThread(FComponentSpacePoseCont
 		const FTransform& BoneCSTransform = Output.Pose.GetComponentSpaceTransform(RootBoneIndex);
 
 		OutBoneTransforms[0] = FBoneTransform(RootBoneIndex, BoneCSTransform);
-		Chain.Add(FABRIKChainLink(BoneCSTransform.GetLocation(), 0.f, RootBoneIndex, 0));
+		Chain.Add(FFABRIKChainLink(BoneCSTransform.GetLocation(), 0.f, RootBoneIndex, 0));
 	}
 
 	// Go through remaining transforms
@@ -110,14 +111,14 @@ void FAnimNode_Fabrik::EvaluateSkeletalControl_AnyThread(FComponentSpacePoseCont
 
 		if (!FMath::IsNearlyZero(BoneLength))
 		{
-			Chain.Add(FABRIKChainLink(BoneCSPosition, BoneLength, BoneIndex, TransformIndex));
+			Chain.Add(FFABRIKChainLink(BoneCSPosition, BoneLength, BoneIndex, TransformIndex));
 			MaximumReach += BoneLength;
 		}
 		else
 		{
 			// Mark this transform as a zero length child of the last link.
 			// It will inherit position and delta rotation from parent link.
-			FABRIKChainLink & ParentLink = Chain[Chain.Num()-1];
+			FFABRIKChainLink & ParentLink = Chain[Chain.Num()-1];
 			ParentLink.ChildZeroLengthTransformIndices.Add(TransformIndex);
 		}
 	}
@@ -130,7 +131,7 @@ void FAnimNode_Fabrik::EvaluateSkeletalControl_AnyThread(FComponentSpacePoseCont
 		// First step: update bone transform positions from chain links.
 		for (int32 LinkIndex = 0; LinkIndex < NumChainLinks; LinkIndex++)
 		{
-			FABRIKChainLink const & ChainLink = Chain[LinkIndex];
+			FFABRIKChainLink const & ChainLink = Chain[LinkIndex];
 			OutBoneTransforms[ChainLink.TransformIndex].Transform.SetTranslation(ChainLink.Position);
 
 			// If there are any zero length children, update position of those
@@ -144,8 +145,8 @@ void FAnimNode_Fabrik::EvaluateSkeletalControl_AnyThread(FComponentSpacePoseCont
 		// FABRIK algorithm - re-orientation of bone local axes after translation calculation
 		for (int32 LinkIndex = 0; LinkIndex < NumChainLinks - 1; LinkIndex++)
 		{
-			FABRIKChainLink const & CurrentLink = Chain[LinkIndex];
-			FABRIKChainLink const & ChildLink = Chain[LinkIndex + 1];
+			FFABRIKChainLink const & CurrentLink = Chain[LinkIndex];
+			FFABRIKChainLink const & ChildLink = Chain[LinkIndex + 1];
 
 			// Calculate pre-translation vector between this bone and child
 			FVector const OldDir = (GetCurrentLocation(Output.Pose, FCompactPoseBoneIndex(ChildLink.BoneIndex)) - GetCurrentLocation(Output.Pose, FCompactPoseBoneIndex(CurrentLink.BoneIndex))).GetUnsafeNormal();
@@ -223,6 +224,7 @@ void FAnimNode_Fabrik::ConditionalDebugDraw(FPrimitiveDrawInterface* PDI, USkele
 
 void FAnimNode_Fabrik::InitializeBoneReferences(const FBoneContainer& RequiredBones)
 {
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_ANIMNODE(InitializeBoneReferences)
 	TipBone.Initialize(RequiredBones);
 	RootBone.Initialize(RequiredBones);
 	EffectorTarget.InitializeBoneReferences(RequiredBones);
@@ -230,6 +232,7 @@ void FAnimNode_Fabrik::InitializeBoneReferences(const FBoneContainer& RequiredBo
 
 void FAnimNode_Fabrik::GatherDebugData(FNodeDebugData& DebugData)
 {
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_ANIMNODE(GatherDebugData)
 	FString DebugLine = DebugData.GetNodeName(this);
 
 	DebugData.AddDebugItem(DebugLine);
@@ -238,6 +241,7 @@ void FAnimNode_Fabrik::GatherDebugData(FNodeDebugData& DebugData)
 
 void FAnimNode_Fabrik::Initialize_AnyThread(const FAnimationInitializeContext& Context)
 {
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_ANIMNODE(Initialize_AnyThread)
 	Super::Initialize_AnyThread(Context);
 	EffectorTarget.Initialize(Context.AnimInstanceProxy);
 }

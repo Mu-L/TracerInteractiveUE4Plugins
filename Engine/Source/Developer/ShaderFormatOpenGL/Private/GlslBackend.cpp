@@ -2288,10 +2288,10 @@ class ir_gen_glsl_visitor : public ir_visitor
 			"imageAtomicCompSwap"
 		};
 		check(scope_depth > 0);
-		const bool is_image = ir->memory_ref->as_dereference_image() != NULL;
+		ir_dereference_image* image = ir->memory_ref->as_dereference_image();
 
 		ir->lhs->accept(this);
-		if (!is_image)
+		if (!image || (image->image->type && image->image->type->shader_storage_buffer))
 		{
 			ralloc_asprintf_append(buffer, " = %s(",
 				sharedAtomicFunctions[ir->operation]);
@@ -2307,7 +2307,6 @@ class ir_gen_glsl_visitor : public ir_visitor
 		}
 		else
 		{
-			ir_dereference_image *image = ir->memory_ref->as_dereference_image();
 			ralloc_asprintf_append(buffer, " = %s(",
 				imageAtomicFunctions[ir->operation]);
 			image->image->accept(this);
@@ -3102,10 +3101,17 @@ class ir_gen_glsl_visitor : public ir_visitor
 #endif		
 	}
 
-	void print_extensions(_mesa_glsl_parse_state* state, bool bUsesFramebufferFetchES2, bool bUsesDepthbufferFetchES2, bool bUsesES31Extensions, bool bInUsesExternalTexture)
+	void print_extensions(_mesa_glsl_parse_state* state, bool bUsesFramebufferFetchES2, bool bUsesDepthbufferFetchES2, bool bInUsesExternalTexture)
 	{
 		if (bInUsesExternalTexture)
 		{
+			if (CompileTarget == HCT_FeatureLevelES3_1)
+			{
+				ralloc_asprintf_append(buffer, "\n#ifdef GL_OES_EGL_image_external_essl3\n");
+				ralloc_asprintf_append(buffer, "#extension GL_OES_EGL_image_external_essl3 : enable\n");
+				ralloc_asprintf_append(buffer, "\n#endif\n");
+			}
+
 			ralloc_asprintf_append(buffer, "// Uses samplerExternalOES\n");
 		}
 
@@ -3151,7 +3157,7 @@ class ir_gen_glsl_visitor : public ir_visitor
 			ralloc_asprintf_append(buffer, "#extension GL_ARM_shader_framebuffer_fetch_depth_stencil : enable\n");
 		}
 
-		if (bUsesES31Extensions)
+		if (CompileTarget == HCT_FeatureLevelES3_1Ext)
 		{
 			ralloc_asprintf_append(buffer, "\n#ifdef GL_EXT_gpu_shader5\n");
 			ralloc_asprintf_append(buffer, "#extension GL_EXT_gpu_shader5 : enable\n");
@@ -3408,7 +3414,7 @@ bool compiler_internal_AdjustIsFrontFacing(bool isFrontFacing)
 
 		char* Extensions = ralloc_asprintf(mem_ctx, "");
 		buffer = &Extensions;
-		print_extensions(state, bUsesFrameBufferFetch, bUsesDepthbufferFetch, CompileTarget == HCT_FeatureLevelES3_1Ext, bUsesExternalTexture);
+		print_extensions(state, bUsesFrameBufferFetch, bUsesDepthbufferFetch, bUsesExternalTexture);
 		if (state->bSeparateShaderObjects && !(state->bGenerateES || CompileTarget == HCT_FeatureLevelES3_1))
 		{
 			switch (state->target)
@@ -3586,7 +3592,7 @@ char* FGlslCodeBackend::GenerateCode(exec_list* ir, _mesa_glsl_parse_state* stat
 	FixRedundantCasts(ir);
 //IRDump(ir);
 
-	const bool bDefaultPrecisionIsHalf = ((HlslCompileFlags & HLSLCC_UseFullPrecisionInPS) == 0);
+	const bool bDefaultPrecisionIsHalf = ((HlslCompileFlags & HLSLCC_UseFullPrecisionInPS) == 0 && Frequency != HSF_ComputeShader);
 	const bool bUsesExternalTexture = ((HlslCompileFlags & HLSLCC_UsesExternalTexture) == HLSLCC_UsesExternalTexture);
 	
 	FBreakPrecisionChangesVisitor BreakPrecisionChangesVisitor(state, bDefaultPrecisionIsHalf);

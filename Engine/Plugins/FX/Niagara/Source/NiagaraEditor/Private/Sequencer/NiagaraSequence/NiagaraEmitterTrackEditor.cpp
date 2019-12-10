@@ -6,9 +6,12 @@
 #include "ViewModels/NiagaraSystemViewModel.h"
 #include "ViewModels/NiagaraEmitterHandleViewModel.h"
 #include "ViewModels/NiagaraEmitterViewModel.h"
+#include "ViewModels/NiagaraSystemSelectionViewModel.h"
+#include "ViewModels/Stack/NiagaraStackViewModel.h"
 #include "Sequencer/NiagaraSequence/NiagaraSequence.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "NiagaraEditorStyle.h"
+#include "NiagaraEditorModule.h"
 
 #include "EditorStyleSet.h"
 #include "Styling/SlateIconFinder.h"
@@ -16,6 +19,7 @@
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Input/SCheckBox.h"
+#include "Modules/ModuleManager.h"
 
 #define LOCTEXT_NAMESPACE "NiagaraEmitterTrackEditor"
 
@@ -29,6 +33,7 @@ public:
 	{
 		EmitterTrack = &InEmitterTrack;
 
+		FNiagaraEditorModule& NiagaraEditorModule = FModuleManager::LoadModuleChecked<FNiagaraEditorModule>("NiagaraEditor");
 		TSharedRef<SHorizontalBox> TrackBox = SNew(SHorizontalBox)
 			// Track initialization error icon.
 			+ SHorizontalBox::Slot()
@@ -41,17 +46,15 @@ public:
 				.Image(FEditorStyle::GetBrush("Icons.Info"))
 				.ToolTipText(this, &SEmitterTrackWidget::GetTrackErrorIconToolTip)
 			]
-			// Enabled checkbox.
+			// Stack issues icon
 			+ SHorizontalBox::Slot()
 			.AutoWidth()
 			.VAlign(VAlign_Center)
 			.Padding(3, 0, 0, 0)
 			[
-				SNew(SCheckBox)
-				.ToolTipText(LOCTEXT("EnabledTooltip", "Toggle whether or not this emitter is enabled."))
-				.IsChecked(this, &SEmitterTrackWidget::GetEnabledCheckState)
-				.OnCheckStateChanged(this, &SEmitterTrackWidget::OnEnabledCheckStateChanged)
-				.Visibility(this, &SEmitterTrackWidget::GetEnableCheckboxVisibility)
+				NiagaraEditorModule.GetWidgetProvider()->CreateStackIssueIcon( 
+					*EmitterTrack->GetEmitterHandleViewModel()->GetEmitterStackViewModel(),
+					*EmitterTrack->GetEmitterHandleViewModel()->GetEmitterStackViewModel()->GetRootEntry())
 			]
 			// Isolate toggle
 			+ SHorizontalBox::Slot()
@@ -93,6 +96,19 @@ public:
 					]
 				];
 		}
+
+		// Enabled checkbox.
+		TrackBox->AddSlot()
+			.AutoWidth()
+			.VAlign(VAlign_Center)
+			.Padding(3, 0, 0, 0)
+			[
+				SNew(SCheckBox)
+				.ToolTipText(LOCTEXT("EnabledTooltip", "Toggle whether or not this emitter is enabled."))
+				.IsChecked(this, &SEmitterTrackWidget::GetEnabledCheckState)
+				.OnCheckStateChanged(this, &SEmitterTrackWidget::OnEnabledCheckStateChanged)
+				.Visibility(this, &SEmitterTrackWidget::GetEnableCheckboxVisibility)
+			];
 
 		ChildSlot
 		[
@@ -141,28 +157,28 @@ private:
 
 	FReply OnToggleIsolateButtonClicked()
 	{
-		TArray<TSharedRef<FNiagaraEmitterHandleViewModel>> EmittersToIsolate;
+		TArray<FGuid> EmitterIdsToIsolate;
 		if (EmitterTrack.IsValid())
 		{
-			if (EmitterTrack->GetSystemViewModel().IsEmitterIsolated(EmitterTrack->GetEmitterHandleViewModel().ToSharedRef()) == false)
+			if (EmitterTrack->GetEmitterHandleViewModel()->GetIsIsolated() == false)
 			{
-				EmittersToIsolate.Add(EmitterTrack->GetEmitterHandleViewModel().ToSharedRef());
+				EmitterIdsToIsolate.Add(EmitterTrack->GetEmitterHandleViewModel()->GetId());
 			}
-			EmitterTrack->GetSystemViewModel().IsolateEmitters(EmittersToIsolate);
+			EmitterTrack->GetSystemViewModel().IsolateEmitters(EmitterIdsToIsolate);
 		}
 		return FReply::Handled();
 	}
 
 	FText GetToggleIsolateToolTip() const
 	{
-		return EmitterTrack.IsValid() && EmitterTrack->GetSystemViewModel().IsEmitterIsolated(EmitterTrack->GetEmitterHandleViewModel().ToSharedRef())
+		return EmitterTrack.IsValid() && EmitterTrack->GetEmitterHandleViewModel()->GetIsIsolated()
 			? LOCTEXT("TurnOffEmitterIsolation", "Disable emitter isolation.")
 			: LOCTEXT("IsolateThisEmitter", "Enable isolation for this emitter.");
 	}
 
 	FSlateColor GetToggleIsolateImageColor() const
 	{
-		return EmitterTrack.IsValid() && EmitterTrack->GetSystemViewModel().IsEmitterIsolated(EmitterTrack->GetEmitterHandleViewModel().ToSharedRef())
+		return EmitterTrack.IsValid() && EmitterTrack->GetEmitterHandleViewModel()->GetIsIsolated()
 			? FEditorStyle::GetSlateColor("SelectionColor")
 			: FLinearColor::Gray;
 	}
@@ -233,22 +249,21 @@ void FNiagaraEmitterTrackEditor::BuildTrackContextMenu( FMenuBuilder& MenuBuilde
 		MenuBuilder.BeginSection("Niagara", LOCTEXT("NiagaraContextMenuSectionName", "Niagara"));
 		{
 			MenuBuilder.AddMenuEntry(
-				SystemViewModel.IsEmitterIsolated(EmitterTrack->GetEmitterHandleViewModel().ToSharedRef())
+				EmitterTrack->GetEmitterHandleViewModel()->GetIsIsolated()
 					? LOCTEXT("RemoveFromIsolation", "Remove this from isolation.")
 					: LOCTEXT("AddToIsolation", "Add this to isolation"),
-				SystemViewModel.IsEmitterIsolated(EmitterTrack->GetEmitterHandleViewModel().ToSharedRef())
+				EmitterTrack->GetEmitterHandleViewModel()->GetIsIsolated()
 					? LOCTEXT("RemoveFromIsolation_NoChangeOthers", "Remove this emitter from isolation, without changing other emitters.")
 					: LOCTEXT("AddToIsolation_NoChangeOthers", "Add this emitter to isolation, without changing other emitters."),
 				FSlateIcon(),
 				FUIAction(FExecuteAction::CreateRaw(&SystemViewModel, &FNiagaraSystemViewModel::ToggleEmitterIsolation, EmitterTrack->GetEmitterHandleViewModel().ToSharedRef())));
 			
-			TArray<TSharedRef<FNiagaraEmitterHandleViewModel>> SelectedEmitters;
-			SystemViewModel.GetSelectedEmitterHandles(SelectedEmitters);
+			TArray<FGuid> SelectedEmitterHandleIds = SystemViewModel.GetSelectionViewModel()->GetSelectedEmitterHandleIds();
 			MenuBuilder.AddMenuEntry(
 				LOCTEXT("IsolateSelected", "Isolate all selected"),
 				LOCTEXT("IsolateSelectedToolTip", "Add all of the selected emitters to isloation"),
 				FSlateIcon(),
-				FUIAction(FExecuteAction::CreateRaw(&SystemViewModel, &FNiagaraSystemViewModel::IsolateEmitters, SelectedEmitters)));
+				FUIAction(FExecuteAction::CreateRaw(&SystemViewModel, &FNiagaraSystemViewModel::IsolateEmitters, SelectedEmitterHandleIds)));
 		}
 		MenuBuilder.EndSection();
 	}

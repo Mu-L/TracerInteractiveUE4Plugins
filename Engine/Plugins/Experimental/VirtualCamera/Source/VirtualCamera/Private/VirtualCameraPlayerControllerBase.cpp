@@ -114,7 +114,7 @@ void AVirtualCameraPlayerControllerBase::BeginPlay()
 		if (IRemoteSessionModule* RemoteSession = FModuleManager::LoadModulePtr<IRemoteSessionModule>("RemoteSession"))
 		{
 			TMap<FString, ERemoteSessionChannelMode> RequiredChannels;
-			RequiredChannels.Add(FRemoteSessionFrameBufferChannel::StaticType(), ERemoteSessionChannelMode::Write);
+			RequiredChannels.Add(FRemoteSessionFrameBufferChannelFactoryWorker::StaticType(), ERemoteSessionChannelMode::Write);
 			RequiredChannels.Add(FRemoteSessionInputChannel::StaticType(), ERemoteSessionChannelMode::Read);
 			RequiredChannels.Add(FRemoteSessionXRTrackingChannel::StaticType(), ERemoteSessionChannelMode::Read);
 
@@ -275,16 +275,17 @@ static const FName RemoteSessionTrackingSystemName(TEXT("RemoteSessionXRTracking
 
 bool AVirtualCameraPlayerControllerBase::GetCurrentTrackerLocationAndRotation(FVector& OutTrackerLocation, FRotator& OutTrackerRotation)
 {
-	FQuat ARKitQuaternion;
+	bool bTransformSet = false;
 
 	switch (InputSource)
 	{
 		case ETrackerInputSource::ARKit:
 			if (GEngine && GEngine->XRSystem.IsValid() && GEngine->XRSystem->GetSystemName() == RemoteSessionTrackingSystemName)
 			{
+				FQuat ARKitQuaternion;
 				GEngine->XRSystem->GetCurrentPose(0, ARKitQuaternion, OutTrackerLocation);
 				OutTrackerRotation = ARKitQuaternion.Rotator();
-				return true;
+				bTransformSet = true;
 			}
 			break;
 
@@ -300,18 +301,22 @@ bool AVirtualCameraPlayerControllerBase::GetCurrentTrackerLocationAndRotation(FV
 					OutTrackerLocation = TransformFrameData->Transform.GetLocation();
 					OutTrackerRotation = TransformFrameData->Transform.GetRotation().Rotator();
 
-					return true;
+					bTransformSet = true;
 				}
 				else if (LiveLinkClient->EvaluateFrame_AnyThread(LiveLinkTargetName, ULiveLinkAnimationRole::StaticClass(), EvaluateData))
 				{
 					FLiveLinkAnimationFrameData* AnimationFrameData = EvaluateData.FrameData.Cast<FLiveLinkAnimationFrameData>();
-					check(AnimationFrameData);
-					if (AnimationFrameData->Transforms.Num() > 0)
-					{
-						OutTrackerLocation = AnimationFrameData->Transforms[0].GetLocation();
-						OutTrackerRotation = AnimationFrameData->Transforms[0].GetRotation().Rotator();
+					FLiveLinkSkeletonStaticData* AnimationStaticData = EvaluateData.StaticData.Cast<FLiveLinkSkeletonStaticData>();
+					check(AnimationFrameData && AnimationStaticData);
 
-						return true;
+					int32 RootIndex = AnimationStaticData->FindRootBone();
+					if (AnimationFrameData->Transforms.IsValidIndex(RootIndex))
+					{
+						
+						OutTrackerLocation = AnimationFrameData->Transforms[RootIndex].GetLocation();
+						OutTrackerRotation = AnimationFrameData->Transforms[RootIndex].GetRotation().Rotator();
+
+						bTransformSet = true;
 					}
 				}
 			}
@@ -319,15 +324,18 @@ bool AVirtualCameraPlayerControllerBase::GetCurrentTrackerLocationAndRotation(FV
 
 		case ETrackerInputSource::Custom:
 			GetCustomTrackerLocationAndRotation(OutTrackerLocation, OutTrackerRotation);
-			return true;
+			bTransformSet = true;
+			break;
 
 		default:
 			UE_LOG(LogVirtualCamera, Warning, TEXT("Selected tracker source is not yet supported"))
 			break;
 	}
 
-	// Return failure status if we couldn't find device to track or device isn't supported
-	return false;
+	bTransformSet = bTransformSet && !OutTrackerLocation.ContainsNaN() && !OutTrackerRotation.ContainsNaN();
+
+	// Return failure status if we couldn't find device to track or device isn't supported or the values contains NaN
+	return bTransformSet;
 }
 
 bool AVirtualCameraPlayerControllerBase::IsTouchInputInFocusMode()
@@ -492,9 +500,9 @@ void AVirtualCameraPlayerControllerBase::PilotTargetedCamera(AVirtualCameraPawnB
 		TargetCameraComponent->CurrentFocalLength = CameraToFollow->CurrentFocalLength;
 		TargetCameraComponent->FocusSettings = CameraToFollow->FocusSettings;
 		TargetCameraComponent->LensSettings = CameraToFollow->LensSettings;
-		TargetCameraComponent->FilmbackSettings = CameraToFollow->FilmbackSettings;
+		TargetCameraComponent->Filmback = CameraToFollow->Filmback;
 	}
-	TargetCameraComponent->SetRelativeLocationAndRotation(CameraToFollow->RelativeLocation, CameraToFollow->RelativeRotation);
+	TargetCameraComponent->SetRelativeLocationAndRotation(CameraToFollow->GetRelativeLocation(), CameraToFollow->GetRelativeRotation());
 }
 
 bool AVirtualCameraPlayerControllerBase::InputTouch(uint32 Handle, ETouchType::Type Type, const FVector2D & TouchLocation, float Force, FDateTime DeviceTimestamp, uint32 TouchpadIndex)

@@ -12,19 +12,18 @@
 #include "ViewModels/NiagaraEmitterHandleViewModel.h"
 #include "ViewModels/NiagaraSystemViewModel.h"
 #include "ViewModels/Stack/NiagaraStackViewModel.h"
-#include "ViewModels/Stack/NiagaraStackSpacer.h"
 #include "ViewModels/Stack/NiagaraStackModuleItemOutputCollection.h"
 #include "ViewModels/Stack/NiagaraStackModuleItemLinkedInputCollection.h"
 #include "ViewModels/Stack/NiagaraStackModuleItemOutput.h"
 #include "ViewModels/Stack/NiagaraStackErrorItem.h"
 #include "ViewModels/Stack/NiagaraStackInputCategory.h" 
 #include "ViewModels/Stack/NiagaraStackPropertyRow.h"
-#include "ViewModels/Stack/NiagaraStackAdvancedExpander.h"
+#include "ViewModels/Stack/NiagaraStackItemFooter.h"
 #include "ViewModels/Stack/NiagaraStackFunctionInputCollection.h"
 #include "ViewModels/Stack/NiagaraStackModuleItem.h"
 #include "ViewModels/Stack/NiagaraStackRendererItem.h"
 #include "ViewModels/Stack/NiagaraStackParameterStoreEntry.h"
-#include "ViewModels/Stack/NiagaraStackEmitterSpawnScriptItemGroup.h"
+#include "ViewModels/Stack/NiagaraStackEmitterSettingsGroup.h"
 #include "ViewModels/Stack/NiagaraStackEventScriptItemGroup.h"
 #include "Framework/Application/SlateApplication.h"
 #include "IContentBrowserSingleton.h"
@@ -40,265 +39,55 @@
 #include "Stack/SNiagaraStackFunctionInputValue.h"
 #include "Stack/SNiagaraStackEmitterPropertiesItem.h"
 #include "Stack/SNiagaraStackEventHandlerPropertiesItem.h"
-#include "Stack/SNiagaraStackItemExpander.h"
+#include "Stack/SNiagaraStackItemFooter.h"
 #include "Stack/SNiagaraStackItemGroup.h"
 #include "Stack/SNiagaraStackModuleItem.h"
 #include "Stack/SNiagaraStackParameterStoreEntryName.h"
 #include "Stack/SNiagaraStackParameterStoreEntryValue.h"
 #include "Stack/SNiagaraStackRendererItem.h"
 #include "Stack/SNiagaraStackTableRow.h"
+#include "Stack/SNiagaraStackIssueIcon.h"
 #include "NiagaraEditorWidgetsUtilities.h"
 #include "DragAndDrop/DecoratedDragDropOp.h"
 #include "Stack/SNiagaraStackErrorItem.h"
 #include "NiagaraStackEditorData.h"
 #include "ScopedTransaction.h"
 #include "Widgets/Layout/SWrapBox.h"
-#include "Stack/SNiagaraStackSpacer.h"
 #include "ViewModels/Stack/NiagaraStackRoot.h"
-
-/** Contains data for a socket drag and drop operation in the StackEntry node. */
-class FNiagaraStackEntryDragDropOp : public FDecoratedDragDropOp
-{
-public:
-	DRAG_DROP_OPERATOR_TYPE(FNiagaraStackEntryDragDropOp, FDecoratedDragDropOp)
-
-public:
-	FNiagaraStackEntryDragDropOp(TArray<UNiagaraStackEntry*> InDraggedEntries)
-	{
-		DraggedEntries = InDraggedEntries;
-	}
-
-	const TArray<UNiagaraStackEntry*> GetDraggedEntries() const
-	{
-		return DraggedEntries;
-	}
-
-private:
-	TArray<UNiagaraStackEntry*> DraggedEntries;
-};
+#include "Subsystems/AssetEditorSubsystem.h"
 
 #define LOCTEXT_NAMESPACE "NiagaraStack"
 
-const float SpacerHeight = 6;
-
-const FText SNiagaraStack::OccurencesFormat = NSLOCTEXT("NiagaraStack", "OccurencesFound", "{0} / {1}");
-
-void SNiagaraStack::Construct(const FArguments& InArgs, UNiagaraStackViewModel* InStackViewModel)
+class SNiagaraStackEmitterHeader : public SCompoundWidget
 {
-	StackViewModel = InStackViewModel;
-	StackViewModel->OnStructureChanged().AddSP(this, &SNiagaraStack::StackStructureChanged);
-	StackViewModel->OnSearchCompleted().AddSP(this, &SNiagaraStack::OnStackSearchComplete); 
-	NameColumnWidth = .3f;
-	ContentColumnWidth = .7f;
-	PinIsPinnedColor = FNiagaraEditorWidgetsStyle::Get().GetColor("NiagaraEditor.Stack.ForegroundColor");
-	PinIsUnpinnedColor = PinIsPinnedColor.Desaturate(.4f);
-	CurrentPinColor = StackViewModel->GetSystemViewModel()->GetIsEmitterPinned(StackViewModel->GetEmitterHandleViewModel()->AsShared()) ? PinIsPinnedColor: PinIsUnpinnedColor;
-	bNeedsJumpToNextOccurence = false;
+public:
+	SLATE_BEGIN_ARGS(SNiagaraStackEmitterHeader) {}
+		SLATE_ATTRIBUTE(EVisibility, IssueIconVisibility);
+	SLATE_END_ARGS();
 
-	ConstructHeaderWidget();
-	TSharedPtr<SWidget> HeaderBox;
-	ChildSlot
-	[
-		SAssignNew(HeaderBox, SVerticalBox)
-		+ SVerticalBox::Slot()
-		.AutoHeight()
-		.Padding(0, 0, 0, 3)
+	void Construct(const FArguments& InArgs, TSharedRef<FNiagaraEmitterHandleViewModel> InEmitterHandleViewModel, UNiagaraStackEntry* InRootEntry)
+	{
+		EmitterHandleViewModel = InEmitterHandleViewModel;
+
+		ChildSlot
 		[
-			SNew(SBorder)
-			.BorderImage(FEditorStyle::GetBrush("ToolPanel.GroupBorder"))
-			.Padding(3)
-			[
-				HeaderWidget.ToSharedRef()
-			]
-		]
-		+ SVerticalBox::Slot()
-		.Padding(0)
-		[
-			SNew(SBorder)
-			.BorderImage(FEditorStyle::GetBrush("ToolPanel.GroupBorder"))
-			.Padding(5)
-			[
-				SAssignNew(StackTree, STreeView<UNiagaraStackEntry*>)
-				.OnGenerateRow(this, &SNiagaraStack::OnGenerateRowForStackItem)
-				.OnGetChildren(this, &SNiagaraStack::OnGetChildren)
-				.TreeItemsSource(&StackViewModel->GetRootEntries())
-				.OnTreeViewScrolled(this, &SNiagaraStack::StackTreeScrolled)
-			]
-		]
-	];
+			SNew(SVerticalBox)
 
-	StackTree->SetScrollOffset(StackViewModel->GetLastScrollPosition());
-
-	auto OnHeaderMouseButtonUp = [this](const FGeometry&, const FPointerEvent& MouseEvent) -> FReply
-	{
-		if (MouseEvent.GetEffectingButton() == EKeys::RightMouseButton)
-		{
-			FMenuBuilder MenuBuilder(true, nullptr);
-			MenuBuilder.BeginSection("EmitterInlineMenuActions", LOCTEXT("EmitterActions", "Emitter Actions"));
-			{
-				FUIAction Action(FExecuteAction::CreateSP(this, &SNiagaraStack::SetEmitterEnabled, !StackViewModel->GetEmitterHandleViewModel()->GetIsEnabled()),
-					FCanExecuteAction(),
-					FIsActionChecked::CreateSP(this, &SNiagaraStack::CheckEmitterEnabledStatus, true));
-				MenuBuilder.AddMenuEntry(
-					LOCTEXT("IsEnabled", "Is Enabled"),
-					LOCTEXT("ToggleEmitterEnabledToolTip", "Toggle emitter enabled/disabled state"),
-					FSlateIcon(),
-					Action,
-					NAME_None,
-					EUserInterfaceActionType::Check);
-
-				if (!GetEmitterNameIsReadOnly()) // Only allow renaming local copies of Emitters in Systems
-				{
-					MenuBuilder.AddMenuEntry(
-						LOCTEXT("RenameEmitter", "Rename Emitter"),
-						LOCTEXT("RenameEmitterToolTip", "Rename this local emitter copy"),
-						FSlateIcon(),
-						FUIAction(FExecuteAction::CreateSP(InlineEditableTextBlock.Get(), &SInlineEditableTextBlock::EnterEditingMode)));
-				}
-
-				MenuBuilder.AddMenuEntry(
-					LOCTEXT("RemoveSourceEmitter", "Remove Source Emitter"),
-					LOCTEXT("RemoveSourceEmitterToolTip", "Removes source information from this emitter, preventing inheritance of any further changes."),
-					FSlateIcon(),
-					FUIAction(
-						FExecuteAction::CreateUObject(StackViewModel, &UNiagaraStackViewModel::RemoveEmitterSource),
-						FCanExecuteAction::CreateUObject(StackViewModel, &UNiagaraStackViewModel::HasParentEmitter)));
-
-				MenuBuilder.AddMenuEntry(
-					LOCTEXT("ShowEmitterInContentBrowser", "Show in Content Browser"),
-					LOCTEXT("ShowEmitterInContentBrowserToolTip", "Show the emitter in this stack in the Content Browser"),
-					FSlateIcon(),
-					FUIAction(FExecuteAction::CreateSP(this, &SNiagaraStack::ShowEmitterInContentBrowser))); 
-
-				MenuBuilder.AddMenuEntry(
-					LOCTEXT("CollapseStack", "Collapse All"),
-					LOCTEXT("CollapseStackToolTip", "Collapses every row in the stack."),
-					FSlateIcon(),
-					FUIAction(FExecuteAction::CreateSP(this, &SNiagaraStack::CollapseAll)));
-				
-				TSharedPtr<FUICommandInfo> ExpandStackGroups = FNiagaraEditorModule::Get().Commands().CollapseStackToHeaders;
-				MenuBuilder.AddMenuEntry(
-					ExpandStackGroups->GetLabel(),
-					ExpandStackGroups->GetDescription(),
-					FSlateIcon(),
-					FUIAction(FExecuteAction::CreateUObject(StackViewModel, &UNiagaraStackViewModel::CollapseToHeaders)));
-			}
-			MenuBuilder.EndSection();
-			MenuBuilder.BeginSection("EmitterNavigateTo", 
-				FText::Format(LOCTEXT("EmitterNavigateTo", "Navigate to {0} Section:"), StackViewModel->GetEmitterHandleViewModel()->GetNameText()));
-			{
-				// Parse all children of root entries and if they are UNiagaraStackItemGroup then add a navigate menu entry
-				TArray<UNiagaraStackEntry*> EntriesToProcess(StackViewModel->GetRootEntries());
-				TArray<UNiagaraStackEntry*> RootChildren;
-				while (EntriesToProcess.Num() > 0)
-				{
-					UNiagaraStackEntry* EntryToProcess = EntriesToProcess[0];
-					EntriesToProcess.RemoveAtSwap(0);
-					EntryToProcess->GetUnfilteredChildren(RootChildren);
-				}
-				for (auto RootChild: RootChildren)
-				{
-					UNiagaraStackItemGroup* GroupChild = Cast<UNiagaraStackItemGroup>(RootChild);
-					if (GroupChild != nullptr)
-					{
-						MenuBuilder.AddMenuEntry(
-							RootChild->GetDisplayName(),
-							FText::Format(LOCTEXT("EmitterTooltip", "Navigate to {0}"), RootChild->GetDisplayName()),
-							FSlateIcon(),
-							FUIAction(FExecuteAction::CreateSP(this, &SNiagaraStack::NavigateTo, RootChild)));
-					}
-				}
-			}
-			MenuBuilder.EndSection();
-			
-			MenuBuilder.BeginSection("StackActions", LOCTEXT("StackActions", "Stack Actions"));
-			if (StackViewModel->HasDismissedStackIssues())
-			{
-				MenuBuilder.AddMenuEntry(
-					LOCTEXT("UndismissIssues", "Undismiss All Stack Issues"),
-					LOCTEXT("ShowAssetInContentBrowserToolTip", "Undismiss all issues that were previously dismissed for this stack, if any"),
-					FSlateIcon(),
-					FUIAction(FExecuteAction::CreateUObject(StackViewModel, &UNiagaraStackViewModel::UndismissAllIssues)));
-			}
-			MenuBuilder.EndSection();
-
-			FWidgetPath WidgetPath = MouseEvent.GetEventPath() != nullptr ? *MouseEvent.GetEventPath() : FWidgetPath();
-			FSlateApplication::Get().PushMenu(AsShared(), WidgetPath, MenuBuilder.MakeWidget(), MouseEvent.GetScreenSpacePosition(), FPopupTransitionEffect(FPopupTransitionEffect::ContextMenu));
-			return FReply::Handled();
-		}
-		return FReply::Unhandled();
-	};
-	HeaderBox->SetOnMouseButtonUp(FPointerEventHandler::CreateLambda(OnHeaderMouseButtonUp));
-	
-	SynchronizeTreeExpansion();
-}
-
-void SNiagaraStack::SynchronizeTreeExpansion()
-{
-	TArray<UNiagaraStackEntry*> EntriesToProcess(StackViewModel->GetRootEntries());
-	while (EntriesToProcess.Num() > 0)
-	{
-		UNiagaraStackEntry* EntryToProcess = EntriesToProcess[0];
-		EntriesToProcess.RemoveAtSwap(0);
-
-		if (EntryToProcess->GetIsExpanded())
-		{
-			StackTree->SetItemExpansion(EntryToProcess, true);
-			EntryToProcess->GetFilteredChildren(EntriesToProcess);
-		}
-		else
-		{
-			StackTree->SetItemExpansion(EntryToProcess, false);
-		}
-	}
-}
-
-void SNiagaraStack::ConstructHeaderWidget()
-{
-	if (!StackViewModel->GetEmitterHandleViewModel().IsValid() || !StackViewModel->GetSystemViewModel().IsValid())
-	{
-		HeaderWidget = SNullWidget::NullWidget;
-	}
-	else
-	{
-		SAssignNew(HeaderWidget, SVerticalBox)
-			//~ Enable check box, pin text box, view source emitter button, and external header controls.
+			//~ Enable check box, view source emitter button, and external header controls.
 			+ SVerticalBox::Slot()
 			.AutoHeight()
 			.HAlign(HAlign_Fill)
 			[
-				//~ Enabled
 				SNew(SHorizontalBox)
+				//~ Enabled
 				+ SHorizontalBox::Slot()
 				.AutoWidth()
-				.Padding(2)
+				.Padding(2, 0, 0, 0)
 				[
 					SNew(SCheckBox)
 					.ToolTipText(LOCTEXT("EnabledToolTip", "Toggles whether this emitter is enabled. Disabled emitters don't simulate or render."))
-					.IsChecked(StackViewModel->GetEmitterHandleViewModel()->AsShared(), &FNiagaraEmitterHandleViewModel::GetIsEnabledCheckState)
-					.OnCheckStateChanged(StackViewModel->GetEmitterHandleViewModel()->AsShared(), &FNiagaraEmitterHandleViewModel::OnIsEnabledCheckStateChanged)
-					.Visibility(this, &SNiagaraStack::GetEnableCheckboxVisibility) 
-				]
-				// Pin
-				+ SHorizontalBox::Slot()
-				.VAlign(VAlign_Center)
-				.AutoWidth()
-				[
-					SNew(SButton)
-					.IsFocusable(false)
-					.ToolTipText(LOCTEXT("PinToolTip", "Pin this emitter"))
-					.ButtonStyle(FEditorStyle::Get(), "HoverHintOnly")
-					.ForegroundColor(this, &SNiagaraStack::GetPinColor)
-					.ContentPadding(2)
-					.OnClicked(this, &SNiagaraStack::PinButtonPressed)
-					.Visibility(this, &SNiagaraStack::GetPinEmitterVisibility)
-					.Content()
-					[
-						SNew(STextBlock)
-						.Font(FEditorStyle::Get().GetFontStyle("FontAwesome.9"))
-						.Text(FText::FromString(FString(TEXT("\xf08d"))))
-						.RenderTransformPivot(FVector2D(.5f, .5f))
-					]
+					.IsChecked(EmitterHandleViewModel.ToSharedRef(), &FNiagaraEmitterHandleViewModel::GetIsEnabledCheckState)
+					.OnCheckStateChanged(EmitterHandleViewModel.ToSharedRef(), &FNiagaraEmitterHandleViewModel::OnIsEnabledCheckStateChanged)
 				]
 				// Name and Source Emitter Name
 				+ SHorizontalBox::Slot()
@@ -309,25 +98,38 @@ void SNiagaraStack::ConstructHeaderWidget()
 					.UseAllottedWidth(true)
 					+ SWrapBox::Slot()
 					.Padding(3, 0)
-					[						
-						SAssignNew(InlineEditableTextBlock, SInlineEditableTextBlock)
-						.ToolTipText(this, &SNiagaraStack::GetEmitterNameToolTip)
-						.Style(FNiagaraEditorStyle::Get(), "NiagaraEditor.HeadingInlineEditableText") 
-						.Clipping(EWidgetClipping::ClipToBoundsAlways)
-						.Text(StackViewModel->GetEmitterHandleViewModel()->AsShared(), &FNiagaraEmitterHandleViewModel::GetNameText)
-						.OnTextCommitted(this, &SNiagaraStack::OnStackViewNameTextCommitted)
-						.OnVerifyTextChanged(StackViewModel->GetEmitterHandleViewModel()->AsShared(), &FNiagaraEmitterHandleViewModel::VerifyNameTextChanged)
-						.IsReadOnly(this, &SNiagaraStack::GetEmitterNameIsReadOnly)
+					[
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot()
+						[
+							SAssignNew(EmitterNameTextBlock, SInlineEditableTextBlock)
+							.ToolTipText(this, &SNiagaraStackEmitterHeader::GetEmitterNameToolTip)
+							.Style(FNiagaraEditorStyle::Get(), "NiagaraEditor.HeadingInlineEditableText") 
+							.Clipping(EWidgetClipping::ClipToBoundsAlways)
+							.Text(EmitterHandleViewModel.ToSharedRef(), &FNiagaraEmitterHandleViewModel::GetNameText)
+							.OnTextCommitted(EmitterHandleViewModel.ToSharedRef(), &FNiagaraEmitterHandleViewModel::OnNameTextComitted)
+							.OnVerifyTextChanged(EmitterHandleViewModel.ToSharedRef(), &FNiagaraEmitterHandleViewModel::VerifyNameTextChanged)
+							.IsReadOnly(EmitterHandleViewModel->CanRenameEmitter() == false)
+						]
+						// Issue Icon
+						+ SHorizontalBox::Slot()
+						.AutoWidth()
+						.VAlign(VAlign_Center)
+						.Padding(4, 0, 0, 0)
+						[
+							SNew(SNiagaraStackIssueIcon, EmitterHandleViewModel->GetEmitterStackViewModel(), InRootEntry)
+							.Visibility(InArgs._IssueIconVisibility)
+						]
 					]
 					+ SWrapBox::Slot()
-					.Padding(3, 0)
+					.Padding(4, 0)
 					[
 						SNew(STextBlock)
-						.ToolTipText(this, &SNiagaraStack::GetEmitterNameToolTip)
+						.ToolTipText(this, &SNiagaraStackEmitterHeader::GetEmitterNameToolTip)
 						.TextStyle(FNiagaraEditorStyle::Get(), "NiagaraEditor.SubduedHeadingTextBox")
 						.Clipping(EWidgetClipping::ClipToBoundsAlways)
-						.Text(this, &SNiagaraStack::GetSourceEmitterNameText)
-						.Visibility(this, &SNiagaraStack::GetSourceEmitterNameVisibility) 
+						.Text(EmitterHandleViewModel->GetEmitterViewModel(), &FNiagaraEmitterViewModel::GetParentNameText)
+						.Visibility(this, &SNiagaraStackEmitterHeader::GetSourceEmitterNameVisibility) 
 					]
  				]
 				// Open and Focus Source Emitter
@@ -341,10 +143,10 @@ void SNiagaraStack::ConstructHeaderWidget()
 					.IsFocusable(false)
 					.ToolTipText(LOCTEXT("OpenAndFocusParentEmitterToolTip", "Open and Focus Parent Emitter"))
 					.ButtonStyle(FEditorStyle::Get(), "HoverHintOnly")
-					.ForegroundColor(this, &SNiagaraStack::GetPinColor)
+					.ForegroundColor(FNiagaraEditorWidgetsStyle::Get().GetColor("NiagaraEditor.Stack.ForegroundColor"))
 					.ContentPadding(2)
-					.OnClicked(this, &SNiagaraStack::OpenParentEmitter)
-					.Visibility(this, &SNiagaraStack::GetOpenSourceEmitterVisibility)
+					.OnClicked(this, &SNiagaraStackEmitterHeader::OpenParentEmitter)
+					.Visibility(this, &SNiagaraStackEmitterHeader::GetOpenSourceEmitterVisibility)
 					// GoToSource icon is 30x30px so we scale it down to stay in line with other 12x12px UI
 					.DesiredSizeScale(FVector2D(0.55f, 0.55f))
 					.Content()
@@ -363,62 +165,197 @@ void SNiagaraStack::ConstructHeaderWidget()
 			.Padding(2)
 			[
 				SNew(STextBlock)
-				.Text(StackViewModel->GetEmitterHandleViewModel()->GetEmitterViewModel()->AsShared(), &FNiagaraEmitterViewModel::GetStatsText)
+				.Text(EmitterHandleViewModel->GetEmitterViewModel(), &FNiagaraEmitterViewModel::GetStatsText)
 			]
-			
-			//~ Search, view options
-			+ SVerticalBox::Slot()
-			.AutoHeight()
-			.HAlign(HAlign_Fill)
-			.Padding(2, 4, 2, 4)
+		];
+	}
+
+	void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime)
+	{
+		if (EmitterHandleViewModel->GetIsRenamePending())
+		{
+			EmitterHandleViewModel->SetIsRenamePending(false);
+			EmitterNameTextBlock->EnterEditingMode();
+		}
+	}
+
+private:
+	FText GetEmitterNameToolTip() const
+	{
+		if (EmitterHandleViewModel->GetEmitterViewModel()->HasParentEmitter())
+		{
+			// We are looking at this Emitter in a System Asset and it has a valid parent Emitter
+			return FText::Format(LOCTEXT("EmitterNameAndPath", "{0}\nParent: {1}"), EmitterHandleViewModel->GetNameText(), EmitterHandleViewModel->GetEmitterViewModel()->GetParentPathNameText());
+		}
+		else
+		{
+			// We are looking at this Emitter in an Emitter Asset or we are looking at this Emitter in a System Asset and it does not have a valid parent Emitter
+			return EmitterHandleViewModel->GetNameText();
+		}
+	}
+
+	EVisibility GetSourceEmitterNameVisibility() const
+	{
+		bool bIsRenamed = false;
+		if (EmitterHandleViewModel->GetEmitterViewModel()->HasParentEmitter())
+		{
+			const FText CurrentNameText = EmitterHandleViewModel->GetNameText();
+			const FText ParentNameText = EmitterHandleViewModel->GetEmitterViewModel()->GetParentNameText();
+			bIsRenamed = CurrentNameText.EqualTo(ParentNameText) == false;
+		}
+		return bIsRenamed ? EVisibility::Visible : EVisibility::Collapsed;
+	}
+
+
+	FReply OpenParentEmitter()
+	{
+		UNiagaraEmitter* ParentEmitter = const_cast<UNiagaraEmitter*>(EmitterHandleViewModel->GetEmitterViewModel()->GetParentEmitter());
+		if (ParentEmitter != nullptr)
+		{
+			GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(ParentEmitter);
+		}
+		return FReply::Handled();
+	}
+
+	EVisibility GetOpenSourceEmitterVisibility() const
+	{
+		return EmitterHandleViewModel->GetEmitterViewModel()->GetEmitter()->GetParent() != nullptr ? EVisibility::Visible : EVisibility::Collapsed;
+	}
+
+private:
+	TSharedPtr<FNiagaraEmitterHandleViewModel> EmitterHandleViewModel;
+
+	TSharedPtr<SInlineEditableTextBlock> EmitterNameTextBlock;
+};
+
+const float SpacerHeight = 6;
+
+const FText SNiagaraStack::OccurencesFormat = NSLOCTEXT("NiagaraStack", "OccurencesFound", "{0} / {1}");
+
+void SNiagaraStack::Construct(const FArguments& InArgs, UNiagaraStackViewModel* InStackViewModel)
+{
+	StackViewModel = InStackViewModel;
+	StackViewModel->OnStructureChanged().AddSP(this, &SNiagaraStack::StackStructureChanged);
+	StackViewModel->OnSearchCompleted().AddSP(this, &SNiagaraStack::OnStackSearchComplete); 
+	NameColumnWidth = .3f;
+	ContentColumnWidth = .7f;
+	bNeedsJumpToNextOccurence = false;
+
+	ChildSlot
+	[
+		SNew(SVerticalBox)
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		.Padding(1, 1, 1, 4)
+		[
+			SNew(SBorder)
+			.BorderImage(FEditorStyle::GetBrush("ToolPanel.GroupBorder"))
+			.Padding(5)
 			[
-				// Search box
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot()
-				[
-					SAssignNew(SearchBox, SSearchBox)
-					.HintText(LOCTEXT("StackSearchBoxHint", "Search the stack"))
-					.SearchResultData(this, &SNiagaraStack::GetSearchResultData)
-					.IsSearching(this, &SNiagaraStack::GetIsSearching)
-					.OnTextChanged(this, &SNiagaraStack::OnSearchTextChanged)
-					.DelayChangeNotificationsWhileTyping(true)
-					.OnTextCommitted(this, &SNiagaraStack::OnSearchBoxTextCommitted)
-					.OnSearch(this, &SNiagaraStack::OnSearchBoxSearch)
-				]
-				// View options
-				+ SHorizontalBox::Slot()
-				.AutoWidth()
-				.Padding(4, 0, 0, 0)
-				[
-					SNew(SComboButton)
-					.ButtonStyle(FEditorStyle::Get(), "HoverHintOnly")
-					.ForegroundColor(FSlateColor::UseForeground())
-					.ToolTipText(LOCTEXT("ViewOptionsToolTip", "View Options"))
-					.OnGetMenuContent(this, &SNiagaraStack::GetViewOptionsMenu)
-					.ContentPadding(0)
-					.MenuPlacement(MenuPlacement_BelowRightAnchor)
-					.ButtonContent()
-					[
-						SNew(SBox)
-						.HAlign(HAlign_Center)
-						.VAlign(VAlign_Center)
-						[
-							SNew(SImage)
-							.Image(FEditorStyle::GetBrush("GenericViewButton"))
-							.ColorAndOpacity(FNiagaraEditorWidgetsStyle::Get().GetColor("NiagaraEditor.Stack.FlatButtonColor"))
-						]
-					]
-				]
-			];
+				ConstructHeaderWidget()
+			]
+		]
+		+ SVerticalBox::Slot()
+		.Padding(1)
+		[
+			SNew(SBorder)
+			.BorderImage(FEditorStyle::GetBrush("WhiteBrush"))
+			.BorderBackgroundColor(FNiagaraEditorWidgetsStyle::Get().GetColor("NiagaraEditor.Stack.BackgroundColor"))
+			[
+				SAssignNew(StackTree, STreeView<UNiagaraStackEntry*>)
+				.OnGenerateRow(this, &SNiagaraStack::OnGenerateRowForStackItem)
+				.OnGetChildren(this, &SNiagaraStack::OnGetChildren)
+				.TreeItemsSource(&StackViewModel->GetRootEntryAsArray())
+				.OnTreeViewScrolled(this, &SNiagaraStack::StackTreeScrolled)
+				.SelectionMode(ESelectionMode::Single)
+				.OnItemToString_Debug_Static(&FNiagaraStackEditorWidgetsUtilities::StackEntryToStringForListDebug)
+			]
+		]
+	];
+
+	StackTree->SetScrollOffset(StackViewModel->GetLastScrollPosition());
+
+	SynchronizeTreeExpansion();
+}
+
+void SNiagaraStack::SynchronizeTreeExpansion()
+{
+	TArray<UNiagaraStackEntry*> EntriesToProcess(StackViewModel->GetRootEntryAsArray());
+	while (EntriesToProcess.Num() > 0)
+	{
+		UNiagaraStackEntry* EntryToProcess = EntriesToProcess[0];
+		EntriesToProcess.RemoveAtSwap(0);
+
+		if (EntryToProcess->GetIsExpanded())
+		{
+			StackTree->SetItemExpansion(EntryToProcess, true);
+			EntryToProcess->GetFilteredChildren(EntriesToProcess);
+		}
+		else
+		{
+			StackTree->SetItemExpansion(EntryToProcess, false);
+		}
 	}
 }
 
-FReply SNiagaraStack::PinButtonPressed()
+TSharedRef<SWidget> SNiagaraStack::ConstructHeaderWidget()
 {
-	bool bNewPinnedState = !StackViewModel->GetSystemViewModel()->GetIsEmitterPinned(StackViewModel->GetEmitterHandleViewModel()->AsShared());
-	StackViewModel->GetSystemViewModel()->SetEmitterPinnedState(StackViewModel->GetEmitterHandleViewModel()->AsShared(), bNewPinnedState);
-	CurrentPinColor = bNewPinnedState ? PinIsPinnedColor : PinIsUnpinnedColor;
-	return FReply::Handled();
+	return SNew(SVerticalBox)
+		//~ Top level object list view
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		.HAlign(HAlign_Fill)
+		[
+			SAssignNew(HeaderList, SListView<TSharedRef<UNiagaraStackViewModel::FTopLevelViewModel>>)
+			.ListItemsSource(&StackViewModel->GetTopLevelViewModels())
+			.SelectionMode(ESelectionMode::None)
+			.OnGenerateRow(this, &SNiagaraStack::OnGenerateRowForTopLevelObject)
+		]
+		
+		//~ Search, view options
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		.HAlign(HAlign_Fill)
+		.Padding(2, 4, 2, 4)
+		[
+			// Search box
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot()
+			[
+				SAssignNew(SearchBox, SSearchBox)
+				.HintText(LOCTEXT("StackSearchBoxHint", "Search the stack"))
+				.SearchResultData(this, &SNiagaraStack::GetSearchResultData)
+				.IsSearching(this, &SNiagaraStack::GetIsSearching)
+				.OnTextChanged(this, &SNiagaraStack::OnSearchTextChanged)
+				.DelayChangeNotificationsWhileTyping(true)
+				.OnTextCommitted(this, &SNiagaraStack::OnSearchBoxTextCommitted)
+				.OnSearch(this, &SNiagaraStack::OnSearchBoxSearch)
+			]
+			// View options
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			.Padding(4, 0, 0, 0)
+			[
+				SNew(SComboButton)
+				.ButtonStyle(FEditorStyle::Get(), "HoverHintOnly")
+				.ForegroundColor(FSlateColor::UseForeground())
+				.ToolTipText(LOCTEXT("ViewOptionsToolTip", "View Options"))
+				.OnGetMenuContent(this, &SNiagaraStack::GetViewOptionsMenu)
+				.ContentPadding(0)
+				.MenuPlacement(MenuPlacement_BelowRightAnchor)
+				.ButtonContent()
+				[
+					SNew(SBox)
+					.HAlign(HAlign_Center)
+					.VAlign(VAlign_Center)
+					[
+						SNew(SImage)
+						.Image(FEditorStyle::GetBrush("GenericViewButton"))
+						.ColorAndOpacity(FNiagaraEditorWidgetsStyle::Get().GetColor("NiagaraEditor.Stack.FlatButtonColor"))
+					]
+				]
+			]
+		];
 }
 
 void SNiagaraStack::OnSearchTextChanged(const FText& SearchText)
@@ -530,67 +467,19 @@ bool SNiagaraStack::IsEntryFocusedInSearch(UNiagaraStackEntry* Entry) const
 	return false;
 }
 
-FReply SNiagaraStack::OpenParentEmitter() 
+void SNiagaraStack::ShowEmitterInContentBrowser(TWeakPtr<FNiagaraEmitterHandleViewModel> EmitterHandleViewModelWeak)
 {
-	if (StackViewModel && StackViewModel->GetEmitterHandleViewModel().IsValid() && StackViewModel->GetEmitterHandleViewModel()->GetEmitterViewModel().IsValid())
+	TSharedPtr<FNiagaraEmitterHandleViewModel> EmitterHandleViewModel = EmitterHandleViewModelWeak.Pin();
+	if (EmitterHandleViewModel.IsValid())
 	{
-		UNiagaraEmitter* ParentEmitter = const_cast<UNiagaraEmitter*>(StackViewModel->GetEmitterHandleViewModel()->GetEmitterViewModel()->GetParentEmitter());
-		if (ParentEmitter != nullptr)
+		FContentBrowserModule& ContentBrowserModule = FModuleManager::Get().LoadModuleChecked<FContentBrowserModule>(TEXT("ContentBrowser"));
+		TArray<FAssetData> Assets;
+		if (EmitterHandleViewModel->GetEmitterViewModel()->HasParentEmitter())
 		{
-			FAssetEditorManager::Get().OpenEditorForAsset(ParentEmitter);
+			Assets.Add(FAssetData(EmitterHandleViewModel->GetEmitterViewModel()->GetParentEmitter()));
+			ContentBrowserModule.Get().SyncBrowserToAssets(Assets);
 		}
 	}
-	return FReply::Handled();
-}
-
-EVisibility SNiagaraStack::GetEnableCheckboxVisibility() const
-{
-	return StackViewModel->GetSystemViewModel()->GetEditMode() == ENiagaraSystemViewModelEditMode::SystemAsset ? EVisibility::Visible : EVisibility::Collapsed;
-}
-
-EVisibility SNiagaraStack::GetPinEmitterVisibility() const
-{
-	return StackViewModel->GetSystemViewModel()->GetEditMode() == ENiagaraSystemViewModelEditMode::SystemAsset ? EVisibility::Visible : EVisibility::Collapsed;
-}
-
-EVisibility SNiagaraStack::GetOpenSourceEmitterVisibility() const
-{
-	return StackViewModel->HasParentEmitter() ? EVisibility::Visible : EVisibility::Collapsed;
-}
-
-bool SNiagaraStack::GetEmitterNameIsReadOnly() const
-{
-	if (StackViewModel && StackViewModel->GetSystemViewModel().IsValid())
-	{
-		return StackViewModel->GetSystemViewModel()->GetEditMode() == ENiagaraSystemViewModelEditMode::EmitterAsset;
-	}
-	return true;
-}
-
-void SNiagaraStack::SetEmitterEnabled(bool bIsEnabled)
-{
-	StackViewModel->GetEmitterHandleViewModel()->SetIsEnabled(bIsEnabled);
-}
-
-bool SNiagaraStack::CheckEmitterEnabledStatus(bool bIsEnabled)
-{
-	return StackViewModel->GetEmitterHandleViewModel()->GetIsEnabled() == bIsEnabled;
-}
-
-void SNiagaraStack::ShowEmitterInContentBrowser()
-{
-	FContentBrowserModule& ContentBrowserModule = FModuleManager::Get().LoadModuleChecked<FContentBrowserModule>(TEXT("ContentBrowser"));
-	TArray<FAssetData> Assets;
-	if (StackViewModel->HasParentEmitter())
-	{
-		Assets.Add(FAssetData(StackViewModel->GetEmitterHandleViewModel()->GetEmitterViewModel()->GetParentEmitter()));
-		ContentBrowserModule.Get().SyncBrowserToAssets(Assets);
-	}
-}
-
-void SNiagaraStack::NavigateTo(UNiagaraStackEntry* Item)
-{
-	StackTree->RequestScrollIntoView(Item);
 }
 
 void CollapseEntriesRecursive(TArray<UNiagaraStackEntry*> Entries)
@@ -610,7 +499,7 @@ void CollapseEntriesRecursive(TArray<UNiagaraStackEntry*> Entries)
 
 void SNiagaraStack::CollapseAll()
 {
-	CollapseEntriesRecursive(StackViewModel->GetRootEntries());
+	CollapseEntriesRecursive(StackViewModel->GetRootEntryAsArray());
 	StackViewModel->NotifyStructureChanged();
 }
 
@@ -657,59 +546,25 @@ FReply SNiagaraStack::OnRowDragDetected(const FGeometry& InGeometry, const FPoin
 	{
 		TArray<UNiagaraStackEntry*> DraggedEntries;
 		DraggedEntries.Add(InStackEntry);
-		TSharedRef<FNiagaraStackEntryDragDropOp> DragDropOp = MakeShared<FNiagaraStackEntryDragDropOp>(DraggedEntries);
-		DragDropOp->CurrentHoverText = InStackEntry->GetDisplayName();
-		DragDropOp->CurrentIconBrush = FNiagaraEditorWidgetsStyle::Get().GetBrush(
-			FNiagaraStackEditorWidgetsUtilities::GetIconNameForExecutionSubcategory(InStackEntry->GetExecutionSubcategoryName(), true));
-		DragDropOp->CurrentIconColorAndOpacity = FNiagaraEditorWidgetsStyle::Get().GetColor(
-			FNiagaraStackEditorWidgetsUtilities::GetIconColorNameForExecutionCategory(InStackEntry->GetExecutionCategoryName()));
-		DragDropOp->SetupDefaults();
-		DragDropOp->Construct();
-		return FReply::Handled().BeginDragDrop(DragDropOp);
+		return FReply::Handled().BeginDragDrop(FNiagaraStackEditorWidgetsUtilities::ConstructDragDropOperationForStackEntries(DraggedEntries));
 	}
 	return FReply::Unhandled();
+}
+
+void  SNiagaraStack::OnRowDragLeave(FDragDropEvent const& InDragDropEvent)
+{
+	FNiagaraStackEditorWidgetsUtilities::HandleDragLeave(InDragDropEvent);
 }
 
 TOptional<EItemDropZone> SNiagaraStack::OnRowCanAcceptDrop(const FDragDropEvent& InDragDropEvent, EItemDropZone InDropZone, UNiagaraStackEntry* InTargetEntry)
 {
-	TOptional<EItemDropZone> DropZone;
-	TSharedPtr<FNiagaraStackEntryDragDropOp> DragDropOp = InDragDropEvent.GetOperationAs<FNiagaraStackEntryDragDropOp>();
-	if (DragDropOp.IsValid())
-	{
-		DragDropOp->ResetToDefaultToolTip();
-		TOptional<UNiagaraStackEntry::FDropResult> Result = InTargetEntry->CanDrop(DragDropOp->GetDraggedEntries());
-		if (Result.IsSet())
-		{
-			if (Result.GetValue().DropMessage.IsEmptyOrWhitespace() == false)
-			{
-				DragDropOp->CurrentHoverText = FText::Format(LOCTEXT("DropFormat", "{0} - {1}"), DragDropOp->GetDefaultHoverText(), Result.GetValue().DropMessage);
-			}
-
-			if (Result.GetValue().bCanDrop)
-			{
-				DropZone = EItemDropZone::OntoItem;
-			}
-			else 
-			{
-				DragDropOp->CurrentIconBrush = FEditorStyle::GetBrush("Icons.Error");
-				DragDropOp->CurrentIconColorAndOpacity = FLinearColor::White;
-			}
-		}
-	}
-	return DropZone;
+	return FNiagaraStackEditorWidgetsUtilities::RequestDropForStackEntry(InDragDropEvent, InDropZone, InTargetEntry, UNiagaraStackEntry::EDropOptions::None);
 }
 
 FReply SNiagaraStack::OnRowAcceptDrop(const FDragDropEvent& InDragDropEvent, EItemDropZone InDropZone, UNiagaraStackEntry* InTargetEntry)
 {
-	TSharedPtr<FNiagaraStackEntryDragDropOp> DragDropOp = InDragDropEvent.GetOperationAs<FNiagaraStackEntryDragDropOp>();
-	if (DragDropOp.IsValid())
-	{
-		if (ensureMsgf(InTargetEntry->Drop(DragDropOp->GetDraggedEntries()).IsSet(), TEXT("Failed to drop stack entry when can drop returned true")))
-		{
-			return FReply::Handled();
-		}
-	}
-	return FReply::Unhandled();
+	bool bHandled = FNiagaraStackEditorWidgetsUtilities::HandleDropForStackEntry(InDragDropEvent, InDropZone, InTargetEntry, UNiagaraStackEntry::EDropOptions::None);
+	return bHandled ? FReply::Handled() : FReply::Unhandled();
 }
 
 void SNiagaraStack::OnStackSearchComplete()
@@ -767,11 +622,6 @@ FSlateColor SNiagaraStack::GetTextColorForItem(UNiagaraStackEntry* Item) const
 	return FSlateColor::UseForeground();
 }
 
-FSlateColor SNiagaraStack::GetPinColor() const
-{
-	return CurrentPinColor;
-}
-
 TSharedRef<ITableRow> SNiagaraStack::OnGenerateRowForStackItem(UNiagaraStackEntry* Item, const TSharedRef<STableViewBase>& OwnerTable)
 {
 	TSharedRef<SNiagaraStackTableRow> Container = ConstructContainerForItem(Item);
@@ -780,10 +630,130 @@ TSharedRef<ITableRow> SNiagaraStack::OnGenerateRowForStackItem(UNiagaraStackEntr
 	return Container;
 }
 
+TSharedRef<ITableRow> SNiagaraStack::OnGenerateRowForTopLevelObject(TSharedRef<UNiagaraStackViewModel::FTopLevelViewModel> Item, const TSharedRef<STableViewBase>& OwnerTable)
+{
+	TSharedPtr<SWidget> Content;
+	if (Item->SystemViewModel.IsValid())
+	{
+		Content = SNew(SHorizontalBox)
+			// System name
+			+ SHorizontalBox::Slot()
+			[
+				SNew(STextBlock)
+				.TextStyle(FNiagaraEditorStyle::Get(), "NiagaraEditor.HeadingTextBlock")
+				.Text(Item->SystemViewModel.ToSharedRef(), &FNiagaraSystemViewModel::GetDisplayName)
+			]
+			// Issue Icon
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			.VAlign(VAlign_Center)
+			.Padding(4, 0, 2, 0)
+			[
+				SNew(SNiagaraStackIssueIcon, Item->SystemViewModel->GetSystemStackViewModel(), Item->RootEntry.Get())
+				.Visibility(this, &SNiagaraStack::GetIssueIconVisibility)
+			];
+	}
+	else if(Item->EmitterHandleViewModel.IsValid())
+	{
+		Content = SNew(SNiagaraStackEmitterHeader, Item->EmitterHandleViewModel.ToSharedRef(), Item->RootEntry.Get())
+			.IssueIconVisibility(this, &SNiagaraStack::GetIssueIconVisibility);
+	}
+
+	Content->SetOnMouseButtonUp(FPointerEventHandler::CreateSP(this, &SNiagaraStack::OnTopLevelRowMouseButtonDown, TWeakPtr<UNiagaraStackViewModel::FTopLevelViewModel>(Item)));
+
+	return SNew(STableRow<TSharedRef<UNiagaraStackViewModel::FTopLevelViewModel>>, OwnerTable)
+		[
+			Content.ToSharedRef()
+		];
+}
+
+FReply SNiagaraStack::OnTopLevelRowMouseButtonDown(const FGeometry&, const FPointerEvent& MouseEvent, TWeakPtr<UNiagaraStackViewModel::FTopLevelViewModel> TopLevelViewModelWeak)
+{
+	TSharedPtr<UNiagaraStackViewModel::FTopLevelViewModel> TopLevelViewModel = TopLevelViewModelWeak.Pin();
+	if (TopLevelViewModel.IsValid() && MouseEvent.GetEffectingButton() == EKeys::RightMouseButton)
+	{
+		FMenuBuilder MenuBuilder(true, nullptr);
+
+		if (TopLevelViewModel->EmitterHandleViewModel.IsValid())
+		{
+			TSharedRef<FNiagaraEmitterHandleViewModel> EmitterHandleViewModel = TopLevelViewModel->EmitterHandleViewModel.ToSharedRef();
+			MenuBuilder.BeginSection("EmitterInlineMenuActions", LOCTEXT("EmitterActions", "Emitter Actions"));
+			{
+				FUIAction Action(FExecuteAction::CreateSP(EmitterHandleViewModel, &FNiagaraEmitterHandleViewModel::SetIsEnabled, !EmitterHandleViewModel->GetIsEnabled()),
+					FCanExecuteAction(),
+					FIsActionChecked::CreateSP(EmitterHandleViewModel, &FNiagaraEmitterHandleViewModel::GetIsEnabled));
+				MenuBuilder.AddMenuEntry(
+					LOCTEXT("IsEnabled", "Is Enabled"),
+					LOCTEXT("ToggleEmitterEnabledToolTip", "Toggle emitter enabled/disabled state"),
+					FSlateIcon(),
+					Action,
+					NAME_None,
+					EUserInterfaceActionType::Check);
+
+				if (EmitterHandleViewModel->CanRenameEmitter()) // Only allow renaming local copies of Emitters in Systems
+				{
+					MenuBuilder.AddMenuEntry(
+						LOCTEXT("RenameEmitter", "Rename Emitter"),
+						LOCTEXT("RenameEmitterToolTip", "Rename this local emitter copy"),
+						FSlateIcon(),
+						FUIAction(FExecuteAction::CreateSP(EmitterHandleViewModel, &FNiagaraEmitterHandleViewModel::SetIsRenamePending, true)));
+				}
+
+				MenuBuilder.AddMenuEntry(
+					LOCTEXT("RemoveSourceEmitter", "Remove Source Emitter"),
+					LOCTEXT("RemoveSourceEmitterToolTip", "Removes source information from this emitter, preventing inheritance of any further changes."),
+					FSlateIcon(),
+					FUIAction(
+						FExecuteAction::CreateSP(EmitterHandleViewModel->GetEmitterViewModel(), &FNiagaraEmitterViewModel::RemoveParentEmitter),
+						FCanExecuteAction::CreateSP(EmitterHandleViewModel->GetEmitterViewModel(), &FNiagaraEmitterViewModel::HasParentEmitter)));
+
+				MenuBuilder.AddMenuEntry(
+					LOCTEXT("ShowEmitterInContentBrowser", "Show in Content Browser"),
+					LOCTEXT("ShowEmitterInContentBrowserToolTip", "Show the emitter in this stack in the Content Browser"),
+					FSlateIcon(),
+					FUIAction(FExecuteAction::CreateSP(this, &SNiagaraStack::ShowEmitterInContentBrowser, TWeakPtr<FNiagaraEmitterHandleViewModel>(EmitterHandleViewModel))));
+			}
+			MenuBuilder.EndSection();
+		}
+
+		MenuBuilder.BeginSection("StackActions", LOCTEXT("StackActions", "Stack Actions"));
+		{
+			if (StackViewModel->HasDismissedStackIssues())
+			{
+				MenuBuilder.AddMenuEntry(
+					LOCTEXT("UndismissIssues", "Undismiss All Stack Issues"),
+					LOCTEXT("ShowAssetInContentBrowserToolTip", "Undismiss all issues that were previously dismissed for this stack, if any"),
+					FSlateIcon(),
+					FUIAction(FExecuteAction::CreateUObject(StackViewModel, &UNiagaraStackViewModel::UndismissAllIssues)));
+			}
+
+			MenuBuilder.AddMenuEntry(
+				LOCTEXT("CollapseStack", "Collapse All"),
+				LOCTEXT("CollapseStackToolTip", "Collapses every row in the stack."),
+				FSlateIcon(),
+				FUIAction(FExecuteAction::CreateSP(this, &SNiagaraStack::CollapseAll)));
+
+			TSharedPtr<FUICommandInfo> CollapseToHeadersCommand = FNiagaraEditorModule::Get().Commands().CollapseStackToHeaders;
+			MenuBuilder.AddMenuEntry(
+				CollapseToHeadersCommand->GetLabel(),
+				CollapseToHeadersCommand->GetDescription(),
+				FSlateIcon(),
+				FUIAction(FExecuteAction::CreateUObject(StackViewModel, &UNiagaraStackViewModel::CollapseToHeaders)));
+		}
+		MenuBuilder.EndSection();
+
+		FWidgetPath WidgetPath = MouseEvent.GetEventPath() != nullptr ? *MouseEvent.GetEventPath() : FWidgetPath();
+		FSlateApplication::Get().PushMenu(AsShared(), WidgetPath, MenuBuilder.MakeWidget(), MouseEvent.GetScreenSpacePosition(), FPopupTransitionEffect(FPopupTransitionEffect::ContextMenu));
+		return FReply::Handled();
+	}
+	return FReply::Unhandled();
+}
+
 TSharedRef<SNiagaraStackTableRow> SNiagaraStack::ConstructContainerForItem(UNiagaraStackEntry* Item)
 {
 	float LeftContentPadding = 4;
 	float RightContentPadding = 6;
+	TAttribute<FMargin> RowPadding = FMargin(0, 0, 0, 0);
 	FMargin ContentPadding(LeftContentPadding, 0, RightContentPadding, 0);
 	FLinearColor ItemBackgroundColor;
 	FLinearColor ItemForegroundColor = FNiagaraEditorWidgetsStyle::Get().GetColor("NiagaraEditor.Stack.ForegroundColor");
@@ -797,13 +767,30 @@ TSharedRef<SNiagaraStackTableRow> SNiagaraStack::ConstructContainerForItem(UNiag
 		bShowExecutionCategoryIcon = false;
 		break;
 	case UNiagaraStackEntry::EStackRowStyle::GroupHeader:
-		ContentPadding = FMargin(LeftContentPadding, 4, 0, 0);
+		ContentPadding = FMargin(LeftContentPadding, 3, 0, 3);
 		ItemBackgroundColor = FLinearColor::Transparent;
 		ItemForegroundColor = FNiagaraEditorWidgetsStyle::Get().GetColor("NiagaraEditor.Stack.GroupForegroundColor");
 		bIsCategoryIconHighlighted = true;
 		bShowExecutionCategoryIcon = true;
 		break;
+	case UNiagaraStackEntry::EStackRowStyle::GroupFooter:
+		RowPadding = FMargin(0, 0, 0, 6);
+		ItemBackgroundColor = FLinearColor::Transparent;
+		bIsCategoryIconHighlighted = false;
+		bShowExecutionCategoryIcon = false;
+		break;
 	case UNiagaraStackEntry::EStackRowStyle::ItemHeader:
+		RowPadding.Bind(TAttribute<FMargin>::FGetter::CreateLambda([Item]()
+		{
+			if (Item->GetIsExpanded())
+			{
+				return FMargin(0, 2, 0, 0);
+			}
+			else
+			{
+				return FMargin(0, 2, 0, 2);
+			}
+		}));
 		ContentPadding = FMargin(LeftContentPadding, 2, 2, 2);
 		ItemBackgroundColor = FNiagaraEditorWidgetsStyle::Get().GetColor("NiagaraEditor.Stack.Item.HeaderBackgroundColor");
 		bIsCategoryIconHighlighted = false;
@@ -822,6 +809,7 @@ TSharedRef<SNiagaraStackTableRow> SNiagaraStack::ConstructContainerForItem(UNiag
 		bShowExecutionCategoryIcon = false;
 		break;
 	case UNiagaraStackEntry::EStackRowStyle::ItemFooter:
+		RowPadding = FMargin(0, 0, 0, 2);
 		ItemBackgroundColor = FNiagaraEditorWidgetsStyle::Get().GetColor("NiagaraEditor.Stack.Item.FooterBackgroundColor");
 		bIsCategoryIconHighlighted = false;
 		bShowExecutionCategoryIcon = false;
@@ -846,6 +834,7 @@ TSharedRef<SNiagaraStackTableRow> SNiagaraStack::ConstructContainerForItem(UNiag
 	}
 
 	return SNew(SNiagaraStackTableRow, StackViewModel, Item, StackTree.ToSharedRef())
+		.RowPadding(RowPadding)
 		.ContentPadding(ContentPadding)
 		.ItemBackgroundColor(ItemBackgroundColor)
 		.ItemForegroundColor(ItemForegroundColor)
@@ -856,8 +845,10 @@ TSharedRef<SNiagaraStackTableRow> SNiagaraStack::ConstructContainerForItem(UNiag
 		.ValueColumnWidth(this, &SNiagaraStack::GetContentColumnWidth)
 		.OnValueColumnWidthChanged(this, &SNiagaraStack::OnContentColumnWidthChanged)
 		.OnDragDetected(this, &SNiagaraStack::OnRowDragDetected, Item)
+		.OnDragLeave(this, &SNiagaraStack::OnRowDragLeave)
 		.OnCanAcceptDrop(this, &SNiagaraStack::OnRowCanAcceptDrop)
-		.OnAcceptDrop(this, &SNiagaraStack::OnRowAcceptDrop);
+		.OnAcceptDrop(this, &SNiagaraStack::OnRowAcceptDrop)
+		.IssueIconVisibility(this, &SNiagaraStack::GetIssueIconVisibility);
 }
 
 void SNiagaraStack::Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime)
@@ -873,15 +864,7 @@ void SNiagaraStack::Tick(const FGeometry& AllottedGeometry, const double InCurre
 
 SNiagaraStack::FRowWidgets SNiagaraStack::ConstructNameAndValueWidgetsForItem(UNiagaraStackEntry* Item, TSharedRef<SNiagaraStackTableRow> Container)
 {
-	if (Item->IsA<UNiagaraStackSpacer>())
-	{
-		FMargin ContentPadding = Container->GetContentPadding();
-		Container->SetContentPadding(FMargin(ContentPadding.Left, 0, ContentPadding.Right, 0));
-		UNiagaraStackSpacer* SpacerItem = CastChecked<UNiagaraStackSpacer>(Item); 
-		return FRowWidgets(SNew(SNiagaraStackSpacer, *SpacerItem)
-			.HeightOverride(SpacerHeight * SpacerItem->GetSpacerScale()));
-	}
-	else if (Item->IsA<UNiagaraStackItemGroup>())
+	if (Item->IsA<UNiagaraStackItemGroup>())
 	{
 		return FRowWidgets(SNew(SNiagaraStackItemGroup, *CastChecked<UNiagaraStackItemGroup>(Item), StackViewModel));
 	}
@@ -921,10 +904,10 @@ SNiagaraStack::FRowWidgets SNiagaraStack::ConstructNameAndValueWidgetsForItem(UN
 	{
 		return FRowWidgets(SNew(SNiagaraStackErrorItemFix, CastChecked<UNiagaraStackErrorItemFix>(Item), StackViewModel));
 	}
-	else if (Item->IsA<UNiagaraStackAdvancedExpander>())
+	else if (Item->IsA<UNiagaraStackItemFooter>())
 	{
-		UNiagaraStackAdvancedExpander* ItemExpander = CastChecked<UNiagaraStackAdvancedExpander>(Item);
-		return FRowWidgets(SNew(SNiagaraStackItemExpander, *ItemExpander));
+		UNiagaraStackItemFooter* ItemExpander = CastChecked<UNiagaraStackItemFooter>(Item);
+		return FRowWidgets(SNew(SNiagaraStackItemFooter, *ItemExpander));
 	}
 	else if (Item->IsA<UNiagaraStackEmitterPropertiesItem>())
 	{
@@ -950,7 +933,8 @@ SNiagaraStack::FRowWidgets SNiagaraStack::ConstructNameAndValueWidgetsForItem(UN
 			.ToolTipText_UObject(Item, &UNiagaraStackEntry::GetTooltipText)
 			.Text_UObject(Item, &UNiagaraStackEntry::GetDisplayName)
 			.ColorAndOpacity(this, &SNiagaraStack::GetTextColorForItem, Item)
-			.HighlightText_UObject(StackViewModel, &UNiagaraStackViewModel::GetCurrentSearchText),
+			.HighlightText_UObject(StackViewModel, &UNiagaraStackViewModel::GetCurrentSearchText)
+			.IsEnabled_UObject(Item, &UNiagaraStackEntry::GetOwnerIsEnabled),
 			SNullWidget::NullWidget);
 	}
 	else if (Item->IsA<UNiagaraStackModuleItemOutput>())
@@ -962,12 +946,14 @@ SNiagaraStack::FRowWidgets SNiagaraStack::ConstructNameAndValueWidgetsForItem(UN
 			.ToolTipText_UObject(Item, &UNiagaraStackEntry::GetTooltipText)
 			.Text_UObject(Item, &UNiagaraStackEntry::GetDisplayName)
 			.ColorAndOpacity(this, &SNiagaraStack::GetTextColorForItem, Item)
-			.HighlightText_UObject(StackViewModel, &UNiagaraStackViewModel::GetCurrentSearchText),
+			.HighlightText_UObject(StackViewModel, &UNiagaraStackViewModel::GetCurrentSearchText)
+			.IsEnabled_UObject(Item, &UNiagaraStackEntry::GetOwnerIsEnabled),
 			SNew(STextBlock)
 			.TextStyle(FNiagaraEditorWidgetsStyle::Get(), "NiagaraEditor.Stack.ParameterText")
 			.Text_UObject(ModuleItemOutput, &UNiagaraStackModuleItemOutput::GetOutputParameterHandleText)
 			.ColorAndOpacity(this, &SNiagaraStack::GetTextColorForItem, Item)
-			.HighlightText_UObject(StackViewModel, &UNiagaraStackViewModel::GetCurrentSearchText));
+			.HighlightText_UObject(StackViewModel, &UNiagaraStackViewModel::GetCurrentSearchText)
+			.IsEnabled_UObject(Item, &UNiagaraStackEntry::GetOwnerIsEnabled));
 	}
 	else if (Item->IsA<UNiagaraStackFunctionInputCollection>() ||
 		Item->IsA<UNiagaraStackModuleItemOutputCollection>() ||
@@ -979,17 +965,21 @@ SNiagaraStack::FRowWidgets SNiagaraStack::ConstructNameAndValueWidgetsForItem(UN
 			.ToolTipText_UObject(Item, &UNiagaraStackEntry::GetTooltipText)
 			.Text_UObject(Item, &UNiagaraStackEntry::GetDisplayName)
 			.ColorAndOpacity(this, &SNiagaraStack::GetTextColorForItem, Item)
-			.HighlightText_UObject(StackViewModel, &UNiagaraStackViewModel::GetCurrentSearchText),
+			.HighlightText_UObject(StackViewModel, &UNiagaraStackViewModel::GetCurrentSearchText)
+			.IsEnabled_UObject(Item, &UNiagaraStackEntry::GetOwnerIsEnabled),
 			SNullWidget::NullWidget);
 	}
 	else if (Item->IsA<UNiagaraStackPropertyRow>())
 	{
 		UNiagaraStackPropertyRow* PropertyRow = CastChecked<UNiagaraStackPropertyRow>(Item);
 		FNodeWidgets PropertyRowWidgets = PropertyRow->GetDetailTreeNode()->CreateNodeWidgets();
+		TAttribute<bool> IsEnabled;
+		IsEnabled.BindUObject(Item, &UNiagaraStackEntry::GetIsEnabledAndOwnerIsEnabled);
 		if (PropertyRowWidgets.WholeRowWidget.IsValid())
 		{
 			Container->SetOverrideNameWidth(PropertyRowWidgets.WholeRowWidgetLayoutData.MinWidth, PropertyRowWidgets.WholeRowWidgetLayoutData.MaxWidth);
 			Container->SetOverrideNameAlignment(PropertyRowWidgets.WholeRowWidgetLayoutData.HorizontalAlignment, PropertyRowWidgets.WholeRowWidgetLayoutData.VerticalAlignment);
+			PropertyRowWidgets.WholeRowWidget->SetEnabled(IsEnabled);
 			return FRowWidgets(PropertyRowWidgets.WholeRowWidget.ToSharedRef());
 		}
 		else
@@ -998,6 +988,8 @@ SNiagaraStack::FRowWidgets SNiagaraStack::ConstructNameAndValueWidgetsForItem(UN
 			Container->SetOverrideNameAlignment(PropertyRowWidgets.NameWidgetLayoutData.HorizontalAlignment, PropertyRowWidgets.NameWidgetLayoutData.VerticalAlignment);
 			Container->SetOverrideValueWidth(PropertyRowWidgets.ValueWidgetLayoutData.MinWidth, PropertyRowWidgets.ValueWidgetLayoutData.MaxWidth);
 			Container->SetOverrideValueAlignment(PropertyRowWidgets.ValueWidgetLayoutData.HorizontalAlignment, PropertyRowWidgets.ValueWidgetLayoutData.VerticalAlignment);
+			PropertyRowWidgets.NameWidget->SetEnabled(IsEnabled);
+			PropertyRowWidgets.ValueWidget->SetEnabled(IsEnabled);
 			return FRowWidgets(PropertyRowWidgets.NameWidget.ToSharedRef(), PropertyRowWidgets.ValueWidget.ToSharedRef());
 		}
 	}
@@ -1012,12 +1004,7 @@ SNiagaraStack::FRowWidgets SNiagaraStack::ConstructNameAndValueWidgetsForItem(UN
 	}
 	else
 	{
-		return FRowWidgets(SNew(STextBlock)
-			.TextStyle(FNiagaraEditorWidgetsStyle::Get(), "NiagaraEditor.Stack.DefaultText")
-			.ToolTipText_UObject(Item, &UNiagaraStackEntry::GetTooltipText)
-			.Text_UObject(Item, &UNiagaraStackEntry::GetDisplayName)
-			.ColorAndOpacity(this, &SNiagaraStack::GetTextColorForItem, Item)
-			.HighlightText_UObject(StackViewModel, &UNiagaraStackViewModel::GetCurrentSearchText));
+		return FRowWidgets(SNullWidget::NullWidget);
 	}
 }
 
@@ -1055,43 +1042,12 @@ void SNiagaraStack::StackStructureChanged()
 {
 	SynchronizeTreeExpansion();
 	StackTree->RequestTreeRefresh();
+	HeaderList->RequestListRefresh();
 }
 
-FText SNiagaraStack::GetSourceEmitterNameText() const 
+EVisibility SNiagaraStack::GetIssueIconVisibility() const
 {
-	return StackViewModel->GetEmitterHandleViewModel()->GetEmitterViewModel()->GetParentNameText();
-}
-
-FText SNiagaraStack::GetEmitterNameToolTip() const
-{
-	if (StackViewModel->HasParentEmitter())
-	{
-		// We are looking at this Emitter in a System Asset and it has a valid parent Emitter
-		TSharedPtr<FNiagaraEmitterHandleViewModel> ThisViewModel = StackViewModel->GetEmitterHandleViewModel();
-		return FText::Format(LOCTEXT("EmitterNameAndPath", "{0}\nParent: {1}"), ThisViewModel->GetNameText(), ThisViewModel->GetEmitterViewModel()->GetParentPathNameText());
-	}
-	else
-	{
-		// We are looking at this Emitter in an Emitter Asset or we are looking at this Emitter in a System Asset and it does not have a valid parent Emitter
-		return StackViewModel->GetEmitterHandleViewModel()->GetNameText();
-	}
-}
-
-void SNiagaraStack::OnStackViewNameTextCommitted(const FText& InText, ETextCommit::Type CommitInfo) const
-{
-	StackViewModel->GetEmitterHandleViewModel()->OnNameTextComitted(InText, CommitInfo);
-}
-
-EVisibility SNiagaraStack::GetSourceEmitterNameVisibility() const
-{
-	return StackViewModel->HasParentEmitter() && GetIsEmitterRenamed() ? EVisibility::Visible : EVisibility::Collapsed;
-}
-
-bool SNiagaraStack::GetIsEmitterRenamed() const
-{
-	const FText CurrentNameText = StackViewModel->GetEmitterHandleViewModel()->GetNameText();
-	const FText SourceNameText = StackViewModel->GetEmitterHandleViewModel()->GetEmitterViewModel()->GetParentNameText();
-	return !CurrentNameText.EqualTo(SourceNameText);
+	return StackViewModel->HasIssues() ? EVisibility::Visible : EVisibility::Collapsed;
 }
 
 #undef LOCTEXT_NAMESPACE

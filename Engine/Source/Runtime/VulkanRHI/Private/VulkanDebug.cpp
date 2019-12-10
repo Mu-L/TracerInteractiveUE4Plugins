@@ -120,7 +120,6 @@ static VkBool32 VKAPI_PTR DebugReportFunction(
 				return VK_FALSE;
 			}
 		}
-
 	}
 	else if (MsgFlags & VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT)
 	{
@@ -154,6 +153,13 @@ static VkBool32 VKAPI_PTR DebugReportFunction(
 	else
 	{
 		ensure(0);
+	}
+
+	const VkBool32 bPlatformPrintLog = FVulkanPlatform::DebugReportFunction(MsgFlags, ObjType, SrcObject, Location, MsgCode, LayerPrefix, Msg, UserData);
+	if (bPlatformPrintLog == VK_FALSE)
+	{
+		// Early out if platform wants to suppress this debug report.
+		return VK_FALSE;
 	}
 
 	FString LayerCode = FString::Printf(TEXT("%s%x"), ANSI_TO_TCHAR(LayerPrefix), MsgCode);
@@ -3733,7 +3739,7 @@ void FWrapLayer::QueueBindSparse(VkResult Result, VkQueue Queue, uint32_t BindIn
 	}
 }
 
-#if VULKAN_HAS_PHYSICAL_DEVICE_PROPERTIES2
+#if VULKAN_SUPPORTS_PHYSICAL_DEVICE_PROPERTIES2
 void FWrapLayer::GetPhysicalDeviceProperties2KHR(VkResult Result, VkPhysicalDevice PhysicalDevice, VkPhysicalDeviceProperties2KHR* Properties)
 {
 	if (Result == VK_RESULT_MAX_ENUM)

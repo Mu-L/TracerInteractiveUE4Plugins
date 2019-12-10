@@ -10,6 +10,7 @@
 #include "Misc/CoreMisc.h"
 #include "Misc/CommandLine.h"
 #include "Misc/App.h"
+#include "Misc/Paths.h"
 
 #include "Async/MappedFileHandle.h"
 #include <sys/mman.h>
@@ -461,6 +462,7 @@ public:
 	
 	virtual IMappedFileRegion* MapRegion(int64 Offset = 0, int64 BytesToMap = MAX_int64, bool bPreloadHint = false) override
 	{
+		LLM_PLATFORM_SCOPE(ELLMTag::PlatformMMIO);
 		check(Offset < GetFileSize()); // don't map zero bytes and don't map off the end of the file
 		BytesToMap = FMath::Min<int64>(BytesToMap, GetFileSize() - Offset);
 		check(BytesToMap > 0); // don't map zero bytes
@@ -486,6 +488,7 @@ public:
 			UE_LOG(LogIOS, Warning, TEXT("Failed to map memory %s, error is %d"), *Filename, errno);
 			return nullptr;
 		}
+		LLM(FLowLevelMemTracker::Get().OnLowLevelAlloc(ELLMTracker::Platform, AlignedMapPtr, AlignedSize));
 
 		// create a mapping for this range
 		const uint8* MapPtr = AlignedMapPtr + Offset - AlignedOffset;
@@ -496,9 +499,11 @@ public:
 	
 	void UnMap(FIOSMappedFileRegion* Region)
 	{
+		LLM_PLATFORM_SCOPE(ELLMTag::PlatformMMIO);
 		check(NumOutstandingRegions > 0);
 		NumOutstandingRegions--;
 		
+		LLM(FLowLevelMemTracker::Get().OnLowLevelFree(ELLMTracker::Platform, (void*)Region->AlignedPtr));
 		int Res = munmap((void*)Region->AlignedPtr, Region->AlignedSize);
 		checkf(Res == 0, TEXT("Failed to unmap, error is %d, errno is %d [params: %x, %d]"), Res, errno, MappedPtr, GetFileSize());
 	}
@@ -1047,7 +1052,9 @@ FString FIOSPlatformFile::ConvertToIOSPath(const FString& Filename, bool bForWri
 	{
 		return Result;
 	}
-    
+	
+	FPaths::MakePlatformFilename(Result);
+	
 	Result.ReplaceInline(TEXT("../"), TEXT(""));
 	Result.ReplaceInline(TEXT(".."), TEXT(""));
 	Result.ReplaceInline(FPlatformProcess::BaseDir(), TEXT(""));
@@ -1056,12 +1063,13 @@ FString FIOSPlatformFile::ConvertToIOSPath(const FString& Filename, bool bForWri
 	{
         AdditionalRootDirectory.ReplaceInline(TEXT("../"), TEXT(""));
         AdditionalRootDirectory.ReplaceInline(TEXT(".."), TEXT(""));
-		if (Result.StartsWith(AdditionalRootDirectory))
+		if (Result.StartsWith(AdditionalRootDirectory) &&
+			(Result.Len() == AdditionalRootDirectory.Len() || Result.Mid(AdditionalRootDirectory.Len()).StartsWith(FPlatformMisc::GetDefaultPathSeparator())))
 		{
-			static FString ReadPathBase = FString([NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) objectAtIndex:0]) + TEXT("/");
-			
-			Result = ReadPathBase + Result.Mid(0,AdditionalRootDirectory.Len()) + TEXT("/") + Result.Mid(AdditionalRootDirectory.Len()+1).ToLower();
-			
+			static FString ReadPathBase = FString([NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) objectAtIndex:0]);
+
+			// lowercase the second half of the path because ios
+			Result = FPaths::Combine(ReadPathBase, Result.Mid(0,AdditionalRootDirectory.Len()), Result.Mid(AdditionalRootDirectory.Len()+1).ToLower());
 			return Result;
         }
 	}

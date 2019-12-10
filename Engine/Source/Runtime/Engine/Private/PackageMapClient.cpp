@@ -83,6 +83,27 @@ static FAutoConsoleVariableRef CVarAllowClientRemapCacheObject(
 	TEXT("When enabled, we will allow clients to remap read only cache objects and keep the same NetGUID.")
 );
 
+static bool GbQuantizeActorScaleOnSpawn = false;
+static FAutoConsoleVariableRef CVarQuantizeActorScaleOnSpawn(
+	TEXT("net.QuantizeActorScaleOnSpawn"),
+	GbQuantizeActorScaleOnSpawn,
+	TEXT("When enabled, we will quantize Scale for newly spawned actors to a single decimal of precision.")
+);
+
+static bool GbQuantizeActorLocationOnSpawn = true;
+static FAutoConsoleVariableRef CVarQuantizeActorLocationOnSpawn(
+	TEXT("net.QuantizeActorLocationOnSpawn"),
+	GbQuantizeActorLocationOnSpawn,
+	TEXT("When enabled, we will quantize Location for newly spawned actors to a single decimal of precision.")
+);
+
+static bool GbQuantizeActorVelocityOnSpawn = true;
+static FAutoConsoleVariableRef CVarQuantizeActorVelocityOnSpawn(
+	TEXT("net.QuantizeActorVelocityOnSpawn"),
+	GbQuantizeActorVelocityOnSpawn,
+	TEXT("When enabled, we will quantize Velocity for newly spawned actors to a single decimal of precision.")
+);
+
 void BroadcastNetFailure(UNetDriver* Driver, ENetworkFailure::Type FailureType, const FString& ErrorStr)
 {
 	UWorld* World = Driver->GetWorld();
@@ -369,10 +390,9 @@ bool UPackageMapClient::SerializeNewActor(FArchive& Ar, class UActorChannel *Cha
 	{
 		UObject* Archetype = nullptr;
 		UObject* ActorLevel = nullptr;
-		FVector_NetQuantize10 Location;
-		FVector_NetQuantize10 LocalLocation;
-		FVector_NetQuantize10 Scale;
-		FVector_NetQuantize10 Velocity;
+		FVector Location;
+		FVector Scale;
+		FVector Velocity;
 		FRotator Rotation;
 		bool SerSuccess;
 
@@ -398,12 +418,11 @@ bool UPackageMapClient::SerializeNewActor(FArchive& Ar, class UActorChannel *Cha
 
 			if (RootComponent)
 			{
-				LocalLocation = Actor->GetActorLocation();
 				Location = FRepMovement::RebaseOntoZeroOrigin(Actor->GetActorLocation(), Actor);
 			} 
 			else
 			{
-				Location = LocalLocation = FVector::ZeroVector;
+				Location = FVector::ZeroVector;
 			}
 			Rotation = RootComponent ? Actor->GetActorRotation() : FRotator::ZeroRotator;
 			Scale = RootComponent ? Actor->GetActorScale() : FVector::OneVector;
@@ -447,29 +466,63 @@ bool UPackageMapClient::SerializeNewActor(FArchive& Ar, class UActorChannel *Cha
 		bool bSerializeRotation = false;
 		bool bSerializeScale = false;
 		bool bSerializeVelocity = false;
-		const float epsilon = 0.001f;
+
 		{			
 			// Server is serializing an object to be sent to a client
 			if (Ar.IsSaving())
 			{
-				const FVector DefaultScale(1.f, 1.f, 1.f);
+				// We use 0.01f for comparing when using quantization, because we will only send a single point of precision anyway.
+				// We could probably get away with 0.1f, but that may introduce edge cases for rounding.
+				static constexpr float Epsilon_Quantized = 0.01f;
+				
+				// We use KINDA_SMALL_NUMBER for comparing when not using quantization, because that's the default for FVector::Equals.
+				static constexpr float Epsilon = KINDA_SMALL_NUMBER;
 
-				// If the Location isn't the default Location
-				bSerializeLocation = !Location.Equals(FVector::ZeroVector, epsilon);
-				bSerializeRotation = !Rotation.Equals(FRotator::ZeroRotator, epsilon);
-				bSerializeScale = !Scale.Equals(DefaultScale, epsilon);
-				bSerializeVelocity = !Velocity.Equals(FVector::ZeroVector, epsilon);
+				bSerializeLocation = !Location.Equals(FVector::ZeroVector, GbQuantizeActorLocationOnSpawn ? Epsilon_Quantized : Epsilon);
+				bSerializeVelocity = !Velocity.Equals(FVector::ZeroVector, GbQuantizeActorVelocityOnSpawn ? Epsilon_Quantized : Epsilon);
+				bSerializeScale = !Scale.Equals(FVector::OneVector, GbQuantizeActorScaleOnSpawn ? Epsilon_Quantized : Epsilon);
+
+				// We use 0.001f for Rotation comparison to keep consistency with old behavior.
+				bSerializeRotation = !Rotation.IsNearlyZero(0.001f);
+				
 			}
 
-			Ar.SerializeBits(&bSerializeLocation, 1);
-			if (bSerializeLocation)
+			auto ConditionallySerializeQuantizedVector = [this, &Ar, &SerSuccess](
+				FVector& InOutValue,
+				const FVector& DefaultValue,
+				bool bShouldQuantize,
+				bool& bWasSerialized)
 			{
-				Location.NetSerialize(Ar, this, SerSuccess);
-			}
-			else
-			{
-				Location = FVector::ZeroVector;
-			}
+				Ar.SerializeBits(&bWasSerialized, 1);
+				if (bWasSerialized)
+				{
+					if (Ar.EngineNetVer() < HISTORY_OPTIONALLY_QUANTIZE_SPAWN_INFO)
+					{
+						bShouldQuantize = true;
+					}
+					else
+					{
+						Ar.SerializeBits(&bShouldQuantize, 1);
+					}
+
+					if (bShouldQuantize)
+					{
+						FVector_NetQuantize10 Temp = InOutValue;
+						Temp.NetSerialize(Ar, this, SerSuccess);
+						InOutValue = Temp;
+					}
+					else
+					{
+						Ar << InOutValue;
+					}
+				}
+				else
+				{
+					InOutValue = DefaultValue;
+				}
+			};
+
+			ConditionallySerializeQuantizedVector(Location, FVector::ZeroVector, GbQuantizeActorLocationOnSpawn, bSerializeLocation);
 
 			Ar.SerializeBits(&bSerializeRotation, 1);
 			if (bSerializeRotation)
@@ -481,25 +534,8 @@ bool UPackageMapClient::SerializeNewActor(FArchive& Ar, class UActorChannel *Cha
 				Rotation = FRotator::ZeroRotator;
 			}
 
-			Ar.SerializeBits(&bSerializeScale, 1);
-			if (bSerializeScale)
-			{
-				Scale.NetSerialize(Ar, this, SerSuccess);
-			}
-			else
-			{
-				Scale = FVector(1, 1, 1);
-			}
-
-			Ar.SerializeBits(&bSerializeVelocity, 1);
-			if (bSerializeVelocity)
-			{
-				Velocity.NetSerialize(Ar, this, SerSuccess);
-			}
-			else
-			{
-				Velocity = FVector::ZeroVector;
-			}
+			ConditionallySerializeQuantizedVector(Scale, FVector::OneVector, GbQuantizeActorScaleOnSpawn, bSerializeScale);
+			ConditionallySerializeQuantizedVector(Velocity, FVector::ZeroVector, GbQuantizeActorVelocityOnSpawn, bSerializeVelocity);
 		}
 
 		if ( Ar.IsLoading() )
@@ -1269,9 +1305,9 @@ void UPackageMapClient::ReceiveNetGUIDBunch( FInBunch &InBunch )
 	UE_LOG(LogNetPackageMap, Log, TEXT("UPackageMapClient::ReceiveNetGUIDBunch end. BitPos: %d"), InBunch.GetPosBits() );
 }
 
-TSharedPtr< FNetFieldExportGroup > UPackageMapClient::GetNetFieldExportGroup( const FString& PathName )
+TSharedPtr<FNetFieldExportGroup> UPackageMapClient::GetNetFieldExportGroup(const FString& PathName)
 {
-	return GuidCache->NetFieldExportGroupMap.FindRef( PathName );
+	return GuidCache->NetFieldExportGroupMap.FindRef(UWorld::RemovePIEPrefix(PathName));
 }
 
 void UPackageMapClient::AddNetFieldExportGroup( const FString& PathName, TSharedPtr< FNetFieldExportGroup > NewNetFieldExportGroup )
@@ -2261,27 +2297,61 @@ void FNetGUIDCache::CleanReferences()
 {
 	const double Time = FPlatformTime::Seconds();
 
+	TMap<TWeakObjectPtr<UObject>, FNetworkGUID> StaticObjectGuids;
+
 	// Mark all static or non valid dynamic guids to timeout after NETWORK_GUID_TIMEOUT seconds
 	// We want to leave them around for a certain amount of time to allow in-flight references to these guids to continue to resolve
 	for (auto It = ObjectLookup.CreateIterator(); It; ++It)
 	{
-		if (It.Value().ReadOnlyTimestamp != 0)
+		const FNetworkGUID& Guid = It.Key();
+		FNetGuidCacheObject& CacheObject = It.Value();
+
+		if (CacheObject.ReadOnlyTimestamp != 0)
 		{
 			// If this guid was suppose to time out, check to see if it has, otherwise ignore it
 			const double NETWORK_GUID_TIMEOUT = 90;
 
-			if (Time - It.Value().ReadOnlyTimestamp > NETWORK_GUID_TIMEOUT)
+			if (Time - CacheObject.ReadOnlyTimestamp > NETWORK_GUID_TIMEOUT)
 			{
 				It.RemoveCurrent();
 			}
-
-			continue;
 		}
-
-		if (!It.Value().Object.IsValid())
+		else if (!CacheObject.Object.IsValid())
 		{
 			// We will leave this guid around for NETWORK_GUID_TIMEOUT seconds to make sure any in-flight guids can be resolved
-			It.Value().ReadOnlyTimestamp = Time;
+			CacheObject.ReadOnlyTimestamp = Time;
+		}
+
+		// Static GUIDs may refer to things on disk that don't get unloaded during travel (Packages, Sublevels, Compiled Blueprints, etc.),
+		// especially if we're traveling to the same map.
+		// The server will forcibly assign a new GUID to certain static objects, but there may be existing requests in flight
+		// already with the old GUID.
+		// So, we'll do a quick sanity check to make sure everything is fixed up.
+		// (Note, even if we get the new GUID later and register it, at worst we'll end up with 2 entries in the ObjectLookup
+		// with different GUIDs, but they'll both point at the same WeakObject, and we can clean them up later).
+		else if (Guid.IsStatic())
+		{
+			FNetworkGUID& FoundGuid = StaticObjectGuids.FindOrAdd(CacheObject.Object);
+
+			// We haven't seen this static object before, so just track it.
+			if (!FoundGuid.IsValid())
+			{
+				FoundGuid = Guid;
+			}
+
+			// We've seen this static object before, but we're seeing it again with a higher guid.
+			// That means this is our newly assigned GUID and we can safely time out the old one.
+			else if (FoundGuid.Value < Guid.Value)
+			{
+				ObjectLookup[FoundGuid].ReadOnlyTimestamp = Time;
+				FoundGuid = Guid;
+			}
+			// We've seen this static object before, but we're seeing it again with a lower guid.
+			// This means this is an older assignment and we can time out this cache object.
+			else
+			{
+				CacheObject.ReadOnlyTimestamp = Time;
+			}
 		}
 	}
 
@@ -3434,10 +3504,7 @@ PRAGMA_ENABLE_DEPRECATION_WARNINGS
 
 void FNetFieldExport::CountBytes(FArchive& Ar) const
 {
-	PRAGMA_DISABLE_DEPRECATION_WARNINGS
-	Name.CountBytes(Ar);
-	Type.CountBytes(Ar);
-	PRAGMA_ENABLE_DEPRECATION_WARNINGS
+
 }
 
 void FNetFieldExportGroup::CountBytes(FArchive& Ar) const

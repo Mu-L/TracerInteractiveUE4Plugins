@@ -23,6 +23,9 @@ struct FSlateIcon;
 struct FDiffResults;
 struct FDiffSingleResult;
 
+class FPropertyLocalizationDataGatherer;
+enum class EPropertyLocalizationGathererTextFlags : uint8;
+
 /**
   * Struct used to define information for terminal types, e.g. types that can be contained
   * by a container. Currently can represent strong/weak references to a type (only UObjects), 
@@ -151,23 +154,36 @@ private:
 	FNodeMetadata() {}
 };
 
-/** This is the context for a GetContextMenuActions call into a specific node. */
-struct FGraphNodeContextMenuBuilder
+/** This is the context for GetContextMenuActions and GetNodeContextMenuActions calls. */
+UCLASS()
+class ENGINE_API UGraphNodeContextMenuContext : public UObject
 {
+	GENERATED_BODY()
+
+public:
+
+	UGraphNodeContextMenuContext();
+
+	void Init(const UEdGraph* InGraph, const UEdGraphNode* InNode, const UEdGraphPin* InPin, bool bInDebuggingMode);
+
 	/** The blueprint associated with this context; may be NULL for non-Kismet related graphs. */
+	UPROPERTY()
 	const UBlueprint* Blueprint;
+
 	/** The graph associated with this context. */
+	UPROPERTY()
 	const UEdGraph* Graph;
+
 	/** The node associated with this context. */
+	UPROPERTY()
 	const UEdGraphNode* Node;
+
 	/** The pin associated with this context; may be NULL when over a node. */
 	const UEdGraphPin* Pin;
-	/** The menu builder to append actions to. */
-	class FMenuBuilder* MenuBuilder;
-	/** Whether the graph editor is currently part of a debugging session (any non-debugging commands should be disabled). */
-	bool bIsDebugging;
 
-	FGraphNodeContextMenuBuilder(const UEdGraph* InGraph, const UEdGraphNode* InNode, const UEdGraphPin* InPin, class FMenuBuilder* InMenuBuilder, bool bInDebuggingMode);
+	/** Whether the graph editor is currently part of a debugging session (any non-debugging commands should be disabled). */
+	UPROPERTY()
+	bool bIsDebugging;
 };
 
 /** Deprecation types for node response. */
@@ -333,6 +349,9 @@ public:
 	{
 		return (EnabledState == ENodeEnabledState::Enabled)	|| ((EnabledState == ENodeEnabledState::DevelopmentOnly) && IsInDevelopmentMode());
 	}
+
+	/** If true, this node can be renamed in the editor */
+	virtual bool GetCanRenameNode() const;
 
 	/** Returns the specific sort of enable state this node wants */
 	ENodeEnabledState GetDesiredEnabledState() const
@@ -804,7 +823,10 @@ public:
 	void CreateNewGuid();
 
 	/** Gets a list of actions that can be done to this particular node */
-	virtual void GetContextMenuActions(const FGraphNodeContextMenuBuilder& Context) const {}
+	virtual void GetNodeContextMenuActions(class UToolMenu* Menu, class UGraphNodeContextMenuContext* Context) const {}
+
+	/** Does the node context menu inherit parent class's menu */
+	virtual bool IncludeParentNodeContextMenu() const { return false; }
 
 	// Gives each visual node a chance to do final validation before it's node is harvested for use at runtime
 	virtual void ValidateNodeDuringCompilation(class FCompilerResultsLog& MessageLog) const {}
@@ -844,6 +866,14 @@ public:
 	 * @param OutTaggedMetaData		Built array of tagged meta data for the node
 	 */
 	virtual void AddSearchMetaDataInfo(TArray<struct FSearchTagDataPair>& OutTaggedMetaData) const;
+
+	/**
+	 * Adds node pin data to the search metadata, override to collect more data that may be desirable to search for
+	 *
+	 * @param Pin					The pin for which to gather search meta data
+	 * @param OutTaggedMetaData		Built array of tagged meta data for the given pin
+	 */
+	virtual void AddPinSearchMetaDataInfo(const UEdGraphPin* Pin, TArray<struct FSearchTagDataPair>& OutTaggedMetaData) const;
 
 	/** Return the requested metadata for the pin if there is any */
 	virtual FString GetPinMetaData(FName InPinName, FName InKey) { return FString(); }
@@ -895,6 +925,12 @@ public:
 	void ForEachNodeDirectlyConnectedToOutputs(TFunctionRef<void(UEdGraphNode*)> Func);
 	
 protected:
+#if WITH_EDITORONLY_DATA
+	/** Internal function used to gather pins from a graph node for localization */
+	friend void GatherGraphNodeForLocalization(const UObject* const Object, FPropertyLocalizationDataGatherer& PropertyLocalizationDataGatherer, const EPropertyLocalizationGathererTextFlags GatherTextFlags);
+	virtual void GatherForLocalization(FPropertyLocalizationDataGatherer& PropertyLocalizationDataGatherer, const EPropertyLocalizationGathererTextFlags GatherTextFlags) const;
+#endif
+
 	/**
 	 * Finds the difference in properties of node instance, for subobjects
 	 *

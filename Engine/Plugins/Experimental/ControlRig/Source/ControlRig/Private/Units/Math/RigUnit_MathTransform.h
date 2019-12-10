@@ -64,6 +64,7 @@ struct FRigUnit_MathTransformFromEulerTransform : public FRigUnit_MathTransformB
 		Result = FTransform::Identity;
 	}
 
+	RIGVM_METHOD()
 	virtual void Execute(const FRigUnitContext& Context) override;
 
 	UPROPERTY(meta=(Input))
@@ -87,6 +88,7 @@ struct FRigUnit_MathTransformToEulerTransform : public FRigUnit_MathTransformBas
 		Result = FEulerTransform::Identity;
 	}
 
+	RIGVM_METHOD()
 	virtual void Execute(const FRigUnitContext& Context) override;
 
 	UPROPERTY(meta=(Input))
@@ -103,13 +105,14 @@ USTRUCT(meta=(DisplayName="Multiply", PrototypeName="Multiply", Keywords="Produc
 struct FRigUnit_MathTransformMul : public FRigUnit_MathTransformBinaryOp
 {
 	GENERATED_BODY()
+	RIGVM_METHOD()
 	virtual void Execute(const FRigUnitContext& Context) override;
 };
 
 /**
  * Returns the relative local transform within a parent's transform
  */
-USTRUCT(meta=(DisplayName="Make Relative", PrototypeName="MakeRelative", Keywords="Local,Global"))
+USTRUCT(meta=(DisplayName="Make Relative", PrototypeName="MakeRelative", Keywords="Local,Global,Absolute"))
 struct FRigUnit_MathTransformMakeRelative : public FRigUnit_MathTransformBase
 {
 	GENERATED_BODY()
@@ -119,6 +122,7 @@ struct FRigUnit_MathTransformMakeRelative : public FRigUnit_MathTransformBase
 		Global = Parent = Local = FTransform::Identity;
 	}
 
+	RIGVM_METHOD()
 	virtual void Execute(const FRigUnitContext& Context) override;
 
 	UPROPERTY(meta=(Input))
@@ -132,12 +136,39 @@ struct FRigUnit_MathTransformMakeRelative : public FRigUnit_MathTransformBase
 };
 
 /**
+ * Returns the absolute global transform within a parent's transform
+ */
+USTRUCT(meta = (DisplayName = "Make Absolute", PrototypeName = "MakeAbsolute", Keywords = "Local,Global,Relative"))
+struct FRigUnit_MathTransformMakeAbsolute : public FRigUnit_MathTransformBase
+{
+	GENERATED_BODY()
+
+	FRigUnit_MathTransformMakeAbsolute()
+	{
+		Global = Parent = Local = FTransform::Identity;
+	}
+
+	RIGVM_METHOD()
+	virtual void Execute(const FRigUnitContext& Context) override;
+
+	UPROPERTY(meta = (Input))
+	FTransform Local;
+
+	UPROPERTY(meta = (Input))
+	FTransform Parent;
+
+	UPROPERTY(meta = (Output))
+	FTransform Global;
+};
+
+/**
  * Returns the negative value
  */
 USTRUCT(meta=(DisplayName="Inverse", PrototypeName="Inverse"))
 struct FRigUnit_MathTransformInverse : public FRigUnit_MathTransformUnaryOp
 {
 	GENERATED_BODY()
+	RIGVM_METHOD()
 	virtual void Execute(const FRigUnitContext& Context) override;
 };
 
@@ -155,6 +186,7 @@ struct FRigUnit_MathTransformLerp : public FRigUnit_MathTransformBase
 		T = 0.f;
 	}
 
+	RIGVM_METHOD()
 	virtual void Execute(const FRigUnitContext& Context) override;
 
 	UPROPERTY(meta=(Input))
@@ -184,6 +216,7 @@ struct FRigUnit_MathTransformSelectBool : public FRigUnit_MathTransformBase
 		IfTrue = IfFalse = Result = FTransform::Identity;
 	}
 
+	RIGVM_METHOD()
 	virtual void Execute(const FRigUnitContext& Context) override;
 
 	UPROPERTY(meta=(Input))
@@ -213,6 +246,7 @@ struct FRigUnit_MathTransformRotateVector : public FRigUnit_MathTransformBase
 		Direction = Result = FVector::ZeroVector;
 	}
 
+	RIGVM_METHOD()
 	virtual void Execute(const FRigUnitContext& Context) override;
 
 	UPROPERTY(meta=(Input))
@@ -239,6 +273,7 @@ struct FRigUnit_MathTransformTransformVector : public FRigUnit_MathTransformBase
 		Location = Result = FVector::ZeroVector;
 	}
 	
+	RIGVM_METHOD()
 	virtual void Execute(const FRigUnitContext& Context) override;
 
 	UPROPERTY(meta=(Input))
@@ -254,7 +289,7 @@ struct FRigUnit_MathTransformTransformVector : public FRigUnit_MathTransformBase
 /**
  * Composes a Transform (and Euler Transform) from its components.
  */
-USTRUCT(meta=(DisplayName="Transform from SRT", PrototypeName="EulerTransform,Scale,Rotation,Orientation,Translation,Location"))
+USTRUCT(meta=(DisplayName="Transform from SRT", Keywords ="EulerTransform,Scale,Rotation,Orientation,Translation,Location"))
 struct FRigUnit_MathTransformFromSRT : public FRigUnit_MathTransformBase
 {
 	GENERATED_BODY()
@@ -269,6 +304,7 @@ struct FRigUnit_MathTransformFromSRT : public FRigUnit_MathTransformBase
 		EulerTransform = FEulerTransform::Identity;
 	}
 	
+	RIGVM_METHOD()
 	virtual void Execute(const FRigUnitContext& Context) override;
 
 	UPROPERTY(meta=(Input))
@@ -288,4 +324,61 @@ struct FRigUnit_MathTransformFromSRT : public FRigUnit_MathTransformBase
 
 	UPROPERTY(meta=(Output))
 	FEulerTransform EulerTransform;
+};
+
+/**
+ * Clamps a position using a plane collision, cylindric collision or spherical collision.
+ */
+USTRUCT(meta = (DisplayName = "Clamp Spatially", PrototypeName = "ClampSpatially", Keywords = "Collide,Collision"))
+struct FRigUnit_MathTransformClampSpatially : public FRigUnit_MathTransformBase
+{
+	GENERATED_BODY()
+
+	FRigUnit_MathTransformClampSpatially()
+	{
+		Value = Result = FTransform::Identity;
+		Axis = EAxis::X;
+		Type = EControlRigClampSpatialMode::Plane;
+		Minimum = 0.f;
+		Maximum = 100.f;
+		Space = FTransform::Identity;
+		bDrawDebug = false;
+		DebugColor = FLinearColor::Red;
+		DebugThickness = 1.f;
+	}
+
+	RIGVM_METHOD()
+	virtual void Execute(const FRigUnitContext& Context) override;
+
+	UPROPERTY(meta = (Input))
+	FTransform Value;
+
+	UPROPERTY(meta = (Input))
+	TEnumAsByte<EAxis::Type> Axis;
+
+	UPROPERTY(meta = (Input))
+	TEnumAsByte<EControlRigClampSpatialMode::Type> Type;
+
+	UPROPERTY(meta = (Input))
+	float Minimum;
+
+	UPROPERTY(meta = (Input))
+	float Maximum;
+
+	// The space this spatial clamp happens within.
+	// The input position will be projected into this space.
+	UPROPERTY(meta = (Input))
+	FTransform Space;
+
+	UPROPERTY(meta = (Input))
+	bool bDrawDebug;
+
+	UPROPERTY(meta = (Input))
+	FLinearColor DebugColor;
+
+	UPROPERTY(meta = (Input))
+	float DebugThickness;
+
+	UPROPERTY(meta = (Output))
+	FTransform Result;
 };

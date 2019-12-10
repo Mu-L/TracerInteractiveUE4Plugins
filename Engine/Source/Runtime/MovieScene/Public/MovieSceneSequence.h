@@ -52,7 +52,7 @@ public:
 	/**
 	 * Locate all the objects that correspond to the specified object ID, using the specified context
 	 *
-	 * @param ObjectId				The unique identifier of the object.
+ * @param ObjectId				The unique identifier of the object.
 	 * @param Context				Optional context to use to find the required object (for instance, a parent spawnable object)
 	 * @param OutObjects			Destination array to add found objects to
 	 */
@@ -179,6 +179,18 @@ public:
 	 */
 	virtual UObject* CreateDirectorInstance(IMovieScenePlayer& Player) { return nullptr; }
 
+	/**
+	 * Find the first object binding ID associated with the specified tag name (set up through RMB->Expose on Object bindings from within sequencer)
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Game|Cinematic|Bindings")
+	MOVIESCENE_API FMovieSceneObjectBindingID FindBindingByTag(FName InBindingName) const;
+
+	/**
+	 * Find all object binding IDs associated with the specified tag name (set up through RMB->Expose on Object bindings from within sequencer)
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Game|Cinematic|Bindings")
+	MOVIESCENE_API const TArray<FMovieSceneObjectBindingID>& FindBindingsByTag(FName InBindingName) const;
+
 public:
 
 	MOVIESCENE_API virtual void PostLoad() override;
@@ -208,6 +220,27 @@ public:
 		return bParentContextsAreSignificant;
 	}
 
+	/**
+	 * Check whether this sequence is playable directly outside of a master sub sequence or not
+	 *
+	 * @return True if this sequences cooked data will include all the necessary information to be played back on its own, false if this data is not present in cooked builds
+	 */
+	bool IsPlayableDirectly() const
+	{
+		return bPlayableDirectly;
+	}
+
+	/**
+	 * Assign whether this sequence is playable directly outside of a master sub sequence or not
+	 *
+	 * @param bInPlayableDirectly   When true, this sequence's cooked data will include all the necessary information to be played back on its own. When false this data will be culled resulting in less memory usage.
+	 */
+	void SetPlayableDirectly(bool bInPlayableDirectly)
+	{
+		Modify();
+		bPlayableDirectly = bInPlayableDirectly;
+	}
+
 protected:
 
 	/**
@@ -217,6 +250,12 @@ protected:
 	 */
 	UPROPERTY()
 	bool bParentContextsAreSignificant;
+
+	/**
+	 * When true, this sequence should be compiled as if it is playable directly (outside of a master sequence). When false, various compiled data will be omitted, preventing direct playback at runtime (although will still play as a sub sequence)
+	 */
+	UPROPERTY()
+	bool bPlayableDirectly;
 
 public:
 

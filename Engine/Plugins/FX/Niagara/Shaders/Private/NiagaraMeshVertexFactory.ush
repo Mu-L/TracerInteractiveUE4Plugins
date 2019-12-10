@@ -7,12 +7,35 @@
 #include "/Engine/Private/VertexFactoryCommon.ush"
 #include "NiagaraVFParticleAccess.usf"
 
-// These are only enabled for SM5 due to limited interpolators elsewhere
-#define USE_PARTICLE_POSITION (FEATURE_LEVEL >= FEATURE_LEVEL_SM5 && NEEDS_PARTICLE_POSITION)
-#define USE_PARTICLE_VELOCITY (FEATURE_LEVEL >= FEATURE_LEVEL_SM5 && NEEDS_PARTICLE_VELOCITY)
-#define USE_PARTICLE_TIME (FEATURE_LEVEL >= FEATURE_LEVEL_SM5 && NEEDS_PARTICLE_TIME)
-#define USE_PARTICLE_RANDOM (FEATURE_LEVEL >= FEATURE_LEVEL_SM5 && NEEDS_PARTICLE_RANDOM)
-#define USE_PARTICLE_TRANSFORM (FEATURE_LEVEL >= FEATURE_LEVEL_SM5 && NEEDS_PARTICLE_TRANSFORM)
+#define USE_PARTICLE_POSITION ((FEATURE_LEVEL >= FEATURE_LEVEL_SM5 || FEATURE_LEVEL == FEATURE_LEVEL_ES3_1) && NEEDS_PARTICLE_POSITION)
+#define USE_PARTICLE_VELOCITY ((FEATURE_LEVEL >= FEATURE_LEVEL_SM5 || FEATURE_LEVEL == FEATURE_LEVEL_ES3_1) && NEEDS_PARTICLE_VELOCITY)
+#define USE_PARTICLE_TIME ((FEATURE_LEVEL >= FEATURE_LEVEL_SM5 || FEATURE_LEVEL == FEATURE_LEVEL_ES3_1) && NEEDS_PARTICLE_TIME)
+#define USE_PARTICLE_RANDOM ((FEATURE_LEVEL >= FEATURE_LEVEL_SM5 || FEATURE_LEVEL == FEATURE_LEVEL_ES3_1) && NEEDS_PARTICLE_RANDOM)
+#define USE_PARTICLE_TRANSFORM ((FEATURE_LEVEL >= FEATURE_LEVEL_SM5 || FEATURE_LEVEL == FEATURE_LEVEL_ES3_1) && NEEDS_PARTICLE_TRANSFORM)
+
+float3 TransformPosition(float3 InPosition)
+{
+	if (NiagaraMeshVF.bLocalSpace)
+	{
+		return TransformLocalToWorld(InPosition).xyz;
+	}
+	else
+	{
+		return InPosition;
+	}
+}
+
+float3 TransformVector(float3 InVector)
+{
+	if (NiagaraMeshVF.bLocalSpace)
+	{
+		return RotateLocalToWorld(InVector);
+	}
+	else
+	{
+		return InVector;
+	}
+}
 
 // Only support previous transform for deferred feature level
 //#define USE_PREVIOUS_TRANSFORM (FEATURE_LEVEL >= FEATURE_LEVEL_SM4)
@@ -158,12 +181,12 @@ struct FVertexFactoryIntermediates
 	/** Particle position in camera-centered translated world space. */
 	float3 ParticleTranslatedWorldPosition;
 
-#if USE_PARTICLE_TIME
+#if NEEDS_PARTICLE_TIME
 	/** Relative time. */
 	float RelativeTime;
 #endif
 
-#if USE_PARTICLE_RANDOM
+#if NEEDS_PARTICLE_RANDOM
 	/** Particle Random value */
 	float ParticleRandom;
 #endif
@@ -307,20 +330,20 @@ FMaterialVertexParameters GetMaterialVertexParameters(FVertexFactoryInput Input,
 	Result.PreSkinnedPosition = Input.Position.xyz;
 	Result.PreSkinnedNormal = TangentBias(Input.TangentZ.xyz);
 
-#if USE_PARTICLE_POSITION
+#if NEEDS_PARTICLE_POSITION
 	Result.Particle.TranslatedWorldPositionAndSize.xyz = Intermediates.ParticleTranslatedWorldPosition.xyz;
 	Result.Particle.TranslatedWorldPositionAndSize.w = 1;
 #endif
 
-#if USE_PARTICLE_VELOCITY
+#if NEEDS_PARTICLE_VELOCITY
 	Result.Particle.Velocity = Intermediates.ParticleVelocity;
 #endif
 
-#if USE_PARTICLE_TIME
+#if NEEDS_PARTICLE_TIME
 	Result.Particle.RelativeTime = Intermediates.RelativeTime;
 #endif
 
-#if USE_PARTICLE_RANDOM
+#if NEEDS_PARTICLE_RANDOM
 	Result.Particle.Random = Intermediates.ParticleRandom;
 #else
 	Result.Particle.Random = 0.0f;
@@ -347,7 +370,7 @@ FMaterialVertexParameters GetMaterialVertexParameters(FVertexFactoryInput Input,
 	float4x4 Transform = GetParticleTransform(Intermediates);
 	Result.InstanceLocalToWorld = Transform;
 
-#if USE_PARTICLE_TRANSFORM
+#if NEEDS_PARTICLE_TRANSFORM
 	Result.Particle.LocalToWorld[0] = float4(Transform[0].x, Transform[1].x, Transform[2].x, Transform[3].x);
 	Result.Particle.LocalToWorld[1] = float4(Transform[0].y, Transform[1].y, Transform[2].y, Transform[3].y);
 	Result.Particle.LocalToWorld[2] = float4(Transform[0].z, Transform[1].z, Transform[2].z, Transform[3].z);
@@ -530,19 +553,47 @@ FVertexFactoryIntermediates GetVertexFactoryIntermediates(FVertexFactoryInput In
 	}
 
 #if (DYNAMIC_PARAMETERS_MASK & 1)
-	Intermediates.DynamicParameter = NiagaraMeshVF.MaterialParamDataOffset != -1 ? GetVec4(NiagaraMeshVF.MaterialParamDataOffset, Input.InstanceId) : float4(1, 1, 1, 1);
+	if (NiagaraMeshVF.MaterialParamDataOffset == -1)
+	{
+		Intermediates.DynamicParameter = float4(1, 1, 1, 1);
+	}
+	else
+	{
+		Intermediates.DynamicParameter = GetVec4(NiagaraMeshVF.MaterialParamDataOffset, Input.InstanceId);
+	}
 #endif
 #if (DYNAMIC_PARAMETERS_MASK & 2)
-	Intermediates.DynamicParameter1 = NiagaraMeshVF.MaterialParam1DataOffset != -1 ? GetVec4(NiagaraMeshVF.MaterialParam1DataOffset, Input.InstanceId) : float4(1, 1, 1, 1);
+	if (NiagaraMeshVF.MaterialParam1DataOffset == -1)
+	{
+		Intermediates.DynamicParameter1 = float4(1, 1, 1, 1);
+	}	
+	else
+	{
+		Intermediates.DynamicParameter1 = GetVec4(NiagaraMeshVF.MaterialParam1DataOffset, Input.InstanceId);
+	}
 #endif
 #if (DYNAMIC_PARAMETERS_MASK & 4)
-	Intermediates.DynamicParameter2 = NiagaraMeshVF.MaterialParam2DataOffset != -1 ? GetVec4(NiagaraMeshVF.MaterialParam2DataOffset, Input.InstanceId) : float4(1, 1, 1, 1);
+	if (NiagaraMeshVF.MaterialParam2DataOffset == -1)
+	{
+		Intermediates.DynamicParameter2 = float4(1, 1, 1, 1);
+	}
+	else
+	{
+		Intermediates.DynamicParameter2 = GetVec4(NiagaraMeshVF.MaterialParam2DataOffset, Input.InstanceId);
+	}
 #endif
 #if (DYNAMIC_PARAMETERS_MASK & 8)
-	Intermediates.DynamicParameter3 = NiagaraMeshVF.MaterialParam3DataOffset != -1 ? GetVec4(NiagaraMeshVF.MaterialParam3DataOffset, Input.InstanceId) : float4(1, 1, 1, 1);
+	if (NiagaraMeshVF.MaterialParam3DataOffset == -1)
+	{
+		Intermediates.DynamicParameter3 = float4(1, 1, 1, 1);
+	}
+	else
+	{
+		Intermediates.DynamicParameter3 = GetVec4(NiagaraMeshVF.MaterialParam3DataOffset, Input.InstanceId);
+	}
 #endif
 
-#if USE_PARTICLE_TIME
+#if NEEDS_PARTICLE_TIME
 	if (NiagaraMeshVF.NormalizedAgeDataOffset == -1)
 	{
 		Intermediates.RelativeTime = 0;
@@ -553,7 +604,7 @@ FVertexFactoryIntermediates GetVertexFactoryIntermediates(FVertexFactoryInput In
 	}
 #endif
 
-#if USE_PARTICLE_RANDOM
+#if NEEDS_PARTICLE_RANDOM
 	if (NiagaraMeshVF.MaterialRandomDataOffset == -1)
 	{
 		Intermediates.ParticleRandom = 0;
@@ -564,7 +615,7 @@ FVertexFactoryIntermediates GetVertexFactoryIntermediates(FVertexFactoryInput In
 	}
 #endif
 
-#if USE_PARTICLE_VELOCITY
+#if NEEDS_PARTICLE_VELOCITY
 	float ParticleVelocityMagnitude = length(ParticleVelocity);
 
 	Intermediates.ParticleVelocity.xyz = (ParticleVelocityMagnitude > 0) ? normalize(ParticleVelocity) : float3(0.0f, 0.0f, 0.0f);
@@ -580,7 +631,7 @@ FVertexFactoryIntermediates GetVertexFactoryIntermediates(FVertexFactoryInput In
 		float4 Quat = GetVec4(NiagaraMeshVF.TransformDataOffset, Input.InstanceId);
 
 		//Transform axis to handle local space.
-		//AxisAngle.xyz = mul(float4(AxisAngle.xyz, 0), NiagaraMeshVF.LocalToWorldInverseTransposed);
+		//AxisAngle.xyz = TransformVector(AxisAngle.xyz);
 
 
 		float4x4 EulerToMat = QuatTo4x4(normalize(Quat));
@@ -612,7 +663,7 @@ FVertexFactoryIntermediates GetVertexFactoryIntermediates(FVertexFactoryInput In
 	}
 	else if (MeshFacingMode == MESH_FACING_CAMERA_POSITION)
 	{
-		float3 WorldPosition = mul(Intermediates.ParticlePosition, NiagaraMeshVF.LocalToWorld).xyz;
+		float3 WorldPosition = TransformPosition(Intermediates.ParticlePosition);
 		float3 CameraVector = ResolvedView.WorldCameraOrigin.xyz - WorldPosition.xyz;
 		float3 CameraDirection = normalize(CameraVector);
 		float4 ToAlignmentQuat = FindQuatBetween(float3(1.0f, 0.0f, 0.0f), CameraDirection);
@@ -634,9 +685,12 @@ FVertexFactoryIntermediates GetVertexFactoryIntermediates(FVertexFactoryInput In
 	//Handle local space. TODO: Optimize behind define.
 	//Apply local space to local to world, also pretranspse here to avoid it in the vs&ps
 	Intermediates.LocalToWorld = transpose(Intermediates.LocalToWorld);
-	Intermediates.LocalToWorld = mul(Intermediates.LocalToWorld, NiagaraMeshVF.LocalToWorld);
-	Intermediates.ParticlePosition = mul(Intermediates.ParticlePosition, NiagaraMeshVF.LocalToWorld);
-	//Intermediates.ParticleVelocity.xyz = mul(float4(Intermediates.ParticleVelocity.xyz,0), NiagaraMeshVF.LocalToWorldInverseTransposed);
+	if (NiagaraMeshVF.bLocalSpace)
+	{
+		Intermediates.LocalToWorld = mul(Intermediates.LocalToWorld, Primitive.LocalToWorld);
+		Intermediates.ParticlePosition = TransformLocalToWorld(Intermediates.ParticlePosition);
+	}
+	//Intermediates.ParticleVelocity.xyz = TransformVector(Intermediates.ParticleVelocity.xyz);
 
 #if NUM_MATERIAL_TEXCOORDS_VERTEX
 	for(int CoordinateIndex = 0; CoordinateIndex < NUM_MATERIAL_TEXCOORDS_VERTEX; CoordinateIndex++)

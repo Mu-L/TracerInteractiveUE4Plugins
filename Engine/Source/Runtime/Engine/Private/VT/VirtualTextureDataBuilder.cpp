@@ -9,7 +9,9 @@
 #include "CrunchCompression.h"
 #include "Async/TaskGraphInterfaces.h"
 #include "Async/ParallelFor.h"
+#include "Misc/ScopedSlowTask.h"
 #include "TextureCompressorModule.h"
+#include "TextureDerivedDataTask.h"
 
 // Debugging aid to dump tiles to disc as png files
 #define SAVE_TILES 0
@@ -210,6 +212,9 @@ struct FPixelDataRectangle
 		case TSF_G8:
 			ImageWrapper->SetRaw(Data, BytesPerPixel * Width * Height, Width, Height, ERGBFormat::Gray, 8);
 			break;
+		case TSF_G16:
+			ImageWrapper->SetRaw(Data, BytesPerPixel * Width * Height, Width, Height, ERGBFormat::Gray, 16);
+			break;
 		case TSF_BGRA8:
 			ImageWrapper->SetRaw(Data, BytesPerPixel * Width * Height, Width, Height, ERGBFormat::BGRA, 8);
 			break;
@@ -394,6 +399,8 @@ void FVirtualTextureDataBuilder::BuildPagesMacroBlocks(bool bAllowAsync)
 		MipHeightInTiles = FMath::DivideAndRoundUp(MipHeightInTiles, 2u);
 	}
 
+	FScopedSlowTask BuildTask(NumTiles);
+
 	//
 	TArray<FVTSourceTileEntry> TilesInChunk;
 	TilesInChunk.Reserve(NumTiles);
@@ -431,6 +438,8 @@ void FVirtualTextureDataBuilder::BuildPagesMacroBlocks(bool bAllowAsync)
 					const int32 BlockIndex = FindSourceBlockIndex(Mip, BlockX, BlockY);
 					if (BlockIndex != INDEX_NONE)
 					{
+						BuildTask.EnterProgressFrame();
+
 						const FTextureSourceBlockData& Block = SourceBlocks[BlockIndex];
 						FVTSourceTileEntry* TileEntry = new(TilesInChunk) FVTSourceTileEntry;
 						TileEntry->BlockIndex = BlockIndex;
@@ -641,7 +650,8 @@ void FVirtualTextureDataBuilder::BuildTiles(const TArray<FVTSourceTileEntry>& Ti
 
 			TArray<FCompressedImage2D> CompressedMip;
 			TArray<FImage> EmptyList;
-			if (!ensure(Compressor->BuildTexture(TileImages, EmptyList, TBSettings, CompressedMip)))
+			uint32 NumMipsInTail, ExtData;
+			if (!ensure(Compressor->BuildTexture(TileImages, EmptyList, TBSettings, CompressedMip, NumMipsInTail, ExtData)))
 			{
 				bCompressionError = true;
 			}
@@ -772,6 +782,25 @@ int32 FVirtualTextureDataBuilder::FindSourceBlockIndex(int32 MipIndex, int32 Blo
 	return INDEX_NONE;
 }
 
+static const FName RemovePlatformPrefixFromName(FName const& InName)
+{
+	FString NameString = InName.ToString();
+	if (NameString.StartsWith(TEXT("PS4_")))
+	{
+		return *NameString.Replace(TEXT("PS4_"), TEXT(""));
+	}
+	else if (NameString.StartsWith("XBOXONE_"))
+	{
+		return *NameString.Replace(TEXT("XBOXONE_"), TEXT(""));
+	}
+	else if (NameString.StartsWith("SWITCH_"))
+	{
+		return *NameString.Replace(TEXT("SWITCH_"), TEXT(""));
+	}
+
+	return InName;
+}
+
 // This builds an uncompressed version of the texture containing all other build settings baked in
 // color corrections, mip sharpening, ....
 void FVirtualTextureDataBuilder::BuildSourcePixels(const FTextureSourceData& SourceData, const FTextureSourceData& CompositeSourceData)
@@ -788,15 +817,13 @@ void FVirtualTextureDataBuilder::BuildSourcePixels(const FTextureSourceData& Sou
 		const FTextureBuildSettings& BuildSettingsForLayer = SettingsPerLayer[LayerIndex];
 		FVirtualTextureSourceLayerData& LayerData = SourceLayers[LayerIndex];
 
-		const FName TextureFormatName = BuildSettingsForLayer.TextureFormatName;
-		const bool bIsHdr = BuildSettingsForLayer.bHDRSource || TextureFormatName == "BC6H" || TextureFormatName == "RGBA16F";
-
-		LayerData.FormatName = "BGRA8";
-		LayerData.PixelFormat = PF_B8G8R8A8;
-		LayerData.SourceFormat = TSF_BGRA8;
-		LayerData.ImageFormat = ERawImageFormat::BGRA8;
 		LayerData.GammaSpace = BuildSettingsForLayer.GetGammaSpace();
 		LayerData.bHasAlpha = false;
+
+		const FName TextureFormatName = RemovePlatformPrefixFromName(BuildSettingsForLayer.TextureFormatName);
+
+		const bool bIsHdr = BuildSettingsForLayer.bHDRSource || TextureFormatName == "BC6H" || TextureFormatName == "RGBA16F";
+		const bool bIsG16 = TextureFormatName == "G16";
 
 		if (bIsHdr)
 		{
@@ -804,6 +831,20 @@ void FVirtualTextureDataBuilder::BuildSourcePixels(const FTextureSourceData& Sou
 			LayerData.PixelFormat = PF_FloatRGBA;
 			LayerData.SourceFormat = TSF_RGBA16F;
 			LayerData.ImageFormat = ERawImageFormat::RGBA16F;
+		}
+		else if (bIsG16)
+		{
+			LayerData.FormatName = "G16";
+			LayerData.PixelFormat = PF_G16;
+			LayerData.SourceFormat = TSF_G16;
+			LayerData.ImageFormat = ERawImageFormat::G16;
+		}
+		else
+		{
+			LayerData.FormatName = "BGRA8";
+			LayerData.PixelFormat = PF_B8G8R8A8;
+			LayerData.SourceFormat = TSF_BGRA8;
+			LayerData.ImageFormat = ERawImageFormat::BGRA8;
 		}
 	}
 
@@ -840,6 +881,7 @@ void FVirtualTextureDataBuilder::BuildSourcePixels(const FTextureSourceData& Sou
 			TBSettings.TextureFormatName = LayerData.FormatName;
 			TBSettings.bSRGB = BuildSettingsForLayer.bSRGB;
 			TBSettings.bUseLegacyGamma = BuildSettingsForLayer.bUseLegacyGamma;
+			TBSettings.bApplyYCoCgBlockScale = BuildSettingsForLayer.bApplyYCoCgBlockScale;
 
 			// Make sure the output of the texture builder is in the same gamma space as we expect it.
 			check(TBSettings.GetGammaSpace() == BuildSettingsForLayer.GetGammaSpace());
@@ -865,7 +907,8 @@ void FVirtualTextureDataBuilder::BuildSourcePixels(const FTextureSourceData& Sou
 			bool bBuildTextureResult = false;
 			if (LocalBlockSizeScale == 1)
 			{
-				bBuildTextureResult = Compressor->BuildTexture(SourceMips, *CompositeSourceMips, TBSettings, CompressedMips);
+				uint32 NumMipsInTail, ExtData;
+				bBuildTextureResult = Compressor->BuildTexture(SourceMips, *CompositeSourceMips, TBSettings, CompressedMips, NumMipsInTail, ExtData);
 			}
 			else
 			{
@@ -887,7 +930,8 @@ void FVirtualTextureDataBuilder::BuildSourcePixels(const FTextureSourceData& Sou
 					SrcMip.ResizeTo(*ScaledMip, SrcMip.SizeX * LocalBlockSizeScale, SrcMip.SizeY * LocalBlockSizeScale, SrcMip.Format, SrcMip.GammaSpace);
 				}
 
-				bBuildTextureResult = Compressor->BuildTexture(ScaledSourceMips, ScaledCompositeMips, TBSettings, CompressedMips);
+				uint32 NumMipsInTail, ExtData;
+				bBuildTextureResult = Compressor->BuildTexture(ScaledSourceMips, ScaledCompositeMips, TBSettings, CompressedMips, NumMipsInTail, ExtData);
 			}
 
 			check(bBuildTextureResult);
@@ -1011,7 +1055,8 @@ void FVirtualTextureDataBuilder::BuildSourcePixels(const FTextureSourceData& Sou
 			// Use the texture compressor module to do all the hard work
 			// TODO - composite images?
 			TArray<FCompressedImage2D> CompressedMips;
-			if (!Compressor->BuildTexture(MiptailInputImages, EmptyImageArray, TBSettings, CompressedMips))
+			uint32 NumMipsInTail, ExtData;
+			if (!Compressor->BuildTexture(MiptailInputImages, EmptyImageArray, TBSettings, CompressedMips, NumMipsInTail, ExtData))
 			{
 				check(false);
 			}
@@ -1044,20 +1089,7 @@ void FVirtualTextureDataBuilder::BuildSourcePixels(const FTextureSourceData& Sou
 
 		// Don't want platform specific swizzling for VT tile data, this tends to add extra padding for textures with odd dimensions
 		// (VT physical tiles generally not power-of-2 after adding border)
-		FName TextureFormatName = BuildSettingsForLayer.TextureFormatName;
-		FString BaseTextureFormatName = TextureFormatName.ToString();
-		if (BaseTextureFormatName.StartsWith(TEXT("PS4_")))
-		{
-			TextureFormatName = *BaseTextureFormatName.Replace(TEXT("PS4_"), TEXT(""));
-		}
-		else if (BaseTextureFormatName.StartsWith("XBOXONE_"))
-		{
-			TextureFormatName = *BaseTextureFormatName.Replace(TEXT("XBOXONE_"), TEXT(""));
-		}
-		else if (BaseTextureFormatName.StartsWith("SWITCH_"))
-		{
-			TextureFormatName = *BaseTextureFormatName.Replace(TEXT("SWITCH_"), TEXT(""));
-		}
+		FName TextureFormatName = RemovePlatformPrefixFromName(BuildSettingsForLayer.TextureFormatName);
 
 		// We handle AutoDXT specially here since otherwise the texture format compressor would choose a DXT format for every tile
 		// individually. Causing tiles in the same VT to use different formats which we don't allow.
@@ -1150,7 +1182,8 @@ void FVirtualTextureDataBuilder::BuildMipTails()
 		check(TBSettings.GetGammaSpace() == Settings.Layers[Layer].GammaSpace);
 
 		TArray<FCompressedImage2D> CompressedMips;
-		if (!Compressor->BuildTexture(SourceList, EmptyList, TBSettings, CompressedMips))
+		uint32 NumMipsInTail, ExtData;
+		if (!Compressor->BuildTexture(SourceList, EmptyList, TBSettings, CompressedMips, NumMipsInTail, ExtData))
 		{
 			check(false);
 		}
@@ -1198,6 +1231,10 @@ bool FVirtualTextureDataBuilder::DetectAlphaChannel(const FImage &Image)
 			}
 			++SrcColors;
 		}
+		return false;
+	}
+	else if (Image.Format == ERawImageFormat::G16)
+	{
 		return false;
 	}
 	else

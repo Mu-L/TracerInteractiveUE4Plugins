@@ -17,7 +17,9 @@ struct FRigUnit_BoneName : public FRigUnit
 	{}
 
 	virtual FString GetUnitLabel() const override;
-	virtual void Execute(const FRigUnitContext& Context) override {}
+
+	RIGVM_METHOD()
+	virtual void Execute(const FRigUnitContext& Context) override;
 
 	/**
 	 * The name of the Bone

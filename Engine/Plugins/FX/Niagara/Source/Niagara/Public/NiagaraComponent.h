@@ -10,6 +10,7 @@
 #include "Particles/ParticleSystemComponent.h"
 #include "NiagaraUserRedirectionParameterStore.h"
 #include "NiagaraSystemInstance.h"
+#include "NiagaraComponentPool.h"
 
 #include "NiagaraComponent.generated.h"
 
@@ -47,12 +48,19 @@ public:
 	void SetVectorParameter(FName ParameterName, FVector Param) override;
 	void SetColorParameter(FName ParameterName, FLinearColor Param) override;
 	void SetActorParameter(FName ParameterName, class AActor* Param) override;
-	virtual UFXSystemAsset* GetFXSystemAsset() const override { return Asset; };
+	virtual UFXSystemAsset* GetFXSystemAsset() const override;
+	void SetEmitterEnable(FName EmitterName, bool bNewEnableState) override;
+	void ReleaseToPool() override;
+	uint32 GetApproxMemoryUsage() const override;
 	/********* UFXSystemComponent *********/
 
 private:
 	UPROPERTY(EditAnywhere, Category="Niagara", meta = (DisplayName = "Niagara System Asset"))
 	UNiagaraSystem* Asset;
+
+	/** Allows you to control how Niagara selects the tick group, changing this while an instance is active will result in not change as it is cached. */
+	UPROPERTY(EditAnywhere, Category = "Niagara", meta = (DisplayName = "Niagara Tick Behavior"))
+	ENiagaraTickBehavior TickBehavior = ENiagaraTickBehavior::UsePrereqs;
 
 	/** Initial values for parameter overrides. 
 	TODO: This should be a minimal set of explicitly override parameters similar to how parameter collection instances override their collections store. 
@@ -106,6 +114,7 @@ private:
 protected:
 	virtual void OnRegister() override;
 	virtual void OnUnregister() override;
+	virtual void OnEndOfFrameUpdateDuringTick() override;
 	virtual void CreateRenderState_Concurrent() override;
 	virtual void SendRenderDynamicData_Concurrent() override;
 	virtual void BeginDestroy() override;
@@ -121,10 +130,21 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Attachment)
 	uint32 bAutoManageAttachment : 1;
 
+	/**
+	 * Time between forced UpdateTransforms for systems that use dynamically calculated bounds,
+	 * Which is effectively how often the bounds are shrunk.
+	 */
+	UPROPERTY()
+	float MaxTimeBeforeForceUpdateTransform;
+
+	/** How to handle pooling for this component instance. */
+	ENCPoolMethod PoolingMethod;
 
 	virtual void Activate(bool bReset = false)override;
 	virtual void Deactivate()override;
 	void DeactivateImmediate();
+
+	virtual void SetComponentTickEnabled(bool bEnabled) override;
 
 	virtual void TickComponent(float DeltaTime, enum ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 	virtual const UObject* AdditionalStatObject() const override;
@@ -136,7 +156,14 @@ public:
 	virtual FBoxSphereBounds CalcBounds(const FTransform& LocalToWorld) const override;
 	virtual FPrimitiveSceneProxy* CreateSceneProxy() override;
 	virtual void GetUsedMaterials(TArray<UMaterialInterface*>& OutMaterials, bool bGetDebugMaterials = false) const override;
+
+	virtual void OnAttachmentChanged() override;
 	//~ End UPrimitiveComponent Interface
+
+	//~ Begin USceneComponent Interface
+	virtual void OnChildAttached(USceneComponent* ChildComponent) override;
+	virtual void OnChildDetached(USceneComponent* ChildComponent) override;
+	//~ Begin USceneComponent Interface
 
 	TSharedPtr<FNiagaraSystemSimulation, ESPMode::ThreadSafe> GetSystemSimulation();
 
@@ -205,43 +232,91 @@ public:
 
 	FNiagaraSystemInstance* GetSystemInstance() const;
 
+	ENiagaraTickBehavior GetTickBehavior() const { return TickBehavior; }
+
 	/** Returns true if this component forces it's instances to run in "Solo" mode. A sub optimal path required in some situations. */
 	bool ForcesSolo()const;
 
 	/** Sets a Niagara FLinearColor parameter by name, overriding locally if necessary.*/
-	UFUNCTION(BlueprintCallable, Category = Niagara, meta = (DisplayName = "Set Niagara Variable (LinearColor)"))
+	UFUNCTION(BlueprintCallable, Category = Niagara, meta = (DisplayName = "Set Niagara Variable By String (LinearColor)"))
 	void SetNiagaraVariableLinearColor(const FString& InVariableName, const FLinearColor& InValue);
+	
+	/** Sets a Niagara FLinearColor parameter by name, overriding locally if necessary.*/
+	UFUNCTION(BlueprintCallable, Category = Niagara, meta = (DisplayName = "Set Niagara Variable (LinearColor)"))
+	void SetVariableLinearColor(FName InVariableName, const FLinearColor& InValue);
+
 
 	/** Sets a Niagara Vector4 parameter by name, overriding locally if necessary.*/
-	UFUNCTION(BlueprintCallable, Category = Niagara, meta = (DisplayName = "Set Niagara Variable (Vector4)"))
+	UFUNCTION(BlueprintCallable, Category = Niagara, meta = (DisplayName = "Set Niagara Variable By String (Vector4)"))
 	void SetNiagaraVariableVec4(const FString& InVariableName, const FVector4& InValue);
+	
+	/** Sets a Niagara Vector4 parameter by name, overriding locally if necessary.*/
+	UFUNCTION(BlueprintCallable, Category = Niagara, meta = (DisplayName = "Set Niagara Variable (Vector4)"))
+	void SetVariableVec4(FName InVariableName, const FVector4& InValue);
+
 
 	/** Sets a Niagara Vector3 parameter by name, overriding locally if necessary.*/
-	UFUNCTION(BlueprintCallable, Category = Niagara, meta = (DisplayName = "Set Niagara Variable (Quaternion)"))
+	UFUNCTION(BlueprintCallable, Category = Niagara, meta = (DisplayName = "Set Niagara Variable By String (Quaternion)"))
 	void SetNiagaraVariableQuat(const FString& InVariableName, const FQuat& InValue);
 
 	/** Sets a Niagara Vector3 parameter by name, overriding locally if necessary.*/
-	UFUNCTION(BlueprintCallable, Category = Niagara, meta = (DisplayName = "Set Niagara Variable (Vector3)"))
+	UFUNCTION(BlueprintCallable, Category = Niagara, meta = (DisplayName = "Set Niagara Variable (Quaternion)"))
+	void SetVariableQuat(FName InVariableName, const FQuat& InValue);
+
+	/** Sets a Niagara Vector3 parameter by name, overriding locally if necessary.*/
+	UFUNCTION(BlueprintCallable, Category = Niagara, meta = (DisplayName = "Set Niagara Variable By String (Vector3)"))
 	void SetNiagaraVariableVec3(const FString& InVariableName, FVector InValue);
 
 	/** Sets a Niagara Vector3 parameter by name, overriding locally if necessary.*/
-	UFUNCTION(BlueprintCallable, Category = Niagara, meta = (DisplayName = "Set Niagara Variable (Vector2)"))
+	UFUNCTION(BlueprintCallable, Category = Niagara, meta = (DisplayName = "Set Niagara Variable (Vector3)"))
+	void SetVariableVec3(FName InVariableName, FVector InValue);
+
+	/** Sets a Niagara Vector3 parameter by name, overriding locally if necessary.*/
+	UFUNCTION(BlueprintCallable, Category = Niagara, meta = (DisplayName = "Set Niagara Variable By String (Vector2)"))
 	void SetNiagaraVariableVec2(const FString& InVariableName, FVector2D InValue);
+
+	/** Sets a Niagara Vector3 parameter by name, overriding locally if necessary.*/
+	UFUNCTION(BlueprintCallable, Category = Niagara, meta = (DisplayName = "Set Niagara Variable (Vector2)"))
+	void SetVariableVec2(FName InVariableName, FVector2D InValue);
+
+	/** Sets a Niagara float parameter by name, overriding locally if necessary.*/
+	UFUNCTION(BlueprintCallable, Category = Niagara, meta = (DisplayName = "Set Niagara Variable By String (Float)"))
+	void SetNiagaraVariableFloat(const FString& InVariableName, float InValue);
 
 	/** Sets a Niagara float parameter by name, overriding locally if necessary.*/
 	UFUNCTION(BlueprintCallable, Category = Niagara, meta = (DisplayName = "Set Niagara Variable (Float)"))
-	void SetNiagaraVariableFloat(const FString& InVariableName, float InValue);
+	void SetVariableFloat(FName InVariableName, float InValue);
+
+	/** Sets a Niagara int parameter by name, overriding locally if necessary.*/
+	UFUNCTION(BlueprintCallable, Category = Niagara, meta = (DisplayName = "Set Niagara Variable By String (Int32)"))
+	void SetNiagaraVariableInt(const FString& InVariableName, int32 InValue);
 
 	/** Sets a Niagara int parameter by name, overriding locally if necessary.*/
 	UFUNCTION(BlueprintCallable, Category = Niagara, meta = (DisplayName = "Set Niagara Variable (Int32)"))
-	void SetNiagaraVariableInt(const FString& InVariableName, int32 InValue);
+	void SetVariableInt(FName InVariableName, int32 InValue);
+
+	/** Sets a Niagara float parameter by name, overriding locally if necessary.*/
+	UFUNCTION(BlueprintCallable, Category = Niagara, meta = (DisplayName = "Set Niagara Variable By String (Bool)"))
+	void SetNiagaraVariableBool(const FString& InVariableName, bool InValue);
 
 	/** Sets a Niagara float parameter by name, overriding locally if necessary.*/
 	UFUNCTION(BlueprintCallable, Category = Niagara, meta = (DisplayName = "Set Niagara Variable (Bool)"))
-	void SetNiagaraVariableBool(const FString& InVariableName, bool InValue);
+	void SetVariableBool(FName InVariableName, bool InValue);
 
+	UFUNCTION(BlueprintCallable, Category = Niagara, meta = (DisplayName = "Set Niagara Variable By String (Actor)"))
+	void SetNiagaraVariableActor(const FString& InVariableName, AActor* Actor);
+	
 	UFUNCTION(BlueprintCallable, Category = Niagara, meta = (DisplayName = "Set Niagara Variable (Actor)"))
-	void SetNiagaraVariableActor(const FString& InVariableName, AActor* Actor) {} // TODO sckime ?????? fix this!!!!
+	void SetVariableActor(FName InVariableName, AActor* Actor);
+	
+	UFUNCTION(BlueprintCallable, Category = Niagara, meta = (DisplayName = "Set Niagara Variable By String (Object)"))
+	void SetNiagaraVariableObject(const FString& InVariableName, UObject* Object);
+
+	UFUNCTION(BlueprintCallable, Category = Niagara, meta = (DisplayName = "Set Niagara Variable (Object)"))
+	void SetVariableObject(FName InVariableName, UObject* Object);
+
+	UFUNCTION(BlueprintCallable, Category = Niagara, meta = (DisplayName = "Set Niagara Variable (Material)"))
+	void SetVariableMaterial(FName InVariableName, UMaterialInterface* Object);
 
 	/** Debug accessors for getting positions in blueprints. */
 	UFUNCTION(BlueprintCallable, Category = Niagara, meta = (DisplayName = "Get Niagara Emitter Positions"))
@@ -284,11 +359,16 @@ public:
 	UFUNCTION(BlueprintCallable, Category = Niagara)
 	bool IsPaused()const;
 
+	UFUNCTION(BlueprintCallable, Category = Niagara)
+	UNiagaraDataInterface * GetDataInterface(const FString &Name);
+
 	//~ Begin UObject Interface.
 	virtual void PostLoad();
 #if WITH_EDITOR
 	virtual void PreEditChange(UProperty* PropertyAboutToChange) override;
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+	void OverrideUObjectParameter(const FNiagaraVariable& InVar, UObject* InObj);
+
 #endif
 	//~ End UObject Interface
 
@@ -321,8 +401,11 @@ public:
 	UPROPERTY(BlueprintAssignable)
 	FOnNiagaraSystemFinished OnSystemFinished;
 
+	/** Removes all local overrides and replaces them with the values from the source System - note: this also removes the editor overrides from the component as it is used by the pooling mechanism to prevent values leaking between different instances. */
+	void SetUserParametersToDefaultValues();
+
 private:
-	/** Compare local overrides with the source System. Remove any that have mismatched types or no longer exist on the System. Returns whether or not any changes occurred.*/
+	/** Compare local overrides with the source System. Remove any that have mismatched types or no longer exist on the System.*/
 	void SynchronizeWithSourceSystem();
 
 	void AssetExposedParametersChanged();
@@ -374,8 +457,9 @@ public:
 	 * @param  ScaleRule		Option for how we handle our scale when we attach to Parent.
 	 * @see bAutoManageAttachment, AutoAttachParent, AutoAttachSocketName, AutoAttachLocationRule, AutoAttachRotationRule, AutoAttachScaleRule
 	 */
-	UFUNCTION(BlueprintCallable, Category = Niagara)
-	void SetAutoAttachmentParameters(USceneComponent* Parent, FName SocketName, EAttachmentRule LocationRule, EAttachmentRule RotationRule, EAttachmentRule ScaleRule);
+	void SetAutoAttachmentParameters(USceneComponent* Parent, FName SocketName, EAttachmentRule LocationRule, EAttachmentRule RotationRule, EAttachmentRule ScaleRule) override;
+
+	virtual void SetUseAutoManageAttachment(bool bAutoManage) override { bAutoManageAttachment = bAutoManage; }
 
 	UPROPERTY(EditAnywhere, Category = Preview, Transient, meta=(EditCondition=bEnablePreviewDetailLevel))
 	int32 PreviewDetailLevel;
@@ -453,6 +537,8 @@ public:
 	virtual bool IsRayTracingRelevant() const override { return true; }
 #endif
 
+	FORCEINLINE const FMatrix& GetLocalToWorldInverse() const { return LocalToWorldInverse; }
+
 private:
 	void ReleaseRenderThreadResources();
 
@@ -490,6 +576,8 @@ private:
 
 	bool bRenderingEnabled;
 	NiagaraEmitterInstanceBatcher* Batcher = nullptr;
+
+	FMatrix LocalToWorldInverse;
 
 #if STATS
 	TStatId SystemStatID;

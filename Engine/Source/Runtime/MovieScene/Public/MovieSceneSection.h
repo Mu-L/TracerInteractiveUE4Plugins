@@ -24,7 +24,7 @@ struct FMovieSceneEvalTemplatePtr;
 template<typename> class TArrayView;
 
 /** Enumeration specifying how to handle state when this section is no longer evaluated */
-UENUM()
+UENUM(BlueprintType)
 enum class EMovieSceneCompletionMode : uint8
 {
 	KeepState,
@@ -287,8 +287,27 @@ public:
 	MOVIESCENE_API virtual TOptional<TRange<FFrameNumber> > GetAutoSizeRange() const;
 
 	/**
+	 * Gets this section's completion mode
+	 */
+	UFUNCTION(BlueprintPure, Category = "Movie Scene Section")
+	EMovieSceneCompletionMode GetCompletionMode() const
+	{
+		return EvalOptions.CompletionMode;
+	}
+
+	/*
+	 * Sets this section's completion mode
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Movie Scene Section")
+	void SetCompletionMode(EMovieSceneCompletionMode InCompletionMode)
+	{
+		EvalOptions.CompletionMode = InCompletionMode;
+	}
+
+	/**
 	 * Gets this section's blend type
 	 */
+	UFUNCTION(BlueprintPure, Category = "Movie Scene Section")
 	FOptionalMovieSceneBlendType GetBlendType() const
 	{
 		return BlendType;
@@ -297,6 +316,7 @@ public:
 	/**
 	 * Sets this section's blend type
 	 */
+	UFUNCTION(BlueprintCallable, Category = "Movie Scene Section")
 	MOVIESCENE_API virtual void SetBlendType(EMovieSceneBlendType InBlendType)
 	{
 		if (GetSupportedBlendTypes().Contains(InBlendType))
@@ -328,17 +348,25 @@ public:
 	 * Split a section in two at the split time
 	 *
 	 * @param SplitTime The time at which to split
+	 * @param bDeleteKeys Delete keys outside the split ranges
 	 * @return The newly created split section
 	 */
-	MOVIESCENE_API virtual UMovieSceneSection* SplitSection(FQualifiedFrameTime SplitTime);
+	MOVIESCENE_API virtual UMovieSceneSection* SplitSection(FQualifiedFrameTime SplitTime, bool bDeleteKeys);
+
+	UE_DEPRECATED(4.23, "Please use SplitSection(SplitTime, bDeleteKeys) instead.")
+	virtual UMovieSceneSection* SplitSection(FQualifiedFrameTime SplitTime) { return SplitSection(SplitTime, false); }
 
 	/**
 	 * Trim a section at the trim time
 	 *
 	 * @param TrimTime The time at which to trim
 	 * @param bTrimLeft Whether to trim left or right
+	 * @param bDeleteKeys Delete keys outside the split ranges
 	 */
-	MOVIESCENE_API virtual void TrimSection(FQualifiedFrameTime TrimTime, bool bTrimLeft);
+	MOVIESCENE_API virtual void TrimSection(FQualifiedFrameTime TrimTime, bool bTrimLeft, bool bDeleteKeys);
+
+	UE_DEPRECATED(4.23, "Please use TrimSection(SplitTime, bTrimLeft, bDeleteKeys) instead.")
+	virtual void TrimSection(FQualifiedFrameTime SplitTime, bool bTrimLeft) { TrimSection(SplitTime, bTrimLeft, false); }
 
 	/**
 	 * Get the data structure representing the specified keys.

@@ -2,6 +2,7 @@
 
 #include "GeometryCollection/GeometryCollectionExampleFields.h"
 
+#include "Chaos/Utilities.h"
 #include "Field/FieldSystem.h"
 #include "Field/FieldSystemNodes.h"
 #include "Field/FieldSystemCoreAlgo.h"
@@ -20,8 +21,7 @@ DEFINE_LOG_CATEGORY_STATIC(GCTF_Log, Verbose, All);
 
 namespace GeometryCollectionExample
 {
-	template<class T>
-	bool Fields_NoiseSample(ExampleResponse&& R)
+	void Fields_NoiseSample()
 	{
 		int Bounds = 100;
 		TArray<ContextIndex> IndicesArray;
@@ -56,32 +56,22 @@ namespace GeometryCollectionExample
 		NoiseField->Evaluate(Context, ResultsView);
 
 		float min = FLT_MAX, max = -FLT_MAX;
+		double avg = 0.0;
+		Chaos::Utilities::GetMinAvgMax(ResultsView, min, avg, max);
+		EXPECT_GE(min, MinDoimain);
+		EXPECT_LE(max, MaxDomain);
+		EXPECT_LT(min, max);
 
-		for (int32 Index = 0, i = 0; i < Bounds; i++)
-		{
-			for (int32 j = 0; j < Bounds; j++)
-			{
-				min = FMath::Min(min, ResultsView[Index]);
-				max = FMath::Max(max, ResultsView[Index]);
-				//std::cout << ResultsView[Index] << " ";
-				Index++;
-			}
-			//std::cout << std::endl;
-		}
-
-		R.ExpectTrue(min >= MinDoimain);
-		R.ExpectTrue(max <= MaxDomain);
-		R.ExpectTrue(min < max);
+		float variance = Chaos::Utilities::GetVariance(ResultsView, avg);
+		float stdDev = Chaos::Utilities::GetStandardDeviation(variance);
+		EXPECT_GT(variance, 0.0); // If variance is 0, then all values are the same.
+		EXPECT_GT(stdDev, 0.0);
+		EXPECT_LT(stdDev, 0.5);
 
 		delete NoiseField;
-
-		return !R.HasError();
-
 	}
-	template bool Fields_NoiseSample<float>(ExampleResponse&& R);
 
-	template<class T>
-	bool Fields_RadialIntMask(ExampleResponse&& R)
+	void Fields_RadialIntMask()
 	{
 		TArray<ContextIndex> IndicesArray;
 		ContextIndex::ContiguousIndices(IndicesArray, 10);
@@ -94,8 +84,6 @@ namespace GeometryCollectionExample
 			SamplesArray[Index] = FVector(Index);
 		}
 		TArrayView<FVector> SamplesView(&(SamplesArray.operator[](0)), SamplesArray.Num());
-
-
 
 		FRadialIntMask * RadialMask = new FRadialIntMask(0.0, FVector(), 1.0, 0.0, ESetMaskConditionType::Field_Set_Always);
 		RadialMask->Position = FVector(0.0, 0.0, 0.0);
@@ -116,27 +104,22 @@ namespace GeometryCollectionExample
 		{
 			if (Index <= 2)
 			{
-				R.ExpectTrue(!!ResultsView[Index]);
+				EXPECT_TRUE(ResultsView[Index]);
 			}
 			else
 			{
-				R.ExpectTrue(!ResultsView[Index]);
+				EXPECT_FALSE(ResultsView[Index]);
 			}
 			//UE_LOG(GCTF_Log, Error, TEXT("[%d] %d"), Index, ResultsView[Index]);
 		}
 		delete RadialMask;
-
-		return !R.HasError();
 	}
-	template bool Fields_RadialIntMask<float>(ExampleResponse&& R);
 
-	template<class T>
-	bool Fields_RadialFalloff(ExampleResponse&& R)
+	void Fields_RadialFalloff()
 	{
 		TArray<ContextIndex> IndicesArray;
 		ContextIndex::ContiguousIndices(IndicesArray, 10);
 		TArrayView<ContextIndex> IndexView(&(IndicesArray[0]), IndicesArray.Num());
-
 
 		TArray<FVector> SamplesArray;
 		SamplesArray.Init(FVector(0.f), 10);
@@ -168,11 +151,11 @@ namespace GeometryCollectionExample
 
 			if (Index <= 5)
 			{
-				R.ExpectTrue(FMath::Abs(ResultsView[Index]) - ExpectedVal < KINDA_SMALL_NUMBER);
+				EXPECT_LT(FMath::Abs(ResultsView[Index]) - ExpectedVal, KINDA_SMALL_NUMBER);
 			}
 			else
 			{
-				R.ExpectTrue(!ResultsView[Index]);
+				EXPECT_FALSE(ResultsView[Index]);
 			}
 			//UE_LOG(GCTF_Log, Error, TEXT("[%d] sample:%3.5f (%3.5f,%3.5f,%3.5f) %3.5f"), Index,
 			//	ExpectedVal ,
@@ -180,13 +163,9 @@ namespace GeometryCollectionExample
 			//	ResultsView[Index]);
 		}
 		delete RadialFalloff;
-
-		return !R.HasError();
 	}
-	template bool Fields_RadialFalloff<float>(ExampleResponse&& R);
 
-	template<class T>
-	bool Fields_PlaneFalloff(ExampleResponse&& R)
+	void Fields_PlaneFalloff()
 	{
 		TArray<ContextIndex> IndicesArray;
 		ContextIndex::ContiguousIndices(IndicesArray, 10);
@@ -227,17 +206,12 @@ namespace GeometryCollectionExample
 				ExpectedVal = -PlaneFalloff->Magnitude * Distance;
 			}
 
-			R.ExpectTrue(FMath::Abs(ResultsView[Index]) - ExpectedVal < KINDA_SMALL_NUMBER);
+			EXPECT_LT(FMath::Abs(ResultsView[Index]) - ExpectedVal, KINDA_SMALL_NUMBER);
 		}
 		delete PlaneFalloff;
-
-		return !R.HasError();
 	}
-	template bool Fields_PlaneFalloff<float>(ExampleResponse&& R);
 
-
-	template<class T>
-	bool Fields_UniformVector(ExampleResponse&& R)
+	void Fields_UniformVector()
 	{
 		TArray<ContextIndex> IndicesArray;
 		ContextIndex::ContiguousIndices(IndicesArray, 10);
@@ -270,21 +244,16 @@ namespace GeometryCollectionExample
 		for (int32 Index = 0; Index < 10; Index++)
 		{
 			FVector ExpectedVal = 10.0*FVector(3, 5, 7);
-			R.ExpectTrue((ResultsView[Index] - ExpectedVal).Size() < KINDA_SMALL_NUMBER);
+			EXPECT_LT((ResultsView[Index] - ExpectedVal).Size(), KINDA_SMALL_NUMBER);
 			//UE_LOG(GCTF_Log, Error, TEXT("[%d] sample:(%3.5f,%3.5f,%3.5f) (%3.5f,%3.5f,%3.5f) (%3.5f,%3.5f,%3.5f)"), Index,
 			//	ExpectedVal.X, ExpectedVal.Y, ExpectedVal.Z,
 			//	SamplesArray[Index].X, SamplesArray[Index].Y, SamplesArray[Index].Z,
 			//	ResultsView[Index].X, ResultsView[Index].Y, ResultsView[Index].Z);
 		}
 		delete UniformVector;
-
-		return !R.HasError();
 	}
-	template bool Fields_UniformVector<float>(ExampleResponse&& R);
 
-
-	template<class T>
-	bool Fields_RaidalVector(ExampleResponse&& R)
+	void Fields_RaidalVector()
 	{
 		TArray<ContextIndex> IndicesArray;
 		ContextIndex::ContiguousIndices(IndicesArray, 10);
@@ -317,21 +286,16 @@ namespace GeometryCollectionExample
 		for (int32 Index = 0; Index < 10; Index++)
 		{
 			FVector ExpectedVal = RadialVector->Magnitude * (SamplesArray[Index] - RadialVector->Position).GetSafeNormal();
-			R.ExpectTrue((ResultsView[Index] - ExpectedVal).Size() < KINDA_SMALL_NUMBER);
+			EXPECT_LT((ResultsView[Index] - ExpectedVal).Size(), KINDA_SMALL_NUMBER);
 			//UE_LOG(GCTF_Log, Error, TEXT("[%d] sample:(%3.5f,%3.5f,%3.5f) (%3.5f,%3.5f,%3.5f) (%3.5f,%3.5f,%3.5f)"), Index,
 			//	ExpectedVal.X, ExpectedVal.Y, ExpectedVal.Z,
 			//	SamplesArray[Index].X, SamplesArray[Index].Y, SamplesArray[Index].Z,
 			//	ResultsView[Index].X, ResultsView[Index].Y, ResultsView[Index].Z);
 		}
 		delete RadialVector;
-
-		return !R.HasError();
 	}
-	template bool Fields_RaidalVector<float>(ExampleResponse&& R);
 
-
-	template<class T>
-	bool Fields_SumVectorFullMult(ExampleResponse&& R)
+	void Fields_SumVectorFullMult()
 	{
 		TArray<ContextIndex> IndicesArray;
 		ContextIndex::ContiguousIndices(IndicesArray, 10);
@@ -397,16 +361,12 @@ namespace GeometryCollectionExample
 			//	SamplesArray[Index].X, SamplesArray[Index].Y, SamplesArray[Index].Z,
 			//	ResultsView[Index].X, ResultsView[Index].Y, ResultsView[Index].Z);
 
-			R.ExpectTrue((ResultsView[Index] - ExpectedVal).Size() < KINDA_SMALL_NUMBER);
+			EXPECT_LT((ResultsView[Index] - ExpectedVal).Size(), KINDA_SMALL_NUMBER);
 		}
 		delete SumVector;
-
-		return !R.HasError();
 	}
-	template bool Fields_SumVectorFullMult<float>(ExampleResponse&& R);
 
-	template<class T>
-	bool Fields_SumVectorFullDiv(ExampleResponse&& R)
+	void Fields_SumVectorFullDiv()
 	{
 		TArray<ContextIndex> IndicesArray;
 		ContextIndex::ContiguousIndices(IndicesArray, 10);
@@ -472,17 +432,12 @@ namespace GeometryCollectionExample
 			//	SamplesArray[Index].X, SamplesArray[Index].Y, SamplesArray[Index].Z,
 			//	ResultsView[Index].X, ResultsView[Index].Y, ResultsView[Index].Z);
 
-			R.ExpectTrue((ResultsView[Index] - ExpectedVal).Size() < KINDA_SMALL_NUMBER);
+			EXPECT_LT((ResultsView[Index] - ExpectedVal).Size(), KINDA_SMALL_NUMBER);
 		}
 		delete SumVector;
-
-		return !R.HasError();
 	}
-	template bool Fields_SumVectorFullDiv<float>(ExampleResponse&& R);
 
-
-	template<class T>
-	bool Fields_SumVectorFullAdd(ExampleResponse&& R)
+	void Fields_SumVectorFullAdd()
 	{
 		TArray<ContextIndex> IndicesArray;
 		ContextIndex::ContiguousIndices(IndicesArray, 10);
@@ -549,17 +504,12 @@ namespace GeometryCollectionExample
 			//	SamplesArray[Index].X, SamplesArray[Index].Y, SamplesArray[Index].Z,
 			//	ResultsView[Index].X, ResultsView[Index].Y, ResultsView[Index].Z);
 
-			R.ExpectTrue((ResultsView[Index] - ExpectedVal).Size() < KINDA_SMALL_NUMBER);
+			EXPECT_LT((ResultsView[Index] - ExpectedVal).Size(), KINDA_SMALL_NUMBER);
 		}
 		delete SumVector;
-
-		return !R.HasError();
 	}
-	template bool Fields_SumVectorFullAdd<float>(ExampleResponse&& R);
 
-
-	template<class T>
-	bool Fields_SumVectorFullSub(ExampleResponse&& R)
+	void Fields_SumVectorFullSub()
 	{
 		TArray<ContextIndex> IndicesArray;
 		ContextIndex::ContiguousIndices(IndicesArray, 10);
@@ -626,17 +576,12 @@ namespace GeometryCollectionExample
 			//	SamplesArray[Index].X, SamplesArray[Index].Y, SamplesArray[Index].Z,
 			//	ResultsView[Index].X, ResultsView[Index].Y, ResultsView[Index].Z);
 
-			R.ExpectTrue((ResultsView[Index] - ExpectedVal).Size() < KINDA_SMALL_NUMBER);
+			EXPECT_LT((ResultsView[Index] - ExpectedVal).Size(), KINDA_SMALL_NUMBER);
 		}
 		delete SumVector;
-
-		return !R.HasError();
 	}
-	template bool Fields_SumVectorFullSub<float>(ExampleResponse&& R);
 
-
-	template<class T>
-	bool Fields_SumVectorLeftSide(ExampleResponse&& R)
+	void Fields_SumVectorLeftSide()
 	{
 		TArray<ContextIndex> IndicesArray;
 		ContextIndex::ContiguousIndices(IndicesArray, 10);
@@ -702,22 +647,17 @@ namespace GeometryCollectionExample
 			//	SamplesArray[Index].X, SamplesArray[Index].Y, SamplesArray[Index].Z,
 			//	ResultsView[Index].X, ResultsView[Index].Y, ResultsView[Index].Z);
 
-			R.ExpectTrue((ResultsView[Index] - ExpectedVal).Size() < KINDA_SMALL_NUMBER);
+			EXPECT_LT((ResultsView[Index] - ExpectedVal).Size(), KINDA_SMALL_NUMBER);
 		}
 		delete SumVector;
 		delete UniformVector;
-
-		return !R.HasError();
 	}
-	template bool Fields_SumVectorLeftSide<float>(ExampleResponse&& R);
 
-	template<class T>
-	bool Fields_SumVectorRightSide(ExampleResponse&& R)
+	void Fields_SumVectorRightSide()
 	{
 		TArray<ContextIndex> IndicesArray;
 		ContextIndex::ContiguousIndices(IndicesArray, 10);
 		TArrayView<ContextIndex> IndexView(&(IndicesArray[0]), IndicesArray.Num());
-
 
 		float AverageSampleLength = 0.0;
 		TArray<FVector> SamplesArray;
@@ -750,7 +690,6 @@ namespace GeometryCollectionExample
 
 		FSumVector * SumVector = new FSumVector(1.0, RadialFalloff, UniformVector, nullptr, EFieldOperationType::Field_Multiply);
 
-
 		FFieldContext Context{
 			IndexView,
 			SamplesView,
@@ -780,18 +719,13 @@ namespace GeometryCollectionExample
 			//	SamplesArray[Index].X, SamplesArray[Index].Y, SamplesArray[Index].Z,
 			//	ResultsView[Index].X, ResultsView[Index].Y, ResultsView[Index].Z);
 
-			R.ExpectTrue((ResultsView[Index] - ExpectedVal).Size() < KINDA_SMALL_NUMBER);
+			EXPECT_LT((ResultsView[Index] - ExpectedVal).Size(), KINDA_SMALL_NUMBER);
 		}
 		delete SumVector;
 		delete RadialVector;
-
-		return !R.HasError();
 	}
-	template bool Fields_SumVectorRightSide<float>(ExampleResponse&& R);
 
-
-	template<class T>
-	bool Fields_SumScalar(ExampleResponse&& R)
+	void Fields_SumScalar()
 	{
 		int32 NumPoints = 20;
 		TArray<ContextIndex> IndicesArray;
@@ -806,8 +740,6 @@ namespace GeometryCollectionExample
 			SamplesArray[Index + 10] = FVector(Index, 0, 0);
 		}
 		TArrayView<FVector> SamplesView(&(SamplesArray.operator[](0)), SamplesArray.Num());
-
-
 		
 		FRadialFalloff * RadialFalloff = new FRadialFalloff();
 		RadialFalloff->Position = FVector(5.0, 0.0, 0.0);
@@ -861,17 +793,12 @@ namespace GeometryCollectionExample
 			//	SamplesArray[Index].X, SamplesArray[Index].Y, SamplesArray[Index].Z,
 			//	ExpectedVal, ResultsView[Index]);
 
-			R.ExpectTrue((ResultsView[Index] - ExpectedVal) < KINDA_SMALL_NUMBER);
+			EXPECT_LT((ResultsView[Index] - ExpectedVal), KINDA_SMALL_NUMBER);
 		}
 		delete SumScalar;
-
-		return !R.HasError();
 	}
-	template bool Fields_SumScalar<float>(ExampleResponse&& R);
 
-
-	template<class T>
-	bool Fields_SumScalarRightSide(ExampleResponse&& R)
+	void Fields_SumScalarRightSide()
 	{
 		int32 NumPoints = 20;
 		TArray<ContextIndex> IndicesArray;
@@ -885,7 +812,6 @@ namespace GeometryCollectionExample
 			SamplesArray[Index + 10] = FVector(Index, 0, 0);
 		}
 		TArrayView<FVector> SamplesView(&(SamplesArray.operator[](0)), SamplesArray.Num());
-
 
 		FRadialFalloff * RadialFalloff = new FRadialFalloff();
 		RadialFalloff->Position = FVector(5.0, 0.0, 0.0);
@@ -924,7 +850,6 @@ namespace GeometryCollectionExample
 			}
 
 			float ScalarLeft = 1.f;
-
 			float ExpectedVal = ScalarLeft * ScalarRight;
 
 			//UE_LOG(GCTF_Log, Error, TEXT("[%d:%3.5f] sample:(%3.5f,%3.5f,%3.5f) %3.5f -> %3.5f"), Index,
@@ -932,18 +857,13 @@ namespace GeometryCollectionExample
 			//	SamplesArray[Index].X, SamplesArray[Index].Y, SamplesArray[Index].Z,
 			//	ExpectedVal, ResultsView[Index]);
 
-			R.ExpectTrue((ResultsView[Index] - ExpectedVal) < KINDA_SMALL_NUMBER);
+			EXPECT_LT((ResultsView[Index] - ExpectedVal), KINDA_SMALL_NUMBER);
 		}
 		delete SumScalar;
 		delete RadialFalloff2;
-
-		return !R.HasError();
 	}
-	template bool Fields_SumScalarRightSide<float>(ExampleResponse&& R);
 
-
-	template<class T>
-	bool Fields_SumScalarLeftSide(ExampleResponse&& R)
+	void Fields_SumScalarLeftSide()
 	{
 		int32 NumPoints = 20;
 		TArray<ContextIndex> IndicesArray;
@@ -957,8 +877,6 @@ namespace GeometryCollectionExample
 			SamplesArray[Index + 10] = FVector(Index, 0, 0);
 		}
 		TArrayView<FVector> SamplesView(&(SamplesArray.operator[](0)), SamplesArray.Num());
-
-
 
 		FRadialFalloff * RadialFalloff = new FRadialFalloff();
 		RadialFalloff->Position = FVector(5.0, 0.0, 0.0);
@@ -1005,20 +923,13 @@ namespace GeometryCollectionExample
 			//	SamplesArray[Index].X, SamplesArray[Index].Y, SamplesArray[Index].Z,
 			//	ExpectedVal, ResultsView[Index]);
 
-			R.ExpectTrue((ResultsView[Index] - ExpectedVal) < KINDA_SMALL_NUMBER);
+			EXPECT_LT((ResultsView[Index] - ExpectedVal), KINDA_SMALL_NUMBER);
 		}
 		delete SumScalar;
 		delete RadialFalloff;
-
-		return !R.HasError();
 	}
-	template bool Fields_SumScalarLeftSide<float>(ExampleResponse&& R);
 
-
-
-
-	template<class T>
-	bool Fields_Culling(ExampleResponse&& R)
+	void Fields_Culling()
 	{
 		int32 NumPoints = 20;
 		TArray<ContextIndex> IndicesArray;
@@ -1033,14 +944,11 @@ namespace GeometryCollectionExample
 		}
 		TArrayView<FVector> SamplesView(&(SamplesArray.operator[](0)), SamplesArray.Num());
 
-
-
 		FRadialFalloff * RadialFalloff = new FRadialFalloff();
 		RadialFalloff->Position = FVector(0.0, 0.0, 0.0);
 		RadialFalloff->Radius = 4.;
 		RadialFalloff->Magnitude = 3.0;
 		float RadialFalloffRadius2 = RadialFalloff->Radius * RadialFalloff->Radius;
-
 
 		FRadialFalloff * RadialFalloff2 = new FRadialFalloff();
 		RadialFalloff2->Position = FVector(5.0, 0.0, 0.0);
@@ -1081,14 +989,10 @@ namespace GeometryCollectionExample
 			//	SamplesArray[Index].X, SamplesArray[Index].Y, SamplesArray[Index].Z,
 			//	ExpectedVal, ResultsView[Index]);
 
-			R.ExpectTrue((ResultsView[Index] - ExpectedVal) < KINDA_SMALL_NUMBER);
+			EXPECT_LT((ResultsView[Index] - ExpectedVal), KINDA_SMALL_NUMBER);
 		}
 		delete CullingField;
-
-		return !R.HasError();
 	}
-	template bool Fields_Culling<float>(ExampleResponse&& R);
-
 
 	FFieldSystemCommand SaveAndLoad(FFieldSystemCommand & CommandOut)
 	{
@@ -1113,67 +1017,97 @@ namespace GeometryCollectionExample
 		return CommandIn;
 	}
 
-	template<class T>
-	bool Fields_SerializeAPI(ExampleResponse&& R)
+	// Helper for testing FFieldSystemCommand equality. Defined very similarly to the == operator but with more granular
+	// checks at each stage of testing. 
+	bool TestFFieldSystemEquality(const FFieldSystemCommand& CommandIn, const FFieldSystemCommand& CommandOut)
+	{
+		EXPECT_TRUE(CommandOut.TargetAttribute.IsEqual(CommandIn.TargetAttribute));
+		if (CommandOut.TargetAttribute.IsEqual(CommandIn.TargetAttribute))
+		{
+			EXPECT_EQ(CommandOut.RootNode.IsValid(), CommandIn.RootNode.IsValid());
+			if (CommandOut.RootNode.IsValid() == CommandIn.RootNode.IsValid())
+			{
+				if (CommandOut.RootNode.IsValid())
+				{
+					EXPECT_EQ(CommandOut.RootNode->SerializationType(), CommandIn.RootNode->SerializationType());
+					if (CommandOut.RootNode->SerializationType() == CommandIn.RootNode->SerializationType())
+					{
+						EXPECT_TRUE(CommandOut.RootNode->operator==(*CommandIn.RootNode));
+						if (CommandOut.RootNode->operator==(*CommandIn.RootNode))
+						{
+							return true;
+						}
+					}
+				}
+				else
+				{
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	void Fields_SerializeAPI()
 	{
 		{
 			FFieldSystemCommand CommandOut("FUniformInteger", new FUniformInteger(3));
 			FFieldSystemCommand CommandIn = SaveAndLoad(CommandOut);
-			R.ExpectTrue(CommandIn == CommandOut);
+			EXPECT_TRUE(TestFFieldSystemEquality(CommandIn, CommandOut));
 		}
 
 		{
 			FFieldSystemCommand CommandOut("FRadialIntMask", new FRadialIntMask(1.f,FVector(3,5,7),11,13) );
 			FFieldSystemCommand CommandIn = SaveAndLoad(CommandOut);
-			R.ExpectTrue(CommandIn == CommandOut);
+			EXPECT_TRUE(TestFFieldSystemEquality(CommandIn, CommandOut));
 		}
 
 		{
 			FFieldSystemCommand CommandOut("FUniformScalar", new FUniformScalar(13));
 			FFieldSystemCommand CommandIn = SaveAndLoad(CommandOut);
-			R.ExpectTrue(CommandIn == CommandOut);
+			EXPECT_TRUE(TestFFieldSystemEquality(CommandIn, CommandOut));
 		}
 
 		{
 			FFieldSystemCommand CommandOut("FRadialFalloff", new FRadialFalloff(1.f,3.f,5.f,7.f,11.f,FVector(13, 17, 19)));
 			FFieldSystemCommand CommandIn = SaveAndLoad(CommandOut);
-			R.ExpectTrue(CommandIn == CommandOut);
+			EXPECT_TRUE(TestFFieldSystemEquality(CommandIn, CommandOut));
 		}
 
 		{
 			FFieldSystemCommand CommandOut("FPlaneFalloff", new FPlaneFalloff(1.f, 3.f, 5.f, 7.f, 100.f, FVector(9, 11, 13), FVector(17, 19, 23)));
 			FFieldSystemCommand CommandIn = SaveAndLoad(CommandOut);
-			R.ExpectTrue(CommandIn == CommandOut);
+			EXPECT_TRUE(TestFFieldSystemEquality(CommandIn, CommandOut));
 		}
 		
 		{
 			FFieldSystemCommand CommandOut("FBoxFalloff", new FBoxFalloff(1.f, 7.f, 9.f, 13.f, FTransform::Identity));
 			FFieldSystemCommand CommandIn = SaveAndLoad(CommandOut);
-			R.ExpectTrue(CommandIn == CommandOut);
+			EXPECT_TRUE(TestFFieldSystemEquality(CommandIn, CommandOut));
 		}
 		
 		{
 			FFieldSystemCommand CommandOut("FNoiseField", new	FNoiseField(1.f, 3.f));
 			FFieldSystemCommand CommandIn = SaveAndLoad(CommandOut);
-			R.ExpectTrue(CommandIn == CommandOut);
+			EXPECT_TRUE(TestFFieldSystemEquality(CommandIn, CommandOut));
 		}
 
 		{
 			FFieldSystemCommand CommandOut("FUniformVector", new FUniformVector(1.f, FVector(3, 5, 7)));
 			FFieldSystemCommand CommandIn = SaveAndLoad(CommandOut);
-			R.ExpectTrue(CommandIn == CommandOut);
+			EXPECT_TRUE(TestFFieldSystemEquality(CommandIn, CommandOut));
 		}
 
 		{
 			FFieldSystemCommand CommandOut("FRadialVector", new FRadialVector(1.f,FVector(3, 5, 7)));
 			FFieldSystemCommand CommandIn = SaveAndLoad(CommandOut);
-			R.ExpectTrue(CommandIn == CommandOut);
+			EXPECT_TRUE(TestFFieldSystemEquality(CommandIn, CommandOut));
 		}
 
 		{
 			FFieldSystemCommand CommandOut("FRandomVector", new FRandomVector(1.f));
 			FFieldSystemCommand CommandIn = SaveAndLoad(CommandOut);
-			R.ExpectTrue(CommandIn == CommandOut);
+			EXPECT_TRUE(TestFFieldSystemEquality(CommandIn, CommandOut));
 		}
 
 		{
@@ -1181,7 +1115,7 @@ namespace GeometryCollectionExample
 			FRadialFalloff* RadialScalar = new FRadialFalloff(1.f, 3.f, 5.f, 7.f, 11.f, FVector(13, 17, 19));
 			FFieldSystemCommand CommandOut("FSumScalar", new FSumScalar(1.f, UniformScalar, RadialScalar, EFieldOperationType::Field_Substract));
 			FFieldSystemCommand CommandIn = SaveAndLoad(CommandOut);
-			R.ExpectTrue(CommandIn == CommandOut);
+			EXPECT_TRUE(TestFFieldSystemEquality(CommandIn, CommandOut));
 		}
 
 		{
@@ -1190,7 +1124,7 @@ namespace GeometryCollectionExample
 			FRadialVector* RadialVector = new FRadialVector(21.f, FVector(3, 5, 7));
 			FFieldSystemCommand CommandOut("FSumVector", new FSumVector(1.f, UniformScalar, UniformVector, RadialVector, EFieldOperationType::Field_Divide));
 			FFieldSystemCommand CommandIn = SaveAndLoad(CommandOut);
-			R.ExpectTrue(CommandIn == CommandOut);
+			EXPECT_TRUE(TestFFieldSystemEquality(CommandIn, CommandOut));
 		}
 
 		// conversion fields
@@ -1198,13 +1132,13 @@ namespace GeometryCollectionExample
 			FUniformScalar* UniformScalar = new FUniformScalar(41.f);
 			FFieldSystemCommand CommandOut("FConversionField", new FConversionField<float,int32>(UniformScalar));
 			FFieldSystemCommand CommandIn = SaveAndLoad(CommandOut);
-			R.ExpectTrue(CommandIn == CommandOut);
+			EXPECT_TRUE(TestFFieldSystemEquality(CommandIn, CommandOut));
 		}
 		{
 			FUniformInteger* UniformInteger = new FUniformInteger(3);
 			FFieldSystemCommand CommandOut("FConversionField", new FConversionField<int32, float>(UniformInteger));
 			FFieldSystemCommand CommandIn = SaveAndLoad(CommandOut);
-			R.ExpectTrue(CommandIn == CommandOut);
+			EXPECT_TRUE(TestFFieldSystemEquality(CommandIn, CommandOut));
 		}
 
 		// culling fields
@@ -1213,38 +1147,38 @@ namespace GeometryCollectionExample
 			FRadialFalloff* RadialScalar = new FRadialFalloff(1.f, 3.f, 5.f, 7.f, 11.f, FVector(13, 17, 19));
 			FFieldSystemCommand CommandOut("FCullingField", new FCullingField<int32>(RadialScalar,UniformInteger));
 			FFieldSystemCommand CommandIn = SaveAndLoad(CommandOut);
-			R.ExpectTrue(CommandIn == CommandOut);
+			EXPECT_TRUE(TestFFieldSystemEquality(CommandIn, CommandOut));
 		}
 		{
 			FUniformScalar* UniformScalar = new FUniformScalar(3.f);
 			FRadialFalloff* RadialScalar = new FRadialFalloff(1.f, 3.f, 5.f, 7.f, 11.f, FVector(13, 17, 19));
 			FFieldSystemCommand CommandOut("FCullingField", new FCullingField<float>(RadialScalar, UniformScalar));
 			FFieldSystemCommand CommandIn = SaveAndLoad(CommandOut);
-			R.ExpectTrue(CommandIn == CommandOut);
+			EXPECT_TRUE(TestFFieldSystemEquality(CommandIn, CommandOut));
 		}
 		{
 			FUniformVector* UniformVector = new FUniformVector(3.f);
 			FRadialFalloff* RadialScalar = new FRadialFalloff(1.f, 3.f, 5.f, 7.f, 11.f, FVector(13, 17, 19));
 			FFieldSystemCommand CommandOut("FCullingField", new FCullingField<FVector>(RadialScalar, UniformVector));
 			FFieldSystemCommand CommandIn = SaveAndLoad(CommandOut);
-			R.ExpectTrue(CommandIn == CommandOut);
+			EXPECT_TRUE(TestFFieldSystemEquality(CommandIn, CommandOut));
 		}
 
 		// terminals
 		{
 			FFieldSystemCommand CommandOut("FReturnResultsTerminal", new FReturnResultsTerminal<int32>());
 			FFieldSystemCommand CommandIn = SaveAndLoad(CommandOut);
-			R.ExpectTrue(CommandIn == CommandOut);
+			EXPECT_TRUE(TestFFieldSystemEquality(CommandIn, CommandOut));
 		}
 		{
 			FFieldSystemCommand CommandOut("FReturnResultsTerminal", new FReturnResultsTerminal<float>());
 			FFieldSystemCommand CommandIn = SaveAndLoad(CommandOut);
-			R.ExpectTrue(CommandIn == CommandOut);
+			EXPECT_TRUE(TestFFieldSystemEquality(CommandIn, CommandOut));
 		}
 		{
 			FFieldSystemCommand CommandOut("FReturnResultsTerminal", new FReturnResultsTerminal<FVector>());
 			FFieldSystemCommand CommandIn = SaveAndLoad(CommandOut);
-			R.ExpectTrue(CommandIn == CommandOut);
+			EXPECT_TRUE(TestFFieldSystemEquality(CommandIn, CommandOut));
 		}
 
 
@@ -1288,13 +1222,9 @@ namespace GeometryCollectionExample
 
 			FFieldSystemCommand CommandOut("DeepTreeOfEverything", SumVector3);
 			FFieldSystemCommand CommandIn = SaveAndLoad(CommandOut);
-			R.ExpectTrue(CommandIn == CommandOut);
+			EXPECT_TRUE(TestFFieldSystemEquality(CommandIn, CommandOut));
 		}
 
-		return !R.HasError();
-
 	}
-	template bool Fields_SerializeAPI<float>(ExampleResponse&& R);
-
-
+	//template void Fields_SerializeAPI<float>();
 }

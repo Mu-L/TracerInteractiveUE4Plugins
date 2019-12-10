@@ -14,12 +14,11 @@
 #include "ViewportTypeDefinition.h"
 
 class AActor;
-class ILevelViewport;
-class IViewportLayoutEntity;
+class IAssetViewport;
 class SLevelEditor;
 class UAnimSequence;
 class USkeletalMeshComponent;
-struct FViewportConstructionArgs;
+
 enum class EMapChangeType : uint8;
 
 extern const FName LevelEditorApp;
@@ -112,7 +111,14 @@ public:
 	 *
 	 * @todo This only works with the first level editor. Fix it.
 	 */
-	virtual TSharedPtr<class ILevelViewport> GetFirstActiveViewport();
+	virtual TSharedPtr<class IAssetViewport> GetFirstActiveViewport();
+
+	/**
+	* Gets the first active viewport of all the viewports.
+	*
+	* @todo This only works with the first level editor. Fix it.
+	*/
+	virtual TSharedPtr<class SLevelViewport> GetFirstActiveLevelViewport();
 
 	/**
 	 * Called to focus the level editor that has a play in editor viewport
@@ -145,7 +151,7 @@ public:
 	virtual const class FLevelViewportCommands& GetLevelViewportCommands() const;
 
 	/* @return The pointer to the current level Editor instance */
-	virtual TWeakPtr<class SLevelEditor> GetLevelEditorInstance() const;
+	virtual TWeakPtr<class ILevelEditor> GetLevelEditorInstance() const;
 
 	/* @return The pointer to the level editor tab */
 	virtual TWeakPtr<class SDockTab> GetLevelEditorInstanceTab() const;
@@ -241,6 +247,8 @@ public:
 	virtual TSharedPtr<FExtensibilityManager> GetModeBarExtensibilityManager() {return ModeBarExtensibilityManager;}
 	virtual TSharedPtr<FExtensibilityManager> GetNotificationBarExtensibilityManager() {return NotificationBarExtensibilityManager;}
 
+	virtual TSharedPtr<FExtender> AssembleExtenders(TSharedRef<FUICommandList>& InCommandList, TArray<FLevelEditorMenuExtender>& MenuExtenderDelegates) const;
+
 	DECLARE_EVENT_OneParam(ILevelEditor, FOnRegisterTabs, TSharedPtr<FTabManager>);
 	FOnRegisterTabs& OnRegisterTabs() { return RegisterTabs; }
 
@@ -327,7 +335,7 @@ public:
 	}
 
 	/** Create an instance of a custom viewport from the specified viewport type name */
-	TSharedRef<IViewportLayoutEntity> FactoryViewport(FName InTypeName, const FViewportConstructionArgs& ConstructionArgs) const;
+	TSharedRef<ILevelViewportLayoutEntity> FactoryViewport(FName InTypeName, const FViewportConstructionArgs& ConstructionArgs) const;
 
 private:
 	/**

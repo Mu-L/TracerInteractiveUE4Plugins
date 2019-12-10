@@ -39,6 +39,11 @@ struct FAndroidPlatformProperties
 		return "Android";
 	}
 
+	static FORCEINLINE const TCHAR* GetRuntimeSettingsClassName()
+	{
+		return TEXT("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings");
+	}
+
 	static FORCEINLINE bool IsGameOnly( )
 	{
 		return true;
@@ -49,9 +54,9 @@ struct FAndroidPlatformProperties
 		return true;
 	}
 
-	static FORCEINLINE bool SupportsBuildTarget( EBuildTargets::Type BuildTarget )
+	static FORCEINLINE bool SupportsBuildTarget( EBuildTargetType TargetType )
 	{
-		return (BuildTarget == EBuildTargets::Game);
+		return (TargetType == EBuildTargetType::Game);
 	}
 
 	static FORCEINLINE bool SupportsAutoSDK()

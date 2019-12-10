@@ -6,6 +6,7 @@
 #include "Chaos/Transform.h"
 #include "Chaos/TriangleMeshImplicitObject.h"
 #include "Chaos/HeightField.h"
+#include "Chaos/Convex.h"
 #include "ImplicitObjectScaled.h"
 
 #include "ChaosArchive.h"
@@ -41,8 +42,8 @@ namespace Chaos
 		if(BType == ImplicitObjectType::Sphere)
 		{
 			const TSphere<T, d>& BSphere = static_cast<const TSphere<T, d>&>(B);
-			const TVector<T, d> PtInA = BToATM.TransformPositionNoScale(BSphere.Center());
-			return A.Overlap(PtInA, Thickness + BSphere.Radius());
+			const TVector<T, d> PtInA = BToATM.TransformPositionNoScale(BSphere.GetCenter());
+			return A.Overlap(PtInA, Thickness + BSphere.GetRadius());
 		}
 		//todo: A is a sphere
 		else if (A.IsConvex())
@@ -70,7 +71,7 @@ namespace Chaos
 				const TImplicitObject<T, d>& UnscaledObj = *AScaled.GetUnscaledObject();
 				check(UnscaledObj.GetType(true) == ImplicitObjectType::TriangleMesh);
 				const TTriangleMeshImplicitObject<T>& ATriangleMesh = static_cast<const TTriangleMeshImplicitObject<T>&>(UnscaledObj);
-				return ATriangleMesh.OverlapGeom(B, BToATM, Thickness, AScaled.GetScale());
+				return TImplicitObjectScaled<T,d>::LowLevelOverlapGeom(AScaled, ATriangleMesh, B, BToATM, Thickness);
 			}
 			default:
 				check(false);	//unsupported query type
@@ -82,7 +83,7 @@ namespace Chaos
 	}
 
 	template <typename T, int d>
-	bool SweepQuery(const TImplicitObject<T, d>& A, const TRigidTransform<T,d>& ATM, const TImplicitObject<T, d>& B, const TRigidTransform<T, d>& BTM, const TVector<T,d>& Dir, const T Length, T& OutTime, TVector<T,d>& OutPosition, TVector<T,d>& OutNormal, const T Thickness = 0)
+	bool SweepQuery(const TImplicitObject<T, d>& A, const TRigidTransform<T,d>& ATM, const TImplicitObject<T, d>& B, const TRigidTransform<T, d>& BTM, const TVector<T,d>& Dir, const T Length, T& OutTime, TVector<T,d>& OutPosition, TVector<T,d>& OutNormal, int32& OutFaceIndex, const T Thickness = 0)
 	{
 		const ImplicitObjectType AType = A.GetType(true);
 		const ImplicitObjectType BType = B.GetType(true);
@@ -93,35 +94,77 @@ namespace Chaos
 		{
 			const TImplicitObjectTransformed<T, d>& TransformedA = static_cast<const TImplicitObjectTransformed<T, d>&>(A);
 			const TRigidTransform<T, d> NewATM = TransformedA.GetTransform() * ATM;
-			return SweepQuery(*TransformedA.GetTransformedObject(), NewATM, B, BTM, Dir, Length, OutTime, OutPosition, OutNormal, Thickness);
+			return SweepQuery(*TransformedA.GetTransformedObject(), NewATM, B, BTM, Dir, Length, OutTime, OutPosition, OutNormal, OutFaceIndex, Thickness);
 		}
 
 		if (BType == ImplicitObjectType::Transformed)
 		{
 			const TImplicitObjectTransformed<T, d>& TransformedB = static_cast<const TImplicitObjectTransformed<T, d>&>(B);
 			const TRigidTransform<T, d> NewBTM = TransformedB.GetTransform() * BTM;
-			return SweepQuery(A, ATM, *TransformedB.GetTransformedObject(), NewBTM, Dir, Length, OutTime, OutPosition, OutNormal, Thickness);
+			return SweepQuery(A, ATM, *TransformedB.GetTransformedObject(), NewBTM, Dir, Length, OutTime, OutPosition, OutNormal, OutFaceIndex, Thickness);
 		}
 
 		check(B.IsConvex());	//Object being swept must be convex
+		OutFaceIndex = INDEX_NONE;
 		
-		TVector<T, d> LocalPosition;
-		TVector<T, d> LocalNormal;
+		TVector<T, d> LocalPosition(-TNumericLimits<float>::Max()); // Make it obvious when things go wrong
+		TVector<T, d> LocalNormal(0);
 
 		const TRigidTransform<T, d> BToATM = BTM.GetRelativeTransform(ATM);
 		const TVector<T, d> LocalDir = ATM.InverseTransformVectorNoScale(Dir);
 
-		if (BType == ImplicitObjectType::Sphere)
+		bool bSweepAsRaycast = BType == ImplicitObjectType::Sphere;
+		if (bSweepAsRaycast && AType == ImplicitObjectType::Scaled)
+		{
+			const auto& Scaled = A. template GetObjectChecked<TImplicitObjectScaled<T, d>>();
+			const TVector<T, d>& Scale = Scaled.GetScale();
+			bSweepAsRaycast = FMath::IsNearlyEqual(Scale[0], Scale[1]) && FMath::IsNearlyEqual(Scale[0], Scale[2]);
+		}
+
+		if (bSweepAsRaycast)
 		{
 			const TSphere<T, d>& BSphere = static_cast<const TSphere<T, d>&>(B);
-			const TVector<T, d> Start = BToATM.TransformPositionNoScale(BSphere.Center());
-			bResult = B.Raycast(Start, LocalDir, Length, Thickness + BSphere.Radius(), OutTime, LocalPosition, LocalNormal);
+			const TVector<T, d> Start = BToATM.TransformPositionNoScale(BSphere.GetCenter());
+			bResult = A.Raycast(Start, LocalDir, Length, Thickness + BSphere.GetRadius(), OutTime, LocalPosition, LocalNormal, OutFaceIndex);
 		}
 		//todo: handle case where A is a sphere
 		else if (A.IsConvex())
 		{
+			auto IsValidConvex = [](const TImplicitObject<T, 3>& InObject) -> bool
+			{
+				//todo: move this out of here
+				const TImplicitObject<T, 3>* Obj = &InObject;
+				if (const TImplicitObjectScaled<T, 3>* Scaled = InObject.template GetObject<TImplicitObjectScaled<T, 3>>())
+				{
+					Obj = Scaled->GetUnscaledObject();
+				}
+				if (const TConvex<T, 3>* Convex = Obj->template GetObject<TConvex<T, 3>>())
+				{
+					return Convex->GetSurfaceParticles().Size() > 0;
+				}
+
+				return true;
+			};
+
+			// Validate that the convexes we are about to test are actually valid geometries
+			if(!ensureMsgf(IsValidConvex(A), TEXT("GJKRaycast - Convex A has no particles")) ||
+				!ensureMsgf(IsValidConvex(B), TEXT("GJKRaycast - Convex B has no particles")))
+			{
+				return false;
+			}
+
 			const TVector<T, d> Offset = ATM.GetLocation() - BTM.GetLocation();
-			bResult = GJKRaycast<T>(A, B, BToATM, BToATM.GetLocation(), LocalDir, Length, OutTime, LocalPosition, LocalNormal, Thickness, Offset);
+
+			bResult = GJKRaycast<T>(A, B, BToATM, LocalDir, Length, OutTime, LocalPosition, LocalNormal, Thickness, Offset);
+
+			if (AType == ImplicitObjectType::Convex)
+			{
+				//todo: find face index
+			}
+			else if (AType == ImplicitObjectType::Scaled)
+			{
+				//todo: find face index if convex hull
+			}
 		}
 		else
 		{
@@ -130,13 +173,13 @@ namespace Chaos
 			case ImplicitObjectType::HeightField:
 			{
 				const THeightField<T>& AHeightField = static_cast<const THeightField<T>&>(A);
-				bResult = AHeightField.SweepGeom(B, BToATM, LocalDir, Length, OutTime, LocalPosition, LocalNormal, Thickness);
+				bResult = AHeightField.SweepGeom(B, BToATM, LocalDir, Length, OutTime, LocalPosition, LocalNormal, OutFaceIndex, Thickness);
 				break;
 			}
 			case ImplicitObjectType::TriangleMesh:
 			{
 				const TTriangleMeshImplicitObject<T>& ATriangleMesh = static_cast<const TTriangleMeshImplicitObject<T>&>(A);
-				bResult = ATriangleMesh.SweepGeom(B, BToATM, LocalDir, Length, OutTime, LocalPosition, LocalNormal, Thickness);
+				bResult = ATriangleMesh.SweepGeom(B, BToATM, LocalDir, Length, OutTime, LocalPosition, LocalNormal, OutFaceIndex, Thickness);
 				break;
 			}
 			case ImplicitObjectType::Scaled:
@@ -145,7 +188,7 @@ namespace Chaos
 				const TImplicitObject<T, d>& UnscaledObj = *AScaled.GetUnscaledObject();
 				check(UnscaledObj.GetType(true) == ImplicitObjectType::TriangleMesh);
 				const TTriangleMeshImplicitObject<T>& ATriangleMesh = static_cast<const TTriangleMeshImplicitObject<T>&>(UnscaledObj);
-				bResult = ATriangleMesh.SweepGeom(B, BToATM, LocalDir, Length, OutTime, LocalPosition, LocalNormal, Thickness, AScaled.GetScale());
+				bResult = TImplicitObjectScaled<T,d>::LowLevelSweepGeom(AScaled, ATriangleMesh, B, BToATM, LocalDir, Length, OutTime, LocalPosition, LocalNormal, OutFaceIndex, Thickness);
 				break;
 			}
 			default:
@@ -155,8 +198,11 @@ namespace Chaos
 		}
 
 		//put back into world space
-		OutNormal = ATM.TransformVectorNoScale(LocalNormal);
-		OutPosition = ATM.TransformPositionNoScale(LocalPosition);
+		if (OutTime > 0)
+		{
+			OutNormal = ATM.TransformVectorNoScale(LocalNormal);
+			OutPosition = ATM.TransformPositionNoScale(LocalPosition);
+		}
 
 		return bResult;
 	}

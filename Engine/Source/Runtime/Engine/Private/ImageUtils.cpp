@@ -329,7 +329,7 @@ UTexture2D* FImageUtils::CreateCheckerboardTexture(FColor ColorOne, FColor Color
 	UTexture2D* CheckerboardTexture = UTexture2D::CreateTransient(CheckerSize, CheckerSize, PF_B8G8R8A8);
 
 	// Lock the checkerboard texture so it can be modified
-	FColor* MipData = static_cast<FColor*>( CheckerboardTexture->PlatformData->Mips[0].BulkData.Lock(LOCK_READ_WRITE) );
+	FColor* MipData = reinterpret_cast<FColor*>( CheckerboardTexture->PlatformData->Mips[0].BulkData.Lock(LOCK_READ_WRITE) );
 
 	// Fill in the colors in a checkerboard pattern
 	for ( int32 RowNum = 0; RowNum < CheckerSize; ++RowNum )
@@ -445,7 +445,7 @@ public:
 		//Put first mip data into usable array
 		if (bReadSuccess)
 		{
-			uint32 TotalSize = Texture->PlatformData->Mips[0].BulkData.GetElementCount();
+			const uint32 TotalSize = Texture->PlatformData->Mips[0].BulkData.GetBulkDataSize();
 			RawData.AddZeroed(TotalSize);
 			FMemory::Memcpy(RawData.GetData(), RawData2[0], TotalSize);
 		}
@@ -850,7 +850,8 @@ UTexture2D* FImageUtils::ImportBufferAsTexture2D(const TArray<uint8>& Buffer)
 			}
 			else
 			{
-				UE_LOG(LogImageUtils, Warning, TEXT("Error creating texture. %s is not a valid bit depth (%d)"), BitDepth);
+				UE_LOG(LogImageUtils, Warning, TEXT("Error creating texture. Bit depth is unsupported. (%d)"), BitDepth);
+				return nullptr;
 			}
 			
 			const TArray<uint8>* UncompressedData = nullptr;

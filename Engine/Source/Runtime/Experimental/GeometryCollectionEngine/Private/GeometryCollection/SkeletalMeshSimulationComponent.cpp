@@ -4,11 +4,10 @@
 #include "GeometryCollection/GeometryCollectionSimulationTypes.h"
 #include "GeometryCollection/PhysicsAssetSimulation.h"
 
-#include "PBDRigidsSolver.h"
+#include "PhysicsSolver.h"
 #include "ChaosSolversModule.h"
 #include "Chaos/DebugDrawQueue.h"
 #include "Chaos/ErrorReporter.h"
-#include "Chaos/TriangleMesh.h"
 
 #include "Components/BoxComponent.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -18,7 +17,7 @@
 #include "Engine/SkeletalMesh.h"
 #include "Engine/SkeletalMeshSocket.h"
 #include "Rendering/SkeletalMeshRenderData.h"
-#include "SolverObjects/SkeletalMeshPhysicsObject.h"
+#include "PhysicsProxy/SkeletalMeshPhysicsProxy.h"
 
 #include "PhysXIncludes.h"
 
@@ -62,33 +61,29 @@ USkeletalMeshSimulationComponent::USkeletalMeshSimulationComponent(const FObject
 	, InitialVelocityType(EInitialVelocityTypeEnum::Chaos_Initial_Velocity_User_Defined)
 	, InitialLinearVelocity(0.f)
 	, InitialAngularVelocity(0.f)
-
-#if INCLUDE_CHAOS
-	, PhysicsObject(nullptr)
-#endif // INCLUDE_CHAOS
+	, PhysicsProxy(nullptr)
 {
 	// Enable calls to TickComponent()
 	UActorComponent::PrimaryComponentTick.bCanEverTick = true;	
-#if INCLUDE_CHAOS
 	ChaosMaterial = MakeUnique<Chaos::TChaosPhysicsMaterial<float>>();
-#endif
 }
 
-#if INCLUDE_CHAOS
-Chaos::FPBDRigidsSolver* GetSolver(const USkeletalMeshSimulationComponent& SkeletalMeshSimulationComponent)
+Chaos::FPhysicsSolver* GetSolver(const USkeletalMeshSimulationComponent& SkeletalMeshSimulationComponent)
 {
+#if INCLUDE_CHAOS
 	return	SkeletalMeshSimulationComponent.ChaosSolverActor != nullptr ?
 		SkeletalMeshSimulationComponent.ChaosSolverActor->GetSolver() :
 		SkeletalMeshSimulationComponent.GetOwner()->GetWorld()->PhysicsScene_Chaos->GetSolver();
+#else
+	return nullptr;
+#endif
 }
-#endif // INCLUDE_CHAOS
 
 void USkeletalMeshSimulationComponent::OnCreatePhysicsState()
 {
 	// Skip the chain - don't care about body instance setup
 	UActorComponent::OnCreatePhysicsState();
 
-#if INCLUDE_CHAOS
 	const bool bValidWorld = GetWorld() && GetWorld()->IsGameWorld();
 
 	AActor* OwningActor = GetOwner();
@@ -113,7 +108,7 @@ void USkeletalMeshSimulationComponent::OnCreatePhysicsState()
 			ChaosMaterial->SleepingAngularThreshold = PhysicalMaterial->SleepingAngularVelocityThreshold;
 		}
 
-		auto InitFunc = [this, OwningActor, SkelMeshComponent](FSkeletalMeshPhysicsObjectParams& OutPhysicsParams)
+		auto InitFunc = [this, OwningActor, SkelMeshComponent](FSkeletalMeshPhysicsProxyParams& OutPhysicsParams)
 		{
 			OutPhysicsParams.bSimulating = bSimulating;
 
@@ -149,11 +144,11 @@ void USkeletalMeshSimulationComponent::OnCreatePhysicsState()
 			FPhysicsAssetSimulationUtil::UpdateAnimState(this, OwningActor, SkelMeshComponent, 0.0f, OutPhysicsParams);
 		};
 
-		check(PhysicsObject == nullptr);
-		PhysicsObject = new FSkeletalMeshPhysicsObject(this, InitFunc);
+		check(PhysicsProxy == nullptr);
+		PhysicsProxy = new FSkeletalMeshPhysicsProxy(this, InitFunc);
 
 		TSharedPtr<FPhysScene_Chaos> Scene = GetPhysicsScene();
-		Scene->AddObject(SkelMeshComponent, PhysicsObject);
+		Scene->AddObject(SkelMeshComponent, PhysicsProxy);
 
 		AChaosSolverActor* const SolverActor = Cast<AChaosSolverActor>(Scene->GetSolverActor());
 		UChaosGameplayEventDispatcher* const EventDispatcher = SolverActor ? SolverActor->GetGameplayEventDispatcher() : nullptr;
@@ -174,15 +169,13 @@ void USkeletalMeshSimulationComponent::OnCreatePhysicsState()
 			}
 		}
 	}
-#endif // INCLUDE_CHAOS
 }
 
 void USkeletalMeshSimulationComponent::OnDestroyPhysicsState()
 {
 	UActorComponent::OnDestroyPhysicsState();
 
-#if INCLUDE_CHAOS
-	if (PhysicsObject)
+	if (PhysicsProxy)
 	{
 		// Remove our tick dependency on the Skeletal Mesh component.
 		AActor* OwningActor = GetOwner();
@@ -191,12 +184,11 @@ void USkeletalMeshSimulationComponent::OnDestroyPhysicsState()
 
 		// Handle scene remove, right now we rely on the reset of EndPlay to clean up
 		TSharedPtr<FPhysScene_Chaos> Scene = GetPhysicsScene();
-		Scene->RemoveObject(PhysicsObject);
+		Scene->RemoveObject(PhysicsProxy);
 
 		// Discard the pointer, the scene will handle destroying it
-		PhysicsObject = nullptr;
+		PhysicsProxy = nullptr;
 	}
-#endif // INCLUDE_CHAOS
 }
 
 bool USkeletalMeshSimulationComponent::ShouldCreatePhysicsState() const
@@ -206,14 +198,9 @@ bool USkeletalMeshSimulationComponent::ShouldCreatePhysicsState() const
 
 bool USkeletalMeshSimulationComponent::HasValidPhysicsState() const
 {
-#if INCLUDE_CHAOS
-	return PhysicsObject != nullptr;
-#else // INCLUDE_CHAOS
-	return false;
-#endif // INCLUDE_CHAOS
+	return PhysicsProxy != nullptr;
 }
 
-#if INCLUDE_CHAOS
 const TSharedPtr<FPhysScene_Chaos> USkeletalMeshSimulationComponent::GetPhysicsScene() const
 {
 	if (ChaosSolverActor)
@@ -222,10 +209,13 @@ const TSharedPtr<FPhysScene_Chaos> USkeletalMeshSimulationComponent::GetPhysicsS
 	}
 	else
 	{
+#if INCLUDE_CHAOS
 		return GetOwner()->GetWorld()->PhysicsScene_Chaos;
+#else
+		return nullptr;
+#endif
 	}
 }
-#endif // INCLUDE_CHAOS
 
 void USkeletalMeshSimulationComponent::DispatchChaosPhysicsCollisionBlueprintEvents(const FChaosPhysicsCollisionInfo& CollisionInfo)
 {
@@ -237,7 +227,6 @@ void USkeletalMeshSimulationComponent::TickComponent(float DeltaTime, enum ELeve
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-#if INCLUDE_CHAOS
 	if (DeltaTime < 1.0e-5f)
 	{
 		return;
@@ -254,8 +243,8 @@ void USkeletalMeshSimulationComponent::TickComponent(float DeltaTime, enum ELeve
 		{
 			AActor* OwningActor = GetOwner();
 			USkeletalMeshComponent* SkelMeshComponent = OwningActor->FindComponentByClass<USkeletalMeshComponent>();
-			PhysicsObject->CaptureInputs(DeltaTime,
-				[this, OwningActor, SkelMeshComponent](const float Dt, FSkeletalMeshPhysicsObjectParams & InOutPhysicsParams) -> bool
+			PhysicsProxy->CaptureInputs(DeltaTime,
+				[this, OwningActor, SkelMeshComponent](const float Dt, FSkeletalMeshPhysicsProxyParams & InOutPhysicsParams) -> bool
 				{
 					return FPhysicsAssetSimulationUtil::UpdateAnimState(this, OwningActor, SkelMeshComponent, Dt, InOutPhysicsParams);
 				});
@@ -264,6 +253,5 @@ void USkeletalMeshSimulationComponent::TickComponent(float DeltaTime, enum ELeve
 	case ELevelTick::LEVELTICK_PauseTick: // 3
 		break;
 	};
-#endif // INCLUDE_CHAOS
 }
 

@@ -160,6 +160,7 @@
 #include "Sound/SoundCue.h"
 #include "Sound/SoundMix.h"
 #include "Engine/TextureCube.h"
+#include "Engine/Texture2DArray.h"
 #include "Engine/VolumeTexture.h"
 #include "Engine/TextureRenderTarget.h"
 #include "Engine/TextureRenderTarget2D.h"
@@ -192,6 +193,7 @@
 #include "DDSLoader.h"
 #include "HDRLoader.h"
 #include "Factories/IESLoader.h"
+#include "Factories/TIFFLoader.h"
 #include "IImageWrapper.h"
 #include "IImageWrapperModule.h"
 
@@ -209,6 +211,8 @@
 #include "Kismet2/StructureEditorUtils.h"
 
 #include "InstancedFoliageActor.h"
+
+#include "Animation/DebugSkelMeshComponent.h"
 
 #if PLATFORM_WINDOWS
 	// Needed for DDS support.
@@ -264,7 +268,7 @@
 #include "Interfaces/IMainFrameModule.h"
 #include "Factories/TextureImportSettings.h"
 
-#include "LODUtilities.h"
+#include "SkinWeightsUtilities.h"
 
 DEFINE_LOG_CATEGORY(LogEditorFactories);
 
@@ -2168,11 +2172,11 @@ public:
 	{
 		Ar << H.Manufacturer << H.Version << H.Encoding << H.BitsPerPixel;
 		Ar << H.XMin << H.YMin << H.XMax << H.YMax << H.XDotsPerInch << H.YDotsPerInch;
-		for( int32 i=0; i<ARRAY_COUNT(H.OldColorMap); i++ )
+		for( int32 i=0; i<UE_ARRAY_COUNT(H.OldColorMap); i++ )
 			Ar << H.OldColorMap[i];
 		Ar << H.Reserved1 << H.NumPlanes;
 		Ar << H.BytesPerLine << H.PaletteType << H.HScreenSize << H.VScreenSize;
-		for( int32 i=0; i<ARRAY_COUNT(H.Reserved2); i++ )
+		for( int32 i=0; i<UE_ARRAY_COUNT(H.Reserved2); i++ )
 			Ar << H.Reserved2[i];
 		return Ar;
 	}
@@ -2910,6 +2914,7 @@ UTextureFactory::UTextureFactory(const FObjectInitializer& ObjectInitializer)
 	Formats.Add( TEXT( "jpg;Texture" ) );
 	Formats.Add( TEXT( "jpeg;Texture" ) );
 	Formats.Add( TEXT( "exr;Texture (HDR)" ) );
+	Formats.Add( TEXT( "tif;Texture (TIFF)" ) );
 
 	bCreateNew = false;
 	bEditorImport = true;
@@ -2954,6 +2959,12 @@ UTextureCube* UTextureFactory::CreateTextureCube( UObject* InParent, FName Name,
 	// CreateOrOverwriteAsset could fail if this cubemap replaces an asset that still has references.
 	UObject* NewObject = CreateOrOverwriteAsset(UTextureCube::StaticClass(), InParent, Name, Flags);
 	return NewObject ? CastChecked<UTextureCube>(NewObject) : nullptr;
+}
+
+UTexture2DArray* UTextureFactory::CreateTexture2DArray(UObject* InParent, FName Name, EObjectFlags Flags) 
+{
+	UObject* NewObject = CreateOrOverwriteAsset(UTexture2DArray::StaticClass(), InParent, Name, Flags);
+	return NewObject ? CastChecked<UTexture2DArray>(NewObject) : nullptr;
 }
 
 void UTextureFactory::SuppressImportOverwriteDialog(bool bOverwriteExistingSettings)
@@ -3649,7 +3660,25 @@ bool UTextureFactory::ImportImage(const uint8* Buffer, uint32 Length, FFeedbackC
 			return true;
 		}
 	}
-	
+
+	FTiffLoadHelper TiffLoaderHelper;
+	if (TiffLoaderHelper.IsValid())
+	{
+		if (TiffLoaderHelper.Load(Buffer, Length))
+		{
+			OutImage.Init2D(
+				TiffLoaderHelper.Width,
+				TiffLoaderHelper.Height,
+				TiffLoaderHelper.TextureSourceFormat,
+				TiffLoaderHelper.RawData.GetData()
+			);
+
+			OutImage.SRGB = TiffLoaderHelper.bSRGB;
+			OutImage.CompressionSettings = TiffLoaderHelper.CompressionSettings;
+			return true;
+		}
+	}
+
 	return false;
 }
 
@@ -3800,9 +3829,9 @@ UTexture* UTextureFactory::ImportTexture(UClass* Class, UObject* InParent, FName
 		if ( TextureCube )
 		{
 			TextureCube->Source.Init(
-				DDSLoadHelper.DDSHeader->dwWidth, 
-				DDSLoadHelper.DDSHeader->dwHeight,
-				/*NumSlices=*/ 6,
+				DDSLoadHelper.GetSizeX(),
+				DDSLoadHelper.GetSizeY(),
+				DDSLoadHelper.GetSliceCount(),
 				NumMips,
 				Format
 				);
@@ -3842,6 +3871,73 @@ UTexture* UTextureFactory::ImportTexture(UClass* Class, UObject* InParent, FName
 		return TextureCube;
 	}
 	
+	// DDS Texture array.
+	if (DDSLoadHelper.IsValidArrayTexture())
+	{
+		if (!IsImportResolutionValid(DDSLoadHelper.DDSHeader->dwWidth, DDSLoadHelper.DDSHeader->dwHeight, bAllowNonPowerOfTwo, Warn))
+		{
+			Warn->Logf(ELogVerbosity::Error, TEXT("DDS uses an unsupported format"));
+			return nullptr;
+		}
+
+		int32 NumMips = DDSLoadHelper.ComputeMipMapCount();
+		ETextureSourceFormat Format = DDSLoadHelper.ComputeSourceFormat();
+		if (Format == TSF_Invalid)
+		{
+			Warn->Logf(ELogVerbosity::Error, TEXT("DDS file contains data in an unsupported format."));
+			return nullptr;
+		}
+
+		// Create the array texture
+		UTexture2DArray* TextureArray = CreateTexture2DArray(InParent, Name, Flags);
+
+		if (TextureArray)
+		{
+			TextureArray->Source.Init(
+				DDSLoadHelper.GetSizeX(),
+				DDSLoadHelper.GetSizeY(),
+				DDSLoadHelper.GetSliceCount(),
+				NumMips,
+				Format
+			);
+			if (Format == TSF_RGBA16F)
+			{
+				TextureArray->CompressionSettings = TC_HDR;
+			}
+
+			uint8* DestMipData[MAX_TEXTURE_MIP_COUNT] = { 0 };
+			int32 MipSize[MAX_TEXTURE_MIP_COUNT] = { 0 };
+			for (int32 MipIndex = 0; MipIndex < NumMips; ++MipIndex)
+			{
+				DestMipData[MipIndex] = TextureArray->Source.LockMip(MipIndex);
+				MipSize[MipIndex] = TextureArray->Source.CalcMipSize(MipIndex) / DDSLoadHelper.GetSliceCount();
+			}
+
+			for (uint32 SliceIndex = 0; SliceIndex < DDSLoadHelper.GetSliceCount(); ++SliceIndex)
+			{
+				const uint8* SrcMipData = DDSLoadHelper.GetDDSDataPointer((ECubeFace)SliceIndex);
+				for (int32 MipIndex = 0; MipIndex < NumMips; ++MipIndex)
+				{
+					FMemory::Memcpy(DestMipData[MipIndex] + MipSize[MipIndex] * SliceIndex, SrcMipData, MipSize[MipIndex]);
+					SrcMipData += MipSize[MipIndex];
+				}
+			}
+
+			for (int32 MipIndex = 0; MipIndex < NumMips; ++MipIndex)
+			{
+				TextureArray->Source.UnlockMip(MipIndex);
+			}
+
+			if (NumMips > 1)
+			{
+				// If the source has mips we keep the mips by default, unless the user changes that
+				MipGenSettings = TMGS_LeaveExistingMips;
+			}
+		}
+
+		return TextureArray;
+	}
+
 	//
 	// HDR File
 	//
@@ -4344,6 +4440,28 @@ UObject* UTextureFactory::FactoryCreateBinary
 		}
 	}
 
+	// Invalidate any Texture2DArrays that use the updated texture.
+	if (Texture2D) 
+	{
+		for (TObjectIterator<UTexture2DArray> It; It; ++It) 
+		{
+			UTexture2DArray* TextureArray = *It;
+			if (TextureArray) 
+			{
+				for (int32 SourceIndex = 0; SourceIndex < TextureArray->SourceTextures.Num(); ++SourceIndex) 
+				{
+					if (TextureArray->SourceTextures[SourceIndex] == Texture2D) 
+					{
+						// Update the entire texture array.
+						TextureArray->UpdateSourceFromSourceTextures(false);
+						break;
+					}
+				}
+			}
+		}
+	}
+
+
 	// If we are automatically creating a material for this texture...
 	if( bCreateMaterial )
 	{
@@ -4632,7 +4750,7 @@ bool UTextureExporterBMP::SupportsObject(UObject* Object) const
 
 		if (Texture)
 		{
-			bSupportsObject = Texture->Source.GetFormat() == TSF_BGRA8 || Texture->Source.GetFormat() == TSF_RGBA16;
+			bSupportsObject = Texture->Source.GetFormat() == TSF_BGRA8 || Texture->Source.GetFormat() == TSF_RGBA16 || Texture->Source.GetFormat() == TSF_G8;
 		}
 	}
 	return bSupportsObject;
@@ -4642,13 +4760,14 @@ bool UTextureExporterBMP::ExportBinary( UObject* Object, const TCHAR* Type, FArc
 {
 	UTexture2D* Texture = CastChecked<UTexture2D>( Object );
 
-	if( !Texture->Source.IsValid() || ( Texture->Source.GetFormat() != TSF_BGRA8 && Texture->Source.GetFormat() != TSF_RGBA16 ) )
+	if( !Texture->Source.IsValid() || ( Texture->Source.GetFormat() != TSF_BGRA8 && Texture->Source.GetFormat() != TSF_RGBA16  && Texture->Source.GetFormat() != TSF_G8) )
 	{
 		return false;
 	}
 
 	const bool bIsRGBA16 = Texture->Source.GetFormat() == TSF_RGBA16;
-	const int32 SourceBytesPerPixel = bIsRGBA16 ? 8 : 4;
+	const bool bIsG8 = Texture->Source.GetFormat() == TSF_G8;
+	const int32 SourceBytesPerPixel = bIsRGBA16 ? 8 : (bIsG8 ? 1 : 4);
 
 	if (bIsRGBA16)
 	{
@@ -4704,6 +4823,13 @@ bool UTextureExporterBMP::ExportBinary( UObject* Object, const TCHAR* Type, FArc
 				Ar << ScreenPtr[3];
 				Ar << ScreenPtr[5];
 				ScreenPtr += 8;
+			}
+			else if (bIsG8)
+			{
+				Ar << ScreenPtr[0];
+				Ar << ScreenPtr[0];
+				Ar << ScreenPtr[0];
+				ScreenPtr += 1;
 			}
 			else
 			{
@@ -6125,6 +6251,7 @@ EReimportResult::Type UReimportFbxSkeletalMeshFactory::Reimport( UObject* Obj, i
 		ImportOptions->SkeletonForAnimation = SkeletalMesh->Skeleton;
 		ImportOptions->bCreatePhysicsAsset = false;
 		ImportOptions->PhysicsAsset = SkeletalMesh->PhysicsAsset;
+		
 
 		ImportOptions = GetImportOptions( FFbxImporter, ReimportUI, bShowOptionDialog, bIsAutomated, Obj->GetPathName(), bOperationCanceled, bOutImportAll, bIsObjFormat, Filename, bForceImportType, FBXIT_SkeletalMesh);
 
@@ -6135,78 +6262,102 @@ EReimportResult::Type UReimportFbxSkeletalMeshFactory::Reimport( UObject* Obj, i
 		}
 	}
 
+	//Set the build option to reflect the user choice in the dialog
+	UFbxSkeletalMeshImportData* SKImportData = UFbxSkeletalMeshImportData::GetImportDataForSkeletalMesh(SkeletalMesh, ReimportUI->SkeletalMeshImportData);
+	if (SKImportData)
+	{
+		FSkeletalMeshLODInfo* LODInfo = SkeletalMesh->GetLODInfo(0);
+		if (LODInfo && SkeletalMesh->GetImportedModel() && SkeletalMesh->GetImportedModel()->LODModels.IsValidIndex(0))
+		{
+			const FSkeletalMeshLODModel& LODModel = SkeletalMesh->GetImportedModel()->LODModels[0];
+			if (LODModel.RawSkeletalMeshBulkData.IsBuildDataAvailable())
+			{
+				//Set the build settings
+				LODInfo->BuildSettings.bComputeWeightedNormals = SKImportData->bComputeWeightedNormals;
+				LODInfo->BuildSettings.bRecomputeNormals = SKImportData->NormalImportMethod == EFBXNormalImportMethod::FBXNIM_ComputeNormals;
+				LODInfo->BuildSettings.bRecomputeTangents = SKImportData->NormalImportMethod != EFBXNormalImportMethod::FBXNIM_ImportNormalsAndTangents;
+				LODInfo->BuildSettings.bUseMikkTSpace = SKImportData->NormalGenerationMethod == EFBXNormalGenerationMethod::MikkTSpace;
+			}
+		}
+	}
+
 	UE_LOG(LogEditorFactories, Log, TEXT("Performing atomic reimport of [%s]"), *Filename);
 	CurrentFilename = Filename;
 
-	if( !bOperationCanceled )
+	if (!bOperationCanceled)
 	{
-		ImportOptions->bCanShowDialog = !IsUnattended;
-
-		if (ImportOptions->bImportAsSkeletalSkinning)
+		FScopedSuspendAlternateSkinWeightPreview ScopedSuspendAlternateSkinWeightPreview(SkeletalMesh);
 		{
-			ImportOptions->bImportMaterials = false;
-			ImportOptions->bImportTextures = false;
-			ImportOptions->bImportLOD = false;
-			ImportOptions->bImportSkeletalMeshLODs = false;
-			ImportOptions->bImportAnimations = false;
-			ImportOptions->bImportMorph = false;
-			ImportOptions->VertexColorImportOption = EVertexColorImportOption::Ignore;
-		}
-		else if (ImportOptions->bImportAsSkeletalGeometry)
-		{
-			ImportOptions->bImportAnimations = false;
-			ImportOptions->bUpdateSkeletonReferencePose = false;
-		}
+			FScopedSkeletalMeshPostEditChange ScopedPostEditChange(SkeletalMesh);
 
-		//Save all skinweight profile infos (need a copy, because they will be removed)
-		const TArray<FSkinWeightProfileInfo> ExistingSkinWeightProfileInfos = SkeletalMesh->GetSkinWeightProfiles();
+			ImportOptions->bCanShowDialog = !IsUnattended;
 
-		if ( FFbxImporter->ImportFromFile( *Filename, FPaths::GetExtension( Filename ), true ) )
-		{
-			if ( FFbxImporter->ReimportSkeletalMesh(SkeletalMesh, ImportData) )
+			if (ImportOptions->bImportAsSkeletalSkinning)
 			{
-				UE_LOG(LogEditorFactories, Log, TEXT("-- imported successfully") );
+				ImportOptions->bImportMaterials = false;
+				ImportOptions->bImportTextures = false;
+				ImportOptions->bImportLOD = false;
+				ImportOptions->bImportSkeletalMeshLODs = false;
+				ImportOptions->bImportAnimations = false;
+				ImportOptions->bImportMorph = false;
+				ImportOptions->VertexColorImportOption = EVertexColorImportOption::Ignore;
+			}
+			else if (ImportOptions->bImportAsSkeletalGeometry)
+			{
+				ImportOptions->bImportAnimations = false;
+				ImportOptions->bUpdateSkeletonReferencePose = false;
+			}
 
-				// Try to find the outer package so we can dirty it up
-				if (SkeletalMesh->GetOuter())
+			//Save all skinweight profile infos (need a copy, because they will be removed)
+			const TArray<FSkinWeightProfileInfo> ExistingSkinWeightProfileInfos = SkeletalMesh->GetSkinWeightProfiles();
+
+			if (FFbxImporter->ImportFromFile(*Filename, FPaths::GetExtension(Filename), true))
+			{
+				if (FFbxImporter->ReimportSkeletalMesh(SkeletalMesh, ImportData))
 				{
-					SkeletalMesh->GetOuter()->MarkPackageDirty();
+					UE_LOG(LogEditorFactories, Log, TEXT("-- imported successfully"));
+
+					// Try to find the outer package so we can dirty it up
+					if (SkeletalMesh->GetOuter())
+					{
+						SkeletalMesh->GetOuter()->MarkPackageDirty();
+					}
+					else
+					{
+						SkeletalMesh->MarkPackageDirty();
+					}
+
+					bSuccess = true;
 				}
 				else
 				{
-					SkeletalMesh->MarkPackageDirty();
+					UE_LOG(LogEditorFactories, Warning, TEXT("-- import failed"));
 				}
-
-				bSuccess = true;
 			}
 			else
 			{
-				UE_LOG(LogEditorFactories, Warning, TEXT("-- import failed") );
+				UE_LOG(LogEditorFactories, Warning, TEXT("-- import failed"));
 			}
-		}
-		else
-		{
-			UE_LOG(LogEditorFactories, Warning, TEXT("-- import failed") );
-		}
-		FFbxImporter->ReleaseScene(); 
+			FFbxImporter->ReleaseScene();
 
-		CleanUp();
+			CleanUp();
 
-		if (bSuccess && ExistingSkinWeightProfileInfos.Num() > 0)
-		{
-			//Restore skin weight profile infos, then reimport affected LODs
-			TArray<FSkinWeightProfileInfo>&SkinWeightsProfile = SkeletalMesh->GetSkinWeightProfiles();
-			SkinWeightsProfile = ExistingSkinWeightProfileInfos;
-			FLODUtilities::ReimportAlternateSkinWeight(SkeletalMesh, 0, true);
+			if (bSuccess && ExistingSkinWeightProfileInfos.Num() > 0)
+			{
+				//Restore skin weight profile infos, then reimport affected LODs
+				TArray<FSkinWeightProfileInfo>&SkinWeightsProfile = SkeletalMesh->GetSkinWeightProfiles();
+				SkinWeightsProfile = ExistingSkinWeightProfileInfos;
+				FSkinWeightsUtilities::ReimportAlternateSkinWeight(SkeletalMesh, 0);
+			}
+
+			// Reimporting can have dangerous effects if the mesh is still in the transaction buffer.  Reset the transaction buffer if this is the case
+			if (!IsRunningCommandlet() && GEditor->IsObjectInTransactionBuffer(SkeletalMesh))
+			{
+				GEditor->ResetTransaction(LOCTEXT("ReimportSkeletalMeshTransactionReset", "Reimporting a skeletal mesh which was in the undo buffer"));
+			}
+
+			return bSuccess ? EReimportResult::Succeeded : EReimportResult::Failed;
 		}
-
-		// Reimporting can have dangerous effects if the mesh is still in the transaction buffer.  Reset the transaction buffer if this is the case
-		if(!IsRunningCommandlet() && GEditor->IsObjectInTransactionBuffer( SkeletalMesh ) )
-		{
-			GEditor->ResetTransaction( LOCTEXT("ReimportSkeletalMeshTransactionReset", "Reimporting a skeletal mesh which was in the undo buffer") );
-		}
-
-		return bSuccess ? EReimportResult::Succeeded : EReimportResult::Failed;
 	}
 	else
 	{

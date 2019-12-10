@@ -2,6 +2,7 @@
 
 #include "FractureToolBrick.h"
 
+#include "FractureEditorModeToolkit.h"
 #include "FractureEditorStyle.h"
 #include "Editor.h"
 #include "Engine/Selection.h"
@@ -63,6 +64,7 @@ void UFractureToolBrick::RegisterUICommand( FFractureEditorCommands* BindingCont
 TArray<UObject*> UFractureToolBrick::GetSettingsObjects() const 
 { 
 	TArray<UObject*> Settings; 
+	Settings.Add(GetMutableDefault<UFractureCommonSettings>());
 	Settings.Add(GetMutableDefault<UFractureBrickSettings>());
 	return Settings;
 }
@@ -246,27 +248,25 @@ void UFractureToolBrick::PostEditChangeChainProperty(struct FPropertyChangedChai
 
 	for (AActor* Actor : SelectedActors)
 	{
-		TArray<UActorComponent*> Components = Actor->GetComponentsByClass(UPrimitiveComponent::StaticClass());
-		for (UActorComponent* Component : Components)
+		TInlineComponentArray<UPrimitiveComponent*> PrimitiveComponents;
+		Actor->GetComponents(PrimitiveComponents);
+		for (UPrimitiveComponent* PrimitiveComponent : PrimitiveComponents)
 		{
-			if (UPrimitiveComponent* PrimitiveComponent = CastChecked<UPrimitiveComponent>(Component))
+			FractureContext.OriginalActor = Actor;
+			FractureContext.OriginalPrimitiveComponent = PrimitiveComponent;
+			// 				FractureContext.Transform = PrimitiveComponent->GetComponentTransform();
+			FractureContext.Transform = Actor->GetTransform();
+			FVector Origin;
+			FVector BoxExtent;
+			Actor->GetActorBounds(false, Origin, BoxExtent);
+			if (LocalCommonSettings->bGroupFracture)
 			{
-				FractureContext.OriginalActor = Actor;
-				FractureContext.OriginalPrimitiveComponent = PrimitiveComponent;
-				// 				FractureContext.Transform = PrimitiveComponent->GetComponentTransform();
-				FractureContext.Transform = Actor->GetTransform();
-				FVector Origin;
-				FVector BoxExtent;
-				Actor->GetActorBounds(false, Origin, BoxExtent);
-				if (LocalCommonSettings->bGroupFracture)
-				{
-					FractureContext.Bounds += FBox::BuildAABB(Origin, BoxExtent);
-				}
-				else
-				{
-					FractureContext.Bounds = FBox::BuildAABB(Origin, BoxExtent);
-					GenerateBrickTransforms(FractureContext.Bounds);
-				}
+				FractureContext.Bounds += FBox::BuildAABB(Origin, BoxExtent);
+			}
+			else
+			{
+				FractureContext.Bounds = FBox::BuildAABB(Origin, BoxExtent);
+				GenerateBrickTransforms(FractureContext.Bounds);
 			}
 		}
 	}
@@ -364,6 +364,11 @@ void UFractureToolBrick::ExecuteFracture(const FFractureContext& FractureContext
 			CutMultipleWithPlanarCells(VoronoiPlanarCells, *GeometryCollection, FractureContext.SelectedBones);
  		}
 	}
+}
+
+bool UFractureToolBrick::CanExecuteFracture() const
+{
+	return FFractureEditorModeToolkit::IsLeafBoneSelected();
 }
 
 #undef LOCTEXT_NAMESPACE

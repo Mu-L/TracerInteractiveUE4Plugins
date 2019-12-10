@@ -47,6 +47,8 @@ public:
 	UPROPERTY(EditAnywhere, Category = Effects)
 	uint32 bPlayEffectChainTails : 1;
 
+	void AddReferencedEffects(FReferenceCollector& Collector);
+
 protected:
 
 #if WITH_EDITORONLY_DATA
@@ -55,7 +57,7 @@ protected:
 
 };
 
-/** Struct which has data needed to initialize the source effect. */
+/** Data required to initialize the source effect. */
 struct FSoundEffectSourceInitData
 {
 	float SampleRate;
@@ -73,7 +75,7 @@ struct FSoundEffectSourceInitData
 	{}
 };
 
-/** Struct which has data to initialize the source effect. */
+/** Data required to update the source effect. */
 struct FSoundEffectSourceInputData
 {
 	float CurrentVolume;
@@ -105,5 +107,7 @@ public:
 
 	/** Process the input block of audio. Called on audio thread. */
 	virtual void ProcessAudio(const FSoundEffectSourceInputData& InData, float* OutAudioBufferData) = 0;
-};
 
+	/** Process modulation controls if enabled */
+	virtual void ProcessControls(const FSoundModulationControls& InControls) { }
+};

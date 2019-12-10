@@ -18,8 +18,6 @@ struct CONTROLRIG_API FAnimNode_ControlRig_ExternalSource : public FAnimNode_Con
 	void SetControlRig(UControlRig* InControlRig);
 	virtual UControlRig* GetControlRig() const;
 
-	virtual void Evaluate_AnyThread(FPoseContext& Output) override;
-
 private:
 	UPROPERTY(transient)
 	TWeakObjectPtr<UControlRig> ControlRig;

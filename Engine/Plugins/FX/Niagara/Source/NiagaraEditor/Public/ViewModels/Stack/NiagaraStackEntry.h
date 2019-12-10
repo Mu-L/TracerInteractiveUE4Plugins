@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include "DragAndDrop/DecoratedDragDropOp.h"
+#include "Widgets/Views/STableRow.h"
 #include "NiagaraStackEntry.generated.h"
 
 class FNiagaraSystemViewModel;
@@ -18,21 +20,69 @@ enum class EStackIssueSeverity : uint8
 	Info
 };
 
+class FNiagaraStackEntryDragDropOp : public FDecoratedDragDropOp
+{
+public:
+	DRAG_DROP_OPERATOR_TYPE(FNiagaraStackEntryDragDropOp, FDecoratedDragDropOp)
+
+public:
+	FNiagaraStackEntryDragDropOp(TArray<UNiagaraStackEntry*> InDraggedEntries)
+	{
+		DraggedEntries = InDraggedEntries;
+	}
+
+	const TArray<UNiagaraStackEntry*> GetDraggedEntries() const
+	{
+		return DraggedEntries;
+	}
+
+private:
+	TArray<UNiagaraStackEntry*> DraggedEntries;
+};
+
 UCLASS()
 class NIAGARAEDITOR_API UNiagaraStackEntry : public UObject
 {
 	GENERATED_BODY()
 
 public:
-	struct FDropResult
+	enum class EDragOptions
 	{
-		explicit FDropResult(bool bInCanDrop, FText InDropMessage = FText())
-			: bCanDrop(bInCanDrop)
+		Copy,
+		None
+	};
+
+	enum class EDropOptions
+	{
+		Overview,
+		None
+	};
+
+	struct FDropRequest
+	{
+		FDropRequest(TSharedRef<const FDragDropOperation> InDragDropOperation, EItemDropZone InDropZone, EDragOptions InDragOptions, EDropOptions InDropOptions)
+			: DragDropOperation(InDragDropOperation)
+			, DropZone(InDropZone)
+			, DragOptions(InDragOptions)
+			, DropOptions(InDropOptions)
+		{
+		}
+
+		const TSharedRef<const FDragDropOperation> DragDropOperation;
+		const EItemDropZone DropZone;
+		const EDragOptions DragOptions;
+		const EDropOptions DropOptions;
+	};
+
+	struct FDropRequestResponse
+	{
+		FDropRequestResponse(TOptional<EItemDropZone> InDropZone, FText InDropMessage = FText())
+			: DropZone(InDropZone)
 			, DropMessage(InDropMessage)
 		{
 		}
 
-		const bool bCanDrop;
+		const TOptional<EItemDropZone> DropZone;
 		const FText DropMessage;
 	};
 
@@ -40,7 +90,7 @@ public:
 	DECLARE_MULTICAST_DELEGATE_OneParam(FOnDataObjectModified, UObject*);
 	DECLARE_MULTICAST_DELEGATE(FOnRequestFullRefresh);
 	DECLARE_MULTICAST_DELEGATE(FOnRequestFullRefreshDeferred);
-	DECLARE_DELEGATE_RetVal_TwoParams(TOptional<FDropResult>, FOnRequestDrop, const UNiagaraStackEntry&, const TArray<UNiagaraStackEntry*>&);
+	DECLARE_DELEGATE_RetVal_TwoParams(TOptional<FDropRequestResponse>, FOnRequestDrop, const UNiagaraStackEntry& /*TargetEntry*/, const FDropRequest& /*DropRequest*/);
 	DECLARE_DELEGATE_RetVal_OneParam(bool, FOnFilterChild, const UNiagaraStackEntry&);
 	DECLARE_DELEGATE(FStackIssueFixDelegate);
 
@@ -55,16 +105,18 @@ public:
 
 	struct NIAGARAEDITOR_API FExecutionSubcategoryNames
 	{
-		static const FName Parameters;
+		static const FName Settings;
 		static const FName Spawn;
 		static const FName Update;
 		static const FName Event;
+		static const FName Render;
 	};
 
 	enum class EStackRowStyle
 	{
 		None,
 		GroupHeader,
+		GroupFooter,
 		ItemHeader,
 		ItemContent,
 		ItemContentAdvanced,
@@ -75,7 +127,7 @@ public:
 
 	struct FRequiredEntryData
 	{
-		FRequiredEntryData(TSharedRef<FNiagaraSystemViewModel> InSystemViewModel, TSharedRef<FNiagaraEmitterViewModel> InEmitterViewModel, FName InExecutionCategoryName, FName InExecutionSubcategoryName, UNiagaraStackEditorData& InStackEditorData)
+		FRequiredEntryData(TSharedRef<FNiagaraSystemViewModel> InSystemViewModel, TSharedPtr<FNiagaraEmitterViewModel> InEmitterViewModel, FName InExecutionCategoryName, FName InExecutionSubcategoryName, UNiagaraStackEditorData& InStackEditorData)
 			: SystemViewModel(InSystemViewModel)
 			, EmitterViewModel(InEmitterViewModel)
 			, ExecutionCategoryName(InExecutionCategoryName)
@@ -85,7 +137,7 @@ public:
 		}
 
 		const TSharedRef<FNiagaraSystemViewModel> SystemViewModel;
-		const TSharedRef<FNiagaraEmitterViewModel> EmitterViewModel;
+		const TSharedPtr<FNiagaraEmitterViewModel> EmitterViewModel;
 		const FName ExecutionCategoryName;
 		const FName ExecutionSubcategoryName;
 		UNiagaraStackEditorData* const StackEditorData;
@@ -125,7 +177,7 @@ public:
 		FString UniqueIdentifier;
 	};
 
-	struct FStackIssue
+	struct NIAGARAEDITOR_API FStackIssue
 	{
 		FStackIssue();
 
@@ -167,7 +219,11 @@ public:
 
 	void Finalize();
 
+	bool IsFinalized() const;
+
 	virtual FText GetDisplayName() const;
+
+	virtual UObject* GetDisplayedObject() const;
 
 	UNiagaraStackEditorData& GetStackEditorData() const;
 
@@ -186,6 +242,10 @@ public:
 	void SetIsExpanded(bool bInExpanded);
 
 	virtual bool GetIsEnabled() const;
+
+	bool GetOwnerIsEnabled() const;
+
+	bool GetIsEnabledAndOwnerIsEnabled() const { return GetIsEnabled() && GetOwnerIsEnabled(); }
 
 	FName GetExecutionCategoryName() const;
 
@@ -207,16 +267,19 @@ public:
 
 	FOnRequestFullRefresh& OnRequestFullRefresh();
 
+	const FOnRequestFullRefresh& OnRequestFullRefreshDeferred() const;
+
 	FOnRequestFullRefresh& OnRequestFullRefreshDeferred();
 
 	void RefreshChildren();
 
+	void RefreshChildrenDeferred();
 
 	FDelegateHandle AddChildFilter(FOnFilterChild ChildFilter);
 	void RemoveChildFilter(FDelegateHandle FilterHandle);
 
 	TSharedRef<FNiagaraSystemViewModel> GetSystemViewModel() const;
-	TSharedRef<FNiagaraEmitterViewModel> GetEmitterViewModel() const;
+	TSharedPtr<FNiagaraEmitterViewModel> GetEmitterViewModel() const;
 
 	template<typename ChildType, typename PredicateType>
 	static ChildType* FindCurrentChildOfTypeByPredicate(const TArray<UNiagaraStackEntry*>& CurrentChildren, PredicateType Predicate)
@@ -238,9 +301,9 @@ public:
 
 	virtual bool CanDrag() const;
 
-	TOptional<FDropResult> CanDrop(const TArray<UNiagaraStackEntry*>& DraggedEntries);
+	TOptional<FDropRequestResponse> CanDrop(const FDropRequest& DropRequest);
 
-	TOptional<FDropResult> Drop(const TArray<UNiagaraStackEntry*>& DraggedEntries);
+	TOptional<FDropRequestResponse> Drop(const FDropRequest& DropRequest);
 
 	void SetOnRequestCanDrop(FOnRequestDrop InOnRequestCanDrop);
 
@@ -251,6 +314,18 @@ public:
 	void SetIsSearchResult(bool bInIsSearchResult);
 
 	bool HasBaseEmitter() const;
+
+	bool HasIssuesOrAnyChildHasIssues() const;
+
+	int32 GetTotalNumberOfInfoIssues() const;
+
+	int32 GetTotalNumberOfWarningIssues() const;
+
+	int32 GetTotalNumberOfErrorIssues() const;
+
+	const TArray<FStackIssue>& GetIssues() const;
+
+	const TArray<UNiagaraStackEntry*>& GetAllChildrenWithIssues() const;
 
 protected:
 	virtual void BeginDestroy() override;
@@ -263,13 +338,13 @@ protected:
 
 	virtual int32 GetChildIndentLevel() const;
 
-	virtual TOptional<FDropResult> CanDropInternal(const TArray<UNiagaraStackEntry*>& DraggedEntries);
+	virtual TOptional<FDropRequestResponse> CanDropInternal(const FDropRequest& DropRequest);
 
-	virtual TOptional<FDropResult> DropInternal(const TArray<UNiagaraStackEntry*>& DraggedEntries);
+	virtual TOptional<FDropRequestResponse> DropInternal(const FDropRequest& DropRequest);
 
-	virtual TOptional<FDropResult> ChildRequestCanDropInternal(const UNiagaraStackEntry& TargetChild, const TArray<UNiagaraStackEntry*>& DraggedEntries);
+	virtual TOptional<FDropRequestResponse> ChildRequestCanDropInternal(const UNiagaraStackEntry& TargetChild, const FDropRequest& DropRequest);
 
-	virtual TOptional<FDropResult> ChildRequestDropInternal(const UNiagaraStackEntry& TargetChild, const TArray<UNiagaraStackEntry*>& DraggedEntries);
+	virtual TOptional<FDropRequestResponse> ChildRequestDropInternal(const UNiagaraStackEntry& TargetChild, const FDropRequest& DropRequest);
 
 	virtual void ChlildStructureChangedInternal();
 
@@ -284,9 +359,9 @@ private:
 
 	void ChildRequestFullRefreshDeferred();
 
-	TOptional<FDropResult> ChildRequestCanDrop(const UNiagaraStackEntry& TargetChild, const TArray<UNiagaraStackEntry*>& DraggedEntries);
+	TOptional<FDropRequestResponse> ChildRequestCanDrop(const UNiagaraStackEntry& TargetChild, const FDropRequest& DropRequest);
 
-	TOptional<FDropResult> ChildRequestDrop(const UNiagaraStackEntry& TargetChild, const TArray<UNiagaraStackEntry*>& DraggedEntries);
+	TOptional<FDropRequestResponse> ChildRequestDrop(const UNiagaraStackEntry& TargetChild, const FDropRequest& DropRequest);
 
 	void RefreshStackErrorChildren();
 
@@ -328,9 +403,17 @@ private:
 	
 	TArray<FStackIssue> StackIssues;
 
+	TArray<UNiagaraStackEntry*> ChildrenWithIssues;
+
 	bool bIsFinalized;
 
 	bool bIsSearchResult;
 
 	mutable TOptional<bool> bHasBaseEmitterCache;
+
+	bool bOwnerIsEnabled;
+
+	int32 TotalNumberOfInfoIssues;
+	int32 TotalNumberOfWarningIssues;
+	int32 TotalNumberOfErrorIssues;
 };

@@ -9,17 +9,15 @@
 
 void SImage::Construct( const FArguments& InArgs )
 {
-	Image = InArgs._Image;
+	Image = FInvalidatableBrushAttribute(InArgs._Image);
 	ColorAndOpacity = InArgs._ColorAndOpacity;
 	bFlipForRightToLeftFlowDirection = InArgs._FlipForRightToLeftFlowDirection;
 	SetOnMouseButtonDown(InArgs._OnMouseButtonDown);
-
-
 }
 
 int32 SImage::OnPaint( const FPaintArgs& Args, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled ) const
 {
-	const FSlateBrush* ImageBrush = Image.Get();
+	const FSlateBrush* ImageBrush = Image.GetImage().Get();
 
 	if ((ImageBrush != nullptr) && (ImageBrush->DrawAs != ESlateBrushDrawType::NoDrawType))
 	{
@@ -54,29 +52,17 @@ FVector2D SImage::ComputeDesiredSize( float ) const
 
 void SImage::SetColorAndOpacity( const TAttribute<FSlateColor>& InColorAndOpacity )
 {
-	if (!ColorAndOpacity.IdenticalTo(InColorAndOpacity))
-	{
-		ColorAndOpacity = InColorAndOpacity;
-		Invalidate(EInvalidateWidget::PaintAndVolatility);
-	}
+	SetAttribute(ColorAndOpacity, InColorAndOpacity, EInvalidateWidgetReason::Paint);
 }
 
 void SImage::SetColorAndOpacity( FLinearColor InColorAndOpacity )
 {
-	if (!ColorAndOpacity.IdenticalTo(InColorAndOpacity))
-	{
-		ColorAndOpacity = InColorAndOpacity;
-		Invalidate(EInvalidateWidget::PaintAndVolatility);
-	}
+	SetColorAndOpacity(TAttribute<FSlateColor>(InColorAndOpacity));
 }
 
 void SImage::SetImage(TAttribute<const FSlateBrush*> InImage)
 {
-	if (!Image.IdenticalTo(InImage))
-	{
-		Image = InImage;
-		Invalidate(EInvalidateWidget::LayoutAndVolatility);
-	}
+	Image.SetImage(*this, InImage);
 }
 
 #if WITH_ACCESSIBILITY

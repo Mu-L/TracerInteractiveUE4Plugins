@@ -3,11 +3,12 @@
 
 #include "Chaos/PBDCollisionTypes.h"
 #include "Chaos/PBDConstraintGraph.h"
-#include "Chaos/PerParticleRule.h"
 
 #include <memory>
 #include <queue>
 #include <sstream>
+
+#if CHAOS_PARTICLEHANDLE_TODO
 
 namespace ChaosTest
 {
@@ -87,3 +88,5 @@ class TPBDCollisionConstraintPGS
 	const bool bUseCCD;
 };
 }
+
+#endif

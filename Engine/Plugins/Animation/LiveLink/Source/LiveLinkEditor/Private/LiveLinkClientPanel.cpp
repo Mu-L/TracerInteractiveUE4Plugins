@@ -6,6 +6,7 @@
 
 #include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "Widgets/SBoxPanel.h"
+#include "Widgets/SNullWidget.h"
 #include "Widgets/SOverlay.h"
 #include "Widgets/Layout/SSplitter.h"
 #include "Widgets/Layout/SWidgetSwitcher.h"
@@ -19,6 +20,7 @@
 #include "LiveLinkClientCommands.h"
 #include "LiveLinkClient.h"
 #include "LiveLinkClientPanelToolbar.h"
+#include "LiveLinkLog.h"
 #include "LiveLinkSettings.h"
 #include "LiveLinkSourceFactory.h"
 #include "LiveLinkSourceSettings.h"
@@ -29,6 +31,7 @@
 #include "Editor/EditorPerformanceSettings.h"
 #include "EditorFontGlyphs.h"
 #include "EditorStyleSet.h"
+#include "MessageLogModule.h"
 #include "Modules/ModuleManager.h"
 #include "PropertyEditorModule.h"
 #include "UObject/UObjectHash.h"
@@ -114,7 +117,7 @@ struct FLiveLinkSubjectUIEntry
 
 	bool IsSubjectEnabled() const
 	{
-		return IsSubject() ? Client->IsSubjectEnabled(SubjectKey, true) : false;
+		return IsSubject() ? Client->IsSubjectEnabled(SubjectKey, false) : false;
 	}
 
 	bool IsSubjectValid() const
@@ -441,8 +444,20 @@ void SLiveLinkClientPanel::Construct(const FArguments& Args, FLiveLinkClient* In
 			.DefaultLabel(LOCTEXT("ActionsColumnHeaderName", ""))
 		);
 
-	const int WarningPadding = 8;
 
+	const FName LogName = "Live Link";
+	TSharedPtr<class IMessageLogListing> MessageLogListing;
+
+	FMessageLogModule& MessageLogModule = FModuleManager::LoadModuleChecked<FMessageLogModule>("MessageLog");
+	if (MessageLogModule.IsRegisteredLogListing(LogName))
+	{
+		MessageLogListing = MessageLogModule.GetLogListing(LogName);
+	}
+
+	TSharedRef<class SWidget> MessageLogListingWidget = MessageLogListing.IsValid() ? MessageLogModule.CreateLogListingWidget(MessageLogListing.ToSharedRef()) : SNullWidget::NullWidget;
+
+
+	const int WarningPadding = 8;
 	UProperty* PerformanceThrottlingProperty = FindFieldChecked<UProperty>(UEditorPerformanceSettings::StaticClass(), GET_MEMBER_NAME_CHECKED(UEditorPerformanceSettings, bThrottleCPUWhenNotForeground));
 	PerformanceThrottlingProperty->GetDisplayNameText();
 	FFormatNamedArguments Arguments;
@@ -451,112 +466,150 @@ void SLiveLinkClientPanel::Construct(const FArguments& Args, FLiveLinkClient* In
 	
 	ChildSlot
 	[
-		SNew(SVerticalBox)
-		+SVerticalBox::Slot()
-		.AutoHeight()
-		.Padding(FMargin(0.0f, 4.0f, 0.0f, 0.0f))
+		SNew(SBorder)
+		.BorderImage(FEditorStyle::GetBrush("MessageLog.ListBorder")) // set panel background color to same color as message log at the bottom
 		[
-			SNew(SLiveLinkClientPanelToolbar, Client)
-		]
-		+ SVerticalBox::Slot()
-		.FillHeight(1.f)
-		.Padding(FMargin(0.0f, 4.0f, 0.0f, 0.0f))
-		[
-			SNew(SSplitter)
-			.Orientation(EOrientation::Orient_Horizontal)
-			+SSplitter::Slot()
-			.Value(0.5f)
+			SNew(SVerticalBox)
+			+SVerticalBox::Slot()
+			.AutoHeight()
+			.Padding(FMargin(0.0f, 4.0f, 0.0f, 0.0f))
+			[
+				SNew(SLiveLinkClientPanelToolbar, Client)
+			]
+			+SVerticalBox::Slot()
+			.FillHeight(1.f)
+			.Padding(FMargin(0.0f, 4.0f, 0.0f, 0.0f))
 			[
 				SNew(SSplitter)
 				.Orientation(EOrientation::Orient_Vertical)
 				+SSplitter::Slot()
-				.Value(0.25f)
+				.Value(0.8f)
 				[
-					SNew(SBorder)
-					.BorderImage(FEditorStyle::GetBrush("ToolPanel.GroupBorder"))
-					.Padding(FMargin(4.0f, 4.0f))
+					SNew(SSplitter)
+					.Orientation(EOrientation::Orient_Horizontal)
+					+SSplitter::Slot()
+					.Value(0.5f)
 					[
-						SAssignNew(SourceListView, SLiveLinkSourceListView, Client)
-						.ListItemsSource(&SourceData)
-						.SelectionMode(ESelectionMode::Single)
-						.OnGenerateRow(this, &SLiveLinkClientPanel::MakeSourceListViewWidget)
-						.OnContextMenuOpening(this, &SLiveLinkClientPanel::OnSourceConstructContextMenu)
-						.OnSelectionChanged(this, &SLiveLinkClientPanel::OnSourceListSelectionChanged)
-						.HeaderRow
-						(
-							SNew(SHeaderRow)
-							+ SHeaderRow::Column(SourceListUI::TypeColumnName)
-							.FillWidth(25.f)
-							.DefaultLabel(LOCTEXT("TypeColumnHeaderName", "Source Type"))
-							+ SHeaderRow::Column(SourceListUI::MachineColumnName)
-							.FillWidth(25.f)
-							.DefaultLabel(LOCTEXT("MachineColumnHeaderName", "Source Machine"))
-							+ SHeaderRow::Column(SourceListUI::StatusColumnName)
-							.FillWidth(50.f)
-							.DefaultLabel(LOCTEXT("StatusColumnHeaderName", "Status"))
-							+ SHeaderRow::Column(SourceListUI::ActionsColumnName)
-							.ManualWidth(20.f)
-							.DefaultLabel(LOCTEXT("ActionsColumnHeaderName", ""))
-						)
+						SNew(SSplitter)
+						.Orientation(EOrientation::Orient_Vertical)
+						+SSplitter::Slot()
+						.Value(0.25f)
+						[
+							SNew(SBorder)
+							.BorderImage(FEditorStyle::GetBrush("ToolPanel.GroupBorder"))
+							.Padding(FMargin(4.0f, 4.0f))
+							[
+								SAssignNew(SourceListView, SLiveLinkSourceListView, Client)
+								.ListItemsSource(&SourceData)
+								.SelectionMode(ESelectionMode::Single)
+								.OnGenerateRow(this, &SLiveLinkClientPanel::MakeSourceListViewWidget)
+								.OnContextMenuOpening(this, &SLiveLinkClientPanel::OnSourceConstructContextMenu)
+								.OnSelectionChanged(this, &SLiveLinkClientPanel::OnSourceListSelectionChanged)
+								.HeaderRow
+								(
+									SNew(SHeaderRow)
+									+SHeaderRow::Column(SourceListUI::TypeColumnName)
+									.FillWidth(25.f)
+									.DefaultLabel(LOCTEXT("TypeColumnHeaderName", "Source Type"))
+									+SHeaderRow::Column(SourceListUI::MachineColumnName)
+									.FillWidth(25.f)
+									.DefaultLabel(LOCTEXT("MachineColumnHeaderName", "Source Machine"))
+									+SHeaderRow::Column(SourceListUI::StatusColumnName)
+									.FillWidth(50.f)
+									.DefaultLabel(LOCTEXT("StatusColumnHeaderName", "Status"))
+									+SHeaderRow::Column(SourceListUI::ActionsColumnName)
+									.ManualWidth(20.f)
+									.DefaultLabel(LOCTEXT("ActionsColumnHeaderName", ""))
+								)
+							]
+						]
+						+SSplitter::Slot()
+						.Value(0.75f)
+						[
+							SNew(SBorder)
+							.BorderImage(FEditorStyle::GetBrush("ToolPanel.GroupBorder"))
+							.Padding(FMargin(4.0f, 4.0f))
+							[
+								SubjectsTreeView->AsShared()
+							]
+						]
+					]
+					+SSplitter::Slot()
+					.Value(0.5f)
+					[
+						SNew(SWidgetSwitcher)
+						.WidgetIndex(this, &SLiveLinkClientPanel::GetDetailWidgetIndex)
+						+SWidgetSwitcher::Slot()
+						[
+							//[0] Detail view for Source
+							SettingsDetailsView.ToSharedRef()
+						]
+						+SWidgetSwitcher::Slot()
+						[
+							// [1] Detail view for Subject, Frame data & Static data
+							SAssignNew(DataDetailsView, SLiveLinkDataView, Client)
+						]
 					]
 				]
 				+SSplitter::Slot()
-				.Value(0.75f)
+				.Value(0.2f)
 				[
-					SNew(SBorder)
-					.BorderImage(FEditorStyle::GetBrush("ToolPanel.GroupBorder"))
-					.Padding(FMargin(4.0f, 4.0f))
+					SNew(SOverlay)
+					+SOverlay::Slot()
 					[
-						SubjectsTreeView->AsShared()
+						MessageLogListingWidget
+					]
+					+SOverlay::Slot()
+					.HAlign(HAlign_Left)
+					.VAlign(VAlign_Bottom)
+					[
+						SNew(SHorizontalBox)
+						+SHorizontalBox::Slot()
+						.AutoWidth()
+						.Padding(10, 4, 4, 10)
+						[
+							SNew(STextBlock)
+							.Text(this, &SLiveLinkClientPanel::GetMessageCountText)
+						]
+						+SHorizontalBox::Slot()
+						.Padding(20, 4, 50, 10)
+						.AutoWidth()
+						[
+							SNew(STextBlock)
+							.Text(this, &SLiveLinkClientPanel::GetSelectedMessageOccurrenceText)
+						]
 					]
 				]
 			]
-			+SSplitter::Slot()
-			.Value(0.5f)
+			+SVerticalBox::Slot()
+			.AutoHeight()
 			[
-				SNew(SWidgetSwitcher)
-				.WidgetIndex(this, &SLiveLinkClientPanel::GetDetailWidgetIndex)
-				+ SWidgetSwitcher::Slot()
+				SNew(SBorder)
+				.BorderImage(FEditorStyle::GetBrush("SettingsEditor.CheckoutWarningBorder"))
+				.BorderBackgroundColor(FColor(166, 137, 0))
+				.Visibility(this, &SLiveLinkClientPanel::ShowEditorPerformanceThrottlingWarning)
 				[
-					//[0] Detail view for Source
-					SettingsDetailsView.ToSharedRef()
-				]
-				+ SWidgetSwitcher::Slot()
-				[
-					// [1] Detail view for Subject, Frame data & Static data
-					SAssignNew(DataDetailsView, SLiveLinkDataView, Client)
-				]
-			]
-		]
-		+SVerticalBox::Slot()
-		.AutoHeight()
-		[
-			SNew(SBorder)
-			.BorderImage(FEditorStyle::GetBrush("SettingsEditor.CheckoutWarningBorder"))
-			.BorderBackgroundColor(FColor(166, 137, 0))
-			.Visibility(this, &SLiveLinkClientPanel::ShowEditorPerformanceThrottlingWarning)
-			[
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot()
-				.FillWidth(1.0f)
-				.Padding(FMargin(WarningPadding, WarningPadding, WarningPadding, WarningPadding))
-				.VAlign(VAlign_Center)
-				[
-					SNew(STextBlock)
-					.Text(PerformanceWarningText)
-					.Font(FEditorStyle::GetFontStyle("PropertyWindow.NormalFont"))
-					.ShadowColorAndOpacity(FLinearColor::Black.CopyWithNewOpacity(0.3f))
-					.ShadowOffset(FVector2D::UnitVector)
-				]
-
-				+ SHorizontalBox::Slot()
-				.Padding(FMargin(0.f, 0.f, WarningPadding, 0.f))
-				.AutoWidth()
-				.VAlign(VAlign_Center)
-				[
-					SNew(SButton)
-					.OnClicked(this, &SLiveLinkClientPanel::DisableEditorPerformanceThrottling)
-					.Text(LOCTEXT("LiveLinkPerformanceWarningDisable", "Disable"))
+					SNew(SHorizontalBox)
+					+SHorizontalBox::Slot()
+					.FillWidth(1.0f)
+					.Padding(FMargin(WarningPadding, WarningPadding, WarningPadding, WarningPadding))
+					.VAlign(VAlign_Center)
+					[
+						SNew(STextBlock)
+						.Text(PerformanceWarningText)
+						.Font(FEditorStyle::GetFontStyle("PropertyWindow.NormalFont"))
+						.ShadowColorAndOpacity(FLinearColor::Black.CopyWithNewOpacity(0.3f))
+						.ShadowOffset(FVector2D::UnitVector)
+					]
+					+SHorizontalBox::Slot()
+					.Padding(FMargin(0.f, 0.f, WarningPadding, 0.f))
+					.AutoWidth()
+					.VAlign(VAlign_Center)
+					[
+						SNew(SButton)
+						.OnClicked(this, &SLiveLinkClientPanel::DisableEditorPerformanceThrottling)
+						.Text(LOCTEXT("LiveLinkPerformanceWarningDisable", "Disable"))
+					]
 				]
 			]
 		]
@@ -854,6 +907,23 @@ FReply SLiveLinkClientPanel::DisableEditorPerformanceThrottling()
 	Settings->PostEditChange();
 	Settings->SaveConfig();
 	return FReply::Handled();
+}
+
+FText SLiveLinkClientPanel::GetMessageCountText() const
+{
+	int32 ErrorCount, WarningCount, InfoCount;
+	FLiveLinkLog::GetInstance()->GetLogCount(ErrorCount, WarningCount, InfoCount);
+	return FText::Format(LOCTEXT("MessageCountText", "{0} Error(s)  {1} Warning(s)"), FText::AsNumber(ErrorCount), FText::AsNumber(WarningCount));
+}
+
+FText SLiveLinkClientPanel::GetSelectedMessageOccurrenceText() const
+{
+	TPair<int32, FTimespan> Occurrence = FLiveLinkLog::GetInstance()->GetSelectedOccurrence();
+	if (Occurrence.Get<0>() > 1)
+	{
+		return FText::Format(LOCTEXT("SelectedMessageOccurrenceText", "Last selected occurrence: {0}"), FText::FromString(Occurrence.Get<1>().ToString()));
+	}
+	return FText::GetEmpty();
 }
 
 #undef LOCTEXT_NAMESPACE

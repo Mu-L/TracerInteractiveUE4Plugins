@@ -14,7 +14,7 @@ class FFloat16Color;
 /**
  * Enum for the different kinds of gamma spaces we expect to need to convert from/to.
  */
-enum class EGammaSpace
+enum class EGammaSpace : uint8
 {
 	/** No gamma correction is applied to this space, the incoming colors are assumed to already be in linear space. */
 	Linear,
@@ -61,21 +61,10 @@ struct FLinearColor
 
 	// Serializer.
 
-	friend FArchive& operator<<(FArchive& Ar,FLinearColor& Color)
-	{
-		return Ar << Color.R << Color.G << Color.B << Color.A;
-	}
-
-	bool Serialize( FArchive& Ar )
-	{
-		Ar << *this;
-		return true;
-	}
-
 	friend void operator<<(FStructuredArchive::FSlot Slot, FLinearColor& Color)
 	{
 		FStructuredArchive::FRecord Record = Slot.EnterRecord();
-		Record << NAMED_ITEM("R", Color.R) << NAMED_ITEM("G", Color.G) << NAMED_ITEM("B", Color.B) << NAMED_ITEM("A", Color.A);
+		Record << SA_VALUE(TEXT("R"), Color.R) << SA_VALUE(TEXT("G"), Color.G) << SA_VALUE(TEXT("B"), Color.B) << SA_VALUE(TEXT("A"), Color.A);
 	}
 
 	bool Serialize(FStructuredArchive::FSlot Slot)

@@ -49,6 +49,11 @@ namespace UnrealBuildTool.Rules
                     "UMG",
 					"TimeManagement",
                     "PropertyPath",
+					"WorkspaceMenuStructure",
+					"Json",
+					"DesktopPlatform",
+					"ToolMenus",
+					"ControlRigManipulation"
                 }
             );
         }

@@ -14,8 +14,8 @@
 #include "ChaosSolversModule.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
-#include "SolverObjects/StaticMeshPhysicsObject.h"
-#include "PBDRigidsSolver.h"
+#include "PhysicsProxy/StaticMeshPhysicsProxy.h"
+#include "PhysicsSolver.h"
 #include "Chaos/ChaosGameplayEventDispatcher.h"
 
 
@@ -47,7 +47,6 @@ void UStaticMeshSimulationComponent::TickComponent(float DeltaTime, enum ELevelT
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-#if INCLUDE_CHAOS
 	// for kinematic objects, we assume that UE4 can and will move them, so we need to pass the new data to the phys solver
 	if ((ObjectType == EObjectStateTypeEnum::Chaos_Object_Kinematic) && Simulating)
 	{
@@ -57,37 +56,37 @@ void UStaticMeshSimulationComponent::TickComponent(float DeltaTime, enum ELevelT
 		Chaos::IDispatcher* PhysicsDispatcher = ChaosModule->GetDispatcher();
 		checkSlow(PhysicsDispatcher); // Should always have one of these
 
-		for (int32 Idx = 0; Idx < PhysicsObjects.Num(); ++Idx)
+		for (int32 Idx = 0; Idx < PhysicsProxies.Num(); ++Idx)
 		{
-			FStaticMeshPhysicsObject* const PhysicsObject = PhysicsObjects[Idx];
+			FStaticMeshPhysicsProxy* const PhysicsProxy = PhysicsProxies[Idx];
 			UPrimitiveComponent* const Comp = SimulatedComponents[Idx];
 
-			FSolverObjectKinematicUpdate ParamUpdate;
+			FPhysicsProxyKinematicUpdate ParamUpdate;
 			ParamUpdate.NewTransform = Comp->GetComponentTransform();
 			ParamUpdate.NewVelocity = Comp->ComponentVelocity;
 
-			PhysicsDispatcher->EnqueueCommand([PhysObj = PhysicsObject, Params = ParamUpdate]()
+			PhysicsDispatcher->EnqueueCommandImmediate([PhysObj = PhysicsProxy, Params = ParamUpdate]()
 			{
 				PhysObj->BufferKinematicUpdate(Params);
 			});
 		}
 	}
-#endif
 }
 
-#if INCLUDE_CHAOS
-Chaos::FPBDRigidsSolver* GetSolver(const UStaticMeshSimulationComponent& StaticMeshSimulationComponent)
+Chaos::FPhysicsSolver* GetSolver(const UStaticMeshSimulationComponent& StaticMeshSimulationComponent)
 {
+#if INCLUDE_CHAOS
 	return	StaticMeshSimulationComponent.ChaosSolverActor != nullptr ? StaticMeshSimulationComponent.ChaosSolverActor->GetSolver() : StaticMeshSimulationComponent.GetOwner()->GetWorld()->PhysicsScene_Chaos->GetSolver();
-}
+#else
+	return nullptr;
 #endif
+}
 
 void UStaticMeshSimulationComponent::OnCreatePhysicsState()
 {
 	// Skip the chain - don't care about body instance setup
 	UActorComponent::OnCreatePhysicsState();
 
-#if INCLUDE_CHAOS
 	const bool bValidWorld = GetWorld() && GetWorld()->IsGameWorld();
 
 	// Need to see if we actually have a target for the component
@@ -122,7 +121,7 @@ void UStaticMeshSimulationComponent::OnCreatePhysicsState()
 					ChaosMaterial->SleepingLinearThreshold = PhysicalMaterial->SleepingLinearVelocityThreshold;
 					ChaosMaterial->SleepingAngularThreshold = PhysicalMaterial->SleepingAngularVelocityThreshold;
 				}
-				auto InitFunc = [this, TargetComponent](FStaticMeshPhysicsObject::Params& InParams)
+				auto InitFunc = [this, TargetComponent](FStaticMeshPhysicsProxy::Params& InParams)
 				{
 					GetPathName(this, InParams.Name);
 					InParams.InitialTransform = GetOwner()->GetTransform();
@@ -148,14 +147,15 @@ void UStaticMeshSimulationComponent::OnCreatePhysicsState()
 						{
 							if ((InParams.InitialTransform.GetScale3D() - FVector(1.f, 1.f, 1.f)).SizeSquared() < SMALL_NUMBER)
 							{
-								InParams.MeshVertexPositions = MoveTemp(CollisionData.Vertices);
+								auto& TVectorArray = reinterpret_cast<TArray<Chaos::TVector<float, 3>>&>(CollisionData.Vertices);
+								InParams.MeshVertexPositions = MoveTemp(TVectorArray);
 							}
 							else
 							{
-								InParams.MeshVertexPositions.SetNum(CollisionData.Vertices.Num());
+								InParams.MeshVertexPositions.Resize(CollisionData.Vertices.Num());
 								for (int32 i = 0; i < CollisionData.Vertices.Num(); ++i)
 								{
-									InParams.MeshVertexPositions[i] = CollisionData.Vertices[i] * InParams.InitialTransform.GetScale3D();
+									InParams.MeshVertexPositions.X(i) = CollisionData.Vertices[i] * InParams.InitialTransform.GetScale3D();
 								}
 							}
 							check(sizeof(Chaos::TVector<int32, 3>) == sizeof(FTriIndices)); // binary compatible?
@@ -237,12 +237,12 @@ void UStaticMeshSimulationComponent::OnCreatePhysicsState()
 					TargetComponent->SetWorldTransform(InTransform);
 				};
 
-				FStaticMeshPhysicsObject* const NewPhysicsObject = new FStaticMeshPhysicsObject(this, InitFunc, SyncFunc);
-				PhysicsObjects.Add(NewPhysicsObject);
+				FStaticMeshPhysicsProxy* const NewPhysicsProxy = new FStaticMeshPhysicsProxy(this, InitFunc, SyncFunc);
+				PhysicsProxies.Add(NewPhysicsProxy);
 				SimulatedComponents.Add(TargetComponent);
-				check(PhysicsObjects.Num() == SimulatedComponents.Num());
+				check(PhysicsProxies.Num() == SimulatedComponents.Num());
 
-				Scene->AddObject(TargetComponent, NewPhysicsObject);
+				Scene->AddObject(TargetComponent, NewPhysicsProxy);
 
 				if (EventDispatcher)
 				{
@@ -276,7 +276,7 @@ void UStaticMeshSimulationComponent::OnCreatePhysicsState()
 					ChaosMaterial->SleepingAngularThreshold = PhysicalMaterial->SleepingAngularVelocityThreshold;
 				}
 				const TArray<UStaticMeshComponent*>* StaticMeshComponentChildren = ParentToChildMap.Find(TargetComponent);
-				auto InitFunc = [this, StaticMeshComponentChildren, TargetComponent](FStaticMeshPhysicsObject::Params& InParams)
+				auto InitFunc = [this, StaticMeshComponentChildren, TargetComponent](FStaticMeshPhysicsProxy::Params& InParams)
 				{
 					GetPathName(this, InParams.Name);
 					InParams.InitialTransform = GetOwner()->GetTransform();
@@ -360,12 +360,12 @@ void UStaticMeshSimulationComponent::OnCreatePhysicsState()
 					TargetComponent->SetWorldTransform(InTransform);
 				};
 
-				FStaticMeshPhysicsObject* const NewPhysicsObject = new FStaticMeshPhysicsObject(this, InitFunc, SyncFunc);
-				PhysicsObjects.Add(NewPhysicsObject);
+				FStaticMeshPhysicsProxy* const NewPhysicsProxy = new FStaticMeshPhysicsProxy(this, InitFunc, SyncFunc);
+				PhysicsProxies.Add(NewPhysicsProxy);
 				SimulatedComponents.Add(TargetComponent);
-				check(PhysicsObjects.Num() == SimulatedComponents.Num());
+				check(PhysicsProxies.Num() == SimulatedComponents.Num());
 
-				Scene->AddObject(TargetComponent, NewPhysicsObject);
+				Scene->AddObject(TargetComponent, NewPhysicsProxy);
 
 				if (EventDispatcher)
 				{
@@ -386,30 +386,28 @@ void UStaticMeshSimulationComponent::OnCreatePhysicsState()
 			}
 		}
 	}
-#endif
 }
 
 void UStaticMeshSimulationComponent::OnDestroyPhysicsState()
 {
 	UActorComponent::OnDestroyPhysicsState();
 
-#if INCLUDE_CHAOS
 	TSharedPtr<FPhysScene_Chaos> Scene = GetPhysicsScene();
 	AChaosSolverActor* const SolverActor = Scene ? Cast<AChaosSolverActor>(Scene->GetSolverActor()) : nullptr;
 	UChaosGameplayEventDispatcher* const EventDispatcher = SolverActor ? SolverActor->GetGameplayEventDispatcher() : nullptr;
 
 	if (Scene)
 	{
-		for (FStaticMeshPhysicsObject* PhysicsObject : PhysicsObjects)
+		for (FStaticMeshPhysicsProxy* PhysicsProxy : PhysicsProxies)
 		{
-			if (PhysicsObject)
+			if (PhysicsProxy)
 			{
 				// Handle scene remove, right now we rely on the reset of EndPlay to clean up
-				Scene->RemoveObject(PhysicsObject);
+				Scene->RemoveObject(PhysicsProxy);
 
 				if (EventDispatcher)
 				{
-					if (UPrimitiveComponent* const Comp = Scene->GetOwningComponent<UPrimitiveComponent>(PhysicsObject))
+					if (UPrimitiveComponent* const Comp = Scene->GetOwningComponent<UPrimitiveComponent>(PhysicsProxy))
 					{
 						EventDispatcher->UnRegisterForCollisionEvents(Comp, this);
 						EventDispatcher->UnRegisterForCollisionEvents(Comp, Comp);
@@ -419,9 +417,8 @@ void UStaticMeshSimulationComponent::OnDestroyPhysicsState()
 		}
 	}
 
-	PhysicsObjects.Empty();
+	PhysicsProxies.Empty();
 	SimulatedComponents.Empty();
-#endif
 }
 
 bool UStaticMeshSimulationComponent::ShouldCreatePhysicsState() const
@@ -431,10 +428,9 @@ bool UStaticMeshSimulationComponent::ShouldCreatePhysicsState() const
 
 bool UStaticMeshSimulationComponent::HasValidPhysicsState() const
 {
-	return PhysicsObjects.Num() > 0;
+	return PhysicsProxies.Num() > 0;
 }
 
-#if INCLUDE_CHAOS
 const TSharedPtr<FPhysScene_Chaos> UStaticMeshSimulationComponent::GetPhysicsScene() const
 { 
 	if (ChaosSolverActor)
@@ -443,12 +439,15 @@ const TSharedPtr<FPhysScene_Chaos> UStaticMeshSimulationComponent::GetPhysicsSce
 	}
 	else if (UWorld* W = GetOwner()->GetWorld())
 	{
+#if INCLUDE_CHAOS
 		return W->PhysicsScene_Chaos;
+#else
+		return nullptr;
+#endif
 	}
 
 	return nullptr;
 }
-#endif
 
 void UStaticMeshSimulationComponent::DispatchChaosPhysicsCollisionBlueprintEvents(const FChaosPhysicsCollisionInfo& CollisionInfo)
 {

@@ -104,9 +104,13 @@ public:
 
 	/** Set up this reference from a supplied field */
 	template<class TFieldType>
-	void SetFromField(const UField* InField, const bool bIsConsideredSelfContext)
+	void SetFromField(const UField* InField, const bool bIsConsideredSelfContext, UClass* OwnerClass=nullptr)
 	{
-		UClass* OwnerClass = InField->GetOwnerClass();
+		// if we didn't get an owner passed in try to figure out what it should be based on the field
+		if (!OwnerClass)
+		{
+			OwnerClass = InField->GetOwnerClass();
+		}
 		MemberParent = OwnerClass;
 
 		if (bIsConsideredSelfContext)
@@ -245,6 +249,9 @@ public:
 		return !MemberScope.IsEmpty();
 	}
 
+	/** Returns true if this is in the sparse data struct for OwningClass */
+	ENGINE_API bool IsSparseClassData(const UClass* OwningClass) const;
+
 #if WITH_EDITOR
 	/**
 	 * Returns a search string to submit to Find-in-Blueprints to find references to this reference
@@ -307,6 +314,13 @@ public:
 		return bWasDeprecated;
 	}
 
+	/** Returns the scope for the current member. This will vary based on whether or not this member uses the self context or not. */
+	UClass* GetScope(UClass* SelfScope = nullptr) const
+	{
+		return bSelfContext ? SelfScope : GetMemberParentClass();
+	}
+	
+
 	/** 
 	 *	Returns the member UProperty/UFunction this reference is pointing to, or NULL if it no longer exists 
 	 *	Derives 'self' scope from supplied Blueprint node if required
@@ -347,7 +361,7 @@ public:
 		else
 		{
 			// Look for remapped member
-			UClass* TargetScope = bSelfContext ? SelfScope : GetMemberParentClass();
+			UClass* TargetScope = GetScope(SelfScope);
 #if WITH_EDITOR
 			if( TargetScope != nullptr &&  !GIsSavingPackage )
 			{
@@ -383,8 +397,16 @@ public:
 #if WITH_EDITOR
 				TargetScope = GetClassToUse(TargetScope, bUseUpToDateClass);
 #endif
-				// Find in target scope
-				ReturnField = FindField<TFieldType>(TargetScope, MemberName);
+				// Find in target scope or in the sparse class data
+				UScriptStruct* SparseClassDataStruct = TargetScope->GetSparseClassDataStruct();
+				if (SparseClassDataStruct)
+				{
+					ReturnField = FindField<TFieldType>(SparseClassDataStruct, MemberName);
+				}
+				if (ReturnField == nullptr)
+				{
+					ReturnField = FindField<TFieldType>(TargetScope, MemberName);
+				}
 
 #if WITH_EDITOR
 

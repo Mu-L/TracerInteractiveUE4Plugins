@@ -22,7 +22,7 @@
 #include "Containers/CircularBuffer.h"
 #include "ReplicationDriver.h"
 #include "Analytics/EngineNetAnalytics.h"
-#include "PacketTraits.h"
+#include "Net/Core/Misc/PacketTraits.h"
 #include "Net/Util/ResizableCircularQueue.h"
 #include "Net/NetAnalyticsTypes.h"
 
@@ -170,7 +170,7 @@ DECLARE_DELEGATE_ThreeParams(FOnLowLevelSend, void* /*Data*/, int32 /*Count*/, b
 /**
  * An artificially lagged packet
  */
-struct DelayedPacket
+struct FDelayedPacket
 {
 	/** The packet data to send */
 	TArray<uint8> Data;
@@ -185,18 +185,8 @@ struct DelayedPacket
 	double SendTime;
 
 public:
-	UE_DEPRECATED(4.21, "Use the constructor that takes PacketTraits for allowing for analytics and flags")
-	FORCEINLINE DelayedPacket(uint8* InData, int32 InSizeBytes, int32 InSizeBits)
-		: Data()
-		, SizeBits(InSizeBits)
-		, Traits()
-		, SendTime(0.0)
-	{
-		Data.AddUninitialized(InSizeBytes);
-		FMemory::Memcpy(Data.GetData(), InData, InSizeBytes);
-	}
 
-	FORCEINLINE DelayedPacket(uint8* InData, int32 InSizeBits, FOutPacketTraits& InTraits)
+	FORCEINLINE FDelayedPacket(uint8* InData, int32 InSizeBits, FOutPacketTraits& InTraits)
 		: Data()
 		, SizeBits(InSizeBits)
 		, Traits(InTraits)
@@ -213,7 +203,25 @@ public:
 		Data.CountBytes(Ar);
 	}
 };
-#endif
+
+struct FDelayedIncomingPacket
+{
+	TUniquePtr<FBitReader> PacketData;
+
+	/** Time at which the packet should be reinjected into the connection */
+	double ReinjectionTime = 0.0;
+
+	void CountBytes(FArchive& Ar) const
+	{
+		if (PacketData.IsValid())
+		{
+			PacketData->CountMemory(Ar);
+		}
+		Ar.CountBytes(sizeof(ReinjectionTime), sizeof(ReinjectionTime));
+	}
+};
+
+#endif //#if DO_ENABLE_NET_TEST
 
 /** Record of channels with data written into each outgoing packet. */
 struct FWrittenChannelsRecord
@@ -353,12 +361,6 @@ public:
 	EClientLoginState::Type	ClientLoginState;
 	uint8					ExpectedClientLoginMsgType;	// Used to determine what the next expected control channel msg type should be from a connecting client
 
-	// CD key authentication
-	UE_DEPRECATED(4.23, "CDKeyHash is deprecated.")
-	FString			CDKeyHash;				// Hash of client's CD key
-	UE_DEPRECATED(4.23, "CDKeyResponse is deprecated.")
-	FString			CDKeyResponse;			// Client's response to CD key challenge
-
 	// Internal.
 	UPROPERTY()
 	double			LastReceiveTime;		// Last time a packet was received, for timeout checking.
@@ -374,6 +376,11 @@ public:
 	/** Time when connection request was first initiated */
 	float			ConnectTime;
 
+private:
+	FPacketTimestamp	LastOSReceiveTime;		// Last time a packet was received at the OS/NIC layer
+	bool				bIsOSReceiveTimeLocal;	// Whether LastOSReceiveTime uses the same clock as the game, or needs translating
+
+public:
 	// Merge info.
 	FBitWriterMark  LastStart;				// Most recently sent bunch start.
 	FBitWriterMark  LastEnd;				// Most recently sent bunch end.
@@ -607,30 +614,43 @@ public:
 	TSet<FName> ClientVisibleLevelNames;
 
 	/** Called by PlayerController to tell connection about client level visiblity change */
+	ENGINE_API void UpdateLevelVisibility(const struct FUpdateLevelVisibilityLevelInfo& LevelVisibility);
+	
+	UE_DEPRECATED(4.24, "This method will be removed. Use UpdateLevelVisibility that takes an FUpdateLevelVisibilityLevelInfo")
 	ENGINE_API void UpdateLevelVisibility(const FName& PackageName, bool bIsVisible);
 
 #if DO_ENABLE_NET_TEST
-	// For development.
+
 	/** Packet settings for testing lag, net errors, etc */
 	FPacketSimulationSettings PacketSimulationSettings;
 
-	/** delayed packet array */
-	TArray<DelayedPacket> Delayed;
-
 	/** Copies the settings from the net driver to our local copy */
-	void UpdatePacketSimulationSettings(void);
-#endif
+	void UpdatePacketSimulationSettings();
+
+private:
+
+	/** delayed outgoing packet array */
+	TArray<FDelayedPacket> Delayed;
+
+	/** delayed incoming packet array */
+	TArray<FDelayedIncomingPacket> DelayedIncomingPackets;
+
+	/** set to true when already delayed packets are reinjected */
+	bool bIsReinjectingDelayedPackets;
+
+	/** Process incoming packets that have been delayed for long enough */
+	void ReinjectDelayedPackets();
+
+#endif //#if DO_ENABLE_NET_TEST
+
+public:
 
 	/** 
-	 * If true, will resend everything this connection has ever sent, since the connection has been open.
 	 *	This functionality is used during replay checkpoints for example, so we can re-use the existing connection and channels to record
 	 *	a version of each actor and capture all properties that have changed since the actor has been alive...
 	 *	This will also act as if it needs to re-open all the channels, etc.
 	 *   NOTE - This doesn't force all exports to happen again though, it will only export new stuff, so keep that in mind.
 	 */
-	UE_DEPRECATED(4.23, "Use ResendAllDataState instead.")
-	bool bResendAllDataSinceOpen;
-
 	EResendAllDataState ResendAllDataState;
 
 #if !UE_BUILD_SHIPPING
@@ -706,13 +726,6 @@ public:
 	/** Describe the connection. */
 	ENGINE_API virtual FString Describe();
 
-	UE_DEPRECATED(4.21, "Use the method that allows for packet traits for analytics and modification")
-	ENGINE_API virtual void LowLevelSend(void* Data, int32 CountBytes, int32 CountBits)
-	{
-		FOutPacketTraits EmptyTraits;
-		LowLevelSend(Data, CountBits, EmptyTraits);
-	}
-
 	/**
 	 * Sends a byte stream to the remote endpoint using the underlying socket
 	 *
@@ -732,10 +745,6 @@ public:
 
 	/** Make sure this connection is in a reasonable state. */
 	ENGINE_API virtual void AssertValid();
-
-	/** Send an acknowledgment. */
-	UE_DEPRECATED(4.22, "This method will be removed")
-	ENGINE_API virtual void SendAck( int32 PacketId, bool FirstTime=1);
 
 	/**
 	 * flushes any pending data, bundling it into a packet and sending it via LowLevelSend()
@@ -757,22 +766,6 @@ public:
 	 */
 	ENGINE_API virtual void HandleClientPlayer( class APlayerController* PC, class UNetConnection* NetConnection );
 
-	/** @return the address of the connection as an integer */
-	UE_DEPRECATED(4.23, "Use GetRemoteAddr as it allows direct access to the RemoteAddr and allows for dynamic address sizing.")
-	virtual int32 GetAddrAsInt(void)
-	{
-		PRAGMA_DISABLE_DEPRECATION_WARNINGS
-		if (RemoteAddr.IsValid())
-		{
-			uint32 OutAddr = 0;
-			// Get the host byte order ip addr
-			RemoteAddr->GetIp(OutAddr);
-			return (int32)OutAddr;
-		}
-		PRAGMA_ENABLE_DEPRECATION_WARNINGS
-		return 0;
-	}
-
 	/** @return the port of the connection as an integer */
 	virtual int32 GetAddrPort(void)
 	{
@@ -782,15 +775,6 @@ public:
 		}
 		return 0;
 	}
-
-	/**
-	 * Return the platform specific FInternetAddr type, containing this connections address.
-	 * If nullptr is returned, connection is not added to MappedClientConnections, and can't receive net packets which depend on this.
-	 *
-	 * @return	The platform specific FInternetAddr containing this connections address
-	 */
-	UE_DEPRECATED(4.23, "Use GetRemoteAddr to safely get the FInternetAddr tied to this connection")
-	virtual TSharedPtr<FInternetAddr> GetInternetAddr() { return ConstCastSharedPtr<FInternetAddr>(GetRemoteAddr()); }
 
 	/**
 	 * Return the platform specific FInternetAddr type, containing this connections address.
@@ -854,12 +838,6 @@ public:
 	 */
 	ENGINE_API virtual void InitConnection(UNetDriver* InDriver, EConnectionState InState, const FURL& InURL, int32 InConnectionSpeed=0, int32 InMaxPacket=0);
 
-	UE_DEPRECATED(4.21, "Analytics providers are now handled in the NetDriver")
-	ENGINE_API virtual void InitHandler(TSharedPtr<IAnalyticsProvider> InProvider)
-	{
-		InitHandler();
-	}
-
 	/**
 	 * Initializes the PacketHandler
 	 */
@@ -882,17 +860,35 @@ public:
 	/**
 	 * Sets the encryption key and enables encryption.
 	 */
+	UE_DEPRECATED(4.24, "Use SetEncryptionData instead.")
 	ENGINE_API void EnableEncryptionWithKey(TArrayView<const uint8> Key);
+	
+	/**
+	 * Sets the encryption data and enables encryption.
+	 */
+	ENGINE_API void EnableEncryption(const FEncryptionData& EncryptionData);
 
 	/**
 	 * Sets the encryption key, enables encryption, and sends the encryption ack to the client.
 	 */
+	UE_DEPRECATED(4.24, "Use SetEncryptionData instead.")
 	ENGINE_API void EnableEncryptionWithKeyServer(TArrayView<const uint8> Key);
+
+	/**
+	 * Sets the encryption data, enables encryption, and sends the encryption ack to the client.
+	 */
+	ENGINE_API void EnableEncryptionServer(const FEncryptionData& EncryptionData);
 
 	/**
 	 * Sets the key for the underlying encryption packet handler component, but doesn't modify encryption enabled state.
 	 */
+	UE_DEPRECATED(4.24, "Use SetEncryptionData instead.")
 	ENGINE_API void SetEncryptionKey(TArrayView<const uint8> Key);
+
+	/**
+	 * Sets the data for the underlying encryption packet handler component, but doesn't modify encryption enabled state.
+	 */
+	ENGINE_API void SetEncryptionData(const FEncryptionData& EncryptionData);
 
 	/**
 	 * Sends an NMT_EncryptionAck message
@@ -927,14 +923,6 @@ public:
 	ENGINE_API virtual TSharedPtr<FObjectReplicator> CreateReplicatorForNewActorChannel(UObject* Object);
 
 	// Functions.
-
-	/** Resend any pending acks. */
-	UE_DEPRECATED(4.22, "This method will be removed.")
-	void PurgeAcks();
-
-	/** Send package map to the remote. */
-	UE_DEPRECATED(4.23, "This method will be removed.")
-	void SendPackageMap() {}
 
 	/** 
 	 * Appends the passed in data to the SendBuffer to be sent when FlushNet is called
@@ -986,10 +974,6 @@ public:
 
 	/** @todo document */
 	class UControlChannel* GetControlChannel();
-
-	/** Create a channel. */
-	UE_DEPRECATED(4.22, "Use CreateChannelByName")
-	ENGINE_API UChannel* CreateChannel( EChannelType Type, bool bOpenedLocally, int32 ChannelIndex=INDEX_NONE );
 
 	/** Create a channel. */
 	ENGINE_API UChannel* CreateChannelByName( const FName& ChName, EChannelCreateFlags CreateFlags, int32 ChannelIndex=INDEX_NONE );
@@ -1099,12 +1083,26 @@ public:
 	/** Removes stale entries from DormantReplicatorMap. */
 	void CleanupStaleDormantReplicators();
 
+	void PostTickDispatch();
+
 	/**
 	 * Flush the cache of sequenced packets waiting for a missing packet. Will flush only up to the next missing packet, unless bFlushWholeCache is set.
 	 *
 	 * @param bFlushWholeCache	Whether or not the whole cache should be flushed, or only flush up to the next missing packet
 	 */
 	void FlushPacketOrderCache(bool bFlushWholeCache=false);
+
+	/**
+	 * Sets the OS/NIC level timestamp, for the last packet that was received
+	 *
+	 * @param InOSReceiveTime			The OS/NIC level timestamp, for the last packet that was received
+	 * @param bInIsOSReceiveTimeLocal	Whether the input timestamp is based on the same clock as the game thread, or needs translating
+	 */
+	void SetPacketOSReceiveTime(const FPacketTimestamp& InOSReceiveTime, bool bInIsOSReceiveTimeLocal)
+	{
+		LastOSReceiveTime = InOSReceiveTime;
+		bIsOSReceiveTimeLocal = bInIsOSReceiveTimeLocal;
+	}
 
 	/** Called when an actor channel is open and knows its NetGUID. */
 	ENGINE_API virtual void NotifyActorNetGUID(UActorChannel* Channel) {}
@@ -1136,6 +1134,19 @@ public:
 	ENGINE_API void ResetSaturationAnalytics();
 
 	/**
+	 * Returns the current packet stability analytics and resets them.
+	 * This would be similar to calls to Get and Reset separately, except that the caller
+	 * will assume ownership of the data in this case.
+	 */
+	ENGINE_API void ConsumePacketAnalytics(FNetConnectionPacketAnalytics& Out);
+
+	/** Returns the current packet stability analytics. */
+	ENGINE_API const FNetConnectionPacketAnalytics& GetPacketAnalytics() const;
+
+	/** Resets the current packet stability analytics. */
+	ENGINE_API void ResetPacketAnalytics();
+
+	/**
 	 * Called to notify the connection that we attempted to replicate its actors this frame.
 	 * This is primarily for analytics book keeping.
 	 *
@@ -1147,7 +1158,13 @@ public:
 	 * Get the current number of sent packets for which we have received a delivery notification
 	 */
 	ENGINE_API uint32 GetOutTotalNotifiedPackets() const { return OutTotalNotifiedPackets; }
-	
+
+	/** Sends the NMT_Challenge message */
+	void SendChallengeControlMessage();
+
+	/** Sends the NMT_Challenge message based on encryption response */
+	void SendChallengeControlMessage(const FEncryptionKeyResponse& Response);
+
 protected:
 
 	ENGINE_API void SetPendingCloseDueToSocketSendFailure();
@@ -1183,7 +1200,17 @@ private:
 	void UpdateAllCachedLevelVisibility() const;
 
 	/** Returns true if an outgoing packet should be dropped due to packet simulation settings, including loss burst simulation. */
+#if DO_ENABLE_NET_TEST
 	bool ShouldDropOutgoingPacketForLossSimulation(int64 NumBits) const;
+#endif
+
+	/**
+	*	Test the current emulation settings to delay, drop, etc the current packet
+	*	Returns true if the packet was emulated and false when the packet must be sent via the normal path
+	*/
+#if DO_ENABLE_NET_TEST
+	bool CheckOutgoingPacketEmulation(FOutPacketTraits& Traits);
+#endif
 
 	/** Write packetHeader */
 	void WritePacketHeader(FBitWriter& Writer);
@@ -1259,6 +1286,7 @@ private:
 	int32 PacketOrderCacheCount;
 
 	FNetConnectionSaturationAnalytics SaturationAnalytics;
+	FNetConnectionPacketAnalytics PacketAnalytics;
 
 	/** Whether or not PacketOrderCache is presently being flushed */
 	bool bFlushingPacketOrderCache;

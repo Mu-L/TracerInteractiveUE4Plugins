@@ -62,7 +62,7 @@ struct FLandscapeTextureDataInfo
 		TArray<FUpdateTextureRegion2D> MipUpdateRegions;
 	};
 
-	FLandscapeTextureDataInfo(UTexture2D* InTexture);
+	FLandscapeTextureDataInfo(UTexture2D* InTexture, bool bShouldDirtyPackage);
 	virtual ~FLandscapeTextureDataInfo();
 
 	// returns true if we need to block on the render thread before unlocking the mip data
@@ -86,12 +86,12 @@ struct FLandscapeTextureDataInfo
 		return MipInfo[MipNum].MipData;
 	}
 
-	int32 GetMipSizeX(int32 MipNum)
+	int32 GetMipSizeX(int32 MipNum) const
 	{
 		return FMath::Max(Texture->Source.GetSizeX() >> MipNum, 1);
 	}
 
-	int32 GetMipSizeY(int32 MipNum)
+	int32 GetMipSizeY(int32 MipNum) const
 	{
 		return FMath::Max(Texture->Source.GetSizeY() >> MipNum, 1);
 	}
@@ -105,6 +105,9 @@ struct LANDSCAPE_API FLandscapeTextureDataInterface
 {
 	FLandscapeTextureDataInterface(bool bInUploadTextureChangesToGPU = true);
 	virtual ~FLandscapeTextureDataInterface();
+		
+	void SetShouldDirtyPackage(bool bValue) { bShouldDirtyPackage = bValue; }
+	bool GetShouldDirtyPackage() const { return bShouldDirtyPackage; }
 
 	// Texture data access
 	FLandscapeTextureDataInfo* GetTextureDataInfo(UTexture2D* Texture);
@@ -115,8 +118,10 @@ struct LANDSCAPE_API FLandscapeTextureDataInterface
 	// Texture bulk operations for weightmap reallocation
 	void CopyTextureChannel(UTexture2D* Dest, int32 DestChannel, UTexture2D* Src, int32 SrcChannel);
 	void ZeroTextureChannel(UTexture2D* Dest, int32 DestChannel);
+	void CopyTextureFromHeightmap(UTexture2D* Dest, ULandscapeComponent* Comp, int32 MipIndex);
 	void CopyTextureFromHeightmap(UTexture2D* Dest, int32 DestChannel, ULandscapeComponent* Comp, int32 SrcChannel);
 	void CopyTextureFromWeightmap(UTexture2D* Dest, int32 DestChannel, ULandscapeComponent* Comp, ULandscapeLayerInfoObject* LayerInfo);
+	void CopyTextureFromWeightmap(UTexture2D* Dest, int32 DestChannel, ULandscapeComponent* Comp, ULandscapeLayerInfoObject* LayerInfo, int32 MipIndex);
 
 	template<typename TData>
 	void SetTextureValueTempl(UTexture2D* Dest, TData Value);
@@ -128,10 +133,12 @@ struct LANDSCAPE_API FLandscapeTextureDataInterface
 	bool EqualTextureValue(UTexture2D* Src, FColor Value);
 
 private:
+	void CopyTextureFromWeightmap(FLandscapeTextureDataInfo* DestDataInfo, int32 DestChannel, ULandscapeComponent* Comp, ULandscapeLayerInfoObject* LayerInfo, int32 MipIndex);
+
 	TMap<UTexture2D*, FLandscapeTextureDataInfo*> TextureDataMap;
 	bool bUploadTextureChangesToGPU;
+	bool bShouldDirtyPackage;
 };
-
 
 struct LANDSCAPE_API FLandscapeEditDataInterface : public FLandscapeTextureDataInterface
 {
@@ -225,6 +232,12 @@ struct LANDSCAPE_API FLandscapeEditDataInterface : public FLandscapeTextureDataI
 	void GetLayerContributionData(const int32 X1, const int32 Y1, const int32 X2, const int32 Y2, TMap<FIntPoint, uint8>& SparseData);
 	void SetLayerContributionData(const int32 X1, const int32 Y1, const int32 X2, const int32 Y2, const uint8* Data, int32 Stride);
 
+	template<typename TStoreData>
+	void GetDirtyDataTempl(const int32 X1, const int32 Y1, const int32 X2, const int32 Y2, TStoreData& StoreData);
+	void GetDirtyData(const int32 X1, const int32 Y1, const int32 X2, const int32 Y2, uint8* Data, int32 Stride);
+	void GetDirtyData(const int32 X1, const int32 Y1, const int32 X2, const int32 Y2, TMap<FIntPoint, uint8>& SparseData);
+	void SetDirtyData(const int32 X1, const int32 Y1, const int32 X2, const int32 Y2, const uint8* Data, int32 Stride);
+
 	//
 	// XYOffsetmap access
 	//
@@ -291,6 +304,31 @@ private:
 
 	// chooses a replacement layer to use when erasing from 100% influence on a texel
 	const ULandscapeLayerInfoObject* ChooseReplacementLayer(const ULandscapeLayerInfoObject* LayerInfo, int32 ComponentIndexX, int32 SubIndexX, int32 SubX, int32 ComponentIndexY, int32 SubIndexY, int32 SubY, TMap<FIntPoint, TMap<const ULandscapeLayerInfoObject*, uint32>>& LayerInfluenceCache, TArrayView<const uint8* const> LayerDataPtrs);
+};
+
+struct LANDSCAPE_API FLandscapeDoNotDirtyScope
+{
+	FLandscapeDoNotDirtyScope(FLandscapeEditDataInterface& InEditInterface, bool bInScopeEnabled = true)
+		: EditInterface(InEditInterface), bScopeEnabled(bInScopeEnabled)
+	{
+		if (bScopeEnabled)
+		{
+			bPreviousValue = EditInterface.GetShouldDirtyPackage();
+			EditInterface.SetShouldDirtyPackage(false);
+		}
+	}
+
+	~FLandscapeDoNotDirtyScope()
+	{
+		if (bScopeEnabled)
+		{
+			EditInterface.SetShouldDirtyPackage(bPreviousValue);
+		}
+	}
+
+	FLandscapeEditDataInterface& EditInterface;
+	bool bPreviousValue;
+	bool bScopeEnabled;
 };
 
 template<typename T>
@@ -367,11 +405,10 @@ struct FHeightmapAccessor
 			bool bUpdateFoliage = false;
 			bool bUpdateNormals = false;
 
-			ALandscapeProxy::InvalidateGeneratedComponentData(Components);
-
             // Landscape Layers are updates are delayed and done in  ALandscape::TickLayers
 			if (!LandscapeEdit->HasLandscapeLayersContent())
 			{
+				ALandscapeProxy::InvalidateGeneratedComponentData(Components);
 				bUpdateNormals = true;
 				for (ULandscapeComponent* Component : Components)
 				{
@@ -529,7 +566,6 @@ struct FAlphamapAccessor
 		TSet<ULandscapeComponent*> Components;
 		if (LandscapeEdit.GetComponentsInRegion(X1, Y1, X2, Y2, &Components))
 		{
-			ALandscapeProxy::InvalidateGeneratedComponentData(Components);
 			for (ULandscapeComponent* LandscapeComponent : Components)
 			{
 				// Flag both modes depending on client calling SetData
@@ -538,6 +574,7 @@ struct FAlphamapAccessor
 			
 			if (!LandscapeEdit.HasLandscapeLayersContent())
 			{
+				ALandscapeProxy::InvalidateGeneratedComponentData(Components);
 				ModifiedComponents.Append(Components);
 			}
 

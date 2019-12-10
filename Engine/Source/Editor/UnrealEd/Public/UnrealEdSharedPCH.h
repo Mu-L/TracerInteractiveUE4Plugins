@@ -199,7 +199,6 @@
 #include "Templates/RefCounting.h"
 #include "Async/TaskGraphInterfaces.h"
 #include "Misc/Paths.h"
-#include "Templates/ScopedPointer.h"
 #include "Serialization/CustomVersion.h"
 #include "Misc/OutputDeviceError.h"
 #include "Misc/ObjectThumbnail.h"
@@ -610,7 +609,7 @@
 #include "Settings/LevelEditorViewportSettings.h"
 #include "Settings/LevelEditorPlaySettings.h"
 #include "Editor/EditorEngine.h"
-#include "Toolkits/AssetEditorManager.h"
+
 #include "AssetThumbnail.h"
 #include "Toolkits/BaseToolkit.h"
 #include "Toolkits/AssetEditorToolkit.h"

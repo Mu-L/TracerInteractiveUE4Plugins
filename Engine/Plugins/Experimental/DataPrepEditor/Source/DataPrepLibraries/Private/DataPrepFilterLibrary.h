@@ -5,7 +5,7 @@
 #include "EditorFilterLibrary.h"
 #include "Kismet/BlueprintFunctionLibrary.h"
 
-#include "DataprepFilterLibrary.generated.h"
+#include "DataPrepFilterLibrary.generated.h"
 
 UENUM()
 enum class EDataprepSizeSource : uint8
@@ -44,17 +44,6 @@ public:
 	 */
 	UFUNCTION(BlueprintPure, Category = "Dataprep | Filter", meta = (DeterminesOutputType = "TargetArray"))
 	static TArray< UObject* > FilterByName( const TArray< UObject* >& TargetArray, const FString& NameSubString, EEditorScriptingStringMatchType StringMatch = EEditorScriptingStringMatchType::Contains );
-
-	/**
-	 * Filter the array based on the metadata key and value.
-	 * @param	TargetArray		Array of Object to filter. The array will not change.
-	 * @param	Key				The key to filter with.
-	 * @param	Value			An optional value to filter with.
-	 * @param	ValueMatch		Contains the Value OR matches with the wildcard *? OR exactly the same value.
-	 * @return	The filtered list.
-	 */
-	UFUNCTION(BlueprintPure, Category = "Dataprep | Filter", meta = (DeterminesOutputType = "TargetArray"))
-	static TArray< UObject* > FilterByMetadata( const TArray< UObject* >& TargetArray, FName Key, const FString& Value, EEditorScriptingStringMatchType ValueMatch = EEditorScriptingStringMatchType::Contains );
 
 	/**
 	 * Filter the array based on the geometry size.

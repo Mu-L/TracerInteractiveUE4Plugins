@@ -16,6 +16,7 @@
 
 #include "USDIncludesStart.h"
 #include "pxr/pxr.h"
+#include "pxr/usd/usd/stageCache.h"
 #include "USDIncludesEnd.h"
 
 PXR_NAMESPACE_OPEN_SCOPE
@@ -34,7 +35,7 @@ PXR_NAMESPACE_CLOSE_SCOPE
 
 class IUsdPrim;
 
-enum EUsdInterpolationMethod
+enum class EUsdInterpolationMethod
 {
 	/** Each element in a buffer maps directly to a specific vertex */
 	Vertex,
@@ -42,9 +43,11 @@ enum EUsdInterpolationMethod
 	FaceVarying,
 	/** Each vertex on a face is the same value */
 	Uniform,
+	/** Single value */
+	Constant
 };
 
-enum EUsdGeomOrientation
+enum class EUsdGeomOrientation
 {
 	/** Right handed coordinate system */
 	RightHanded,
@@ -52,7 +55,7 @@ enum EUsdGeomOrientation
 	LeftHanded,
 };
 
-enum EUsdSubdivisionScheme
+enum class EUsdSubdivisionScheme
 {
 	None,
 	CatmullClark,
@@ -61,7 +64,7 @@ enum EUsdSubdivisionScheme
 
 };
 
-enum EUsdUpAxis
+enum class EUsdUpAxis
 {
 	XAxis,
 	YAxis,
@@ -149,9 +152,11 @@ class UnrealUSDWrapper
 public:
 #if USE_USD_SDK
 	UNREALUSDWRAPPER_API static void Initialize(const std::vector<std::string>& InPluginDirectories);
-	UNREALUSDWRAPPER_API static TUsdStore< pxr::TfRefPtr< pxr::UsdStage > > ImportUSDFile(const char* Path, const char* Filename);
-	UNREALUSDWRAPPER_API static double GetDefaultTimeCode();
 	UNREALUSDWRAPPER_API static const char* GetErrors();
+	UNREALUSDWRAPPER_API static double GetDefaultTimeCode();
+
+	UNREALUSDWRAPPER_API static TUsdStore< pxr::TfRefPtr< pxr::UsdStage > > OpenUsdStage(const char* Path, const char* Filename);
+	UNREALUSDWRAPPER_API static pxr::UsdStageCache& GetUsdStageCache();
 #endif  // #if USE_USD_SDK
 private:
 	static std::string Errors;

@@ -81,7 +81,7 @@ void FRemesher::BasicRemeshPass()
 	}
 
 	ProfileBeginSmooth();
-	if (bEnableSmoothing && SmoothSpeedT > 0)
+	if (bEnableSmoothing && (SmoothSpeedT > 0 || CustomSmoothSpeedF) )
 	{
 		if (bEnableSmoothInPlace) 
 		{
@@ -271,6 +271,7 @@ abort_collapse:
 			EMeshResult result = Mesh->FlipEdge(edgeID, flipInfo);
 			if (result == EMeshResult::Ok) 
 			{
+				OnEdgeFlip(edgeID, flipInfo);
 				DoDebugChecks();
 				return EProcessResult::Ok_Flipped;
 			}
@@ -451,27 +452,29 @@ static FVector3d CotanSmooth(const FDynamicMesh3& mesh, int vID, double t)
 	return (1.0 - t)*v + (t)*c;
 }
 
+TFunction<FVector3d(const FDynamicMesh3&, int, double)> FRemesher::GetSmoothFunction()
+{
+	if (CustomSmoothF != nullptr)
+	{
+		return CustomSmoothF;
+	} 
+	else if (SmoothType == ESmoothTypes::MeanValue)
+	{
+		return MeanValueSmooth;
+	}
+	else if (SmoothType == ESmoothTypes::Cotan)
+	{
+		return CotanSmooth;
+	}
+	return UniformSmooth;
+}
+
+
 void FRemesher::FullSmoothPass_Buffer(bool bParallel)
 {
 	InitializeVertexBufferForPass();
 
-	TFunction<FVector3d(const FDynamicMesh3&, int, double)> UseSmoothFunc = UniformSmooth;
-	//Func<FDynamicMesh3, int, double, FVector3d> smoothFunc = MeshUtil.UniformSmooth;
-	if (CustomSmoothF != nullptr) 
-	{
-		UseSmoothFunc = CustomSmoothF;
-	}
-	else 
-	{
-		if (SmoothType == ESmoothTypes::MeanValue)
-		{
-			UseSmoothFunc = MeanValueSmooth;
-		}
-		else if (SmoothType == ESmoothTypes::Cotan)
-		{
-			UseSmoothFunc = CotanSmooth;
-		}
-	}
+	TFunction<FVector3d(const FDynamicMesh3&, int, double)> UseSmoothFunc = GetSmoothFunction();
 
 	auto SmoothAndUpdateFunc = [&](int vID) 
 	{
@@ -559,8 +562,19 @@ FVector3d FRemesher::ComputeSmoothedVertexPos(int vID,
 		return Mesh->GetVertex(vID);
 	}
 
+	double UseSmoothSpeed = (CustomSmoothSpeedF) ? CustomSmoothSpeedF(*Mesh, vID) : SmoothSpeedT;
+	if (UseSmoothSpeed <= 0)
+	{
+		return Mesh->GetVertex(vID);
+	}
+
 	FVector3d vSmoothed = smoothFunc(*Mesh, vID, SmoothSpeedT);
-	check(VectorUtil::IsFinite(vSmoothed));     // this will really catch a lot of bugs...
+	// @todo we should probably make sure that vertex does not move too far here...
+	checkSlow(VectorUtil::IsFinite(vSmoothed));
+	if (VectorUtil::IsFinite(vSmoothed) == false)
+	{
+		return Mesh->GetVertex(vID);
+	}
 
 	// project onto either vtx constraint target, or surface target
 	if (vConstraint.Target != nullptr) 

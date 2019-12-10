@@ -70,6 +70,9 @@ public:
 	/** Setup the map - only called at initial construction */
 	void SetMap(const UWorld* InMap);
 
+    /** Get the owner map for this HLOD proxy */
+	TSoftObjectPtr<UWorld> GetMap() const;
+
 	/** Adds a static mesh and the key used to generate it */
 	void AddMesh(ALODActor* InLODActor, UStaticMesh* InStaticMesh, const FName& InKey);
 
@@ -79,6 +82,19 @@ public:
 	/** Helper for recursive traversing LODActors to retrieve a semi deterministic first AActor for resulting asset naming */
 	static const AActor* FindFirstActor(const ALODActor* LODActor);
 
+	/** Extract components that we would use for LOD generation. Used to generate keys for LOD actors. */
+	static void ExtractComponents(const ALODActor* LODActor, TArray<UPrimitiveComponent*>& InOutComponents);
+
+	/** Build a unique key for the LOD actor, used to determine if the actor needs rebuilding */
+	static FName GenerateKeyForActor(const ALODActor* LODActor);
+
+	static uint32 GetCRC(UMaterialInterface* InMaterialInterface, uint32 InCRC = 0);
+	static uint32 GetCRC(UTexture* InTexture, uint32 InCRC = 0);
+	static uint32 GetCRC(UStaticMesh* InStaticMesh, uint32 InCRC = 0);
+	static uint32 GetCRC(UStaticMeshComponent* InComponent, uint32 InCRC = 0);
+
+#endif
+
 	/**
 	 * Recursively retrieves StaticMeshComponents from a LODActor and its child LODActors
 	 *
@@ -86,13 +102,6 @@ public:
 	 * @param InOutComponents - Will hold the StaticMeshComponents
 	 */
 	static void ExtractStaticMeshComponentsFromLODActor(const ALODActor* LODActor, TArray<UStaticMeshComponent*>& InOutComponents);
-
-	/** Extract components that we would use for LOD generation. Used to generate keys for LOD actors. */
-	static void ExtractComponents(const ALODActor* LODActor, TArray<UPrimitiveComponent*>& InOutComponents);
-
-	/** Build a unique key for the LOD actor, used to determine if the actor needs rebuilding */
-	static FName GenerateKeyForActor(const ALODActor* LODActor);
-#endif
 
 #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
 	/** Check if we contain data for the specified actor */

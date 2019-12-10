@@ -8,12 +8,36 @@
 	#include "UnrealEngine.h"
 #endif
 
-#include "GenericPlatform/GenericPlatformInstallBundleManager.h"
-
 class FEngineService;
 class FPendingCleanupObjects;
 class ISessionService;
+class FSlateRenderer;
 
+struct FScopedSlowTask;
+
+struct FPreInitContext
+{
+	bool bDumpEarlyConfigReads = false;
+	bool bDumpEarlyPakFileReads = false;
+	bool bForceQuitAfterEarlyReads = false;
+	bool bWithConfigPatching = false;
+	bool bDisableDisregardForGC = false;
+	bool bHasEditorToken = false;
+	bool bIsRegularClient = false;
+	bool bTokenDoesNotHaveDash = false;
+
+	FString Token;
+	const TCHAR* CommandletCommandLine = nullptr;
+	TCHAR* CommandLineCopy = nullptr;
+
+	FScopedSlowTask* SlowTaskPtr = nullptr;
+
+	void Cleanup();
+
+#if WITH_ENGINE && !UE_SERVER
+	TSharedPtr<FSlateRenderer> SlateRenderer;
+#endif // WITH_ENGINE && !UE_SERVER
+};
 
 /**
  * Implements the main engine loop.	
@@ -49,6 +73,12 @@ public:
 	 * @return The error level; 0 if successful, > 0 if there were errors.
 	 */ 
 	int32 PreInit(const TCHAR* CmdLine);
+	
+	/** First part of PreInit. */
+	int32 PreInitPreStartupScreen(const TCHAR* CmdLine);
+
+	/** Second part of PreInit. */
+	int32 PreInitPostStartupScreen(const TCHAR* CmdLine);
 
 	/** Load all modules needed before Init. */ 
 	void LoadPreInitModules();
@@ -118,10 +148,6 @@ private:
 	/** Utility function that processes Slate operations. */
 	void ProcessLocalPlayerSlateOperations() const;
 
-	void OnStartupContentMounted(FInstallBundleResultInfo Result, bool bDumpEarlyConfigReads, bool bDumpEarlyPakFileReads);
-
-	void HandleConfigReload(bool bDumpEarlyConfigReads, bool bDumpEarlyPakFileReads);
-
 protected:
 
 	/** Holds a dynamically expanding array of frame times in milliseconds (if FApp::IsBenchmarking() is set). */
@@ -157,6 +183,7 @@ private:
 	TSharedPtr<ISessionService> SessionService;
 
 #endif // WITH_ENGINE
+	FPreInitContext PreInitContext;
 };
 
 

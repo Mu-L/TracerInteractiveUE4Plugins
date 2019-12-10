@@ -8,7 +8,7 @@
 #include "PaperCustomVersion.h"
 
 #include "PaperRenderSceneProxy.h"
-#include "PaperGeomTools.h"
+#include "GeomTools.h"
 #include "PhysicsEngine/ConvexElem.h"
 #include "PhysicsEngine/BoxElem.h"
 #include "PhysicsEngine/BodySetup.h"
@@ -18,8 +18,6 @@
 
 #define PAPER_USE_MATERIAL_SLOPES 1
 #define PAPER_TERRAIN_DRAW_DEBUG 0
-
-DECLARE_CYCLE_STAT(TEXT("Terrain Spline Proxy"), STAT_TerrainSpline_GetDynamicMeshElements, STATGROUP_Paper2D);
 
 //////////////////////////////////////////////////////////////////////////
 
@@ -71,38 +69,29 @@ public:
 	}
 
 	FPaperTerrainSceneProxy(const UPaperTerrainComponent* InComponent, const TArray<FPaperTerrainSpriteGeometry>& InDrawingData);
-
-protected:
-	TArray<FPaperTerrainSpriteGeometry> DrawingData;
-protected:
-	// FPaperRenderSceneProxy interface
-	virtual void GetDynamicMeshElementsForView(const FSceneView* View, int32 ViewIndex, FMeshElementCollector& Collector) const override;
-	// End of FPaperRenderSceneProxy interface
 };
 
 FPaperTerrainSceneProxy::FPaperTerrainSceneProxy(const UPaperTerrainComponent* InComponent, const TArray<FPaperTerrainSpriteGeometry>& InDrawingData)
 	: FPaperRenderSceneProxy(InComponent)
 {
-	DrawingData = InDrawingData;
+	//@TODO: PAPER2D: Build/store the data in the 'new' batch format directly rather than converting it here
+	BatchedSections.AddDefaulted(InDrawingData.Num());
+	FSpriteRenderSection* DstBatch = BatchedSections.GetData();
+	for (const FPaperTerrainSpriteGeometry& SrcBatch : InDrawingData)
+	{
+		DstBatch->Material = SrcBatch.Material;
+		for (const FSpriteDrawCallRecord& SrcRecord : SrcBatch.Records)
+		{
+			DstBatch->AddVerticesFromDrawCallRecord(SrcRecord, 0, SrcRecord.RenderVerts.Num(), Vertices);
+		}
+		++DstBatch;
+	}
 
 	// Combine the material relevance for all materials
-	for (const FPaperTerrainSpriteGeometry& Batch : DrawingData)
+	for (const FPaperTerrainSpriteGeometry& Batch : InDrawingData)
 	{
 		const UMaterialInterface* MaterialInterface = (Batch.Material != nullptr) ? Batch.Material : UMaterial::GetDefaultMaterial(MD_Surface);
 		MaterialRelevance |= MaterialInterface->GetRelevance_Concurrent(GetScene().GetFeatureLevel());
-	}
-}
-
-void FPaperTerrainSceneProxy::GetDynamicMeshElementsForView(const FSceneView* View, int32 ViewIndex, FMeshElementCollector& Collector) const
-{
-	SCOPE_CYCLE_COUNTER(STAT_TerrainSpline_GetDynamicMeshElements);
-
-	for (const FPaperTerrainSpriteGeometry& Batch : DrawingData)
-	{
-		if (Batch.Material != nullptr)
-		{
-			GetBatchMesh(View, Batch.Material, Batch.Records, ViewIndex, Collector);
-		}
 	}
 }
 
@@ -659,10 +648,10 @@ void UPaperTerrainComponent::OnSplineEdited()
 
 			// Always CCW and facing forward regardless of spline winding
 			TArray<FVector2D> CorrectedSplineVertices;
-			PaperGeomTools::CorrectPolygonWinding(CorrectedSplineVertices, SplinePolyVertices2D, false);
+			FGeomTools2D::CorrectPolygonWinding(CorrectedSplineVertices, SplinePolyVertices2D, false);
 
 			TArray<FVector2D> TriangulatedPolygonVertices;
-			PaperGeomTools::TriangulatePoly(/*out*/TriangulatedPolygonVertices, CorrectedSplineVertices, false);
+			FGeomTools2D::TriangulatePoly(/*out*/TriangulatedPolygonVertices, CorrectedSplineVertices, false);
 
 			GenerateCollisionDataFromPolygon(SplinePolyVertices2D, SplineEdgeOffsetAmounts, TriangulatedPolygonVertices);
 
@@ -920,7 +909,7 @@ static void CreateExtrudedConvexHull(TArray<FVector2D>& OutConvexHull, TArray<FV
 		ExtrudedPoints.Add(B - N * extrude);
 	}
 
-	PaperGeomTools::GenerateConvexHullFromPoints(OutConvexHull, ExtrudedPoints);
+	FGeomTools2D::GenerateConvexHullFromPoints(OutConvexHull, ExtrudedPoints);
 }
 
 void UPaperTerrainComponent::GenerateFillRenderDataFromPolygon(const class UPaperSprite* NewSprite, FSpriteDrawCallRecord& FillDrawCall, const FVector2D& TextureSize, const TArray<FVector2D>& TriangulatedPolygonVertices)
@@ -944,7 +933,7 @@ void UPaperTerrainComponent::GenerateCollisionDataFromPolygon(const TArray<FVect
 	{
 		// Generate polygon collider
 		TArray<TArray<FVector2D>> ConvexHulls;
-		PaperGeomTools::GenerateConvexPolygonsFromTriangles(ConvexHulls, TriangulatedPolygonVertices);
+		FGeomTools2D::GenerateConvexPolygonsFromTriangles(ConvexHulls, TriangulatedPolygonVertices);
 		TArray<float> ConvexHullEdgeExtrusionAmount;
 
 		for (TArray<FVector2D> ConvexHull : ConvexHulls)
@@ -1013,20 +1002,20 @@ void UPaperTerrainComponent::InsertConvexCollisionDataFromPolygon(const TArray<F
 
 		// Always CCW and facing forward regardless of spline winding
 		TArray<FVector2D> CorrectedSplineVertices;
-		PaperGeomTools::CorrectPolygonWinding(CorrectedSplineVertices, LocalPolyVertices, false);
+		FGeomTools2D::CorrectPolygonWinding(CorrectedSplineVertices, LocalPolyVertices, false);
 
 		TArray<FVector2D> TriangulatedPolygonVertices;
-		if (!PaperGeomTools::TriangulatePoly(/*out*/TriangulatedPolygonVertices, CorrectedSplineVertices, false))
+		if (!FGeomTools2D::TriangulatePoly(/*out*/TriangulatedPolygonVertices, CorrectedSplineVertices, false))
 		{
 			// Triangulation failed, try triangulating the original non simplified polygon
 			CorrectedSplineVertices.Empty();
-			PaperGeomTools::CorrectPolygonWinding(/*out*/CorrectedSplineVertices, ClosedPolyVertices2D, false);
+			FGeomTools2D::CorrectPolygonWinding(/*out*/CorrectedSplineVertices, ClosedPolyVertices2D, false);
 			TriangulatedPolygonVertices.Empty();
-			PaperGeomTools::TriangulatePoly(/*out*/TriangulatedPolygonVertices, CorrectedSplineVertices, false);
+			FGeomTools2D::TriangulatePoly(/*out*/TriangulatedPolygonVertices, CorrectedSplineVertices, false);
 		}
 
 		TArray<TArray<FVector2D>> ConvexHulls;
-		PaperGeomTools::GenerateConvexPolygonsFromTriangles(ConvexHulls, TriangulatedPolygonVertices);
+		FGeomTools2D::GenerateConvexPolygonsFromTriangles(ConvexHulls, TriangulatedPolygonVertices);
 
 		for (TArray<FVector2D> ConvexHull : ConvexHulls)
 		{

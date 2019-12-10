@@ -2,35 +2,52 @@
 #pragma once
 
 #include "ChaosInterfaceWrapperCore.h"
+#include "Chaos/ParticleHandleFwd.h"
+#include "PhysicsInterfaceUtilsCore.h"
 #include "CollisionQueryFilterCallbackCore.h"
+//todo: move this include into an impl header
 
+class FPhysScene_Chaos;
 class UPhysicalMaterial;
 struct FBodyInstance;
+struct FCollisionFilterData;
+struct FCollisionQueryParams;
 
-// Needed by low level SQ calls. Right now there's no specific locking for LLI
-// #PHYS2 update as locking becomes necessary
+namespace Chaos
+{
+	template <class T, int d>
+	class TPerShapeData;
+}
+
+namespace ChaosInterface
+{
+
+// Needed by low level SQ calls.
+#if WITH_CHAOS
 struct FScopedSceneReadLock
 {
-	FScopedSceneReadLock(FPhysScene& Scene)
-	{}
+	FScopedSceneReadLock(FPhysScene_ChaosInterface& SceneIn);
+	~FScopedSceneReadLock();
+
+	FPhysScene_Chaos& Scene;
 };
+#endif
 
 inline FQueryFilterData MakeQueryFilterData(const FCollisionFilterData& FilterData, EQueryFlags QueryFlags, const FCollisionQueryParams& Params)
 {
+#if WITH_PHYSX
+	return PxQueryFilterData(U2PFilterData(FilterData), U2PQueryFlags(QueryFlags));
+#else
 	return FQueryFilterData();
+#endif
 }
 
-inline UPhysicalMaterial* GetUserData(const FPhysTypeDummy& Material)
-{
-	return nullptr;
+FBodyInstance* GetUserData(const Chaos::TGeometryParticle<float, 3>& Actor);
+
+UPhysicalMaterial* GetUserData(const FPhysTypeDummy& Material);
+
 }
 
-inline FBodyInstance* GetUserData(const FPhysActorDummy& Actor)
-{
-	return nullptr;
-}
-
-
-inline void LowLevelRaycast(FPhysScene& Scene, const FVector& Start, const FVector& Dir, float DeltaMag, FPhysicsHitCallback<FHitRaycast>& HitBuffer, EHitFlags OutputFlags, FQueryFlags QueryFlags, const FCollisionFilterData& Filter, const FQueryFilterData& QueryFilterData, ICollisionQueryFilterCallbackBase* QueryCallback) {}
-inline void LowLevelSweep(FPhysScene& Scene, const FPhysicsGeometry& Geom, const FTransform& StartTM, const FVector& Dir, float DeltaMag, FPhysicsHitCallback<FHitSweep>& HitBuffer, EHitFlags OutputFlags, FQueryFlags QueryFlags, const FCollisionFilterData& Filter, const FQueryFilterData& QueryFilterData, ICollisionQueryFilterCallbackBase* QueryCallback) {}
-inline void LowLevelOverlap(FPhysScene& Scene, const FPhysicsGeometry& Geom, const FTransform& GeomPose, FPhysicsHitCallback<FHitOverlap>& HitBuffer, FQueryFlags QueryFlags, const FCollisionFilterData& Filter, const FQueryFilterData& QueryFilterData, ICollisionQueryFilterCallbackBase* QueryCallback) {}
+void LowLevelRaycast(FPhysScene& Scene, const FVector& Start, const FVector& Dir, float DeltaMag, FPhysicsHitCallback<FHitRaycast>& HitBuffer, EHitFlags OutputFlags, FQueryFlags QueryFlags, const FCollisionFilterData& Filter, const FQueryFilterData& QueryFilterData, ICollisionQueryFilterCallbackBase* QueryCallback, const FQueryDebugParams& DebugParams = FQueryDebugParams());
+void LowLevelSweep(FPhysScene& Scene, const FPhysicsGeometry& Geom, const FTransform& StartTM, const FVector& Dir, float DeltaMag, FPhysicsHitCallback<FHitSweep>& HitBuffer, EHitFlags OutputFlags, FQueryFlags QueryFlags, const FCollisionFilterData& Filter, const FQueryFilterData& QueryFilterData, ICollisionQueryFilterCallbackBase* QueryCallback, const FQueryDebugParams& DebugParams = FQueryDebugParams());
+void LowLevelOverlap(FPhysScene& Scene, const FPhysicsGeometry& Geom, const FTransform& GeomPose, FPhysicsHitCallback<FHitOverlap>& HitBuffer, FQueryFlags QueryFlags, const FCollisionFilterData& Filter, const FQueryFilterData& QueryFilterData, ICollisionQueryFilterCallbackBase* QueryCallback, const FQueryDebugParams& DebugParams = FQueryDebugParams());

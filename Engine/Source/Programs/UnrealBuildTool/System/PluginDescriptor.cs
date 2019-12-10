@@ -114,6 +114,11 @@ namespace UnrealBuildTool
 		/// </summary>
 		public string EngineVersion;
 
+		/// <summary>4
+		/// If true, this plugin from a platform extension extending another plugin */
+		/// </summary>
+		public bool bIsPluginExtension;
+
 		/// <summary>
 		/// List of platforms supported by this plugin. This list will be copied to any plugin reference from a project file, to allow filtering entire plugins from staged builds.
 		/// </summary>
@@ -148,6 +153,11 @@ namespace UnrealBuildTool
 		/// Marks the plugin as beta in the UI
 		/// </summary>
 		public bool bIsBetaVersion;
+
+		/// <summary>
+		/// Marks the plugin as experimental in the UI
+		/// </summary>
+		public bool bIsExperimentalVersion;
 
 		/// <summary>
 		/// Set for plugins which are installed
@@ -230,6 +240,7 @@ namespace UnrealBuildTool
 			RawObject.TryGetStringField("SupportURL", out SupportURL);
 			RawObject.TryGetStringField("EngineVersion", out EngineVersion);
 			RawObject.TryGetStringArrayField("SupportedPrograms", out SupportedPrograms);
+			RawObject.TryGetBoolField("bIsPluginExtension", out bIsPluginExtension);
 
 			try
 			{
@@ -266,6 +277,7 @@ namespace UnrealBuildTool
 
 			RawObject.TryGetBoolField("CanContainContent", out bCanContainContent);
 			RawObject.TryGetBoolField("IsBetaVersion", out bIsBetaVersion);
+			RawObject.TryGetBoolField("IsExperimentalVersion", out bIsExperimentalVersion);
 			RawObject.TryGetBoolField("Installed", out bInstalled);
 
 			bool bCanBeUsedWithUnrealHeaderTool;
@@ -297,7 +309,15 @@ namespace UnrealBuildTool
 			JsonObject RawObject = JsonObject.Read(FileName);
 			try
 			{
-				return new PluginDescriptor(RawObject);
+				PluginDescriptor Descriptor = new PluginDescriptor(RawObject);
+				if (Descriptor.Modules != null)
+				{
+					foreach (ModuleDescriptor Module in Descriptor.Modules)
+					{
+						Module.Validate(FileName);
+					}
+				}
+				return Descriptor;
 			}
 			catch (JsonParseException ParseException)
 			{
@@ -345,11 +365,15 @@ namespace UnrealBuildTool
 				Writer.WriteValue("EnabledByDefault", bEnabledByDefault.Value);
 			}
 			Writer.WriteValue("CanContainContent", bCanContainContent);
-			if(bIsBetaVersion)
+			if (bIsBetaVersion)
 			{
 				Writer.WriteValue("IsBetaVersion", bIsBetaVersion);
 			}
-			if(bInstalled)
+			if (bIsExperimentalVersion)
+			{
+				Writer.WriteValue("IsExperimentalVersion", bIsExperimentalVersion);
+			}
+			if (bInstalled)
 			{
 				Writer.WriteValue("Installed", bInstalled);
 			}
@@ -367,6 +391,10 @@ namespace UnrealBuildTool
 			if (SupportedPrograms != null && SupportedPrograms.Length > 0)
 			{
 				Writer.WriteStringArrayField("SupportedPrograms", SupportedPrograms);
+			}
+			if (bIsPluginExtension)
+			{
+				Writer.WriteValue("bIsPluginExtension", bIsPluginExtension);
 			}
 
 			ModuleDescriptor.WriteArray(Writer, "Modules", Modules);
@@ -394,6 +422,18 @@ namespace UnrealBuildTool
 		public bool SupportsTargetPlatform(UnrealTargetPlatform Platform)
 		{
 			return SupportedTargetPlatforms == null || SupportedTargetPlatforms.Length == 0 || SupportedTargetPlatforms.Contains(Platform);
+		}
+
+		/// <summary>
+		/// Combines the given target platforms with the current ones, if appropriate
+		/// </summary>
+		/// <param name="AdditionalSupportedTargetPlatforms"></param>
+		internal void MergeSupportedTargetPlatforms(UnrealTargetPlatform[] AdditionalSupportedTargetPlatforms)
+		{
+			if (SupportedTargetPlatforms != null && (SupportedTargetPlatforms.Length > 0) && AdditionalSupportedTargetPlatforms != null && AdditionalSupportedTargetPlatforms.Length > 0)
+			{
+				SupportedTargetPlatforms = SupportedTargetPlatforms.Union(AdditionalSupportedTargetPlatforms).ToArray();
+			}
 		}
 	}
 }

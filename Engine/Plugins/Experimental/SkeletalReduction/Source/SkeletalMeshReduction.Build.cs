@@ -41,7 +41,8 @@ namespace UnrealBuildTool.Rules
                     "EditorStyle",
                     "RenderCore",
                     "RHI",
-                    "QuadricMeshReduction"
+                    "QuadricMeshReduction",
+					"SkeletalMeshUtilitiesCommon"
 					// ... add other public dependencies that you statically link with here ...
 				}
                 );
@@ -56,7 +57,7 @@ namespace UnrealBuildTool.Rules
                     "AnimationModifiers",
                     "MeshBoneReduction",
                     "QuadricMeshReduction",
-                    "ClothingSystemRuntime"
+                    "ClothingSystemRuntimeCommon"
 					// ... add private dependencies that you statically link with here ...
                     // QuadricMeshReduction is only for testing
 				}

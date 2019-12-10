@@ -15,6 +15,7 @@ FDisplayClusterMessageInterceptor::FDisplayClusterMessageInterceptor()
 	: bIsIntercepting(false)
 	, InterceptorId(FGuid::NewGuid())
 	, Address(FMessageAddress::NewAddress())
+	, ClusterManager(nullptr)
 {}
 
 void FDisplayClusterMessageInterceptor::Setup(IDisplayClusterClusterManager* InClusterManager, TSharedPtr<IMessageBus, ESPMode::ThreadSafe> InBus)
@@ -48,11 +49,15 @@ void FDisplayClusterMessageInterceptor::Start()
 	const UDisplayClusterMessageInterceptionSettings* InterceptionSettings = GetDefault<UDisplayClusterMessageInterceptionSettings>();
 	if (!bIsIntercepting && InterceptionSettings->bIsEnabled && InterceptedBus)
 	{
+		InterceptedAnnotation = InterceptionSettings->Annotation;
+		FString DisplayString = InterceptedAnnotation.ToString();
+		UE_LOG(LogDisplayClusterInterception, Display, TEXT("Starting interception of bus messages with annotation: %s"), *DisplayString);
 		for (const FName& MessageType : InterceptionSettings->MessageTypes)
 		{
 			InterceptedBus->Intercept(AsShared(), MessageType);
+			DisplayString = MessageType.ToString();
+			UE_LOG(LogDisplayClusterInterception, Display, TEXT("Intercepted message type: %s"), *DisplayString);
 		}
-		InterceptedAnnotation = InterceptionSettings->Annotation;
 		bIsIntercepting = true;
 	}
 }
@@ -64,6 +69,7 @@ void FDisplayClusterMessageInterceptor::Stop()
 		InterceptedBus->Unintercept(AsShared(), NAME_All);
 		bIsIntercepting = false;
 		Purge();
+		UE_LOG(LogDisplayClusterInterception, Display, TEXT("Stopping interception of bus messages."));
 	}
 }
 

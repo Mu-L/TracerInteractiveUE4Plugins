@@ -9,6 +9,7 @@
 #include "PrimitiveViewRelevance.h"
 #include "PrimitiveSceneProxy.h"
 #include "SceneManagement.h"
+#include "UnrealEngine.h"
 
 #define SPLINE_FAST_BOUNDS_CALCULATION 0
 
@@ -23,12 +24,6 @@ USplineMetadata::USplineMetadata(const FObjectInitializer& ObjectInitializer)
 }
 
 USplineComponent::USplineComponent(const FObjectInitializer& ObjectInitializer)
- : USplineComponent(ObjectInitializer, nullptr)
-{
-
-}
-
-USplineComponent::USplineComponent(const FObjectInitializer& ObjectInitializer, USplineMetadata* Metadata)
 	: Super(ObjectInitializer)
 	, bAllowSplineEditingPerInstance_DEPRECATED(true)
 	, ReparamStepsPerSegment(10)
@@ -42,14 +37,12 @@ USplineComponent::USplineComponent(const FObjectInitializer& ObjectInitializer, 
 	, DefaultUpVector(FVector::UpVector)
 #if WITH_EDITORONLY_DATA
 	, EditorUnselectedSplineSegmentColor(FLinearColor(1.0f, 1.0f, 1.0f))
-	, EditorSelectedSplineSegmentColor(FLinearColor(1.0f, 0.0f, 0.0f))
+	, EditorSelectedSplineSegmentColor(FLinearColor(0.828f, 0.364f, 0.003f))
 	, bAllowDiscontinuousSpline(false)
 	, bShouldVisualizeScale(false)
 	, ScaleVisualizationWidth(30.0f)
 #endif
 {
-	SplineCurves.Metadata = Metadata;
-
 	SplineCurves.Position.Points.Reset(10);
 	SplineCurves.Rotation.Points.Reset(10);
 	SplineCurves.Scale.Points.Reset(10);
@@ -62,12 +55,12 @@ USplineComponent::USplineComponent(const FObjectInitializer& ObjectInitializer, 
 	SplineCurves.Rotation.Points.Emplace(1.0f, FQuat::Identity, FQuat::Identity, FQuat::Identity, CIM_CurveAuto);
 	SplineCurves.Scale.Points.Emplace(1.0f, FVector(1.0f), FVector::ZeroVector, FVector::ZeroVector, CIM_CurveAuto);
 
-	if (SplineCurves.Metadata)
+#if WITH_EDITORONLY_DATA
+	if (GEngine)
 	{
-		SplineCurves.Metadata->Reset(10);
-		SplineCurves.Metadata->AddPoint(0.0f);
-		SplineCurves.Metadata->AddPoint(1.0f);
+		EditorSelectedSplineSegmentColor = GEngine->GetSelectionOutlineColor();
 	}
+#endif
 
 	UpdateSpline();
 
@@ -152,6 +145,10 @@ void USplineComponent::Serialize(FArchive& Ar)
 	}
 }
 
+void USplineComponent::PostLoad()
+{
+	Super::PostLoad();
+}
 
 void FSplineCurves::UpdateSpline(bool bClosedLoop, bool bStationaryEndpoints, int32 ReparamStepsPerSegment, bool bLoopPositionOverride, float LoopPosition, const FVector& Scale3D)
 {
@@ -463,6 +460,30 @@ FVector USplineComponent::GetScaleAtSplineInputKey(float InKey) const
 	return Scale;
 }
 
+template<class T>
+T GetPropertyValueAtSplineInputKey(const USplineMetadata* Metadata, float InKey, FName PropertyName)
+{
+	if (Metadata)
+	{
+		if (UProperty* Property = Metadata->GetClass()->FindPropertyByName(PropertyName))
+		{
+			const FInterpCurve<T>* Curve = Property->ContainerPtrToValuePtr<FInterpCurve<T>>(Metadata);
+			return Curve->Eval(InKey, T(0));
+		}
+	}
+
+	return T(0);
+}
+
+float USplineComponent::GetFloatPropertyAtSplineInputKey(float InKey, FName PropertyName) const
+{
+	return GetPropertyValueAtSplineInputKey<float>(GetSplinePointsMetadata(), InKey, PropertyName);
+}
+
+FVector USplineComponent::GetVectorPropertyAtSplineInputKey(float InKey, FName PropertyName) const
+{
+	return GetPropertyValueAtSplineInputKey<FVector>(GetSplinePointsMetadata(), InKey, PropertyName);
+}
 
 void USplineComponent::SetClosedLoop(bool bInClosedLoop, bool bUpdateSpline)
 {
@@ -665,7 +686,7 @@ void USplineComponent::AddSplinePointAtIndex(const FVector& Position, int32 Inde
 		USplineMetadata* Metadata = GetSplinePointsMetadata();
 		if (Metadata)
 		{
-			Metadata->InsertPoint(InKey, Index);
+			Metadata->InsertPoint(InKey, Index, bClosedLoop);
 		}
 		
 		NumPoints++;
@@ -880,6 +901,12 @@ int32 USplineComponent::GetNumberOfSplinePoints() const
 	// No longer returns an imaginary extra endpoint if closed loop is set
 	const int32 NumPoints = SplineCurves.Position.Points.Num();
 	return NumPoints;
+}
+
+int32 USplineComponent::GetNumberOfSplineSegments() const
+{
+	const int32 NumPoints = SplineCurves.Position.Points.Num();
+	return (bClosedLoop ? NumPoints : NumPoints - 1);
 }
 
 
@@ -1436,6 +1463,11 @@ T GetPropertyValueAtSplinePoint(const USplineMetadata* Metadata, int32 Index, FN
 float USplineComponent::GetFloatPropertyAtSplinePoint(int32 Index, FName PropertyName) const
 {
 	return GetPropertyValueAtSplinePoint<float>(GetSplinePointsMetadata(), Index, PropertyName);
+}
+
+FVector USplineComponent::GetVectorPropertyAtSplinePoint(int32 Index, FName PropertyName) const
+{
+	return GetPropertyValueAtSplinePoint<FVector>(GetSplinePointsMetadata(), Index, PropertyName);
 }
 
 #if !UE_BUILD_SHIPPING

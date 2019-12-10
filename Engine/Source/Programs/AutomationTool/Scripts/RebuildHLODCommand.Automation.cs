@@ -28,9 +28,6 @@ namespace AutomationScripts.Automation
 	[RequireP4]
 	public class RebuildHLOD : BuildCommand
 	{
-		// The rebuild hierarchical LODs process
-		#region RebuildHLOD Command
-
 		public override void ExecuteBuild()
 		{
 			LogInformation("********** REBUILD HLODS COMMAND STARTED **********");
@@ -84,11 +81,6 @@ namespace AutomationScripts.Automation
 
 			LogInformation("********** REBUILD HLODS COMMAND COMPLETED **********");
 		}
-
-		#endregion
-
-		// Broken down steps used to run the process.
-		#region RebuildHLOD Process Steps
 
 		private void BuildNecessaryTargets()
 		{
@@ -215,11 +207,6 @@ namespace AutomationScripts.Automation
 			}
 		}
 
-		#endregion
-
-		// Helper functions and procedure steps necessary for running the commandlet successfully
-		#region RebuildHLOD Helper Functions
-
 		/**
 		 * Parse the P4 output for any errors that we really care about.
 		 * e.g. umaps and assets are exclusive checkout files, if we cant check out a map for this reason
@@ -343,11 +330,6 @@ namespace AutomationScripts.Automation
 		    }
         }
 
-		#endregion
-
-		// Member vars used in multiple steps.
-		#region RebuildHLOD Property Set-up
-
 		// Users to notify if the process fails or succeeds.
 		List<string> StakeholdersEmailAddresses
 		{
@@ -375,7 +357,14 @@ namespace AutomationScripts.Automation
 					// RoboMerge default behaviour is to ignore buildmachine changes 
 					return "";
 				}
-				return (Command == "deadend" ? "#ROBOMERGE #DEADEND" : "#ROBOMERGE[ALL]") + " #DisregardExcludedAuthors";
+				else if (Command == "all")
+				{
+					return "#ROBOMERGE[ALL] #DisregardExcludedAuthors";
+				}
+				else
+				{
+					return "#ROBOMERGE " + Command + " #DisregardExcludedAuthors";
+				}
 			}
 		}
 
@@ -431,7 +420,5 @@ namespace AutomationScripts.Automation
 				return ProjectFullPath;
 			}
 		}
-
-		#endregion
 	}
 }

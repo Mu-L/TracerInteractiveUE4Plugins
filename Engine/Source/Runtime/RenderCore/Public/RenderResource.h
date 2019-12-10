@@ -11,6 +11,9 @@
 #include "RHI.h"
 #include "RenderCore.h"
 
+/** Number of frames after which unused global resource allocations will be discarded. */
+extern int32 GGlobalBufferNumFramesUnusedThresold;
+
 /**
  * A rendering resource which is owned by the rendering thread.
  */
@@ -594,7 +597,17 @@ public:
 
 	virtual void InitRHI() override
 	{
-		if (Initializer.IndexBuffer && Initializer.PositionVertexBuffer && IsRayTracingEnabled())
+		bool bAllSegmentsAreValid = true;
+		for (const FRayTracingGeometrySegment& Segment : Initializer.Segments)
+		{
+			if (!Segment.VertexBuffer)
+			{
+				bAllSegmentsAreValid = false;
+				break;
+			}
+		}
+
+		if (Initializer.IndexBuffer && bAllSegmentsAreValid && IsRayTracingEnabled())
 		{
 			RayTracingGeometryRHI = RHICreateRayTracingGeometry(Initializer);
 			FRHICommandListExecutor::GetImmediateCommandList().BuildAccelerationStructure(RayTracingGeometryRHI);

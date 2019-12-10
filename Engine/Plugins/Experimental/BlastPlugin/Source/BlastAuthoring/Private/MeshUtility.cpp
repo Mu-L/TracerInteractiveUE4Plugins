@@ -2,7 +2,7 @@
 
 #include "MeshUtility.h"
 #include "PxPhysicsAPI.h"
-#include "MeshAttributes.h"
+#include "StaticMeshAttributes.h"
 #include "GeometryCollection/GeometryCollection.h"
 #include "GeometryCollection/GeometryCollectionClusteringUtility.h"
 #include "GeometryCollection/GeometryCollectionAlgo.h"
@@ -27,10 +27,11 @@ using namespace physx;
 void FMeshUtility::EditableMeshToBlastMesh(const UEditableMesh* SourceMesh, Nv::Blast::Mesh*& OutBlastMesh)
 {
 	const FMeshDescription* MeshDescription = SourceMesh->GetMeshDescription();
+	FStaticMeshConstAttributes Attributes(*MeshDescription);
 
-	TVertexAttributesConstRef<FVector> VertexPositions = MeshDescription->VertexAttributes().GetAttributesRef<FVector>(MeshAttribute::Vertex::Position);
-	TVertexInstanceAttributesConstRef<FVector2D> VertexUvs = MeshDescription->VertexInstanceAttributes().GetAttributesRef<FVector2D>(MeshAttribute::VertexInstance::TextureCoordinate);
-	TVertexInstanceAttributesConstRef<FVector> VertexNormals = MeshDescription->VertexInstanceAttributes().GetAttributesRef<FVector>(MeshAttribute::VertexInstance::Normal);
+	TVertexAttributesConstRef<FVector> VertexPositions = Attributes.GetVertexPositions();
+	TVertexInstanceAttributesConstRef<FVector2D> VertexUvs = Attributes.GetVertexInstanceUVs();
+	TVertexInstanceAttributesConstRef<FVector> VertexNormals = Attributes.GetVertexInstanceNormals();
 
 	// Blast representation
 	TArray<PxVec2> BlastUvs;
@@ -52,12 +53,12 @@ void FMeshUtility::EditableMeshToBlastMesh(const UEditableMesh* SourceMesh, Nv::
 
 	for(const FPolygonID PolygonID : MeshDescription->Polygons().GetElementIDs())
 	{
-		const TArray<FMeshTriangle>& MeshTriangles = MeshDescription->GetPolygonTriangles(PolygonID);
-		for(const FMeshTriangle& MeshTriangle : MeshTriangles)
+		const TArray<FTriangleID>& TriangleIDs = MeshDescription->GetPolygonTriangleIDs(PolygonID);
+		for(const FTriangleID TriangleID : TriangleIDs)
 		{
 			for(int32 TriVertIndex = 0; TriVertIndex < 3; ++TriVertIndex)
 			{
-				const FVertexInstanceID VertexInstanceId = MeshTriangle.GetVertexInstanceID(TriVertIndex);
+				const FVertexInstanceID VertexInstanceId = MeshDescription->GetTriangleVertexInstance(TriangleID, TriVertIndex);
 				BlastIndices.Push(VertexInstanceId.GetValue());
 			}
 
@@ -75,7 +76,7 @@ void FMeshUtility::EditableMeshToBlastMesh(const UEditableMesh* SourceMesh, Nv::
 	const FPolygonArray& Polys = MeshDescription->Polygons();
 	for(int32 Facet = 0; Facet < FacetCount; Facet++)
 	{
-		FacetBuffer[Facet].materialId = Polys[FPolygonID(Facet)].PolygonGroupID.GetValue();
+		FacetBuffer[Facet].materialId = MeshDescription->GetPolygonPolygonGroup(FPolygonID(Facet)).GetValue();
 	}
 }
 
@@ -83,10 +84,11 @@ void FMeshUtility::EditableMeshToBlastMesh(const UEditableMesh* SourceMesh, int3
 {
 	OutBlastMesh = nullptr;
 	const FMeshDescription* MeshDescription = SourceMesh->GetMeshDescription();
+	FStaticMeshConstAttributes Attributes(*MeshDescription);
 
-	TVertexAttributesConstRef<FVector> VertexPositions = MeshDescription->VertexAttributes().GetAttributesRef<FVector>(MeshAttribute::Vertex::Position);
-	TVertexInstanceAttributesConstRef<FVector2D> VertexUVs = MeshDescription->VertexInstanceAttributes().GetAttributesRef<FVector2D>(MeshAttribute::VertexInstance::TextureCoordinate);
-	TVertexInstanceAttributesConstRef<FVector> VertexNormals = MeshDescription->VertexInstanceAttributes().GetAttributesRef<FVector>(MeshAttribute::VertexInstance::Normal);
+	TVertexAttributesConstRef<FVector> VertexPositions = Attributes.GetVertexPositions();
+	TVertexInstanceAttributesConstRef<FVector2D> VertexUVs = Attributes.GetVertexInstanceUVs();
+	TVertexInstanceAttributesConstRef<FVector> VertexNormals = Attributes.GetVertexInstanceNormals();
 	UGeometryCollection* GeometryCollection = Cast<UGeometryCollection>(static_cast<UObject*>(SourceMesh->GetSubMeshAddress().MeshObjectPtr));
 
 	//#define VALIDATE_INPUT
@@ -144,9 +146,9 @@ void FMeshUtility::EditableMeshToBlastMesh(const UEditableMesh* SourceMesh, int3
 
 	for(const FPolygonID PolygonID : PolygonGroupIDs)
 	{
-		const TArray<FMeshTriangle>& MeshTriangles = MeshDescription->GetPolygonTriangles(PolygonID);
+		const TArray<FTriangleID>& TriangleIDs = MeshDescription->GetPolygonTriangleIDs(PolygonID);
 
-		check(MeshTriangles.Num() == 1);
+		check(TriangleIDs.Num() == 1);
 
 #ifdef VALIDATE_INPUT
 		// does triangle match the geometry collection triangle
@@ -162,11 +164,11 @@ void FMeshUtility::EditableMeshToBlastMesh(const UEditableMesh* SourceMesh, int3
 			check(Visible[PolygonID.GetValue()]);
 #endif // VALIDATE_INPUT
 
-		for(const FMeshTriangle& MeshTriangle : MeshTriangles)
+		for(const FTriangleID TriangleID : TriangleIDs)
 		{
 			for(int32 TriVertIndex = 0; TriVertIndex < 3; ++TriVertIndex)
 			{
-				const FVertexInstanceID VertexInstanceID = MeshTriangle.GetVertexInstanceID(TriVertIndex);
+				const FVertexInstanceID VertexInstanceID = MeshDescription->GetTriangleVertexInstance(TriangleID, TriVertIndex);
 				int32 VertexInstanceValue = VertexInstanceID.GetValue();
 				if (UsedVerticesMap.Contains(VertexInstanceValue))
 				{

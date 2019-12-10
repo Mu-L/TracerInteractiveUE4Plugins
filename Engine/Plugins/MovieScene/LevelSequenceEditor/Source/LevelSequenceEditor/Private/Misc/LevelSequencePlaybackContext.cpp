@@ -230,36 +230,22 @@ void SLevelSequenceContextPicker::Construct(const FArguments& InArgs)
 	check(OnSetValueEvent.IsBound());
 
 	ChildSlot
+	.Padding(0.0f)
 	[
 		SNew(SBorder)
 		.BorderImage(this, &SLevelSequenceContextPicker::GetBorderBrush)
+		.Padding(0.0f)
 		[
 			SNew(SComboButton)
 			.ContentPadding(0)
 			.ForegroundColor(FSlateColor::UseForeground())
 			.ButtonStyle(FEditorStyle::Get(), "ToggleButton")
 			.OnGetMenuContent(this, &SLevelSequenceContextPicker::BuildWorldPickerMenu)
-			.ToolTipText(LOCTEXT("WorldPickerText", "The world context that sequencer should be bound to, and playback within."))
+			.ToolTipText(FText::Format(LOCTEXT("WorldPickerTextFomrat", "'{0}': The world context that sequencer should be bound to, and playback within."), GetCurrentContextText()))
 			.ButtonContent()
 			[
-				SNew(SHorizontalBox)
-
-				+SHorizontalBox::Slot()
-				.AutoWidth()
-				.VAlign(VAlign_Center)
-				[
-					SNew(SImage)
-					.Image(FEditorStyle::GetBrush("SceneOutliner.World"))
-				]
-
-				+SHorizontalBox::Slot()
-				.AutoWidth()
-				.Padding(2, 0, 0, 0)
-				.VAlign(VAlign_Center)
-				[
-					SNew(STextBlock)
-					.Text(this, &SLevelSequenceContextPicker::GetCurrentContextText)
-				]
+				SNew(SImage)
+				.Image(FEditorStyle::GetBrush("SceneOutliner.World"))
 			]
 		]
 	];

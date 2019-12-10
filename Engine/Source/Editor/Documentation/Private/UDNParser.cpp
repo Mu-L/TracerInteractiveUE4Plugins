@@ -21,11 +21,12 @@
 #include "ISourceCodeAccessModule.h"
 #include "IContentBrowserSingleton.h"
 #include "ContentBrowserModule.h"
-#include "Toolkits/AssetEditorManager.h"
+
 #include "DesktopPlatformModule.h"
 #include "Framework/Notifications/NotificationManager.h"
 #include "Widgets/Notifications/SNotificationList.h"
 #include "Widgets/Input/SHyperlink.h"
+#include "Subsystems/AssetEditorSubsystem.h"
 
 #define LOCTEXT_NAMESPACE "IntroTutorials"
 
@@ -1318,15 +1319,7 @@ bool FUDNParser::ParseCodeLink(FString &InternalLink)
 	}
 
 	// Finally create the complete path - project name and all
-	int32 PathEndIndex;
-	FString SolutionPath;
-	if( FDesktopPlatformModule::Get()->GetSolutionPath(SolutionPath) && SolutionPath.FindLastChar(TEXT('/'), PathEndIndex) == true)
-	{
-		SolutionPath = SolutionPath.LeftChop(SolutionPath.Len() - PathEndIndex - 1);
-		SolutionPath += Path;
-		bLinkParsedOK = SourceCodeAccessor.OpenFileAtLine(SolutionPath, Line, Col);
-	}
-	return bLinkParsedOK;
+	return SourceCodeAccessor.OpenFileAtLine(FPaths::RootDir() + Path, Line, Col);
 }
 
 bool FUDNParser::ParseAssetLink(FString &InternalLink)
@@ -1344,7 +1337,7 @@ bool FUDNParser::ParseAssetLink(FString &InternalLink)
 		{
 			if (Action == TEXT("EDIT"))
 			{
-				FAssetEditorManager::Get().OpenEditorForAsset(RequiredObject);
+				GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(RequiredObject);
 			}
 			else
 			{

@@ -473,6 +473,134 @@ static bool SaveConfigFileWrapper(const TCHAR* IniFile, const FString& Contents)
 }
 
 
+enum class EConfigLayerFlags : int32
+{
+	Required					= (1 << 0),
+	AllowCommandLineOverride	= (1 << 1),
+	DedicatedServerOnly			= (1 << 2), // replaces Default, Base, and (NOT {PLATFORM} yet) with an empty string
+	GenerateCacheKey			= (1 << 3),
+};
+ENUM_CLASS_FLAGS(EConfigLayerFlags);
+
+/**
+ * Structure to define all the layers of the config system. Layers can be expanded by expansion files (NoRedist, etc), or by ini platform parents
+ * (coming soon from another branch)
+ */
+struct FConfigLayer
+{
+	// Used by the editor to display in the ini-editor
+	const TCHAR* EditorName;
+	// Path to the ini file (with variables)
+	const TCHAR* Path;
+	// Path to the platform extension version
+	const TCHAR* PlatformExtensionPath;
+	// Special flag
+	EConfigLayerFlags Flag;
+
+} GConfigLayers[] =
+{
+	/**************************************************
+	**** CRITICAL NOTES
+	**** If you change this array, you need to also change EnumerateConfigFileLocations() in ConfigHierarchy.cs!!!
+	**** And maybe UObject::GetDefaultConfigFilename(), UObject::GetGlobalUserConfigFilename()
+	**************************************************/
+
+	// Engine/Base.ini
+	{ TEXT("AbsoluteBase"),				TEXT("{ENGINE}Base.ini"), TEXT(""), EConfigLayerFlags::Required },
+	
+	// Engine/Base*.ini
+	{ TEXT("Base"),						TEXT("{ENGINE}{ED}{EF}Base{TYPE}.ini") },
+	// Engine/Platform/BasePlatform*.ini
+	{ TEXT("BasePlatform"),				TEXT("{ENGINE}{ED}{PLATFORM}/{EF}Base{PLATFORM}{TYPE}.ini"), TEXT("{EXTENGINE}/{ED}{EF}Base{PLATFORM}{TYPE}.ini"),  },
+	// Project/Default*.ini
+	{ TEXT("ProjectDefault"),			TEXT("{PROJECT}{ED}{EF}Default{TYPE}.ini"), TEXT(""), EConfigLayerFlags::AllowCommandLineOverride | EConfigLayerFlags::GenerateCacheKey },
+	// Engine/Platform/Platform*.ini
+	{ TEXT("EnginePlatform"),			TEXT("{ENGINE}{ED}{PLATFORM}/{EF}{PLATFORM}{TYPE}.ini"), TEXT("{EXTENGINE}/{ED}{EF}{PLATFORM}{TYPE}.ini") },
+	// Project/Platform/Platform*.ini
+	{ TEXT("ProjectPlatform"),			TEXT("{PROJECT}{ED}{PLATFORM}/{EF}{PLATFORM}{TYPE}.ini"), TEXT("{EXTPROJECT}/{ED}{EF}{PLATFORM}{TYPE}.ini") },
+	
+	// UserSettings/.../User*.ini
+	{ TEXT("UserSettingsDir"),			TEXT("{USERSETTINGS}Unreal Engine/Engine/Config/User{TYPE}.ini") },
+	// UserDir/.../User*.ini
+	{ TEXT("UserDir"),					TEXT("{USER}Unreal Engine/Engine/Config/User{TYPE}.ini") },
+	// Project/User*.ini
+	{ TEXT("GameDirUser"),				TEXT("{PROJECT}User{TYPE}.ini"), TEXT(""), EConfigLayerFlags::GenerateCacheKey },
+};
+
+
+/**
+ * This describes extra files per layer, most so that Epic needs to be able to ship a project, but still share the project 
+ * with licensees. These settings are the settings that should not be shared outside of Epic because they could cause 
+ * problems if a licensee blindly copy and pasted the settings (they can't copy what they don't have!)
+ */
+struct FConfigLayerExpansion
+{
+	// The subdirectory for this expansion (ie "NoRedist")
+	const TCHAR* DirectoryPrefix;
+	// The filename prefix for this expansion (ie "Shippable")
+	const TCHAR* FilePrefix;
+	// Optional flags 
+	EConfigLayerFlags Flag;
+} GConfigLayerExpansions[] = 
+{
+	/**************************************************
+	**** CRITICAL NOTES
+	**** If you change this array, you need to also change EnumerateConfigFileLocations() in ConfigHierarchy.cs!!!
+	**************************************************/
+	
+	// The base expansion (ie, no expansion)
+	{ TEXT(""), TEXT("") },
+
+	// When running a dedicated server - does not support {PLATFORM} layers, so those are skipped
+	{ TEXT(""), TEXT("DedicatedServer"),  EConfigLayerFlags::DedicatedServerOnly },
+	// This file is remapped in UAT from inside NFL or NoRedist, because those directories are stripped while packaging
+	{ TEXT(""), TEXT("Shippable") },
+	// Hidden directory from licensees
+	{ TEXT("NotForLicensees/"), TEXT("") },
+	// Settings that need to be hidden from licensees, but are needed for shipping
+	{ TEXT("NotForLicensees/"), TEXT("Shippable") },
+	// Hidden directory from non-Epic
+	{ TEXT("NoRedist/"), TEXT("") },
+	// Settings that need to be hidden from non-Epic, but are needed for shipping
+	{ TEXT("NoRedist/"), TEXT("Shippable") },
+};
+
+constexpr int32 MaxPlatformIndex = 99;
+
+constexpr int32 GetStaticKey(int32 LayerIndex, int32 LayerExpansionIndex, int32 PlatformIndex)
+{
+	return LayerIndex * 10000 + LayerExpansionIndex * 100 + PlatformIndex;
+}
+
+constexpr int32 MaxStaticHierarchyKey = GetStaticKey(UE_ARRAY_COUNT(GConfigLayers) - 1, UE_ARRAY_COUNT(GConfigLayerExpansions) - 1, MaxPlatformIndex);
+
+/*-----------------------------------------------------------------------------
+	FConfigFileHierarchy
+-----------------------------------------------------------------------------*/
+FConfigFileHierarchy::FConfigFileHierarchy() : KeyGen(MaxStaticHierarchyKey)
+{
+}
+
+
+int32 FConfigFileHierarchy::GenerateDynamicKey()
+{
+	return ++KeyGen;
+}
+
+int32 FConfigFileHierarchy::AddStaticLayer(FIniFilename Filename, int32 LayerIndex, int32 LayerExpansionIndex /*= 0*/, int32 PlatformIndex /*= 0*/)
+{
+	int32 Key = GetStaticKey(LayerIndex, LayerExpansionIndex, PlatformIndex);
+	Emplace(Key, MoveTemp(Filename));
+	return Key;
+}
+
+int32 FConfigFileHierarchy::AddDynamicLayer(FIniFilename Filename)
+{
+	int32 Key = GenerateDynamicKey();
+	Emplace(Key, MoveTemp(Filename));
+	return Key;
+}
+
 /*-----------------------------------------------------------------------------
 	FConfigFile
 -----------------------------------------------------------------------------*/
@@ -537,9 +665,11 @@ FConfigSection* FConfigFile::FindOrAddSection(const FString& SectionName)
 
 bool FConfigFile::Combine(const FString& Filename)
 {
-	FString Text;
+	FString FinalFileName = Filename;
+	OverrideFileFromCommandline(FinalFileName);
 
-	if (LoadConfigFileWrapper(*Filename, Text))
+	FString Text;
+	if (LoadConfigFileWrapper(*FinalFileName, Text))
 	{
 		if (Text.StartsWith("#!"))
 		{
@@ -848,7 +978,10 @@ void FConfigFile::Read( const FString& Filename )
 		Empty();
 		FString Text;
 
-		if (LoadConfigFileWrapper(*Filename, Text))
+		FString FinalFileName = Filename;
+		OverrideFileFromCommandline(FinalFileName);
+	
+		if (LoadConfigFileWrapper(*FinalFileName, Text))
 		{
 			// process the contents of the string
 			ProcessInputFileContents(Text);
@@ -936,14 +1069,50 @@ FString FConfigFile::GenerateExportedPropertyLine(const FString& PropertyName, c
 namespace CommandlineOverrideSpecifiers
 {
 	// -ini:IniName:[Section1]:Key1=Value1,[Section2]:Key2=Value2
-	FString	IniSwitchIdentifier		= TEXT("-ini:");
-	FString	IniNameEndIdentifier	= TEXT(":[");
-	FString	SectionStartIdentifier	= TEXT("[");
-	FString PropertyStartIdentifier	= TEXT("]:");
-	FString	PropertySeperator		= TEXT(",");
+	const TCHAR	IniFileOverrideIdentifier[] = TEXT("-iniFile=");
+	const TCHAR IniSwitchIdentifier[]     = TEXT("-ini:");
+	const TCHAR IniNameEndIdentifier[]    = TEXT(":[");
+	const TCHAR SectionStartIdentifier[]  = TEXT("[");
+	const TCHAR PropertyStartIdentifier[] = TEXT("]:");
+	const TCHAR PropertySeperator[]       = TEXT(",");
 }
 
 #endif
+void FConfigFile::OverrideFileFromCommandline(FString& Filename)
+{
+#if ALLOW_INI_OVERRIDE_FROM_COMMANDLINE
+	// look for this filename on the commandline in the format:
+	//		-iniFile=<hostPatFile1>,<hostPatFile2>,<hostPatFile3>
+	// for example:
+	//		-iniFile=/host/D:\FN-Main\FortniteGame\Config\PS4\PS4DeviceProfiles.ini
+	//       
+	//		Description: 
+	//          The FortniteGame\Config\PS4\PS4DeviceProfiles.ini contained in the pak file will
+	//          be replace with /host/D:\FN-Main\FortniteGame\Config\PS4\PS4DeviceProfiles.ini.
+
+	//			Note: You will need the same base file path for this to work. If you
+	//                want to override Engine/Config/BaseEngine.ini, you will need to place the override file 
+	//                under the same folder structure. 
+	//          Ex1: D:\<some_folder>\Engine\Config\BaseEngine.ini.
+	//			Ex2: D:\<some_folder>\FortniteGame\Config\PS4\PS4Engine.ini.ini.
+	FString StagedFilePaths;
+	if(FParse::Value(FCommandLine::Get(), CommandlineOverrideSpecifiers::IniFileOverrideIdentifier, StagedFilePaths, false))
+	{ 
+		FString BaseFileName = FPaths::GetBaseFilename(Filename);
+		TArray<FString> Files;
+		StagedFilePaths.ParseIntoArray(Files, TEXT(","), true);
+		for (int32 Index = 0; Index < Files.Num(); Index++)
+		{
+			if (Files[Index].Contains(BaseFileName))
+			{
+				Filename = Files[Index];
+				UE_LOG(LogConfig, Warning, TEXT("Loading override ini file: %s "), *Files[Index]);
+				break;
+			}
+		}
+	}
+#endif
+}
 /**
 * Looks for any overrides on the commandline for this file
 *
@@ -959,11 +1128,11 @@ void FConfigFile::OverrideFromCommandline(FConfigFile* File, const FString& File
 	// for example:
 	//		-ini:Engine:[/Script/Engine.Engine]:bSmoothFrameRate=False,[TextureStreaming]:PoolSize=100
 	//			(will update the cache after the final combined engine.ini)
-	if (FParse::Value(FCommandLine::Get(), *FString::Printf(TEXT("%s%s"), *CommandlineOverrideSpecifiers::IniSwitchIdentifier, *FPaths::GetBaseFilename(Filename)), Settings, false))
+	if (FParse::Value(FCommandLine::Get(), *FString::Printf(TEXT("%s%s"), CommandlineOverrideSpecifiers::IniSwitchIdentifier, *FPaths::GetBaseFilename(Filename)), Settings, false))
 	{
 		// break apart on the commas
 		TArray<FString> SettingPairs;
-		Settings.ParseIntoArray(SettingPairs, *CommandlineOverrideSpecifiers::PropertySeperator, true);
+		Settings.ParseIntoArray(SettingPairs, CommandlineOverrideSpecifiers::PropertySeperator, true);
 		for (int32 Index = 0; Index < SettingPairs.Num(); Index++)
 		{
 			// set each one, by splitting on the =
@@ -984,11 +1153,11 @@ void FConfigFile::OverrideFromCommandline(FConfigFile* File, const FString& File
 				CommandlineOption.Section = SectionAndKey.Left(SectionNameEndIndex);
 				
 				// Remove commandline syntax from the section name.
-				CommandlineOption.Section = CommandlineOption.Section.Replace(*CommandlineOverrideSpecifiers::IniNameEndIdentifier, TEXT(""));
-				CommandlineOption.Section = CommandlineOption.Section.Replace(*CommandlineOverrideSpecifiers::PropertyStartIdentifier, TEXT(""));
-				CommandlineOption.Section = CommandlineOption.Section.Replace(*CommandlineOverrideSpecifiers::SectionStartIdentifier, TEXT(""));
+				CommandlineOption.Section = CommandlineOption.Section.Replace(CommandlineOverrideSpecifiers::IniNameEndIdentifier, TEXT(""));
+				CommandlineOption.Section = CommandlineOption.Section.Replace(CommandlineOverrideSpecifiers::PropertyStartIdentifier, TEXT(""));
+				CommandlineOption.Section = CommandlineOption.Section.Replace(CommandlineOverrideSpecifiers::SectionStartIdentifier, TEXT(""));
 
-				CommandlineOption.PropertyKey = SectionAndKey.Mid(SectionNameEndIndex + CommandlineOverrideSpecifiers::PropertyStartIdentifier.Len());
+				CommandlineOption.PropertyKey = SectionAndKey.Mid(SectionNameEndIndex + UE_ARRAY_COUNT(CommandlineOverrideSpecifiers::PropertyStartIdentifier) - 1);
 				CommandlineOption.PropertyValue = Value;
 
 				// now put it into this into the cache
@@ -999,6 +1168,29 @@ void FConfigFile::OverrideFromCommandline(FConfigFile* File, const FString& File
 #endif
 }
 
+
+void FConfigFile::AddDynamicLayerToHeirarchy(const FString& Filename)
+{
+	// Don't allow dynamic layers in editor
+	if (GIsEditor)
+		return;
+
+	FString ConfigContent;
+	if (!FFileHelper::LoadFileToString(ConfigContent, *Filename))
+		return;
+
+	if (SourceConfigFile)
+	{
+		SourceConfigFile->SourceIniHierarchy.AddDynamicLayer(FIniFilename(Filename));
+		SourceConfigFile->CombineFromBuffer(ConfigContent);
+	}
+
+	SourceIniHierarchy.AddDynamicLayer(FIniFilename(Filename));
+	CombineFromBuffer(ConfigContent);
+
+	// Disable saving since dynamic layers are only for runtime
+	NoSave = true;
+}
 
 /**
  * This will completely load .ini file hierarchy into the passed in FConfigFile. The passed in FConfigFile will then
@@ -3127,101 +3319,88 @@ static void ConditionalOverrideIniFilename(FString& IniFilename, const TCHAR* Ba
 }
 
 
-
-
-
-
-const int Flag_Required = 1;
-const int Flag_AllowCommandLineOverride = 2;
-const int Flag_DedicatedServerOnly = 4; // replaces Default, Base, and (NOT {PLATFORM} yet) with DedicatedServer
-const int Flag_GenerateCacheKey = 8;
-
-
-/**
- * Structure to define all the layers of the config system. Layers can be expanded by expansion files (NoRedist, etc), or by ini platform parents
- * (coming soon from another branch)
- */
-struct FConfigLayer
+static FString GetLayerPath(const FConfigLayer& Layer, const FString& PlatformName, const TCHAR* EngineConfigDir, const TCHAR* SourceConfigDir, const TCHAR* BaseIniName, bool& bHasPlatformTag, bool& bHasProjectTag)
 {
-	// Used by the editor to display in the ini-editor
-	const TCHAR* EditorName;
-	// Path to the ini file (with variables)
-	FString Path;
-	// Path to the platform extension version
-	FString PlatformExtensionPath;
-	// Special flag
-	int32  Flag;
+	static FString LastPlatform;
+	static FString PlatformExtensionEngineConfigDir;
+	static FString PlatformExtensionProjectConfigDir;
+	static bool bHasPlatformExtensionEngineConfigDir;
+	static bool bHasPlatformExtensionProjectConfigDir;
 
-} GConfigLayers[] =
+	if (LastPlatform != PlatformName)
+	{
+		LastPlatform = PlatformName;
+		PlatformExtensionEngineConfigDir = FPaths::Combine(*FPaths::EnginePlatformExtensionsDir(), *PlatformName, TEXT("Config"));
+		PlatformExtensionProjectConfigDir = FPaths::Combine(*FPaths::ProjectPlatformExtensionsDir(), *PlatformName, TEXT("Config"));
+		bHasPlatformExtensionEngineConfigDir = FPaths::DirectoryExists(*PlatformExtensionEngineConfigDir);
+		bHasPlatformExtensionProjectConfigDir = FPaths::DirectoryExists(*PlatformExtensionProjectConfigDir);
+	}
+
+	// cache some searches
+	bHasPlatformTag = FCString::Strstr(Layer.Path, TEXT("{PLATFORM}")) != nullptr;
+	bHasProjectTag = FCString::Strstr(Layer.Path, TEXT("{PROJECT}")) != nullptr;
+
+	// you can only have PROJECT or ENGINE, not both
+	FString LayerPath;
+	if (bHasProjectTag)
+	{
+		if (bHasPlatformTag && bHasPlatformExtensionProjectConfigDir)
+		{
+			LayerPath = FString(Layer.PlatformExtensionPath).Replace(TEXT("{EXTPROJECT}"), *PlatformExtensionProjectConfigDir);
+		}
+		else
+		{
+			LayerPath = FString(Layer.Path).Replace(TEXT("{PROJECT}"), SourceConfigDir);
+		}
+	}
+	else
+	{
+		if (bHasPlatformTag && bHasPlatformExtensionEngineConfigDir)
+		{
+			LayerPath = FString(Layer.PlatformExtensionPath).Replace(TEXT("{EXTENGINE}"), *PlatformExtensionEngineConfigDir);
+		}
+		else
+		{
+			LayerPath = FString(Layer.Path).Replace(TEXT("{ENGINE}"), EngineConfigDir);
+		}
+	}
+
+	LayerPath = LayerPath.Replace(TEXT("{TYPE}"), BaseIniName, ESearchCase::CaseSensitive);
+	LayerPath = LayerPath.Replace(TEXT("{USERSETTINGS}"), FPlatformProcess::UserSettingsDir(), ESearchCase::CaseSensitive);
+	LayerPath = LayerPath.Replace(TEXT("{USER}"), FPlatformProcess::UserDir(), ESearchCase::CaseSensitive);
+
+	return LayerPath;
+}
+
+static FString GetExpansionPath(const FConfigLayerExpansion& Expansion, const FString& LayerPath, bool bHasPlatformTag)
 {
-	/**************************************************
-	**** CRITICAL NOTES
-	**** If you change this array, you need to also change EnumerateConfigFileLocations() in ConfigHierarchy.cs!!!
-	**** And maybe UObject::GetDefaultConfigFilename(), UObject::GetGlobalUserConfigFilename()
-	**************************************************/
+	// replace the expansion tags
+	FString ExpansionPath = LayerPath.Replace(TEXT("{ED}"), Expansion.DirectoryPrefix, ESearchCase::CaseSensitive);
+	ExpansionPath = ExpansionPath.Replace(TEXT("{EF}"), Expansion.FilePrefix, ESearchCase::CaseSensitive);
 
-	// Engine/Base.ini
-	{ TEXT("AbsoluteBase"),				TEXT("{ENGINE}Base.ini"), TEXT(""), Flag_Required },
-	
-	// Engine/Base*.ini
-	{ TEXT("Base"),						TEXT("{ENGINE}{ED}{EF}Base{TYPE}.ini") },
-	// Engine/Platform/BasePlatform*.ini
-	{ TEXT("BasePlatform"),				TEXT("{ENGINE}{ED}{PLATFORM}/{EF}Base{PLATFORM}{TYPE}.ini"), TEXT("{EXTENGINE}/{ED}{EF}Base{PLATFORM}{TYPE}.ini"),  },
-	// Project/Default*.ini
-	{ TEXT("ProjectDefault"),			TEXT("{PROJECT}{ED}{EF}Default{TYPE}.ini"), TEXT(""), Flag_AllowCommandLineOverride | Flag_GenerateCacheKey },
-	// Engine/Platform/Platform*.ini
-	{ TEXT("EnginePlatform"),			TEXT("{ENGINE}{ED}{PLATFORM}/{EF}{PLATFORM}{TYPE}.ini"), TEXT("{EXTENGINE}/{ED}{EF}{PLATFORM}{TYPE}.ini") },
-	// Project/Platform/Platform*.ini
-	{ TEXT("ProjectPlatform"),			TEXT("{PROJECT}{ED}{PLATFORM}/{EF}{PLATFORM}{TYPE}.ini"), TEXT("{EXTPROJECT}/{ED}{EF}{PLATFORM}{TYPE}.ini") },
-	
-	// UserSettings/.../User*.ini
-	{ TEXT("UserSettingsDir"),			TEXT("{USERSETTINGS}Unreal Engine/Engine/Config/User{TYPE}.ini") },
-	// UserDir/.../User*.ini
-	{ TEXT("UserDir"),					TEXT("{USER}Unreal Engine/Engine/Config/User{TYPE}.ini") },
-	// Project/User*.ini
-	{ TEXT("GameDirUser"),				TEXT("{PROJECT}User{TYPE}.ini"), TEXT(""), Flag_GenerateCacheKey },
-};
+	// check for dedicated server expansion
+	if (EnumHasAnyFlags(Expansion.Flag, EConfigLayerFlags::DedicatedServerOnly))
+	{
+		// it's unclear how a platform DS ini would be named, so for now, not supported
+		if (bHasPlatformTag)
+		{
+			return TEXT("");
+		}
+		else if (IsRunningDedicatedServer())
+		{
+			ExpansionPath = ExpansionPath.Replace(TEXT("Base"), TEXT(""));
+			ExpansionPath = ExpansionPath.Replace(TEXT("Default"), TEXT(""));
+			// ExpansionPath = ExpansionPath.Replace(TEXT("{PLATFORM}"), TEXT(""));
+		}
+		else
+		{
+			// skip this expansion if not DS
+			return TEXT("");
+		}
+	}
 
-
-/**
- * This describes extra files per layer, most so that Epic needs to be able to ship a project, but still share the project 
- * with licensees. These settings are the settings that should not be shared outside of Epic because they could cause 
- * problems if a licensee blindly copy and pasted the settings (they can't copy what they don't have!)
- */
-struct FConfigLayerExpansion
-{
-	// The subdirectory for this expansion (ie "NoRedist")
-	const TCHAR* DirectoryPrefix;
-	// The filename prefix for this expansion (ie "Shippable")
-	const TCHAR* FilePrefix;
-	// Optional flags 
-	int32 Flag;
-} GConfigLayerExpansions[] = 
-{
-	/**************************************************
-	**** CRITICAL NOTES
-	**** If you change this array, you need to also change EnumerateConfigFileLocations() in ConfigHierarchy.cs!!!
-	**************************************************/
-	
-	// The base expansion (ie, no expansion)
-	{ TEXT(""), TEXT("") },
-
-	// When running a dedicated server - does not support {PLATFORM} layers, so those are skipped
-	{ TEXT(""), TEXT("DedicatedServer"),  Flag_DedicatedServerOnly },
-	// This file is remapped in UAT from inside NFL or NoRedist, because those directories are stripped while packaging
-	{ TEXT(""), TEXT("Shippable") },
-	// Hidden directory from licensees
-	{ TEXT("NotForLicensees/"), TEXT("") },
-	// Settings that need to be hidden from licensees, but are needed for shipping
-	{ TEXT("NotForLicensees/"), TEXT("Shippable") },
-	// Hidden directory from non-Epic
-	{ TEXT("NoRedist/"), TEXT("") },
-	// Settings that need to be hidden from non-Epic, but are needed for shipping
-	{ TEXT("NoRedist/"), TEXT("Shippable") },
-};
-
-
-
+	return ExpansionPath;
+}
 
 /**
  * Creates a chain of ini filenames to load and combine.
@@ -3230,139 +3409,101 @@ struct FConfigLayerExpansion
  * @param InPlatformName Platform name, nullptr means to use the current platform
  * @param OutHierarchy An array which is to receive the generated hierachy of ini filenames.
  */
-static void GetSourceIniHierarchyFilenames(const TCHAR* InBaseIniName, const TCHAR* InPlatformName, const TCHAR* EngineConfigDir, const TCHAR* SourceConfigDir, FConfigFile& OutFile, bool bRequireDefaultIni)
+void FConfigFile::AddStaticLayersToHierarchy(const TCHAR* InBaseIniName, const TCHAR* InPlatformName, const TCHAR* EngineConfigDir, const TCHAR* SourceConfigDir)
 {
-	FConfigFileHierarchy& OutHierarchy = OutFile.SourceIniHierarchy;
-	OutFile.SourceEngineConfigDir = EngineConfigDir;
-	OutFile.SourceProjectConfigDir = SourceConfigDir;
-	
+	SourceEngineConfigDir = EngineConfigDir;
+	SourceProjectConfigDir = SourceConfigDir;
+
 	// get the platform name
 	const FString PlatformName(InPlatformName ? InPlatformName : ANSI_TO_TCHAR(FPlatformProperties::IniPlatformName()));
 
 	// cache some platform extension information that can be used inside the loops
-	FString PlatformExtensionEngineConfigDir = FPaths::Combine(*FPaths::PlatformExtensionsDir(), *PlatformName, TEXT("Engine"), TEXT("Config"));
-	FString PlatformExtensionProjectConfigDir = FPaths::Combine(*FPaths::PlatformExtensionsDir(), *PlatformName, FApp::GetProjectName(), TEXT("Config"));
-	bool bHasPlatformExtensionEngineConfigDir = FPaths::DirectoryExists(*PlatformExtensionEngineConfigDir);
-	bool bHasPlatformExtensionProjectConfigDir = FPaths::DirectoryExists(*PlatformExtensionProjectConfigDir);
 
 	// go over all the config layers
-	for (int32 LayerIndex = 0; LayerIndex < ARRAY_COUNT(GConfigLayers); LayerIndex++)
+	for (int32 LayerIndex = 0; LayerIndex < UE_ARRAY_COUNT(GConfigLayers); LayerIndex++)
 	{
 		const FConfigLayer& Layer = GConfigLayers[LayerIndex];
-		bool bHasPlatformTag = Layer.Path.Contains(TEXT("{PLATFORM}"));
-		bool bHasProjectTag = Layer.Path.Contains(TEXT("{PROJECT}"));
-
-		// calculate a increasing-by-layer index
-		int32 ConfigFileIndex = LayerIndex * 10000;
 
 		// start replacing basic variables
-		FString LayerPath;
-		// you can only have PROJECT or ENGINE, not both
-		if (bHasProjectTag)
-		{
-			if (bHasPlatformTag && bHasPlatformExtensionProjectConfigDir)
-			{
-				LayerPath = Layer.PlatformExtensionPath.Replace(TEXT("{EXTPROJECT}"), *PlatformExtensionProjectConfigDir);
-			}
-			else
-			{
-				LayerPath = Layer.Path.Replace(TEXT("{PROJECT}"), SourceConfigDir);
-			}
-		}
-		else
-		{
-			if (bHasPlatformTag && bHasPlatformExtensionEngineConfigDir)
-			{
-				LayerPath = Layer.PlatformExtensionPath.Replace(TEXT("{EXTENGINE}"), *PlatformExtensionEngineConfigDir);
-			}
-			else
-			{
-				LayerPath = Layer.Path.Replace(TEXT("{ENGINE}"), EngineConfigDir);
-			}
-		}
-
-		LayerPath = LayerPath.Replace(TEXT("{TYPE}"), InBaseIniName, ESearchCase::CaseSensitive);
-		LayerPath = LayerPath.Replace(TEXT("{USERSETTINGS}"), FPlatformProcess::UserSettingsDir(), ESearchCase::CaseSensitive);
-		LayerPath = LayerPath.Replace(TEXT("{USER}"), FPlatformProcess::UserDir(), ESearchCase::CaseSensitive);
+		bool bHasPlatformTag, bHasProjectTag;
+		FString LayerPath = GetLayerPath(Layer, PlatformName, EngineConfigDir, SourceConfigDir, InBaseIniName, bHasPlatformTag, bHasProjectTag);
 
 		// PROGRAMs don't require any ini files
 #if IS_PROGRAM
 		const bool bIsRequired = false;
 #else
-		const bool bIsRequired = ((Layer.Flag & Flag_Required) != 0) && (EngineConfigDir == FPaths::EngineConfigDir());
+		const bool bIsRequired = EnumHasAnyFlags(Layer.Flag, EConfigLayerFlags::Required) && (EngineConfigDir == FPaths::EngineConfigDir());
 #endif
 
 		// expand if it it has {ED} or {EF} expansion tags
-		if (FCString::Strstr(*Layer.Path, TEXT("{ED}")) || FCString::Strstr(*Layer.Path, TEXT("{EF}")))
+		if (FCString::Strstr(Layer.Path, TEXT("{ED}")) || FCString::Strstr(Layer.Path, TEXT("{EF}")))
 		{
 			// we assume none of the more special tags in expanded ones
-			checkfSlow(FCString::Strstr(*Layer.Path, TEXT("{USERSETTINGS}")) == nullptr && FCString::Strstr(*Layer.Path, TEXT("{USER}")) == nullptr, TEXT("Expanded config %s shouldn't have a {USER*} tags in it"), *Layer.Path);
+			checkfSlow(FCString::Strstr(Layer.Path, TEXT("{USERSETTINGS}")) == nullptr && FCString::Strstr(Layer.Path, TEXT("{USER}")) == nullptr, TEXT("Expanded config %s shouldn't have a {USER*} tags in it"), *Layer.Path);
 			// last layer is expected to not be expanded
-			checkfSlow(LayerIndex < ARRAY_COUNT(GConfigLayers) - 1, TEXT("Final layer %s shouldn't be an expansion layer, as it needs to generate the  hierarchy cache key"), *Layer.Path);
+			checkfSlow(LayerIndex < UE_ARRAY_COUNT(GConfigLayers) - 1, TEXT("Final layer %s shouldn't be an expansion layer, as it needs to generate the  hierarchy cache key"), *Layer.Path);
 
 			// loop over all the possible expansions
-			for (int32 ExpansionIndex = 0; ExpansionIndex < ARRAY_COUNT(GConfigLayerExpansions); ExpansionIndex++)
+			for (int32 ExpansionIndex = 0; ExpansionIndex < UE_ARRAY_COUNT(GConfigLayerExpansions); ExpansionIndex++)
 			{
 				const FConfigLayerExpansion& Expansion = GConfigLayerExpansions[ExpansionIndex];
 
-				// apply expansion level
-				int32 ExpansionFileIndex = ConfigFileIndex + ExpansionIndex * 100;
+				bool bSkipExpansion = false;
+				FString ExpansionPath = GetExpansionPath(Expansion, LayerPath, bHasPlatformTag);
 
-				// replace the expansion tags
-				FString ExpansionPath = LayerPath.Replace(TEXT("{ED}"), Expansion.DirectoryPrefix, ESearchCase::CaseSensitive);
-				ExpansionPath = ExpansionPath.Replace(TEXT("{EF}"), Expansion.FilePrefix, ESearchCase::CaseSensitive);
-
-				// check for dedicated server expansion
-				if (Expansion.Flag & Flag_DedicatedServerOnly)
+				// skip this expansion if we didn't want it
+				if (ExpansionPath.Len() == 0)
 				{
-					// it's unclear how a platform DS ini would be named, so for now, not supported
-					if (bHasPlatformTag)
-					{
-						continue;
-					}
-					if (IsRunningDedicatedServer())
-					{
-						ExpansionPath = ExpansionPath.Replace(TEXT("Base"), TEXT("DedicatedServer"));
-						ExpansionPath = ExpansionPath.Replace(TEXT("Default"), TEXT("DedicatedServer"));
-						// ExpansionPath = ExpansionPath.Replace(TEXT("{PLATFORM}"), TEXT("DedicatedServer"));
-					}
-					else
-					{
-						// skip this expansion if not DS
-						continue;
-					}
+					continue;
 				}
 
 				// allow for override, only on BASE EXPANSION!
-				if ((Layer.Flag & Flag_AllowCommandLineOverride) && ExpansionIndex == 0)
+				if (EnumHasAnyFlags(Layer.Flag, EConfigLayerFlags::AllowCommandLineOverride) && ExpansionIndex == 0)
 				{
-					checkfSlow(!bHasPlatformTag, TEXT("Flag_AllowCommandLineOverride config %s shouldn't have a PLATFORM in it"), *Layer.Path);
+					checkfSlow(!bHasPlatformTag, TEXT("EConfigLayerFlags::AllowCommandLineOverride config %s shouldn't have a PLATFORM in it"), *Layer.Path);
 
 					ConditionalOverrideIniFilename(ExpansionPath, InBaseIniName);
 				}
 
 				// check if we should be generating the cache key - only at the end of all expansions
-				bool bGenerateCacheKey = (Layer.Flag & Flag_GenerateCacheKey) && ExpansionIndex == ARRAY_COUNT(GConfigLayerExpansions);
-				checkfSlow(!(bGenerateCacheKey && bHasPlatformTag), TEXT("Flag_GenerateCacheKey shouldn't have a platform tag"));
+				bool bGenerateCacheKey = EnumHasAnyFlags(Layer.Flag, EConfigLayerFlags::GenerateCacheKey) && ExpansionIndex == UE_ARRAY_COUNT(GConfigLayerExpansions);
+				checkfSlow(!(bGenerateCacheKey && bHasPlatformTag), TEXT("EConfigLayerFlags::GenerateCacheKey shouldn't have a platform tag"));
 
 				const FDataDrivenPlatformInfoRegistry::FPlatformInfo& Info = FDataDrivenPlatformInfoRegistry::GetPlatformInfo(PlatformName);
 
-				// go over parents, and then this platform, unless there's no platform tag, then we simply want to run through the loop one time to add it to the 
+				// go over parents, and then this platform, unless there's no platform tag, then we simply want to run through the loop one time to add it to the
 				int NumPlatforms = bHasPlatformTag ? Info.IniParentChain.Num() + 1 : 1;
+				check(NumPlatforms < MaxPlatformIndex);
 				for (int PlatformIndex = 0; PlatformIndex < NumPlatforms; PlatformIndex++)
 				{
 					// the platform to work on (active platform is always last)
 					const FString& CurrentPlatform = (PlatformIndex == NumPlatforms - 1) ? PlatformName : Info.IniParentChain[PlatformIndex];
+					FString PlatformPath;
 
-					// replace
-					FString PlatformPath = ExpansionPath.Replace(TEXT("{PLATFORM}"), *CurrentPlatform, ESearchCase::CaseSensitive);
+					// ini parent may not be a PlatformExtension even if this was, so update based on the current platform after the first
+					if (PlatformIndex < NumPlatforms - 1)
+					{
+						// overriding the bHas*Tag fields is fine here since it will evaluate to the same
+						FString LocalLayerPath = GetLayerPath(Layer, CurrentPlatform, EngineConfigDir, SourceConfigDir, InBaseIniName, bHasPlatformTag, bHasProjectTag);
+
+						// re-expand the new path
+						FString LocalExpansionPath = GetExpansionPath(Expansion, LocalLayerPath, bHasPlatformTag);
+
+						// modify get the final platform path from the parent ini's location
+						PlatformPath = LocalExpansionPath.Replace(TEXT("{PLATFORM}"), *CurrentPlatform, ESearchCase::CaseSensitive);
+					}
+					else
+					{
+						// replace
+						PlatformPath = ExpansionPath.Replace(TEXT("{PLATFORM}"), *CurrentPlatform, ESearchCase::CaseSensitive);
+					}
 
 					// add this to the list!
-					OutHierarchy.Add(ExpansionFileIndex, FIniFilename(PlatformPath, bIsRequired,
-						bGenerateCacheKey ? GenerateHierarchyCacheKey(OutHierarchy, PlatformPath, InBaseIniName) : FString(TEXT(""))));
-
-					// we can incrememnt it here because we reset it next expansion file
-					ExpansionFileIndex++;
+					SourceIniHierarchy.AddStaticLayer(
+						FIniFilename(PlatformPath, bIsRequired, bGenerateCacheKey ?
+							GenerateHierarchyCacheKey(SourceIniHierarchy, PlatformPath, InBaseIniName) :
+							FString(TEXT(""))),
+						LayerIndex, ExpansionIndex, PlatformIndex);
 				}
 			}
 		}
@@ -3370,11 +3511,14 @@ static void GetSourceIniHierarchyFilenames(const TCHAR* InBaseIniName, const TCH
 		else
 		{
 			checkfSlow(!bHasPlatformTag, TEXT("Non-expanded config %s shouldn't have a PLATFORM in it"), *Layer.Path);
-			checkfSlow(!(Layer.Flag & Flag_AllowCommandLineOverride), TEXT("Non-expanded config can't have a Flag_AllowCommandLineOverride"));
+			checkfSlow(!EnumHasAnyFlags(Layer.Flag, EConfigLayerFlags::AllowCommandLineOverride), TEXT("Non-expanded config can't have a EConfigLayerFlags::AllowCommandLineOverride"));
 
 			// final layer needs to generate a hierarchy cache
-			OutHierarchy.Add(ConfigFileIndex, FIniFilename(LayerPath, bIsRequired, 
-				(Layer.Flag & Flag_GenerateCacheKey) ? GenerateHierarchyCacheKey(OutHierarchy, LayerPath, InBaseIniName) : FString(TEXT(""))));
+			SourceIniHierarchy.AddStaticLayer(
+				FIniFilename(LayerPath, bIsRequired, EnumHasAnyFlags(Layer.Flag, EConfigLayerFlags::GenerateCacheKey) ?
+					GenerateHierarchyCacheKey(SourceIniHierarchy, LayerPath, InBaseIniName) :
+					FString(TEXT(""))),
+				LayerIndex);
 		}
 	}
 }
@@ -3452,10 +3596,10 @@ void FConfigCacheIni::InitializeConfigSystem()
 	FConfigCacheIni::LoadGlobalIniFile(GEditorPerProjectIni, TEXT("EditorPerProjectUserSettings"));
 
 	// Project agnostic editor ini files
-	static const FString EditorSettingsDir = FPaths::Combine(*FPaths::GameAgnosticSavedDir(), TEXT("Config")) + TEXT("/");
+	const FString EditorSettingsDir = FPaths::EngineEditorSettingsDir();
 	FConfigCacheIni::LoadGlobalIniFile(GEditorSettingsIni, TEXT("EditorSettings"), nullptr, false, false, true, *EditorSettingsDir);
-	FConfigCacheIni::LoadGlobalIniFile(GEditorLayoutIni, TEXT("EditorLayout"), nullptr, false, false, true, *EditorSettingsDir);
 	FConfigCacheIni::LoadGlobalIniFile(GEditorKeyBindingsIni, TEXT("EditorKeyBindings"), nullptr, false, false, true, *EditorSettingsDir);
+	FConfigCacheIni::LoadGlobalIniFile(GEditorLayoutIni, TEXT("EditorLayout"), nullptr, false, false, true, *EditorSettingsDir);
 
 #endif
 #if PLATFORM_DESKTOP
@@ -3475,7 +3619,9 @@ void FConfigCacheIni::InitializeConfigSystem()
 	// Load scalability settings.
 	FConfigCacheIni::LoadGlobalIniFile(GScalabilityIni, TEXT("Scalability"), ScalabilityPlatformOverride);
 	// Load driver blacklist
-	FConfigCacheIni::LoadGlobalIniFile(GHardwareIni, TEXT("Hardware"));
+	FConfigCacheIni::LoadGlobalIniFile(GHardwareIni, TEXT("Hardware"));	
+	// Load runtime options
+	FConfigCacheIni::LoadGlobalIniFile(GRuntimeOptionsIni, TEXT("RuntimeOptions"));
 	
 	// Load user game settings .ini, allowing merging. This also updates the user .ini if necessary.
 #if PLATFORM_PS4
@@ -3515,24 +3661,13 @@ bool FConfigCacheIni::LoadGlobalIniFile(FString& FinalIniFilename, const TCHAR* 
 		return true;
 	}
 
-	// make a new entry in GConfig (overwriting what's already there)
-	FConfigFile& NewConfigFile = GConfig->Add(FinalIniFilename, FConfigFile());
-
-	return LoadExternalIniFile(NewConfigFile, BaseIniName, *FPaths::EngineConfigDir(), *FPaths::SourceConfigDir(), true, Platform, bForceReload, true, bAllowGeneratedIniWhenCooked, GeneratedConfigDir);
-}
-
-bool FConfigCacheIni::LoadLocalIniFile(FConfigFile& ConfigFile, const TCHAR* IniName, bool bIsBaseIniName, const TCHAR* Platform, bool bForceReload )
-{
-	DECLARE_SCOPE_CYCLE_COUNTER( TEXT( "FConfigCacheIni::LoadLocalIniFile" ), STAT_FConfigCacheIni_LoadLocalIniFile, STATGROUP_LoadTime );
-
 	FString EngineConfigDir = FPaths::EngineConfigDir();
 	FString SourceConfigDir = FPaths::SourceConfigDir();
 
-	if (bIsBaseIniName)
+	if (bForceReload) // If reloading we should preserve the existing config dirs
 	{
-		FConfigFile* BaseConfig = GConfig->FindConfigFileWithBaseName(IniName);
 		// If base ini, try to use an existing GConfig file to set the config directories instead of assuming defaults
-
+		FConfigFile* BaseConfig = GConfig->FindConfigFileWithBaseName(BaseIniName);
 		if (BaseConfig)
 		{
 			if (BaseConfig->SourceEngineConfigDir.Len())
@@ -3547,7 +3682,56 @@ bool FConfigCacheIni::LoadLocalIniFile(FConfigFile& ConfigFile, const TCHAR* Ini
 		}
 	}
 
-	return LoadExternalIniFile(ConfigFile, IniName, *EngineConfigDir, *SourceConfigDir, bIsBaseIniName, Platform, bForceReload, false);
+	// make a new entry in GConfig (overwriting what's already there)
+	FConfigFile& NewConfigFile = GConfig->Add(FinalIniFilename, FConfigFile());
+
+	return LoadExternalIniFile(
+		NewConfigFile, 
+		BaseIniName, 
+		*EngineConfigDir, 
+		*SourceConfigDir, 
+		/*bIsBaseIniName*/ true,
+		Platform, 
+		bForceReload, 
+		/*bWriteDestIni*/ true,
+		bAllowGeneratedIniWhenCooked, 
+		GeneratedConfigDir);
+}
+
+bool FConfigCacheIni::LoadLocalIniFile(FConfigFile& ConfigFile, const TCHAR* IniName, bool bIsBaseIniName, const TCHAR* Platform, bool bForceReload )
+{
+	DECLARE_SCOPE_CYCLE_COUNTER( TEXT( "FConfigCacheIni::LoadLocalIniFile" ), STAT_FConfigCacheIni_LoadLocalIniFile, STATGROUP_LoadTime );
+
+	FString EngineConfigDir = FPaths::EngineConfigDir();
+	FString SourceConfigDir = FPaths::SourceConfigDir();
+
+	if (bIsBaseIniName)
+	{
+		// If base ini, try to use an existing GConfig file to set the config directories instead of assuming defaults
+		FConfigFile* BaseConfig = GConfig->FindConfigFileWithBaseName(IniName);
+		if (BaseConfig)
+		{
+			if (BaseConfig->SourceEngineConfigDir.Len())
+			{
+				EngineConfigDir = BaseConfig->SourceEngineConfigDir;
+			}
+
+			if (BaseConfig->SourceProjectConfigDir.Len())
+			{
+				SourceConfigDir = BaseConfig->SourceProjectConfigDir;
+			}
+		}
+	}
+
+	return LoadExternalIniFile(
+		ConfigFile, 
+		IniName, 
+		*EngineConfigDir, 
+		*SourceConfigDir, 
+		bIsBaseIniName, 
+		Platform, 
+		bForceReload, 
+		/*bWriteDestIni*/ false);
 }
 
 bool FConfigCacheIni::LoadExternalIniFile(FConfigFile& ConfigFile, const TCHAR* IniName, const TCHAR* EngineConfigDir, const TCHAR* SourceConfigDir, bool bIsBaseIniName, const TCHAR* Platform, bool bForceReload, bool bWriteDestIni, bool bAllowGeneratedIniWhenCooked, const TCHAR* GeneratedConfigDir)
@@ -3580,7 +3764,7 @@ bool FConfigCacheIni::LoadExternalIniFile(FConfigFile& ConfigFile, const TCHAR* 
 #endif
 		FString DestIniFilename = GetDestIniFilename(IniName, Platform, GeneratedConfigDir);
 
-		GetSourceIniHierarchyFilenames( IniName, Platform, EngineConfigDir, SourceConfigDir, ConfigFile, false );
+		ConfigFile.AddStaticLayersToHierarchy( IniName, Platform, EngineConfigDir, SourceConfigDir );
 
 		if (bForceReload)
 		{
@@ -3596,7 +3780,6 @@ bool FConfigCacheIni::LoadExternalIniFile(FConfigFile& ConfigFile, const TCHAR* 
 		ConfigFile.SourceConfigFile = new FConfigFile();
 
 		// now generate and make sure it's up to date (using IniName as a Base for an ini filename)
-		const bool bAllowGeneratedINIs = true;
 		// @todo This bNeedsWrite afaict is always true even if it loaded a completely valid generated/final .ini, and the write below will
 		// just write out the exact same thing it read in!
 		bool bNeedsWrite = GenerateDestIniFile(ConfigFile, DestIniFilename, ConfigFile.SourceIniHierarchy, bAllowGeneratedIniWhenCooked, true);
@@ -3709,7 +3892,7 @@ void FConfigFile::UpdateSections(const TCHAR* DiskFilename, const TCHAR* IniRoot
 	{
 		// get the standard ini files
 		SourceIniHierarchy.Empty();
-		GetSourceIniHierarchyFilenames(IniRootName, OverridePlatform, *FPaths::EngineConfigDir(), *FPaths::SourceConfigDir(), *this, false);
+		AddStaticLayersToHierarchy(IniRootName, OverridePlatform, *FPaths::EngineConfigDir(), *FPaths::SourceConfigDir());
 
 		// now chop off this file and any after it
 		TArray<int32> Keys;
@@ -3739,7 +3922,6 @@ void FConfigFile::UpdateSections(const TCHAR* DiskFilename, const TCHAR* IniRoot
 
 		// now when Write it called below, it will diff against SourceIniHierarchy
 		LoadIniFileHierarchy(SourceIniHierarchy, *SourceConfigFile, true);
-
 	}
 
 	// take what we got above (which has the sections skipped), and then append the new sections
@@ -4058,6 +4240,25 @@ void ApplyCVarSettingsFromIni(const TCHAR* InSectionName, const TCHAR* InIniFile
 	}
 }
 
+void ForEachCVarInSectionFromIni(const TCHAR* InSectionName, const TCHAR* InIniFilename, TFunction<void(IConsoleVariable* CVar, const FString& KeyString, const FString& ValueString)> InEvaluationFunction)
+{
+	if (FConfigSection* Section = GConfig->GetSectionPrivate(InSectionName, false, true, InIniFilename))
+	{
+		for (FConfigSectionMap::TConstIterator It(*Section); It; ++It)
+		{
+			const FString& KeyString = It.Key().GetPlainNameString();
+			const FString& ValueString = ConvertValueFromHumanFriendlyValue(*It.Value().GetValue());
+
+			IConsoleVariable* CVar = IConsoleManager::Get().FindConsoleVariable(*KeyString);
+			if (CVar)
+			{
+				InEvaluationFunction(CVar, KeyString, ValueString);
+			}
+		}
+	}
+}
+
+
 void ApplyCVarSettingsGroupFromIni(const TCHAR* InSectionBaseName, int32 InGroupNumber, const TCHAR* InIniFilename, uint32 SetBy)
 {
 	// Lookup the config section for this section and group number
@@ -4198,7 +4399,7 @@ private:
 			TEXT("SectionName")
 		};
 		using UnderType = __underlying_type(HistoryType);
-		static_assert(static_cast<UnderType>(HistoryType::Count) == ARRAY_COUNT(Strings), "");
+		static_assert(static_cast<UnderType>(HistoryType::Count) == UE_ARRAY_COUNT(Strings), "");
 		return Strings[static_cast<UnderType>(Type)];
 	}
 

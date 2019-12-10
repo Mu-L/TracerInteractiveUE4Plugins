@@ -12,7 +12,7 @@
 #include "Widgets/Text/STextBlock.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "Animation/AnimSequence.h"
-#include "Toolkits/AssetEditorManager.h"
+
 #include "Layout/WidgetPath.h"
 #include "Framework/Application/MenuStack.h"
 #include "Fonts/FontMeasure.h"
@@ -43,6 +43,9 @@
 #include "ClassViewerFilter.h"
 #include "ClassViewerModule.h"
 #include "SSkeletonAnimNotifies.h"
+#include "Subsystems/AssetEditorSubsystem.h"
+#include "IAnimationEditor.h"
+#include "IAnimationSequenceBrowser.h"
 
 // Track Panel drawing
 const float NotificationTrackHeight = 20.0f;
@@ -821,6 +824,9 @@ protected:
 
 	/** Opens the supplied blueprint in an editor */
 	void OnOpenNotifySource(UBlueprint* InSourceBlueprint) const;
+
+	/** Filters the asset browser by the selected notify */
+	void OnFilterSkeletonNotify(FName InName);
 
 	/**
 	 * Selects a node on the track. Supports multi selection
@@ -1832,7 +1838,7 @@ FReply SAnimNotifyNode::OnMouseMove( const FGeometry& MyGeometry, const FPointer
 	if(CurrentDragHandle == ENotifyStateHandleHit::None)
 	{
 		// We've had focus taken away - realease the mouse
-		FSlateApplication::Get().ReleaseMouseCapture();
+		FSlateApplication::Get().ReleaseAllPointerCapture();
 		return FReply::Unhandled();
 	}
 	
@@ -3097,19 +3103,29 @@ TSharedPtr<SWidget> SAnimNotifyTrack::SummonContextMenu(const FGeometry& MyGeome
 		UObject* NotifyObject = NotifyEvent->Notify;
 		NotifyObject = NotifyObject ? NotifyObject : NotifyEvent->NotifyStateClass;
 
-		if (NotifyObject && Cast<UBlueprintGeneratedClass>(NotifyObject->GetClass()))
+		MenuBuilder.BeginSection("ViewSource", LOCTEXT("NotifyViewHeading", "View"));
+
+		if (NotifyObject)
 		{
-			if (UBlueprint* Blueprint = Cast<UBlueprint>(NotifyObject->GetClass()->ClassGeneratedBy))
+			if (Cast<UBlueprintGeneratedClass>(NotifyObject->GetClass()))
 			{
-				MenuBuilder.BeginSection("ViewSource", LOCTEXT("NotifyViewHeading", "View"));
-
-				NewAction.ExecuteAction.BindRaw(
-					this, &SAnimNotifyTrack::OnOpenNotifySource, Blueprint);
-				MenuBuilder.AddMenuEntry(LOCTEXT("OpenNotifyBlueprint", "Open Notify Blueprint"), LOCTEXT("OpenNotifyBlueprintTooltip", "Opens the source blueprint for this notify"), FSlateIcon(), NewAction);
-
-				MenuBuilder.EndSection(); //ViewSource
+				if (UBlueprint * Blueprint = Cast<UBlueprint>(NotifyObject->GetClass()->ClassGeneratedBy))
+				{
+					NewAction.ExecuteAction.BindRaw(
+						this, &SAnimNotifyTrack::OnOpenNotifySource, Blueprint);
+					MenuBuilder.AddMenuEntry(LOCTEXT("OpenNotifyBlueprint", "Open Notify Blueprint"), LOCTEXT("OpenNotifyBlueprintTooltip", "Opens the source blueprint for this notify"), FSlateIcon(), NewAction);
+				}
 			}
 		}
+		else
+		{
+			// skeleton notify
+			NewAction.ExecuteAction.BindRaw(
+				this, &SAnimNotifyTrack::OnFilterSkeletonNotify, NotifyEvent->NotifyName);
+			MenuBuilder.AddMenuEntry(LOCTEXT("FindNotifyReferences", "Find References"), LOCTEXT("FindNotifyReferencesTooltip", "Find all references to this skeleton notify in the asset browser"), FSlateIcon(), NewAction);
+		}
+
+		MenuBuilder.EndSection(); //ViewSource
 	}
 
 	FWidgetPath WidgetPath = MouseEvent.GetEventPath() != nullptr ? *MouseEvent.GetEventPath() : FWidgetPath();
@@ -3165,7 +3181,18 @@ void SAnimNotifyTrack::OnManageNotifies()
 
 void SAnimNotifyTrack::OnOpenNotifySource(UBlueprint* InSourceBlueprint) const
 {
-	FAssetEditorManager::Get().OpenEditorForAsset(InSourceBlueprint);
+	GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(InSourceBlueprint);
+}
+
+void SAnimNotifyTrack::OnFilterSkeletonNotify(FName InName)
+{
+	// Open asset browser first
+	OnInvokeTab.ExecuteIfBound(FPersonaTabs::AssetBrowserID);
+
+	IAssetEditorInstance* AssetEditor = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->FindEditorForAsset(Sequence, true);
+	check(AssetEditor->GetEditorName() == TEXT("AnimationEditor"));
+	IAnimationEditor* AnimationEditor = static_cast<IAnimationEditor*>(AssetEditor);
+	AnimationEditor->GetAssetBrowser()->FilterBySkeletonNotify(InName);
 }
 
 bool SAnimNotifyTrack::IsSingleNodeSelected()
@@ -4644,8 +4671,7 @@ void SAnimNotifyPanel::OnPropertyChanged(UObject* ChangedObject, FPropertyChange
 			if(Event.Notify == ChangedObject || Event.NotifyStateClass == ChangedObject)
 			{
 				// If we've changed a notify present in the sequence, refresh our tracks.
-				Sequence->RefreshCacheData();
-				RefreshNotifyTracks();
+				Update();
 			}
 		}
 	}

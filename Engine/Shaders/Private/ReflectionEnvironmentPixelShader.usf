@@ -31,6 +31,7 @@ float3 GatherRadiance(float CompositeAlpha, float3 WorldPosition, float3 RayDire
 	IndirectIrradiance *= IndirectDiffuseOcclusion;
 #endif
 
+	const bool bCompositeSkylight = true;
 	return CompositeReflectionCapturesAndSkylight(
 		CompositeAlpha, 
 		WorldPosition, 
@@ -41,7 +42,8 @@ float3 GatherRadiance(float CompositeAlpha, float3 WorldPosition, float3 RayDire
 		ExtraIndirectSpecular, 
 		NumCulledReflectionCaptures, 
 		CaptureDataStartIndex, 
-		0);
+		0,
+		bCompositeSkylight);
 }
 
 
@@ -143,13 +145,15 @@ float3 SkyLightDiffuse(FGBufferData GBuffer, float AmbientOcclusion, float2 Buff
 		float3 V = -normalize(mul(float4(ScreenPosition, 1, 0), View.ScreenToWorld).xyz);
 		float3 L = normalize(V - N * dot(V, N));
 		SkyLightingNormal = L;
+		FHairTransmittanceData TransmittanceData = InitHairTransmittanceData();
 		bool bEvalMultiScatter = true;
-		DiffuseColor = PI * HairShading(GBuffer, L, V, N, 1, 0, 0.2, uint2(0, 0), bEvalMultiScatter);
+		DiffuseColor = PI * HairShading(GBuffer, L, V, N, 1, TransmittanceData, 0, 0.2, uint2(0, 0), bEvalMultiScatter);
 	}
 
 	if (GBuffer.ShadingModelID == SHADINGMODELID_CLOTH)
 	{
-		DiffuseColor += GBuffer.CustomData.rgb * GBuffer.CustomData.a;
+		float3 ClothFuzz = ExtractSubsurfaceColor(GBuffer);
+		DiffuseColor += ClothFuzz * GBuffer.CustomData.a;
 	}
 
 	// Compute the preconvolved incoming lighting with the bent normal direction
@@ -314,7 +318,7 @@ void ReflectionEnvironmentSkyLighting(
 	float3 BentNormal = GBuffer.WorldNormal;
 	#if APPLY_SKY_SHADOWING
 	{
-		BentNormal = UpsampleDFAO(BufferUV, GBuffer.Depth);
+		BentNormal = UpsampleDFAO(BufferUV, GBuffer.Depth, GBuffer.WorldNormal);
 	}
 	#endif
 	

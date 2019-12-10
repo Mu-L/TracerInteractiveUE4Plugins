@@ -12,6 +12,7 @@
 #include "NiagaraEmitterHandle.h"
 #include "NiagaraParameterCollection.h"
 #include "NiagaraUserRedirectionParameterStore.h"
+#include "NiagaraSystemFastPath.h"
 #include "NiagaraSystem.generated.h"
 
 #if WITH_EDITORONLY_DATA
@@ -19,15 +20,71 @@ class UNiagaraEditorDataBase;
 #endif
 
 USTRUCT()
-struct FNiagaraEmitterSpawnAttributes
+struct FNiagaraEmitterCompiledData
+{
+	GENERATED_USTRUCT_BODY()
+
+	FNiagaraEmitterCompiledData();
+	
+	/** Attribute names in the data set that are driving each emitter's spawning. */
+	UPROPERTY()
+	TArray<FName> SpawnAttributes;
+
+	/** Explicit list of Niagara Variables to bind to Emitter instances. */
+	UPROPERTY()
+	FNiagaraVariable EmitterSpawnIntervalVar;
+
+	UPROPERTY()
+	FNiagaraVariable EmitterInterpSpawnStartDTVar;
+
+	UPROPERTY()
+	FNiagaraVariable EmitterSpawnGroupVar;
+
+	UPROPERTY()
+	FNiagaraVariable EmitterAgeVar;
+
+	UPROPERTY()
+	FNiagaraVariable EmitterRandomSeedVar;
+
+	UPROPERTY()
+	FNiagaraVariable EmitterTotalSpawnedParticlesVar;
+
+	/** Per-Emitter DataSet Data. */
+	UPROPERTY()
+	FNiagaraDataSetCompiledData DataSetCompiledData;
+
+#if WITH_EDITORONLY_DATA
+	UPROPERTY()
+	FNiagaraDataSetCompiledData GPUCaptureDataSetCompiledData;
+#endif
+};
+
+USTRUCT()
+struct FNiagaraSystemCompiledData
 {
 	GENERATED_USTRUCT_BODY()
 
 	UPROPERTY()
-	TArray<FName> SpawnAttributes;
+	TArray<FNiagaraVariable> NumParticleVars;
+
+	UPROPERTY()
+	TArray<FNiagaraVariable> TotalSpawnedParticlesVars;
+
+	UPROPERTY()
+	FNiagaraParameterStore InstanceParamStore;
+
+	UPROPERTY()
+	TArray<FNiagaraVariable> SpawnCountScaleVars;
+
+	UPROPERTY()
+	FNiagaraDataSetCompiledData DataSetCompiledData;
+
+	UPROPERTY()
+	FNiagaraDataSetCompiledData SpawnInstanceParamsDataSetCompiledData;
+
+	UPROPERTY()
+	FNiagaraDataSetCompiledData UpdateInstanceParamsDataSetCompiledData;
 };
-
-
 
 USTRUCT()
 struct FEmitterCompiledScriptPair
@@ -128,6 +185,10 @@ public:
 	UNiagaraScript* GetSystemSpawnScript();
 	UNiagaraScript* GetSystemUpdateScript();
 
+private:
+	bool IsReadyToRunInternal() const;
+	bool bIsReadyToRunCached = false;
+public:
 	bool IsReadyToRun() const;
 
 	FORCEINLINE bool NeedsWarmup()const { return WarmupTickCount > 0 && WarmupTickDelta > SMALL_NUMBER; }
@@ -166,9 +227,6 @@ public:
 	/** Gets editor specific data stored with this system. */
 	const UNiagaraEditorDataBase* GetEditorData() const;
 
-	/** Sets editor specific data stored with this system. */
-	void SetEditorData(UNiagaraEditorDataBase* InEditorData);
-
 	/** Internal: The thumbnail image.*/
 	UPROPERTY()
 	class UTexture2D* ThumbnailImage;
@@ -190,7 +248,9 @@ public:
 	bool ShouldAutoDeactivate() const { return bAutoDeactivate; }
 	bool IsLooping() const;
 
-	const TArray<FNiagaraEmitterSpawnAttributes>& GetEmitterSpawnAttributes()const {	return EmitterSpawnAttributes;	};
+	const TArray<TSharedRef<const FNiagaraEmitterCompiledData>>& GetEmitterCompiledData() const { return EmitterCompiledData; };
+
+	const FNiagaraSystemCompiledData& GetSystemCompiledData() const { return SystemCompiledData; };
 
 	bool UsesCollection(const UNiagaraParameterCollection* Collection)const;
 #if WITH_EDITORONLY_DATA
@@ -199,6 +259,10 @@ public:
 	void InvalidateCachedCompileIds();
 
 	static void RequestCompileForEmitter(UNiagaraEmitter* InEmitter);
+
+	/** Experimental feature that allows us to bake out rapid iteration parameters during the normal compile process. */
+	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "Emitter")
+	uint32 bBakeOutRapidIteration : 1;
 #endif
 
 	FORCEINLINE UNiagaraParameterCollectionInstance* GetParameterCollectionOverride(UNiagaraParameterCollection* Collection)
@@ -226,20 +290,42 @@ public:
 
 	/** Whether or not fixed bounds are enabled. */
 	UPROPERTY(EditAnywhere, Category = "System", meta = (InlineEditConditionToggle))
-		uint32 bFixedBounds : 1;
+	uint32 bFixedBounds : 1;
 
 	TStatId GetStatID(bool bGameThread, bool bConcurrent)const;
+
+	UPROPERTY(EditAnywhere, Category = "Script Fast Path")
+	ENiagaraFastPathMode FastPathMode;
+
+	UPROPERTY(EditAnywhere, Category = "Script Fast Path")
+	FNiagaraFastPath_Module_SystemScalability SystemScalability;
+
+	UPROPERTY(EditAnywhere, Category = "Script Fast Path")
+	FNiagaraFastPath_Module_SystemLifeCycle SystemLifeCycle;
 
 private:
 #if WITH_EDITORONLY_DATA
 	bool QueryCompileComplete(bool bWait, bool bDoPost, bool bDoNotApply = false);
+
+	void InitEmitterCompiledData();
+
+	void InitSystemCompiledData();
+
+	/** Helper for filling in precomputed variable names per emitter. Converts an emitter paramter "Emitter.XXXX" into it's real parameter name. */
+	void InitEmitterVariableAliasNames(FNiagaraEmitterCompiledData& EmitterCompiledDataToInit, const UNiagaraEmitter* InAssociatedEmitter);
+
+	/** Helper for generating aliased FNiagaraVariable names for the Emitter they are associated with. */
+	const FName GetEmitterVariableAliasName(const FNiagaraVariable& InEmitterVar, const UNiagaraEmitter* InEmitter) const;
+
+	/** Helper for filling in attribute datasets per emitter. */
+	void InitEmitterDataSetCompiledData(FNiagaraDataSetCompiledData& DataSetToInit, const UNiagaraEmitter* InAssociatedEmitter, const FNiagaraEmitterHandle& InAssociatedEmitterHandle);
 #endif
 
 	void UpdatePostCompileDIInfo();
 protected:
 
 	/** Handles to the emitter this System will simulate. */
-	UPROPERTY(VisibleAnywhere, Category = "Emitters")
+	UPROPERTY()
 	TArray<FNiagaraEmitterHandle> EmitterHandles;
 
 	UPROPERTY(EditAnywhere, Category="System")
@@ -264,9 +350,12 @@ protected:
 	UPROPERTY()
 	UNiagaraScript* SystemUpdateScript;
 
-	/** Attribute names in the data set that are driving each emitter's spawning. */
+	//** Post compile generated data used for initializing Emitter Instances during runtime. */
+	TArray<TSharedRef<const FNiagaraEmitterCompiledData>> EmitterCompiledData;
+
+	//** Post compile generated data used for initializing System Instances during runtime. */
 	UPROPERTY()
-	TArray<FNiagaraEmitterSpawnAttributes> EmitterSpawnAttributes;
+	FNiagaraSystemCompiledData SystemCompiledData;
 
 	/** Variables exposed to the outside work for tweaking*/
 	UPROPERTY()
@@ -302,19 +391,17 @@ protected:
 	UPROPERTY(EditAnywhere, Category = Warmup)
 	float WarmupTickDelta;
 
-	void InitEmitterSpawnAttributes();
-
 	UPROPERTY()
 	bool bHasSystemScriptDIsWithPerInstanceData;
 
 	UPROPERTY()
 	TArray<FName> UserDINamesReadInSystemScripts;
 
-	void GenerateStatID();
+	void GenerateStatID()const;
 #if STATS
-	TStatId StatID_GT;
-	TStatId StatID_GT_CNC;
-	TStatId StatID_RT;
-	TStatId StatID_RT_CNC;
+	mutable TStatId StatID_GT;
+	mutable TStatId StatID_GT_CNC;
+	mutable TStatId StatID_RT;
+	mutable TStatId StatID_RT_CNC;
 #endif
 };

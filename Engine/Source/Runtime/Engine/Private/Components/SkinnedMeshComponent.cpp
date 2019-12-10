@@ -108,8 +108,8 @@ namespace FAnimUpdateRateManager
 		bool IsHumanControlled() const
 		{
 			AActor* Owner = RegisteredComponents[0]->GetOwner();
-			AController * Controller = Owner ? Owner->GetInstigatorController() : NULL;
-			return Cast<APlayerController>(Controller) != NULL;
+			APlayerController* Controller = Owner ? Owner->GetInstigatorController<APlayerController>() : nullptr;
+			return Controller != nullptr;
 		}
 	};
 
@@ -663,7 +663,6 @@ void USkinnedMeshComponent::SendRenderDynamicData_Concurrent()
 		// scene proxy update of material usage based on active morphs
 		UpdateMorphMaterialUsageOnProxy();
 	}
-
 }
 
 void USkinnedMeshComponent::ClearMotionVector()
@@ -783,6 +782,12 @@ void USkinnedMeshComponent::TickComponent(float DeltaTime, enum ELevelTick TickT
 	// Tick ActorComponent first.
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
+	// Refresh callback in case MeshObjectCallbackData was updated
+	if (MeshObject)
+	{
+		MeshObject->SetCallbackData(MeshObjectCallbackData);
+	}
+
 	// See if this mesh was rendered recently. This has to happen first because other data will rely on this
 	bRecentlyRendered = (GetLastRenderTime() > GetWorld()->TimeSeconds - 1.0f);
 
@@ -900,7 +905,64 @@ bool USkinnedMeshComponent::IsMaterialSlotNameValid(FName MaterialSlotName) cons
 
 bool USkinnedMeshComponent::ShouldCPUSkin()
 {
+	return GetCPUSkinningEnabled();
+}
+
+bool USkinnedMeshComponent::GetCPUSkinningEnabled() const
+{
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
 	return bCPUSkinning;
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
+}
+
+void USkinnedMeshComponent::SetCPUSkinningEnabled(bool bEnable, bool bRecreateRenderStateImmediately)
+{
+	checkSlow(IsInGameThread());
+	check(SkeletalMesh && SkeletalMesh->GetResourceForRendering());
+
+	if (GetCPUSkinningEnabled() == bEnable)
+	{
+		return;
+	}
+
+	if (bEnable && IStreamingManager::Get().IsRenderAssetStreamingEnabled())
+	{
+		UE_LOG(LogSkinnedMeshComp, Warning, TEXT("It is expensive to enable CPU skinning with LOD streaming on."));
+
+		IRenderAssetStreamingManager& Manager = IStreamingManager::Get().GetRenderAssetStreamingManager();
+		Manager.BlockTillAllRequestsFinished();
+
+		const bool bOriginalForcedFullyLoad = SkeletalMesh->bForceMiplevelsToBeResident;
+		SkeletalMesh->bForceMiplevelsToBeResident = true;
+		Manager.UpdateIndividualRenderAsset(SkeletalMesh);
+
+		while (SkeletalMesh->UpdateStreamingStatus())
+		{
+			FlushRenderingCommands();
+			FPlatformProcess::Sleep(RENDER_ASSET_STREAMING_SLEEP_DT);
+		}
+		check(SkeletalMesh->GetResourceForRendering()->CurrentFirstLODIdx <= SkeletalMesh->MinLod.Default);
+
+		SkeletalMesh->UnlinkStreaming();
+		SkeletalMesh->bForceMiplevelsToBeResident = bOriginalForcedFullyLoad;
+	}
+
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
+	bCPUSkinning = bEnable;
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
+	
+	if (IsRegistered())
+	{
+		if (bRecreateRenderStateImmediately)
+		{
+			RecreateRenderState_Concurrent();
+			FlushRenderingCommands();
+		}
+		else
+		{
+			MarkRenderStateDirty();
+		}
+	}
 }
 
 bool USkinnedMeshComponent::GetMaterialStreamingData(int32 MaterialIndex, FPrimitiveMaterialInfo& MaterialData) const
@@ -917,6 +979,13 @@ bool USkinnedMeshComponent::GetMaterialStreamingData(int32 MaterialIndex, FPrimi
 void USkinnedMeshComponent::GetStreamingRenderAssetInfo(FStreamingTextureLevelContext& LevelContext, TArray<FStreamingRenderAssetPrimitiveInfo>& OutStreamingRenderAssets) const
 {
 	GetStreamingTextureInfoInner(LevelContext, nullptr, GetComponentTransform().GetMaximumAxisScale() * StreamingDistanceMultiplier, OutStreamingRenderAssets);
+
+	if (IsStreamingRenderAsset(SkeletalMesh))
+	{
+		const int32 LocalForcedLodModel = GetForcedLOD();
+		const float TexelFactor = LocalForcedLodModel > 0 ? -(SkeletalMesh->GetLODNum() - LocalForcedLodModel + 1) : Bounds.SphereRadius * 2.f;
+		new (OutStreamingRenderAssets) FStreamingRenderAssetPrimitiveInfo(SkeletalMesh, Bounds, TexelFactor, PackedRelativeBox_Identity);
+	}
 }
 
 bool USkinnedMeshComponent::ShouldUpdateBoneVisibility() const
@@ -1393,6 +1462,11 @@ void USkinnedMeshComponent::SetSkeletalMesh(USkeletalMesh* InSkelMesh, bool bRei
 		FRenderStateRecreator RenderStateRecreator(this);
 
 		SkeletalMesh = InSkelMesh;
+
+		for (TWeakObjectPtr<USkinnedMeshComponent>& SlavePoseComponent : SlavePoseComponents)
+		{
+			SlavePoseComponent->UpdateMasterBoneMap();
+		}
 
 		// Don't init anim state if not registered
 		if (IsRegistered())
@@ -2269,7 +2343,7 @@ FName USkinnedMeshComponent::FindClosestBone_K2(FVector TestLocation, FVector& B
 	return FindClosestBone(TestLocation, &BoneLocation, IgnoreScale, bRequirePhysicsAsset);
 }
 
-void USkinnedMeshComponent::ShowMaterialSection(int32 MaterialID, bool bShow, int32 LODIndex)
+void USkinnedMeshComponent::ShowMaterialSection(int32 MaterialID, int32 SectionIndex, bool bShow, int32 LODIndex)
 {
 	if (!SkeletalMesh)
 	{
@@ -2291,15 +2365,12 @@ void USkinnedMeshComponent::ShowMaterialSection(int32 MaterialID, bool bShow, in
 			HiddenMaterials.Empty(SkeletalMesh->Materials.Num());
 			HiddenMaterials.AddZeroed(SkeletalMesh->Materials.Num());
 		}
-		// If we are at a dropped LOD, route material index through the LODMaterialMap in the LODInfo struct.
+		// If we have a valid LODInfo LODMaterialMap, route material index through it.
 		int32 UseMaterialIndex = MaterialID;			
-		if(LODIndex > 0)
+		if(SkelLODInfo.LODMaterialMap.IsValidIndex(SectionIndex) && SkelLODInfo.LODMaterialMap[SectionIndex] != INDEX_NONE)
 		{
-			if(SkelLODInfo.LODMaterialMap.IsValidIndex(MaterialID))
-			{
-				UseMaterialIndex = SkelLODInfo.LODMaterialMap[MaterialID];
-				UseMaterialIndex = FMath::Clamp( UseMaterialIndex, 0, HiddenMaterials.Num() );
-			}
+			UseMaterialIndex = SkelLODInfo.LODMaterialMap[SectionIndex];
+			UseMaterialIndex = FMath::Clamp( UseMaterialIndex, 0, HiddenMaterials.Num() );
 		}
 		// Mark the mapped section material entry as visible/hidden
 		if (HiddenMaterials.IsValidIndex(UseMaterialIndex))
@@ -2738,7 +2809,21 @@ void USkinnedMeshComponent::UnHideBoneByName( FName BoneName )
 
 void USkinnedMeshComponent::SetForcedLOD(int32 InNewForcedLOD)
 {
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
+	const int32 OldValue = ForcedLodModel;
 	ForcedLodModel = FMath::Clamp(InNewForcedLOD, 0, GetNumLODs());
+	if (OldValue != ForcedLodModel)
+	{
+		IStreamingManager::Get().NotifyPrimitiveUpdated(this);
+	}
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
+}
+
+int32 USkinnedMeshComponent::GetForcedLOD() const
+{
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
+	return ForcedLodModel;
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
 }
 
 int32 USkinnedMeshComponent::GetNumLODs() const
@@ -2829,9 +2914,10 @@ bool USkinnedMeshComponent::UpdateLODStatus_Internal(int32 InMasterPoseComponent
 		}
 
 		// Support forcing to a particular LOD.
-		if (ForcedLodModel > 0)
+		const int32 LocalForcedLodModel = GetForcedLOD();
+		if (LocalForcedLodModel > 0)
 		{
-			NewPredictedLODLevel = FMath::Clamp(ForcedLodModel - 1, MinLodIndex, MaxLODIndex);
+			NewPredictedLODLevel = FMath::Clamp(LocalForcedLodModel - 1, MinLodIndex, MaxLODIndex);
 		}
 		else
 		{
@@ -2868,6 +2954,13 @@ bool USkinnedMeshComponent::UpdateLODStatus_Internal(int32 InMasterPoseComponent
 			}
 		}
 
+		// This clamp is needed for meshes with LODs streamed but doesn't work well
+		// with those that have forced LOD level. Need to think of a better solution.
+		if (SkeletalMesh->bIsStreamable && MeshObject)
+		{
+			NewPredictedLODLevel = FMath::Max(NewPredictedLODLevel, MeshObject->MinDesiredLODLevel);
+		}
+
 #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
 		if (CVarAnimVisualizeLODs.GetValueOnAnyThread() != 0)
 		{
@@ -2879,7 +2972,7 @@ bool USkinnedMeshComponent::UpdateLODStatus_Internal(int32 InMasterPoseComponent
 				{
 					const float ScreenSize = FMath::Sqrt(MeshObject->MaxDistanceFactor) * 2.f;
 					FString DebugString = FString::Printf(TEXT("PredictedLODLevel(%d)\nMinDesiredLODLevel(%d) ForcedLodModel(%d) MinLodIndex(%d) LODBias(%d)\nMaxDistanceFactor(%f) ScreenSize(%f)"),
-						PredictedLODLevel, MeshObject->MinDesiredLODLevel, ForcedLodModel, MinLodIndex, LODBias, MeshObject->MaxDistanceFactor, ScreenSize);
+						PredictedLODLevel, MeshObject->MinDesiredLODLevel, LocalForcedLodModel, MinLodIndex, LODBias, MeshObject->MaxDistanceFactor, ScreenSize);
 
 					// See if Child classes want to add something.
 					UpdateVisualizeLODString(DebugString);
@@ -2909,7 +3002,7 @@ bool USkinnedMeshComponent::UpdateLODStatus_Internal(int32 InMasterPoseComponent
 	// See if LOD has changed. 
 	bool bLODChanged = (NewPredictedLODLevel != OldPredictedLODLevel);
 	PredictedLODLevel = NewPredictedLODLevel;
-	
+
 	// also update slave component LOD status, as we may need to recalc required bones if this changes
 	// independently of our LOD
 	for (const TWeakObjectPtr<USkinnedMeshComponent>& SlaveComponent : SlavePoseComponents)
@@ -2994,26 +3087,23 @@ void USkinnedMeshComponent::SetComponentSpaceTransformsDoubleBuffering(bool bInD
 
 void USkinnedMeshComponent::GetCPUSkinnedVertices(TArray<FFinalSkinVertex>& OutVertices, int32 InLODIndex)
 {
-	// switch to CPU skinning
-	bool bCachedCPUSkinning = bCPUSkinning;
-	bCPUSkinning = true;
-
 	if (USkinnedMeshComponent* MasterPoseComponentPtr = MasterPoseComponent.Get())
 	{
-		MasterPoseComponentPtr->ForcedLodModel = InLODIndex + 1;
+		MasterPoseComponentPtr->SetForcedLOD(InLODIndex + 1);
 		MasterPoseComponentPtr->UpdateLODStatus();
 		MasterPoseComponentPtr->RefreshBoneTransforms(nullptr);
 	}
 	else
 	{
-		ForcedLodModel = InLODIndex + 1;
+		SetForcedLOD(InLODIndex + 1);
 		UpdateLODStatus();
 		RefreshBoneTransforms(nullptr);
 	}
 
-	// Recreate render state and flush the renderer
-	RecreateRenderState_Concurrent();
-	FlushRenderingCommands();
+	// switch to CPU skinning
+	const bool bCachedCPUSkinning = GetCPUSkinningEnabled();
+	constexpr bool bRecreateRenderStateImmediately = true;
+	SetCPUSkinningEnabled(true, bRecreateRenderStateImmediately);
 
 	check(MeshObject);
 	check(MeshObject->IsCPUSkinned());
@@ -3022,9 +3112,8 @@ void USkinnedMeshComponent::GetCPUSkinnedVertices(TArray<FFinalSkinVertex>& OutV
 	OutVertices = static_cast<FSkeletalMeshObjectCPUSkin*>(MeshObject)->GetCachedFinalVertices();
 	
 	// switch skinning mode, LOD etc. back
-	bCPUSkinning = bCachedCPUSkinning;
-	ForcedLodModel = 0;
-	RecreateRenderState_Concurrent();
+	SetForcedLOD(0);
+	SetCPUSkinningEnabled(bCachedCPUSkinning, bRecreateRenderStateImmediately);
 }
 
 void USkinnedMeshComponent::ReleaseResources()

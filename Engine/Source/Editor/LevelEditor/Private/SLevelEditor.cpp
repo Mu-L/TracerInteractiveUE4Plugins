@@ -2,6 +2,7 @@
 
 #include "SLevelEditor.h"
 #include "Framework/MultiBox/MultiBoxExtender.h"
+#include "ToolMenus.h"
 #include "Framework/Docking/LayoutService.h"
 #include "EditorModeRegistry.h"
 #include "EdMode.h"
@@ -48,7 +49,7 @@
 #include "GameFramework/WorldSettings.h"
 #include "Framework/Docking/LayoutExtender.h"
 #include "HierarchicalLODOutlinerModule.h"
-
+#include "EditorViewportCommands.h"
 
 static const FName LevelEditorBuildAndSubmitTab("LevelEditorBuildAndSubmit");
 static const FName LevelEditorStatsViewerTab("LevelEditorStatsViewer");
@@ -140,6 +141,17 @@ void SLevelEditor::BindCommands()
 		Actions.FocusAllViewportsToSelection, 
 		FExecuteAction::CreateStatic( &FLevelEditorActionCallbacks::ExecuteExecCommand, FString( TEXT("CAMERA ALIGN") ) )
 		);
+
+	LevelEditorCommands->MapAction( 
+		FEditorViewportCommands::Get().FocusViewportToSelection, 
+		FExecuteAction::CreateStatic( &FLevelEditorActionCallbacks::ExecuteExecCommand, FString( TEXT("CAMERA ALIGN ACTIVEVIEWPORTONLY") ) )
+		);
+}
+
+void SLevelEditor::RegisterMenus()
+{
+	FLevelEditorMenu::RegisterLevelEditorMenus();
+	FLevelEditorToolBar::RegisterLevelEditorToolBar(LevelEditorCommands.ToSharedRef(), SharedThis(this));
 }
 
 void SLevelEditor::Construct( const SLevelEditor::FArguments& InArgs)
@@ -153,6 +165,8 @@ void SLevelEditor::Construct( const SLevelEditor::FArguments& InArgs)
 	GetMutableDefault<UEditorExperimentalSettings>()->OnSettingChanged().AddRaw(this, &SLevelEditor::HandleExperimentalSettingChanged);
 
 	BindCommands();
+
+	RegisterMenus();
 
 	// We need to register when modes list changes so that we can refresh the auto generated commands.
 	FEditorModeRegistry::Get().OnRegisteredModesChanged().AddRaw(this, &SLevelEditor::EditorModeCommandsChanged);
@@ -330,14 +344,15 @@ bool SLevelEditor::HasActivePlayInEditorViewport() const
 		if (ViewportTab.IsValid())
 		{
 			// Get all the viewports in the layout
-			const TMap< FName, TSharedPtr< IViewportLayoutEntity > >* LevelViewports = ViewportTab.Pin()->GetViewports();
+			const TMap< FName, TSharedPtr< IAssetViewportLayoutEntity > >* LevelViewports = ViewportTab.Pin()->GetViewports();
 
 			if (LevelViewports != NULL)
 			{
 				// Search for a viewport with a pie session
 				for (auto& Pair : *LevelViewports)
 				{
-					if (Pair.Value->IsPlayInEditorViewportActive())
+					TSharedPtr<ILevelViewportLayoutEntity> ViewportEntity = StaticCastSharedPtr<ILevelViewportLayoutEntity>(Pair.Value);
+					if (ViewportEntity.IsValid() && ViewportEntity->IsPlayInEditorViewportActive())
 					{
 						return true;
 					}
@@ -378,13 +393,13 @@ TSharedPtr<SLevelViewport> SLevelEditor::GetActiveViewport()
 			// Only check the viewports in the tab if its visible
 			if( ViewportTab->IsVisible() )
 			{
-				const TMap< FName, TSharedPtr< IViewportLayoutEntity > >* LevelViewports = ViewportTab->GetViewports();
+				const TMap< FName, TSharedPtr< IAssetViewportLayoutEntity > >* LevelViewports = ViewportTab->GetViewports();
 
-				if (LevelViewports != NULL)
+				if (LevelViewports != nullptr)
 				{
 					for(auto& Pair : *LevelViewports)
 					{
-						TSharedPtr<SLevelViewport> Viewport = Pair.Value->AsLevelViewport();
+						TSharedPtr<SLevelViewport> Viewport = StaticCastSharedPtr<ILevelViewportLayoutEntity>(Pair.Value)->AsLevelViewport();
 						if( Viewport.IsValid() && Viewport->IsInForegroundTab() )
 						{
 							if( &Viewport->GetLevelViewportClient() == GCurrentLevelEditingViewportClient )
@@ -685,15 +700,34 @@ TSharedRef<SDockTab> SLevelEditor::SpawnLevelEditorTab( const FSpawnTabArgs& Arg
 		InitOptions.bShowTransient = true;
 		InitOptions.Mode = ESceneOutlinerMode::ActorBrowsing;
 		{
+			UToolMenus* ToolMenus = UToolMenus::Get();
+			static const FName MenuName = "LevelEditor.LevelEditorSceneOutliner.ContextMenu";
+			if (!ToolMenus->IsMenuRegistered(MenuName))
+			{
+				UToolMenu* Menu = ToolMenus->RegisterMenu(MenuName, "SceneOutliner.DefaultContextMenuBase");
+				FToolMenuSection& Section = Menu->AddDynamicSection("LevelEditorContextMenu", FNewToolMenuDelegate::CreateLambda([](UToolMenu* InMenu)
+				{
+					FName LevelContextMenuName = FLevelEditorContextMenu::GetContextMenuName(ELevelEditorMenuContext::SceneOutliner);
+					if (LevelContextMenuName != NAME_None)
+					{
+						// Extend the menu even if no actors selected, as Edit menu should always exist for scene outliner
+						UToolMenu* OtherMenu = UToolMenus::Get()->GenerateMenu(LevelContextMenuName, InMenu->Context);
+						InMenu->Sections.Append(OtherMenu->Sections);
+					}
+				}));
+				Section.InsertPosition = FToolMenuInsert("MainSection", EToolMenuInsertType::Before);
+			}
+
 			TWeakPtr<SLevelEditor> WeakLevelEditor = SharedThis(this);
-			InitOptions.DefaultMenuExtender = MakeShareable(new FExtender);
-			InitOptions.DefaultMenuExtender->AddMenuExtension(
-				"MainSection", EExtensionHook::Before, GetLevelEditorActions(),
-				FMenuExtensionDelegate::CreateStatic([](FMenuBuilder& MenuBuilder, TWeakPtr<SLevelEditor> InWeakLevelEditor){
-					// Extend the menu even if no actors selected, as Edit menu should always exist for scene outliner
-					FLevelEditorContextMenu::FillMenu(MenuBuilder, InWeakLevelEditor, LevelEditorMenuContext::SceneOutliner, TSharedPtr<FExtender>());
-				}, WeakLevelEditor)
-			);
+			InitOptions.ModifyContextMenu.BindLambda([=](FName& OutMenuName, FToolMenuContext& MenuContext)
+			{
+				OutMenuName = MenuName;
+
+				if (WeakLevelEditor.IsValid())
+				{
+					FLevelEditorContextMenu::InitMenuContext(MenuContext, WeakLevelEditor, ELevelEditorMenuContext::SceneOutliner);
+				}
+			});
 		}
 
 
@@ -936,13 +970,14 @@ void SLevelEditor::OnViewportTabClosed(TSharedRef<SDockTab> ClosedTab)
 
 void SLevelEditor::SaveViewportTabInfo(TSharedRef<const FLevelViewportTabContent> ViewportTabContent)
 {
-	const TMap<FName, TSharedPtr<IViewportLayoutEntity>>* const Viewports = ViewportTabContent->GetViewports();
+	const TMap<FName, TSharedPtr<IAssetViewportLayoutEntity>>* const Viewports = ViewportTabContent->GetViewports();
 	if(Viewports)
 	{
 		const FString& LayoutId = ViewportTabContent->GetLayoutString();
 		for (auto& Pair : *Viewports)
 		{
-			TSharedPtr<SLevelViewport> Viewport = Pair.Value->AsLevelViewport();
+			TSharedPtr<SLevelViewport> Viewport = StaticCastSharedPtr<ILevelViewportLayoutEntity>(Pair.Value)->AsLevelViewport();
+
 			if( !Viewport.IsValid() )
 			{
 				continue;
@@ -964,13 +999,13 @@ void SLevelEditor::SaveViewportTabInfo(TSharedRef<const FLevelViewportTabContent
 
 void SLevelEditor::RestoreViewportTabInfo(TSharedRef<FLevelViewportTabContent> ViewportTabContent) const
 {
-	const TMap<FName, TSharedPtr<IViewportLayoutEntity>>* const Viewports = ViewportTabContent->GetViewports();
+	const TMap<FName, TSharedPtr<IAssetViewportLayoutEntity>>* const Viewports = ViewportTabContent->GetViewports();
 	if(Viewports)
 	{
 		const FString& LayoutId = ViewportTabContent->GetLayoutString();
 		for (auto& Pair : *Viewports)
 		{
-			TSharedPtr<SLevelViewport> Viewport = Pair.Value->AsLevelViewport();
+			TSharedPtr<SLevelViewport> Viewport = StaticCastSharedPtr<ILevelViewportLayoutEntity>(Pair.Value)->AsLevelViewport();
 			if( !Viewport.IsValid() )
 			{
 				continue;
@@ -1165,7 +1200,7 @@ TSharedRef<SWidget> SLevelEditor::RestoreContentArea( const TSharedRef<SDockTab>
 			const FSlateIcon SequencerIcon("LevelSequenceEditorStyle", "LevelSequenceEditor.Tabs.Sequencer" );
 			LevelEditorTabManager->RegisterTabSpawner( "Sequencer", FOnSpawnTab::CreateSP<SLevelEditor, FName, FString>(this, &SLevelEditor::SpawnLevelEditorTab, FName("Sequencer"), FString()) )
 				.SetDisplayName(NSLOCTEXT("LevelEditorTabs", "Sequencer", "Sequencer"))
-				.SetGroup( MenuStructure.GetLevelEditorCategory() )
+				.SetGroup( MenuStructure.GetLevelEditorCinematicsCategory() )
 				.SetIcon( SequencerIcon );
 		}
 
@@ -1284,7 +1319,9 @@ TSharedRef<SWidget> SLevelEditor::RestoreContentArea( const TSharedRef<SDockTab>
 	LevelEditorModule.OnRegisterLayoutExtensions().Broadcast(LayoutExtender);
 	Layout->ProcessExtensions(LayoutExtender);
 
-	return LevelEditorTabManager->RestoreFrom( Layout, OwnerWindow ).ToSharedRef();
+	const bool bEmbedTitleAreaContent = false;
+	const EOutputCanBeNullptr OutputCanBeNullptr = EOutputCanBeNullptr::IfNoTabValid;
+	return LevelEditorTabManager->RestoreFrom(Layout, OwnerWindow, bEmbedTitleAreaContent, OutputCanBeNullptr).ToSharedRef();
 }
 
 void SLevelEditor::HandleExperimentalSettingChanged(FName PropertyName)
@@ -1324,37 +1361,12 @@ void SLevelEditor::ToggleEditorMode( FEditorModeID ModeID )
 	GLevelEditorModeTools().ActivateMode( ModeID );
 
 	// Find and disable any other 'visible' modes since we only ever allow one of those active at a time.
-	TArray<FEdMode*> ActiveModes;
-	GLevelEditorModeTools().GetActiveModes( ActiveModes );
-	for ( FEdMode* Mode : ActiveModes )
-	{
-		if ( Mode->GetID() != ModeID && Mode->GetModeInfo().bVisible )
-		{
-			GLevelEditorModeTools().DeactivateMode( Mode->GetID() );
-		}
-	}
+	GLevelEditorModeTools().DeactivateOtherVisibleModes(ModeID);
 
 	FLevelEditorModule& LevelEditorModule = FModuleManager::GetModuleChecked<FLevelEditorModule>( "LevelEditor" );
 	TSharedPtr<FTabManager> LevelEditorTabManager = LevelEditorModule.GetLevelEditorTabManager();
 
 	TSharedRef<SDockTab> ToolboxTab = LevelEditorTabManager->InvokeTab( FTabId("LevelEditorToolBox") );
-
-	//// If it's already active deactivate the mode
-	//if ( GLevelEditorModeTools().IsModeActive( ModeID ) )
-	//{
-	//	//GLevelEditorModeTools().DeactivateAllModes();
-	//	//GLevelEditorModeTools().DeactivateMode( ModeID );
-	//}
-	//else // Activate the mode and create the tab for it.
-	//{
-	//	GLevelEditorModeTools().DeactivateAllModes();
-	//	GLevelEditorModeTools().ActivateMode( ModeID );
-
-	//	//FLevelEditorModule& LevelEditorModule = FModuleManager::GetModuleChecked<FLevelEditorModule>( "LevelEditor" );
-	//	//TSharedPtr<FTabManager> LevelEditorTabManager = LevelEditorModule.GetLevelEditorTabManager();
-
-	//	//TSharedRef<SDockTab> ToolboxTab = LevelEditorTabManager->InvokeTab( GetEditorModeTabId( ModeID ) );
-	//}
 }
 
 bool SLevelEditor::IsModeActive( FEditorModeID ModeID )
@@ -1362,15 +1374,9 @@ bool SLevelEditor::IsModeActive( FEditorModeID ModeID )
 	// The level editor changes the default mode to placement
 	if ( ModeID == FBuiltinEditorModes::EM_Placement )
 	{
-		// Only return true if this is the *only* active mode
-		TArray<FEdMode*> ActiveModes;
-		GLevelEditorModeTools().GetActiveModes(ActiveModes);
-		for( FEdMode* Mode : ActiveModes )
+		if (!GLevelEditorModeTools().IsOnlyVisibleActiveMode(ModeID))
 		{
-			if( Mode->GetModeInfo().bVisible && Mode->GetID() != FBuiltinEditorModes::EM_Placement )
-			{
-				return false;
-			}
+			return false;
 		}
 	}
 	return GLevelEditorModeTools().IsModeActive( ModeID );
@@ -1484,7 +1490,7 @@ void SLevelEditor::OnLayoutHasChanged()
 
 void SLevelEditor::SummonLevelViewportContextMenu()
 {
-	FLevelEditorContextMenu::SummonMenu( SharedThis( this ), LevelEditorMenuContext::Viewport );
+	FLevelEditorContextMenu::SummonMenu( SharedThis( this ), ELevelEditorMenuContext::Viewport );
 }
 
 void SLevelEditor::SummonLevelViewportViewOptionMenu(const ELevelViewportType ViewOption)
@@ -1497,9 +1503,9 @@ const TArray< TSharedPtr< IToolkit > >& SLevelEditor::GetHostedToolkits() const
 	return HostedToolkits;
 }
 
-TArray< TSharedPtr< ILevelViewport > > SLevelEditor::GetViewports() const
+TArray< TSharedPtr< IAssetViewport > > SLevelEditor::GetViewports() const
 {
-	TArray< TSharedPtr<ILevelViewport> > OutViewports;
+	TArray< TSharedPtr<IAssetViewport> > OutViewports;
 
 	for( int32 TabIndex = 0; TabIndex < ViewportTabs.Num(); ++TabIndex )
 	{
@@ -1507,13 +1513,13 @@ TArray< TSharedPtr< ILevelViewport > > SLevelEditor::GetViewports() const
 		
 		if (ViewportTab.IsValid())
 		{
-			const TMap< FName, TSharedPtr< IViewportLayoutEntity > >* LevelViewports = ViewportTab->GetViewports();
+			const TMap< FName, TSharedPtr< IAssetViewportLayoutEntity > >* LevelViewports = ViewportTab->GetViewports();
 
 			if (LevelViewports != NULL)
 			{
 				for (auto& Pair : *LevelViewports)
 				{
-					TSharedPtr<SLevelViewport> Viewport = Pair.Value->AsLevelViewport();
+					TSharedPtr<SLevelViewport> Viewport = StaticCastSharedPtr<ILevelViewportLayoutEntity>(Pair.Value)->AsLevelViewport();
 					if( Viewport.IsValid() )
 					{
 						OutViewports.Add(Viewport);
@@ -1538,7 +1544,7 @@ TArray< TSharedPtr< ILevelViewport > > SLevelEditor::GetViewports() const
 	return OutViewports;
 }
  
-TSharedPtr<ILevelViewport> SLevelEditor::GetActiveViewportInterface()
+TSharedPtr<IAssetViewport> SLevelEditor::GetActiveViewportInterface()
 {
 	return GetActiveViewport();
 }

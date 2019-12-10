@@ -222,6 +222,33 @@ void USocialToolkit::SetLocalUserOnlineState(EOnlinePresenceState::Type OnlineSt
 	}
 }
 
+void USocialToolkit::AddLocalUserOnlineProperties(FPresenceProperties OnlineProperties)
+{
+	if (IOnlineSubsystem* PrimaryOss = GetSocialOss(ESocialSubsystem::Primary))
+	{
+		IOnlinePresencePtr PresenceInterface = PrimaryOss->GetPresenceInterface();
+		FUniqueNetIdRepl LocalUserId = GetLocalUserNetId(ESocialSubsystem::Primary);
+		if (PresenceInterface.IsValid() && LocalUserId.IsValid())
+		{
+			TSharedPtr<FOnlineUserPresence> CurrentPresence;
+			PresenceInterface->GetCachedPresence(*LocalUserId, CurrentPresence);
+
+			FOnlineUserPresenceStatus NewStatus;
+			if (CurrentPresence.IsValid())
+			{
+				NewStatus = CurrentPresence->Status;
+			}
+			
+			for (TPair<FPresenceKey, FVariantData>& Pair : OnlineProperties)
+			{
+				NewStatus.Properties.Emplace(MoveTemp(Pair.Key), MoveTemp(Pair.Value));
+			}
+
+			PresenceInterface->SetPresence(*LocalUserId, NewStatus);
+		}
+	}
+}
+
 USocialManager& USocialToolkit::GetSocialManager() const
 {
 	USocialManager* OuterSocialManager = GetTypedOuter<USocialManager>();
@@ -448,6 +475,7 @@ void USocialToolkit::OnOwnerLoggedIn()
 				FriendsInterface->AddOnInviteReceivedDelegate_Handle(FOnInviteReceivedDelegate::CreateUObject(this, &USocialToolkit::HandleFriendInviteReceived, SubsystemType));
 				FriendsInterface->AddOnInviteAcceptedDelegate_Handle(FOnInviteAcceptedDelegate::CreateUObject(this, &USocialToolkit::HandleFriendInviteAccepted, SubsystemType));
 				FriendsInterface->AddOnInviteRejectedDelegate_Handle(FOnInviteRejectedDelegate::CreateUObject(this, &USocialToolkit::HandleFriendInviteRejected, SubsystemType));
+				FriendsInterface->AddOnInviteAbortedDelegate_Handle(FOnInviteAbortedDelegate::CreateUObject(this, &USocialToolkit::HandleFriendInviteRejected, SubsystemType));
 
 				FriendsInterface->AddOnBlockedPlayerCompleteDelegate_Handle(LocalUserNum, FOnBlockedPlayerCompleteDelegate::CreateUObject(this, &USocialToolkit::HandleBlockPlayerComplete, SubsystemType));
 				FriendsInterface->AddOnUnblockedPlayerCompleteDelegate_Handle(LocalUserNum, FOnUnblockedPlayerCompleteDelegate::CreateUObject(this, &USocialToolkit::HandleUnblockPlayerComplete, SubsystemType));
@@ -735,29 +763,14 @@ void USocialToolkit::HandleMapExternalIdComplete(ESocialSubsystem SubsystemType,
 
 void USocialToolkit::HandlePresenceReceived(const FUniqueNetId& UserId, const TSharedRef<FOnlineUserPresence>& NewPresence, ESocialSubsystem SubsystemType)
 {
+	QUICK_SCOPE_CYCLE_COUNTER(STAT_USocialToolkit_HandlePresenceReceived);
 	if (USocialUser* UpdatedUser = FindUser(UserId))
 	{
 		UpdatedUser->NotifyPresenceChanged(SubsystemType);
 	}
 	else if (SubsystemType == ESocialSubsystem::Platform)
 	{
-		FString ErrorString = TEXT("Platform presence received, but existing SocialUser could not be found.\n");
-		ErrorString += TEXT("Incoming UserId is ") + UserId.ToString() + TEXT(", as a UniqueIdRepl it's ") + FUniqueNetIdRepl(UserId).ToString();
-
-		ErrorString += TEXT("Outputting all cached platform IDs and the corresponding user: \n") + UserId.ToString();
-		for (auto IdUserPair : UsersBySubsystemIds)
-		{
-			if (IdUserPair.Key.GetType() != MCP_SUBSYSTEM)
-			{
-				ErrorString += FString::Printf(TEXT("\tUserId [%s]: SocialUser [%s]\n"), *IdUserPair.Key.ToString(), *IdUserPair.Value->ToDebugString());
-				if (IdUserPair.Key == FUniqueNetIdRepl(UserId) || !ensure(*IdUserPair.Key != UserId))
-				{
-					ErrorString += TEXT("\t\tAnd look at that, this one DOES actually match. The map has lied to us!!\n");
-				}
-			}
-		}
-
-		UE_LOG(LogParty, Error, TEXT("%s"), *ErrorString);
+		UE_LOG(LogParty, Error, TEXT("Platform presence received for UserId [%s], but existing SocialUser could not be found.\n"), *UserId.ToDebugString());
 	}
 }
 
@@ -765,11 +778,11 @@ void USocialToolkit::HandleQueryPrimaryUserIdMappingComplete(bool bWasSuccessful
 {
 	if (!IdentifiedUserId.IsValid())
 	{
-		NotifyFriendInviteFailed(IdentifiedUserId, DisplayName, ESendFriendInviteFailureReason::NotFound);
+		OnFriendInviteComplete(IdentifiedUserId, DisplayName, false, FriendInviteFailureReason::InviteFailReason_NotFound);
 	}
 	else if (RequestingUserId == IdentifiedUserId)
 	{
-		NotifyFriendInviteFailed(IdentifiedUserId, DisplayName, ESendFriendInviteFailureReason::AddingSelfFail);
+		OnFriendInviteComplete(IdentifiedUserId, DisplayName, false, FriendInviteFailureReason::InviteFailReason_AddingSelfFail);
 	}
 	else
 	{
@@ -778,11 +791,11 @@ void USocialToolkit::HandleQueryPrimaryUserIdMappingComplete(bool bWasSuccessful
 			{
 				if (SocialUser.IsBlocked())
 				{
-					NotifyFriendInviteFailed(*SocialUser.GetUserId(ESocialSubsystem::Primary), DisplayName, ESendFriendInviteFailureReason::AddingBlockedFail);
+					OnFriendInviteComplete(*SocialUser.GetUserId(ESocialSubsystem::Primary), DisplayName, false, FriendInviteFailureReason::InviteFailReason_AddingBlockedFail);
 				}
 				else if (SocialUser.IsFriend(ESocialSubsystem::Primary))
 				{
-					NotifyFriendInviteFailed(*SocialUser.GetUserId(ESocialSubsystem::Primary), DisplayName, ESendFriendInviteFailureReason::AlreadyFriends);
+					OnFriendInviteComplete(*SocialUser.GetUserId(ESocialSubsystem::Primary), DisplayName, false, FriendInviteFailureReason::InviteFailReason_AlreadyFriends);
 				}
 				else
 				{
@@ -863,10 +876,7 @@ void USocialToolkit::HandleFriendInviteSent(int32 LocalUserNum, bool bWasSuccess
 				}
 			});
 	}
-	else
-	{
-		NotifyFriendInviteFailed(InvitedUserId, ErrorStr, ESendFriendInviteFailureReason::UnknownError, false);
-	}
+	OnFriendInviteComplete(InvitedUserId, DisplayName, bWasSuccessful, ErrorStr);
 }
 
 void USocialToolkit::HandleFriendRemoved(const FUniqueNetId& LocalUserId, const FUniqueNetId& FriendId, ESocialSubsystem SubsystemType)

@@ -11,6 +11,7 @@
 #include "UObject/ObjectMacros.h"
 #include "Misc/OutputDeviceRedirector.h"
 #include "UObject/PrimaryAssetId.h"
+#include "Containers/ArrayView.h"
 #include "Templates/Function.h"
 #include "Templates/IsArrayOrRefOfType.h"
 #include "Serialization/ArchiveUObject.h"
@@ -36,6 +37,7 @@ DECLARE_DWORD_COUNTER_STAT_EXTERN(TEXT("FindObject"),STAT_FindObject,STATGROUP_O
 DECLARE_DWORD_COUNTER_STAT_EXTERN(TEXT("FindObjectFast"),STAT_FindObjectFast,STATGROUP_ObjectVerbose, );
 
 #define	INVALID_OBJECT	(UObject*)-1
+#define PERF_TRACK_DETAILED_ASYNC_STATS (0)
 
 
 // Private system wide variables.
@@ -43,7 +45,7 @@ DECLARE_DWORD_COUNTER_STAT_EXTERN(TEXT("FindObjectFast"),STAT_FindObjectFast,STA
 /** Set while in SavePackage() to detect certain operations that are illegal while saving */
 extern COREUOBJECT_API bool					GIsSavingPackage;
 /** This allows loading unversioned cooked content in the editor */
-extern COREUOBJECT_API bool					GAllowUnversionedContentInEditor;
+extern COREUOBJECT_API int32				GAllowUnversionedContentInEditor;
 /** This allows loading cooked content in the editor */
 extern COREUOBJECT_API int32				GAllowCookedDataInEditorBuilds;
 
@@ -188,7 +190,7 @@ COREUOBJECT_API bool ResolveName(UObject*& Outer, FString& ObjectsReferenceStrin
 COREUOBJECT_API bool SafeLoadError( UObject* Outer, uint32 LoadFlags, const TCHAR* ErrorMessage);
 
 /** Internal function used to update the suffix to be given to the next newly-created unnamed object. */
-COREUOBJECT_API int32 UpdateSuffixForNextNewObject(UObject* Parent, UClass* Class, TFunctionRef<void(int32&)> IndexMutator);
+COREUOBJECT_API int32 UpdateSuffixForNextNewObject(UObject* Parent, const UClass* Class, TFunctionRef<void(int32&)> IndexMutator);
 
 
 /**
@@ -278,7 +280,7 @@ COREUOBJECT_API UClass* StaticLoadClass(UClass* BaseClass, UObject* InOuter, con
  *
  * @return	A pointer to a fully initialized object of the specified class.
  */
-COREUOBJECT_API UObject* StaticConstructObject_Internal(UClass* Class, UObject* InOuter = (UObject*)GetTransientPackage(), FName Name = NAME_None, EObjectFlags SetFlags = RF_NoFlags, EInternalObjectFlags InternalSetFlags = EInternalObjectFlags::None, UObject* Template = nullptr, bool bCopyTransientsFromClassDefaults = false, struct FObjectInstancingGraph* InstanceGraph = nullptr, bool bAssumeTemplateIsArchetype = false);
+COREUOBJECT_API UObject* StaticConstructObject_Internal(const UClass* Class, UObject* InOuter = (UObject*)GetTransientPackage(), FName Name = NAME_None, EObjectFlags SetFlags = RF_NoFlags, EInternalObjectFlags InternalSetFlags = EInternalObjectFlags::None, UObject* Template = nullptr, bool bCopyTransientsFromClassDefaults = false, struct FObjectInstancingGraph* InstanceGraph = nullptr, bool bAssumeTemplateIsArchetype = false);
 
 /**
  * Creates a copy of SourceObject using the Outer and Name specified, as well as copies of all objects contained by SourceObject.  
@@ -500,7 +502,7 @@ COREUOBJECT_API void IncrementalPurgeGarbage( bool bUseTimeLimit, float TimeLimi
  * @return	name is the form BaseName_##, where ## is the number of objects of this
  *			type that have been created since the last time the class was garbage collected.
  */
-COREUOBJECT_API FName MakeUniqueObjectName( UObject* Outer, UClass* Class, FName BaseName=NAME_None );
+COREUOBJECT_API FName MakeUniqueObjectName( UObject* Outer, const UClass* Class, FName BaseName=NAME_None );
 
 /**
  * Given a display label string, generates an FName slug that is a valid FName for that label.
@@ -628,8 +630,10 @@ COREUOBJECT_API bool SaveToTransactionBuffer(UObject* Object, bool bMarkDirty);
  *  b) The object has changed since it started transacting.
  *
  * @param	Object		object to snapshot.
+ * @param	Properties	optional list of properties that have potentially changed on the object (to avoid snapshotting the entire object).
  */
 COREUOBJECT_API void SnapshotTransactionBuffer(UObject* Object);
+COREUOBJECT_API void SnapshotTransactionBuffer(UObject* Object, TArrayView<const UProperty*> Properties);
 
 /**
  * Check for StaticAllocateObject error; only for use with the editor, make or other commandlets.
@@ -640,7 +644,7 @@ COREUOBJECT_API void SnapshotTransactionBuffer(UObject* Object);
  * @param	SetFlags	the ObjectFlags to assign to the new object. some flags can affect the behavior of constructing the object.
  * @return	true if nullptr should be returned; there was a problem reported 
  */
-bool StaticAllocateObjectErrorTests( UClass* Class, UObject* InOuter, FName Name, EObjectFlags SetFlags);
+bool StaticAllocateObjectErrorTests( const UClass* Class, UObject* InOuter, FName Name, EObjectFlags SetFlags);
 
 /**
  * Create a new instance of an object or replace an existing object.  If both an Outer and Name are specified, and there is an object already in memory with the same Class, Outer, and Name, the
@@ -655,7 +659,7 @@ bool StaticAllocateObjectErrorTests( UClass* Class, UObject* InOuter, FName Name
  * @param bOutReusedSubobject	flag indicating if the object is a subobject that has already been created (in which case further initialization is not necessary).
  * @return	a pointer to a fully initialized object of the specified class.
  */
-COREUOBJECT_API UObject* StaticAllocateObject(UClass* Class, UObject* InOuter, FName Name, EObjectFlags SetFlags, EInternalObjectFlags InternalSetFlags = EInternalObjectFlags::None, bool bCanReuseSubobjects = false, bool* bOutReusedSubobject = nullptr);
+COREUOBJECT_API UObject* StaticAllocateObject(const UClass* Class, UObject* InOuter, FName Name, EObjectFlags SetFlags, EInternalObjectFlags InternalSetFlags = EInternalObjectFlags::None, bool bCanReuseSubobjects = false, bool* bOutReusedSubobject = nullptr);
 
 /** @deprecated Use raw pointers or TWeakObjectPtr instead */
 class COREUOBJECT_API FSubobjectPtr
@@ -926,26 +930,25 @@ public:
 
 
 	/**
-	 * Sets the class of a subobject for a base class
+	 * Sets the class to use for a subobject defined in a base class, the class must be a subclass of the class used by the base class.
+	 * @param	SubobjectName	name of the new component or subobject
+	 * @param	Class			The class to use for the specified subobject or component.
+	 */
+	FObjectInitializer const& SetDefaultSubobjectClass(FName SubobjectName, UClass* Class) const
+	{
+		AssertIfSubobjectSetupIsNotAllowed(SubobjectName);
+		ComponentOverrides.Add(SubobjectName, Class, *this);
+		return *this;
+	}
+
+	/**
+	 * Sets the class to use for a subobject defined in a base class, the class must be a subclass of the class used by the base class.
 	 * @param	SubobjectName	name of the new component or subobject
 	 */
 	template<class T>
 	FObjectInitializer const& SetDefaultSubobjectClass(FName SubobjectName) const
 	{
-		AssertIfSubobjectSetupIsNotAllowed(*SubobjectName.GetPlainNameString());
-		ComponentOverrides.Add(SubobjectName, T::StaticClass(), *this);
-		return *this;
-	}
-	/**
-	 * Sets the class of a subobject for a base class
-	 * @param	SubobjectName	name of the new component or subobject
-	 */
-	template<class T>
-	FORCEINLINE FObjectInitializer const& SetDefaultSubobjectClass(TCHAR const*SubobjectName) const
-	{
-		AssertIfSubobjectSetupIsNotAllowed(SubobjectName);
-		ComponentOverrides.Add(SubobjectName, T::StaticClass(), *this);
-		return *this;
+		return SetDefaultSubobjectClass(SubobjectName, T::StaticClass());
 	}
 
 	/**
@@ -954,26 +957,10 @@ public:
 	 */
 	FObjectInitializer const& DoNotCreateDefaultSubobject(FName SubobjectName) const
 	{
-		AssertIfSubobjectSetupIsNotAllowed(*SubobjectName.GetPlainNameString());
-		ComponentOverrides.Add(SubobjectName, nullptr, *this);
-		return *this;
-	}
-
-	/**
-	 * Indicates that a base class should not create a component
-	 * @param	ComponentName	name of the new component or subobject to not create
-	 */
-	FORCEINLINE FObjectInitializer const& DoNotCreateDefaultSubobject(TCHAR const*SubobjectName) const
-	{
 		AssertIfSubobjectSetupIsNotAllowed(SubobjectName);
 		ComponentOverrides.Add(SubobjectName, nullptr, *this);
 		return *this;
 	}
-
-	/** 
-	 * Internal use only, checks if the override is legal and if not deal with error messages
-	**/
-	bool IslegalOverride(FName InComponentName, class UClass *DerivedComponentClass, class UClass *BaseComponentClass) const;
 
 	/**
 	 * Asserts with the specified message if code is executed inside UObject constructor
@@ -1040,44 +1027,20 @@ private:
 
 private:
 
-	/**  Littel helper struct to manage overrides from dervied classes **/
+	/**  Little helper struct to manage overrides from derived classes **/
 	struct FOverrides
 	{
 		/**  Add an override, make sure it is legal **/
-		void Add(FName InComponentName, UClass *InComponentClass, FObjectInitializer const& ObjectInitializer)
-		{
-			int32 Index = Find(InComponentName);
-			if (Index == INDEX_NONE)
-			{
-				new (Overrides) FOverride(InComponentName, InComponentClass);
-			}
-			else if (InComponentClass && Overrides[Index].ComponentClass)
-			{
-				ObjectInitializer.IslegalOverride(InComponentName, Overrides[Index].ComponentClass, InComponentClass); // if a base class is asking for an override, the existing override (which we are going to use) had better be derived
-			}
-		}
+		void Add(FName InComponentName, UClass* InComponentClass, FObjectInitializer const& ObjectInitializer);
+
 		/**  Retrieve an override, or TClassToConstructByDefault::StaticClass or nullptr if this was removed by a derived class **/
-		UClass* Get(FName InComponentName, UClass* ReturnType, UClass* ClassToConstructByDefault, FObjectInitializer const& ObjectInitializer)
-		{
-			int32 Index = Find(InComponentName);
-			UClass *BaseComponentClass = ClassToConstructByDefault;
-			if (Index == INDEX_NONE)
-			{
-				return BaseComponentClass; // no override so just do what the base class wanted
-			}
-			else if (Overrides[Index].ComponentClass)
-			{
-				if (ObjectInitializer.IslegalOverride(InComponentName, Overrides[Index].ComponentClass, ReturnType)) // if THE base class is asking for a T, the existing override (which we are going to use) had better be derived
-				{
-					return Overrides[Index].ComponentClass; // the override is of an acceptable class, so use it
-				}
-				// else return nullptr; this is a unacceptable override
-			}
-			return nullptr;  // the override is of nullptr, which means "don't create this component"
-		}
-private:
+		UClass* Get(FName InComponentName, UClass* ReturnType, UClass* ClassToConstructByDefault, FObjectInitializer const& ObjectInitializer) const;
+
+	private:
+		static bool IsLegalOverride(const UClass* DerivedComponentClass, const UClass* BaseComponentClass);
+
 		/**  Search for an override **/
-		int32 Find(FName InComponentName)
+		int32 Find(FName InComponentName) const
 		{
 			for (int32 Index = 0 ; Index < Overrides.Num(); Index++)
 			{
@@ -1092,7 +1055,7 @@ private:
 		struct FOverride
 		{
 			FName	ComponentName;
-			UClass *ComponentClass;
+			UClass* ComponentClass;
 			FOverride(FName InComponentName, UClass *InComponentClass)
 				: ComponentName(InComponentName)
 				, ComponentClass(InComponentClass)
@@ -1102,7 +1065,7 @@ private:
 		/**  The override array **/
 		TArray<FOverride, TInlineAllocator<8> > Overrides;
 	};
-	/**  Littel helper struct to manage overrides from dervied classes **/
+	/**  Little helper struct to manage overrides from derived classes **/
 	struct FSubobjectsToInit
 	{
 		/**  Add a subobject **/
@@ -1130,7 +1093,7 @@ private:
 	};
 
 	/** Asserts if SetDefaultSubobjectClass or DoNotCreateOptionalDefaultSuobject are called inside of the constructor body */
-	void AssertIfSubobjectSetupIsNotAllowed(const TCHAR* SubobjectName) const;
+	void AssertIfSubobjectSetupIsNotAllowed(const FName SubobjectName) const;
 
 	/**  object to initialize, from static allocate object, after construction **/
 	UObject* Obj;
@@ -1217,7 +1180,7 @@ public:
 
 #if DO_CHECK
 /** Called by NewObject to make sure Child is actually a child of Parent */
-COREUOBJECT_API void CheckIsClassChildOf_Internal(UClass* Parent, UClass* Child);
+COREUOBJECT_API void CheckIsClassChildOf_Internal(const UClass* Parent, const UClass* Child);
 #endif
 
 /**
@@ -1235,7 +1198,7 @@ COREUOBJECT_API void CheckIsClassChildOf_Internal(UClass* Parent, UClass* Child)
  */
 template< class T >
 FUNCTION_NON_NULL_RETURN_START
-	T* NewObject(UObject* Outer, UClass* Class, FName Name = NAME_None, EObjectFlags Flags = RF_NoFlags, UObject* Template = nullptr, bool bCopyTransientsFromClassDefaults = false, FObjectInstancingGraph* InInstanceGraph = nullptr)
+	T* NewObject(UObject* Outer, const UClass* Class, FName Name = NAME_None, EObjectFlags Flags = RF_NoFlags, UObject* Template = nullptr, bool bCopyTransientsFromClassDefaults = false, FObjectInstancingGraph* InInstanceGraph = nullptr)
 FUNCTION_NON_NULL_RETURN_END
 {
 	if (Name == NAME_None)

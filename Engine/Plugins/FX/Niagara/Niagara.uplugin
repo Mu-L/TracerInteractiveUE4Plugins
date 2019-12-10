@@ -44,12 +44,12 @@
 		{
 			"Name" : "NiagaraEditor",
 			"Type" : "Editor",
-			"LoadingPhase" : "PreDefault"
+			"LoadingPhase" : "Default"
 		},
 		{
 			"Name" : "NiagaraEditorWidgets",
 			"Type" : "Editor",
 			"LoadingPhase" : "Default"
 		}
-	]
+	] 
 }

@@ -40,16 +40,6 @@ void UChildActorComponent::OnRegister()
 		}
 		else
 		{
-			USceneComponent* ChildRoot = ChildActor->GetRootComponent();
-			if (ChildRoot && ChildRoot->GetAttachParent() != this)
-			{
-				// attach new actor to this component
-				// we can't attach in CreateChildActor since it has intermediate Mobility set up
-				// causing spam with inconsistent mobility set up
-				// so moving Attach to happen in Register
-				ChildRoot->AttachToComponent(this, FAttachmentTransformRules::SnapToTargetNotIncludingScale);
-			}
-
 			// Ensure the components replication is correctly initialized
 			SetIsReplicated(ChildActor->GetIsReplicated());
 		}
@@ -697,6 +687,8 @@ void UChildActorComponent::BeginPlay()
 
 	if (ChildActor && !ChildActor->HasActorBegunPlay())
 	{
-		ChildActor->DispatchBeginPlay();
+		const AActor* Owner = GetOwner();
+		const bool bFromLevelStreaming = Owner ? Owner->IsActorBeginningPlayFromLevelStreaming() : false;
+		ChildActor->DispatchBeginPlay(bFromLevelStreaming);
 	}
 }

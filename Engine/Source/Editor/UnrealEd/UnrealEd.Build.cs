@@ -7,6 +7,11 @@ public class UnrealEd : ModuleRules
 {
 	public UnrealEd(ReadOnlyTargetRules Target) : base(Target)
 	{
+		if(Target.Type != TargetType.Editor)
+		{
+			throw new BuildException("Unable to instantiate UnrealEd module for non-editor targets.");
+		}
+
 		PrivatePCHHeaderFile = "Private/UnrealEdPrivatePCH.h";
 
 		SharedPCHHeaderFile = "Public/UnrealEdSharedPCH.h";
@@ -97,11 +102,14 @@ public class UnrealEd : ModuleRules
 				"NetworkFileSystem",
 				"UMG",
 				"NavigationSystem",
-                "MeshDescription",
+				"MeshDescription",
+                "StaticMeshDescription",
                 "MeshDescriptionOperations",
                 "MeshBuilder",
                 "MaterialShaderQualitySettings",
                 "EditorSubsystem",
+                "InteractiveToolsFramework",
+				"ToolMenusEditor",
             }
 		);
 
@@ -109,6 +117,7 @@ public class UnrealEd : ModuleRules
 			new string[]
 			{
 				"AssetRegistry",
+				"AssetTagsEditor",
 				"LevelSequence",
 				"AnimGraph",
 				"AppFramework",
@@ -130,7 +139,8 @@ public class UnrealEd : ModuleRules
 				"Projects",
 				"RawMesh",
 				"MeshUtilitiesCommon",
-				"RenderCore",
+                "SkeletalMeshUtilitiesCommon",
+                "RenderCore",
 				"RHI",
 				"Sockets",
 				"SourceControlWindows",
@@ -164,14 +174,18 @@ public class UnrealEd : ModuleRules
 				"ViewportInteraction",
 				"VREditor",
 				"ClothingSystemEditor",
-				"ClothingSystemRuntime",
-				"ClothingSystemRuntimeInterface",
+                "ClothingSystemRuntimeInterface",
+                "ClothingSystemRuntimeCommon",
+                "ClothingSystemRuntimeNv",
 				"PIEPreviewDeviceProfileSelector",
 				"PakFileUtilities",
 				"TimeManagement",
                 "LandscapeEditorUtilities",
                 "DerivedDataCache",
-			}
+				"ScriptDisassembler",
+				"ToolMenus",
+				"FreeImage",
+            }
 		);
 
 		DynamicallyLoadedModuleNames.AddRange(
@@ -204,7 +218,6 @@ public class UnrealEd : ModuleRules
 				"DeviceManager",
 				"SettingsEditor",
 				"SessionFrontend",
-				"Sequencer",
 				"StringTableEditor",
 				"GeometryMode",
 				"TextureAlignMode",
@@ -226,7 +239,6 @@ public class UnrealEd : ModuleRules
 				"UndoHistory",
 				"SourceCodeAccess",
 				"HotReload",
-				"HTML5PlatformEditor",
 				"PortalProxies",
 				"PortalServices",
 				"BlueprintNativeCodeGen",
@@ -236,6 +248,7 @@ public class UnrealEd : ModuleRules
 				"Media",
 				"TimeManagementEditor",
 				"VirtualTexturingEditor",
+				"EditorInteractiveToolsFramework"
 			}
 		);
 
@@ -269,11 +282,12 @@ public class UnrealEd : ModuleRules
 		// Add include directory for Lightmass
 		PublicIncludePaths.Add("Programs/UnrealLightmass/Public");
 
-        PublicIncludePaths.Add("Developer/Android/AndroidDeviceDetection/Public/Interfaces");
+		PublicIncludePaths.Add("Developer/Android/AndroidDeviceDetection/Public/Interfaces");
 
 		PublicIncludePathModuleNames.AddRange(
 			new string[] {
 				"AssetRegistry",
+				"AssetTagsEditor",
 				"CollectionManager",
 				"BlueprintGraph",
 				"AddContentDialog",
@@ -286,7 +300,7 @@ public class UnrealEd : ModuleRules
 				"Engine",
 				"SourceControl",
 			}
-			);
+		);
 
 
 		if ((Target.Platform == UnrealTargetPlatform.Win64) ||
@@ -303,13 +317,7 @@ public class UnrealEd : ModuleRules
 				"Vorbis",
 				"VorbisFile",
 				"DX11Audio"
-				);
-		}
-
-		if (Target.Platform == UnrealTargetPlatform.HTML5)
-		{
-			PublicDependencyModuleNames.Add("ALAudio");
-            PublicDependencyModuleNames.Add("AudioMixerSDL");
+			);
 		}
 
 		AddEngineThirdPartyPrivateStaticDependencies(Target,
@@ -330,9 +338,9 @@ public class UnrealEd : ModuleRules
 			PublicDefinitions.Add( "WITH_RECAST=0" );
 		}
 
-        if (Target.bWithLiveCoding)
-        {
+		if (Target.bWithLiveCoding)
+		{
 			PrivateIncludePathModuleNames.Add("LiveCoding");
-        }
-	}
+		}
+    }
 }

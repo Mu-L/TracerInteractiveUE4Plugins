@@ -426,7 +426,7 @@ FEditorViewportClient::FEditorViewportClient(FEditorModeTools* InModeTools, FPre
 
 	SetViewMode(IsPerspective() ? PerspViewModeIndex : OrthoViewModeIndex);
 
-	ModeTools->OnEditorModeChanged().AddRaw(this, &FEditorViewportClient::OnEditorModeChanged);
+	ModeTools->OnEditorModeIDChanged().AddRaw(this, &FEditorViewportClient::OnEditorModeIDChanged);
 
 	FCoreDelegates::StatCheckEnabled.AddRaw(this, &FEditorViewportClient::HandleViewportStatCheckEnabled);
 	FCoreDelegates::StatEnabled.AddRaw(this, &FEditorViewportClient::HandleViewportStatEnabled);
@@ -446,7 +446,7 @@ FEditorViewportClient::~FEditorViewportClient()
 		ModeTools->DeactivateAllModes(); // this also activates the default mode
 	}
 
-	ModeTools->OnEditorModeChanged().RemoveAll(this);
+	ModeTools->OnEditorModeIDChanged().RemoveAll(this);
 
 	delete Widget;
 	delete MouseDeltaTracker;
@@ -459,7 +459,7 @@ FEditorViewportClient::~FEditorViewportClient()
 
 	if(Viewport)
 	{
-		UE_LOG(LogEditorViewport, Fatal, TEXT("Viewport != NULL in FLevelEditorViewportClient destructor."));
+		UE_LOG(LogEditorViewport, Fatal, TEXT("Viewport != NULL in FEditorViewportClient destructor."));
 	}
 
 	if(GEditor)
@@ -556,6 +556,14 @@ void FEditorViewportClient::RequestInvalidateHitProxy(FViewport* InViewport)
 }
 
 void FEditorViewportClient::OnEditorModeChanged(FEdMode* EditorMode, bool bIsEntering)
+{
+	if (Viewport)
+	{
+		RequestInvalidateHitProxy(Viewport);
+	}
+}
+
+void FEditorViewportClient::OnEditorModeIDChanged(const FEditorModeID& EditorModeID, bool bIsEntering)
 {
 	if (Viewport)
 	{
@@ -3652,6 +3660,8 @@ void FEditorViewportClient::Draw(FViewport* InViewport, FCanvas* Canvas)
 
 	ViewFamily.EngineShowFlags = EngineShowFlags;
 
+	ViewFamily.bIsHDR = Viewport->IsHDRViewport();
+
 	UpdateDebugViewModeShaders();
 
 	if( ModeTools->GetActiveMode( FBuiltinEditorModes::EM_InterpEdit ) == 0 || !AllowsCinematicControl() )
@@ -5520,6 +5530,19 @@ bool FEditorViewportClient::ProcessScreenShots(FViewport* InViewport)
 
 				Bitmap.RemoveAt(NewWidth * NewHeight, OldWidth * OldHeight - NewWidth * NewHeight, false);
 				BitmapSize = FIntPoint(NewWidth, NewHeight);
+			}
+
+			if (GIsAutomationTesting)
+			{
+				// Under automation test, the screenshot is highjacked and sent to be compared
+				TArray<FColor> BitmapForCompare(Bitmap);
+				if (!bWriteAlpha)
+				{
+					// Set full alpha on the bitmap
+					for (FColor& Pixel : BitmapForCompare) { Pixel.A = 255; }
+				}
+
+				FScreenshotRequest::OnScreenshotCaptured().Broadcast(BitmapSize.X, BitmapSize.Y, MoveTemp(BitmapForCompare));
 			}
 
 			TUniquePtr<FImageWriteTask> ImageTask = MakeUnique<FImageWriteTask>();

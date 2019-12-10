@@ -1,9 +1,7 @@
 // Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
 #include "ChaosCollisionEventFilter.h"
 
-#if INCLUDE_CHAOS
-
-void FChaosCollisionEventFilter::FilterEvents(const FTransform& ChaosComponentTransform, const FPBDRigidsSolver::FCollisionDataArray& RawCollisionDataArray)
+void FChaosCollisionEventFilter::FilterEvents(const FTransform& ChaosComponentTransform, const Chaos::FCollisionDataArray& RawCollisionDataArray)
 {
 	FilteredDataArray.Reset();
 
@@ -61,8 +59,8 @@ void FChaosCollisionEventFilter::FilterEvents(const FTransform& ChaosComponentTr
 			NewData.Mass1 = CollisionData.Mass1;
 			NewData.Mass2 = CollisionData.Mass2;
 			NewData.Impulse = CollisionData.AccumulatedImpulse;
-			NewData.ParticleIndex = CollisionData.ParticleIndex;
-			NewData.LevelsetIndex = CollisionData.LevelsetIndex;
+			NewData.Particle = CollisionData.Particle;
+			NewData.Levelset = CollisionData.Levelset;
 
 			FilteredDataArray.Add(NewData);
 
@@ -142,5 +140,3 @@ void FChaosCollisionEventFilter::SortEvents(TArray<FChaosCollisionEventData>& In
 		break;
 	}
 }
-
-#endif // INCLUDE_CHAOS

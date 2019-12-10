@@ -4,33 +4,39 @@
 #include "Units/RigUnitContext.h"
 #include "Math/ControlRigMathLibrary.h"
 
-void FRigUnit_MathVectorFromFloat::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorFromFloat_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result = FVector(Value, Value, Value);
 }
 
-void FRigUnit_MathVectorAdd::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorAdd_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result = A + B;
 }
 
-void FRigUnit_MathVectorSub::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorSub_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result = A - B;
 }
 
-void FRigUnit_MathVectorMul::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorMul_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result = A * B;
 }
 
-void FRigUnit_MathVectorScale::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorScale_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result = Value * Factor;
 }
 
-void FRigUnit_MathVectorDiv::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorDiv_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	if(FMath::IsNearlyZero(B.X) || FMath::IsNearlyZero(B.Y) || FMath::IsNearlyZero(B.Z))
 	{
 		if (FMath::IsNearlyZero(B.X))
@@ -51,8 +57,9 @@ void FRigUnit_MathVectorDiv::Execute(const FRigUnitContext& Context)
 	Result = A / B;
 }
 
-void FRigUnit_MathVectorMod::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorMod_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	if(FMath::IsNearlyZero(B.X) || FMath::IsNearlyZero(B.Y) || FMath::IsNearlyZero(B.Z) || B.X < 0.f || B.Y < 0.f || B.Z < 0.f)
 	{
 		if (FMath::IsNearlyZero(B.X) || B.X < 0.f)
@@ -76,72 +83,83 @@ void FRigUnit_MathVectorMod::Execute(const FRigUnitContext& Context)
 	Result.Z = FMath::Fmod(A.Z, B.Z);
 }
 
-void FRigUnit_MathVectorMin::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorMin_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result.X = FMath::Min<float>(A.X, B.X);
 	Result.Y = FMath::Min<float>(A.Y, B.Y);
 	Result.Z = FMath::Min<float>(A.Z, B.Z);
 }
 
-void FRigUnit_MathVectorMax::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorMax_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result.X = FMath::Max<float>(A.X, B.X);
 	Result.Y = FMath::Max<float>(A.Y, B.Y);
 	Result.Z = FMath::Max<float>(A.Z, B.Z);
 }
 
-void FRigUnit_MathVectorNegate::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorNegate_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result = -Value;
 }
 
-void FRigUnit_MathVectorAbs::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorAbs_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result.X = FMath::Abs(Value.X);
 	Result.Y = FMath::Abs(Value.Y);
 	Result.Z = FMath::Abs(Value.Z);
 }
 
-void FRigUnit_MathVectorFloor::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorFloor_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result.X = FMath::FloorToFloat(Value.X);
 	Result.Y = FMath::FloorToFloat(Value.Y);
 	Result.Z = FMath::FloorToFloat(Value.Z);
 }
 
-void FRigUnit_MathVectorCeil::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorCeil_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result.X = FMath::CeilToFloat(Value.X);
 	Result.Y = FMath::CeilToFloat(Value.Y);
 	Result.Z = FMath::CeilToFloat(Value.Z);
 }
 
-void FRigUnit_MathVectorRound::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorRound_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result.X = FMath::RoundToFloat(Value.X);
 	Result.Y = FMath::RoundToFloat(Value.Y);
 	Result.Z = FMath::RoundToFloat(Value.Z);
 }
 
-void FRigUnit_MathVectorSign::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorSign_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result = Value.GetSignVector();
 }
 
-void FRigUnit_MathVectorClamp::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorClamp_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result.X = FMath::Clamp<float>(Value.X, Minimum.X, Maximum.X);
 	Result.Y = FMath::Clamp<float>(Value.Y, Minimum.Y, Maximum.Y);
 	Result.Z = FMath::Clamp<float>(Value.Z, Minimum.Z, Maximum.Z);
 }
 
-void FRigUnit_MathVectorLerp::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorLerp_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result = FMath::Lerp<FVector>(A, B, T);
 }
 
-void FRigUnit_MathVectorRemap::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorRemap_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	FVector Ratio(0.f, 0.f, 0.f);
 	if (FMath::IsNearlyEqual(SourceMinimum.X, SourceMaximum.X) || FMath::IsNearlyEqual(SourceMinimum.Y, SourceMaximum.Y) || FMath::IsNearlyEqual(SourceMinimum.Z, SourceMaximum.Z))
 	{
@@ -171,18 +189,21 @@ void FRigUnit_MathVectorRemap::Execute(const FRigUnitContext& Context)
 	Result = FMath::Lerp<FVector>(TargetMinimum, TargetMaximum, Ratio);
 }
 
-void FRigUnit_MathVectorEquals::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorEquals_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result = A == B;
 }
 
-void FRigUnit_MathVectorNotEquals::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorNotEquals_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result = A != B;
 }
 
-void FRigUnit_MathVectorIsNearlyZero::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorIsNearlyZero_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	if(Tolerance < 0.f)
 	{
 		UE_CONTROLRIG_RIGUNIT_REPORT_WARNING(TEXT("Tolerance is below zero"));
@@ -190,8 +211,9 @@ void FRigUnit_MathVectorIsNearlyZero::Execute(const FRigUnitContext& Context)
 	Result = Value.IsNearlyZero(FMath::Max<float>(Tolerance, SMALL_NUMBER));
 }
 
-void FRigUnit_MathVectorIsNearlyEqual::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorIsNearlyEqual_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	if(Tolerance < 0.f)
 	{
 		UE_CONTROLRIG_RIGUNIT_REPORT_WARNING(TEXT("Tolerance is below zero"));
@@ -199,48 +221,57 @@ void FRigUnit_MathVectorIsNearlyEqual::Execute(const FRigUnitContext& Context)
 	Result = (A - B).IsNearlyZero(FMath::Max<float>(Tolerance, SMALL_NUMBER));
 }
 
-void FRigUnit_MathVectorSelectBool::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorSelectBool_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result = Condition ? IfTrue : IfFalse;
 }
 
-void FRigUnit_MathVectorDeg::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorDeg_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result = FMath::RadiansToDegrees(Value);
 }
 
-void FRigUnit_MathVectorRad::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorRad_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result = FMath::DegreesToRadians(Value);
 }
 
-void FRigUnit_MathVectorLengthSquared::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorLengthSquared_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result = Value.SizeSquared();
 }
 
-void FRigUnit_MathVectorLength::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorLength_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result = Value.Size();
 }
 
-void FRigUnit_MathVectorDistance::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorDistance_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result = FVector::Distance(A, B);
 }
 
-void FRigUnit_MathVectorCross::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorCross_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result = A ^ B;
 }
 
-void FRigUnit_MathVectorDot::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorDot_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	Result = A | B;
 }
 
-void FRigUnit_MathVectorUnit::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorUnit_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	if (Value.IsNearlyZero())
 	{
 		UE_CONTROLRIG_RIGUNIT_REPORT_WARNING(TEXT("Value is nearly zero"));
@@ -250,8 +281,34 @@ void FRigUnit_MathVectorUnit::Execute(const FRigUnitContext& Context)
 	Result = Value.GetUnsafeNormal();
 }
 
-void FRigUnit_MathVectorMirror::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorSetLength_Execute()
 {
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
+	if (Value.IsNearlyZero())
+	{
+		UE_CONTROLRIG_RIGUNIT_REPORT_WARNING(TEXT("Value is nearly zero"));
+		Result = FVector::ZeroVector;
+		return;
+	}
+	Result = Value.GetUnsafeNormal() * Length;
+}
+
+FRigUnit_MathVectorClampLength_Execute()
+{
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
+	if (Value.IsNearlyZero())
+	{
+		UE_CONTROLRIG_RIGUNIT_REPORT_WARNING(TEXT("Value is nearly zero"));
+		Result = FVector::ZeroVector;
+		return;
+	}
+	float Length = Value.Size();
+	Result = Value * FMath::Clamp<float>(Length, MinimumLength, MaximumLength) / Length;
+}
+
+FRigUnit_MathVectorMirror_Execute()
+{
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	if (Normal.IsNearlyZero())
 	{
 		UE_CONTROLRIG_RIGUNIT_REPORT_WARNING(TEXT("Normal is nearly zero"));
@@ -261,8 +318,9 @@ void FRigUnit_MathVectorMirror::Execute(const FRigUnitContext& Context)
 	Result = Value.MirrorByVector(Normal.GetSafeNormal());
 }
 
-void FRigUnit_MathVectorAngle::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorAngle_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	if (A.IsNearlyZero() || B.IsNearlyZero())
 	{
 		if (A.IsNearlyZero())
@@ -279,8 +337,9 @@ void FRigUnit_MathVectorAngle::Execute(const FRigUnitContext& Context)
 	Result = FQuat::FindBetween(A, B).GetAngle();
 }
 
-void FRigUnit_MathVectorParallel::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorParallel_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	if (A.IsNearlyZero() || B.IsNearlyZero())
 	{
 		if (A.IsNearlyZero())
@@ -297,8 +356,9 @@ void FRigUnit_MathVectorParallel::Execute(const FRigUnitContext& Context)
 	Result = FVector::Parallel(A, B);
 }
 
-void FRigUnit_MathVectorOrthogonal::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorOrthogonal_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	if (A.IsNearlyZero() || B.IsNearlyZero())
 	{
 		if (A.IsNearlyZero())
@@ -315,7 +375,108 @@ void FRigUnit_MathVectorOrthogonal::Execute(const FRigUnitContext& Context)
 	Result = FVector::Orthogonal(A, B);
 }
 
-void FRigUnit_MathVectorBezierFourPoint::Execute(const FRigUnitContext& Context)
+FRigUnit_MathVectorBezierFourPoint_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	FControlRigMathLibrary::FourPointBezier(Bezier, T, Result, Tangent);
+}
+
+FRigUnit_MathVectorMakeBezierFourPoint_Execute()
+{
+}
+
+FRigUnit_MathVectorClampSpatially_Execute()
+{
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
+	Result = FControlRigMathLibrary::ClampSpatially(Value, Axis, Type, Minimum, Maximum, Space);
+
+	if (Context.DrawInterface != nullptr && bDrawDebug)
+	{
+		switch (Type)
+		{
+			case EControlRigClampSpatialMode::Plane:
+			{
+				TArray<FVector> Points;
+				Points.SetNumUninitialized(2);
+					
+				switch (Axis)
+				{
+					case EAxis::X:
+					{
+						Points[0] = FVector(Minimum, 0.f, 0.f);
+						Points[1] = FVector(Maximum, 0.f, 0.f);
+						break;
+					}
+					case EAxis::Y:
+					{
+						Points[0] = FVector(0.f, Minimum, 0.f);
+						Points[1] = FVector(0.f, Maximum, 0.f);
+						break;
+					}
+					default:
+					{
+						Points[0] = FVector(0.f, 0.f, Minimum);
+						Points[1] = FVector(0.f, 0.f, Maximum);
+						break;
+					}
+				}
+
+				Context.DrawInterface->DrawLine(Space, Points[0], Points[1], DebugColor, DebugThickness);
+				Context.DrawInterface->DrawPoints(Space, Points, DebugThickness * 8.f, DebugColor);
+
+				break;
+			}
+			case EControlRigClampSpatialMode::Cylinder:
+			{
+				FTransform CircleTransform = FTransform::Identity;
+				switch (Axis)
+				{
+					case EAxis::X:
+					{
+						CircleTransform.SetRotation(FQuat(FVector(0.f, 1.f, 0.f), PI * 0.5f));
+						break;
+					}
+					case EAxis::Y:
+					{
+						CircleTransform.SetRotation(FQuat(FVector(1.f, 0.f, 0.f), PI * 0.5f));
+						break;
+					}
+					default:
+					{
+						break;
+					}
+				}
+				if (Minimum > SMALL_NUMBER)
+				{
+					Context.DrawInterface->DrawArc(Space, CircleTransform, Minimum, 0.f, PI * 2.f, DebugColor, DebugThickness, 16);
+				}
+				Context.DrawInterface->DrawArc(Space, CircleTransform, Maximum, 0.f, PI * 2.f, DebugColor, DebugThickness, 16);
+				break;
+			}
+			default:
+			case EControlRigClampSpatialMode::Sphere:
+			{
+				FTransform CircleTransform = FTransform::Identity;
+				if (Minimum > SMALL_NUMBER)
+				{
+					Context.DrawInterface->DrawArc(Space, CircleTransform, Minimum, 0.f, PI * 2.f, DebugColor, DebugThickness, 16);
+				}
+				Context.DrawInterface->DrawArc(Space, CircleTransform, Maximum, 0.f, PI * 2.f, DebugColor, DebugThickness, 16);
+				CircleTransform.SetRotation(FQuat(FVector(0.f, 1.f, 0.f), PI * 0.5f));
+				if (Minimum > SMALL_NUMBER)
+				{
+					Context.DrawInterface->DrawArc(Space, CircleTransform, Minimum, 0.f, PI * 2.f, DebugColor, DebugThickness, 16);
+				}
+				Context.DrawInterface->DrawArc(Space, CircleTransform, Maximum, 0.f, PI * 2.f, DebugColor, DebugThickness, 16);
+				CircleTransform.SetRotation(FQuat(FVector(1.f, 0.f, 0.f), PI * 0.5f));
+				if (Minimum > SMALL_NUMBER)
+				{
+					Context.DrawInterface->DrawArc(Space, CircleTransform, Minimum, 0.f, PI * 2.f, DebugColor, DebugThickness, 16);
+				}
+				Context.DrawInterface->DrawArc(Space, CircleTransform, Maximum, 0.f, PI * 2.f, DebugColor, DebugThickness, 16);
+				break;
+			}
+
+		}
+	}
 }

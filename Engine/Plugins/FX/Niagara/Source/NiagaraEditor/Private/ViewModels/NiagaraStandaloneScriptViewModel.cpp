@@ -15,7 +15,7 @@ FNiagaraStandaloneScriptViewModel::FNiagaraStandaloneScriptViewModel(
 {
 }
 
-void FNiagaraStandaloneScriptViewModel::SetStandaloneScripts(UNiagaraScript* InScript, UNiagaraScript* InSourceScript)
+void FNiagaraStandaloneScriptViewModel::Initialize(UNiagaraScript* InScript, UNiagaraScript* InSourceScript)
 {
 	SetScript(InScript);
 	SourceScript = InSourceScript;

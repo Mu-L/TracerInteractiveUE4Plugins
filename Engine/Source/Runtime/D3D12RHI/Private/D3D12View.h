@@ -687,28 +687,9 @@ public:
 	inline uint32 GetIndex() const { return Index; }
 
 private:
-	void AllocateDescriptorSlot()
-	{
-		if (Parent)
-		{
-			FD3D12Device* Device = GetParentDevice();
-			FD3D12OfflineDescriptorManager& DescriptorAllocator = Device->template GetViewDescriptorAllocator<TDesc>();
-			Handle = DescriptorAllocator.AllocateHeapSlot(Index);
-			check(Handle.ptr != 0);
-		}
-	}
-
-	void FreeDescriptorSlot()
-	{
-		if (Parent)
-		{
-			FD3D12Device* Device = GetParentDevice();
-			FD3D12OfflineDescriptorManager& DescriptorAllocator = Device->template GetViewDescriptorAllocator<TDesc>();
-			DescriptorAllocator.FreeHeapSlot(Handle, Index);
-			Handle.ptr = 0;
-		}
-		check(!Handle.ptr);
-	}
+	// Implemented in D3D12Device.h due to dependencies on FD3D12Device
+	inline void AllocateDescriptorSlot();
+	inline void FreeDescriptorSlot();
 };
 
 typedef TD3D12ViewDescriptorHandle<D3D12_SHADER_RESOURCE_VIEW_DESC>		FD3D12DescriptorHandleSRV;
@@ -850,7 +831,7 @@ public:
 
 		if (InDesc.ViewDimension == D3D12_SRV_DIMENSION_BUFFER)
 		{
-			check(InResourceLocation.GetOffsetFromBaseOfResource() / Stride == InDesc.Buffer.FirstElement);
+			check(InResourceLocation.GetOffsetFromBaseOfResource() == InDesc.Buffer.FirstElement * Stride);
 		}
 #endif
 
@@ -895,6 +876,23 @@ public:
 	FORCEINLINE bool IsDepthPlaneResource()		const { return bContainsDepthPlane; }
 	FORCEINLINE bool IsStencilPlaneResource()	const { return bContainsStencilPlane; }
 	FORCEINLINE bool GetSkipFastClearFinalize()	const { return bSkipFastClearFinalize; }
+};
+
+class FD3D12ShaderResourceViewWithLocation : public FD3D12ShaderResourceView
+{
+public:
+	FD3D12ShaderResourceViewWithLocation(FD3D12Device* InParent)
+		: FD3D12ShaderResourceView(InParent)
+		, ViewLocation(InParent)
+	{}
+
+	FD3D12ShaderResourceViewWithLocation(FD3D12Device* InParent, D3D12_SHADER_RESOURCE_VIEW_DESC& InDesc, FD3D12ResourceLocation& InResourceLocation, uint32 InStride = -1, bool InSkipFastClearFinalize = false)
+		: FD3D12ShaderResourceView(InParent, InDesc, ViewLocation, InStride, InSkipFastClearFinalize)
+		, ViewLocation(InParent)
+	{
+	}
+
+	FD3D12ResourceLocation ViewLocation;
 };
 
 class FD3D12UnorderedAccessView : public FRHIUnorderedAccessView, public FD3D12View < D3D12_UNORDERED_ACCESS_VIEW_DESC >, public FD3D12LinkedAdapterObject<FD3D12UnorderedAccessView>

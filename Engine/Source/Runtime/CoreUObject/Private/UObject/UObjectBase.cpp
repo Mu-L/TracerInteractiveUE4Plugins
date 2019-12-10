@@ -21,6 +21,7 @@
 #include "UObject/LinkerLoad.h"
 #include "Misc/CommandLine.h"
 #include "Interfaces/IPluginManager.h"
+#include "Serialization/LoadTimeTrace.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogUObjectBase, Log, All);
 DEFINE_STAT(STAT_UObjectsStatGroupTester);
@@ -33,9 +34,16 @@ DEFINE_LOG_CATEGORY_STATIC(LogUObjectBootstrap, Display, Display);
 /** Whether uobject system is initialized.												*/
 namespace Internal
 {
-	bool GObjInitialized = false;
+	static bool& GetUObjectSubsystemInitialised()
+	{
+		static bool ObjInitialized = false;
+		return ObjInitialized;
+	}
 };
-
+bool UObjectInitialized()
+{
+	return Internal::GetUObjectSubsystemInitialised();
+}
 
 /** Objects to automatically register once the object system is ready.					*/
 struct FPendingRegistrantInfo
@@ -207,7 +215,7 @@ void UObjectBase::CreateStatID() const
  */
 void UObjectBase::DeferredRegister(UClass *UClassStaticClass,const TCHAR* PackageName,const TCHAR* InName)
 {
-	check(Internal::GObjInitialized);
+	check(UObjectInitialized());
 	// Set object properties.
 	UPackage* Package = CreatePackage(nullptr, PackageName);
 	check(Package);
@@ -867,6 +875,8 @@ void UClassReplaceHotReloadClasses()
  */
 static void UObjectLoadAllCompiledInDefaultProperties()
 {
+	TRACE_LOADTIME_REQUEST_GROUP_SCOPE(TEXT("UObjectLoadAllCompiledInDefaultProperties"));
+
 	static FName LongEnginePackageName(TEXT("/Script/Engine"));
 
 	TArray<UClass *(*)()>& DeferredCompiledInRegistration = GetDeferredCompiledInRegistration();
@@ -1119,7 +1129,7 @@ void UObjectBaseInit()
 	InitAsyncThread();
 
 	// Note initialized.
-	Internal::GObjInitialized = true;
+	Internal::GetUObjectSubsystemInitialised() = true;
 
 	UObjectProcessRegistrants();
 }
@@ -1133,7 +1143,7 @@ void UObjectBaseShutdown()
 	ShutdownAsyncThread();
 
 	GUObjectArray.ShutdownUObjectArray();
-	Internal::GObjInitialized = false;
+	Internal::GetUObjectSubsystemInitialised() = false;
 }
 
 /**

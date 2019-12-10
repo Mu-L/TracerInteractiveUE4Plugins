@@ -128,7 +128,7 @@ static void AsyncSafeProgramCounterToSymbolInfo( uint64 ProgramCounter, FProgram
 	}
 #else // But on iOS the best we can do is demangle
 	int32 Status = 0;
-	ANSICHAR* DemangledName = NULL;
+	ANSICHAR* DemangledName = nullptr;
 	
 	// Increased the size of the demangle destination to reduce the chances that abi::__cxa_demangle will allocate
 	// this causes the app to hang as malloc isn't signal handler safe. Ideally we wouldn't call this function in a handler.
@@ -180,7 +180,7 @@ uint32 FApplePlatformStackWalk::CaptureStackBackTrace( uint64* BackTrace, uint32
 {
 	// Make sure we have place to store the information before we go through the process of raising
 	// an exception and handling it.
-	if( BackTrace == NULL || MaxDepth == 0 )
+	if( BackTrace == nullptr || MaxDepth == 0 )
 	{
 		return 0;
 	}
@@ -425,7 +425,7 @@ void CreateExceptionInfoString(int32 Signal, struct __siginfo* Info)
 	}
 	
 #if WITH_EDITORONLY_DATA
-	FCString::Strncpy(GErrorExceptionDescription, *ErrorString, FMath::Min(ErrorString.Len() + 1, (int32)ARRAY_COUNT(GErrorExceptionDescription)));
+	FCString::Strncpy(GErrorExceptionDescription, *ErrorString, FMath::Min(ErrorString.Len() + 1, (int32)UE_ARRAY_COUNT(GErrorExceptionDescription)));
 #endif
 #undef HANDLE_CASE
 }
@@ -448,7 +448,7 @@ int32 ReportCrash(ucontext_t *Context, int32 Signal, struct __siginfo* Info)
 		// Walk the stack and dump it to the allocated memory.
 		FPlatformStackWalk::StackWalkAndDump( StackTrace, StackTraceSize, 0, Context );
 #if WITH_EDITORONLY_DATA
-        FCString::Strncat( GErrorHist, ANSI_TO_TCHAR(StackTrace), ARRAY_COUNT(GErrorHist) - 1 );
+        FCString::Strncat( GErrorHist, ANSI_TO_TCHAR(StackTrace), UE_ARRAY_COUNT(GErrorHist) - 1 );
 		CreateExceptionInfoString(Signal, Info);
 #endif
 	}

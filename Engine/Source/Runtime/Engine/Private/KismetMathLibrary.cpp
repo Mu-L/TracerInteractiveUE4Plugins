@@ -285,6 +285,11 @@ float UKismetMathLibrary::MakePulsatingValue(float InCurrentTime, float InPulses
 	return FMath::MakePulsatingValue((double)InCurrentTime, InPulsesPerSecond, InPhase);
 }
 
+float UKismetMathLibrary::SafeDivide(float A, float B)
+{
+	return (B != 0.0f) ? (A / B) : 0.0f;
+}
+
 void UKismetMathLibrary::MaxOfIntArray(const TArray<int32>& IntArray, int32& IndexOfMaxValue, int32& MaxValue)
 {
 	MaxValue = FMath::Max(IntArray, &IndexOfMaxValue);
@@ -568,6 +573,11 @@ bool UKismetMathLibrary::NearlyEqual_TransformTransform(const FTransform& A, con
 float UKismetMathLibrary::Transform_Determinant(const FTransform& Transform)
 {
 	return Transform.ToMatrixWithScale().Determinant();
+}
+
+FMatrix UKismetMathLibrary::Conv_TransformToMatrix(const FTransform& Tranform)
+{
+	return Tranform.ToMatrixWithScale();
 }
 
 bool UKismetMathLibrary::ClassIsChildOf(TSubclassOf<class UObject> TestClass, TSubclassOf<class UObject> ParentClass)
@@ -962,7 +972,7 @@ void UKismetMathLibrary::MinimumAreaRectangle(class UObject* WorldContextObject,
 	OutRectCenter /= InVerts.Num();
 
 	// Compute the convex hull of the sample points
-	ConvexHull2D::ComputeConvexHull(TransformedVerts, PolyVertIndices);
+	ConvexHull2D::ComputeConvexHullLegacy(TransformedVerts, PolyVertIndices);
 
 	// Minimum area rectangle as computed by http://www.geometrictools.com/Documentation/MinimumAreaRectangle.pdf
 	for (int32 Idx = 1; Idx < PolyVertIndices.Num() - 1; ++Idx)

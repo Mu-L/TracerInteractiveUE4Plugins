@@ -18,7 +18,7 @@ static TCHAR							MsgLogfStaticBuffer[8192];
 
 CSV_DEFINE_CATEGORY(FMsgLogf, true);
 
-void FMsg::LogfImpl(const ANSICHAR* File, int32 Line, const FName& Category, ELogVerbosity::Type Verbosity, const TCHAR* Fmt, ...)
+void FMsg::LogfImpl(const ANSICHAR* File, int32 Line, const FLogCategoryName& Category, ELogVerbosity::Type Verbosity, const TCHAR* Fmt, ...)
 {
 #if !NO_LOGGING
 	if (Verbosity != ELogVerbosity::Fatal)
@@ -55,10 +55,10 @@ void FMsg::LogfImpl(const ANSICHAR* File, int32 Line, const FName& Category, ELo
 			// We're using one big shared static buffer here, so guard against re-entry
 			FScopeLock MsgLock(&MsgLogfStaticBufferGuard);
 			// Print to a large static buffer so we can keep the stack allocation below 16K
-			GET_VARARGS(MsgLogfStaticBuffer, ARRAY_COUNT(MsgLogfStaticBuffer), ARRAY_COUNT(MsgLogfStaticBuffer) - 1, Fmt, Fmt);
+			GET_VARARGS(MsgLogfStaticBuffer, UE_ARRAY_COUNT(MsgLogfStaticBuffer), UE_ARRAY_COUNT(MsgLogfStaticBuffer) - 1, Fmt, Fmt);
 			// Copy the message to the stack-allocated buffer)
-			FCString::Strncpy(Message, MsgLogfStaticBuffer, ARRAY_COUNT(Message) - 1);
-			Message[ARRAY_COUNT(Message) - 1] = '\0';
+			FCString::Strncpy(Message, MsgLogfStaticBuffer, UE_ARRAY_COUNT(Message) - 1);
+			Message[UE_ARRAY_COUNT(Message) - 1] = '\0';
 		}
 
 		const int32 NumStackFramesToIgnore = 1;
@@ -68,7 +68,7 @@ void FMsg::LogfImpl(const ANSICHAR* File, int32 Line, const FName& Category, ELo
 #endif
 }
 
-void FMsg::Logf_InternalImpl(const ANSICHAR* File, int32 Line, const FName& Category, ELogVerbosity::Type Verbosity, const TCHAR* Fmt, ...)
+void FMsg::Logf_InternalImpl(const ANSICHAR* File, int32 Line, const FLogCategoryName& Category, ELogVerbosity::Type Verbosity, const TCHAR* Fmt, ...)
 {
 #if !NO_LOGGING
 	QUICK_SCOPE_CYCLE_COUNTER(STAT_FMsgLogf);
@@ -78,25 +78,19 @@ void FMsg::Logf_InternalImpl(const ANSICHAR* File, int32 Line, const FName& Cate
 	{
 		// SetColour is routed to GWarn just like the other verbosities and handled in the 
 		// device that does the actual printing.
-		FOutputDevice* LogDevice = NULL;
+		FOutputDevice* LogOverride = NULL;
 		switch (Verbosity)
 		{
 		case ELogVerbosity::Error:
 		case ELogVerbosity::Warning:
 		case ELogVerbosity::Display:
 		case ELogVerbosity::SetColor:
-			if (GWarn)
-			{
-				LogDevice = GWarn;
-				break;
-			}
+			LogOverride = GWarn;
 		default:
-		{
-			LogDevice = GLog;
-		}
 		break;
 		}
-		GROWABLE_LOGF(LogDevice->Log(Category, Verbosity, Buffer))
+		GROWABLE_LOGF(LogOverride	? LogOverride->Log(Category, Verbosity, Buffer)
+									: GLog->RedirectLog(Category, Verbosity, Buffer))
 	}
 	else
 	{
@@ -108,10 +102,10 @@ void FMsg::Logf_InternalImpl(const ANSICHAR* File, int32 Line, const FName& Cate
 			// We're using one big shared static buffer here, so guard against re-entry
 			FScopeLock MsgLock(&MsgLogfStaticBufferGuard);
 			// Print to a large static buffer so we can keep the stack allocation below 16K
-			GET_VARARGS(MsgLogfStaticBuffer, ARRAY_COUNT(MsgLogfStaticBuffer), ARRAY_COUNT(MsgLogfStaticBuffer) - 1, Fmt, Fmt);
+			GET_VARARGS(MsgLogfStaticBuffer, UE_ARRAY_COUNT(MsgLogfStaticBuffer), UE_ARRAY_COUNT(MsgLogfStaticBuffer) - 1, Fmt, Fmt);
 			// Copy the message to the stack-allocated buffer)
-			FCString::Strncpy(Message, MsgLogfStaticBuffer, ARRAY_COUNT(Message) - 1);
-			Message[ARRAY_COUNT(Message) - 1] = '\0';
+			FCString::Strncpy(Message, MsgLogfStaticBuffer, UE_ARRAY_COUNT(Message) - 1);
+			Message[UE_ARRAY_COUNT(Message) - 1] = '\0';
 		}
 
 		const int32 NumStackFramesToIgnore = 1;

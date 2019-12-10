@@ -12,6 +12,7 @@
 #include "NiagaraSystem.h"
 #include "NiagaraStats.h"
 #include "Modules/ModuleManager.h"
+#include "Misc/ConfigCacheIni.h"
 
 #if WITH_EDITOR
 const FName UNiagaraEmitter::PrivateMemberNames::EventHandlerScriptProps = GET_MEMBER_NAME_CHECKED(UNiagaraEmitter, EventHandlerScriptProps);
@@ -50,6 +51,32 @@ static FAutoConsoleVariableRef CVarEnableEmitterChangeIdMergeLogging(
 	TEXT("If > 0 verbose change id information will be logged to help with debuggin merge issues. \n"),
 	ECVF_Default
 );
+
+float UNiagaraEmitter::GetSpawnCountScale(int EffectsQuality)
+{
+	if (bOverrideGlobalSpawnCountScale)
+	{
+		switch (EffectsQuality)
+		{
+		case 0: return GlobalSpawnCountScaleOverrides.Low;
+		case 1: return GlobalSpawnCountScaleOverrides.Medium;
+		case 2: return GlobalSpawnCountScaleOverrides.High;
+		case 3: return GlobalSpawnCountScaleOverrides.Epic;
+		case 4: return GlobalSpawnCountScaleOverrides.Cine;
+		}
+	}
+	
+	return INiagaraModule::GetGlobalSpawnCountScale(); // default to the global spawn scale when invalid effects quality
+}
+
+FNiagaraDetailsLevelScaleOverrides::FNiagaraDetailsLevelScaleOverrides()
+{
+	GConfig->GetFloat(TEXT("EffectsQuality@0"), TEXT("fx.NiagaraGlobalSpawnCountScale"), Low, GScalabilityIni);
+	GConfig->GetFloat(TEXT("EffectsQuality@1"), TEXT("fx.NiagaraGlobalSpawnCountScale"), Medium, GScalabilityIni);
+	GConfig->GetFloat(TEXT("EffectsQuality@2"), TEXT("fx.NiagaraGlobalSpawnCountScale"), High, GScalabilityIni);
+	GConfig->GetFloat(TEXT("EffectsQuality@3"), TEXT("fx.NiagaraGlobalSpawnCountScale"), Epic, GScalabilityIni);
+	GConfig->GetFloat(TEXT("EffectsQuality@Cine"), TEXT("fx.NiagaraGlobalSpawnCountScale"), Cine, GScalabilityIni);
+}
 
 void FNiagaraEmitterScriptProperties::InitDataSetAccess()
 {
@@ -98,6 +125,7 @@ bool FNiagaraEmitterScriptProperties::DataSetAccessSynchronized() const
 
 UNiagaraEmitter::UNiagaraEmitter(const FObjectInitializer& Initializer)
 : Super(Initializer)
+, PreAllocationCount(0)
 , FixedBounds(FBox(FVector(-100), FVector(100)))
 , MinDetailLevel(0)
 , MaxDetailLevel(4)
@@ -107,8 +135,10 @@ UNiagaraEmitter::UNiagaraEmitter(const FObjectInitializer& Initializer)
 , bUseMaxDetailLevel(false)
 , bRequiresPersistentIDs(false)
 , MaxDeltaTimePerTick(0.125)
+, MaxUpdateIterations(1)
 , bLimitDeltaTime(true)
 #if WITH_EDITORONLY_DATA
+, bBakeOutRapidIteration(true)
 , ThumbnailImageOutOfDate(true)
 #endif
 {
@@ -136,8 +166,6 @@ void UNiagaraEmitter::PostInitProperties()
 
 	}
 	UniqueEmitterName = TEXT("Emitter");
-
-	GenerateStatID();
 }
 
 #if WITH_EDITORONLY_DATA
@@ -316,8 +344,11 @@ void UNiagaraEmitter::PostLoad()
 		ParentAtLastMerge = nullptr;
 	}
 
-	GraphSource->ConditionalPostLoad();
-	GraphSource->PostLoadFromEmitter(*this);
+	if (!GetOutermost()->bIsCookedForEditor)
+	{
+		GraphSource->ConditionalPostLoad();
+		GraphSource->PostLoadFromEmitter(*this);
+	}
 #endif
 
 	TArray<UNiagaraScript*> AllScripts;
@@ -330,99 +361,101 @@ void UNiagaraEmitter::PostLoad()
 	}
 
 #if WITH_EDITORONLY_DATA
-
-	// Handle emitter inheritance.
-	if (Parent != nullptr)
+	if (!GetOutermost()->bIsCookedForEditor)
 	{
-		Parent->ConditionalPostLoad();
-	}
-	if (ParentAtLastMerge != nullptr)
-	{
-		ParentAtLastMerge->ConditionalPostLoad();
-	}
-	if (IsSynchronizedWithParent() == false)
-	{
-		MergeChangesFromParent();
-	}
-
-	// Reset scripts if recompile is forced.
-	bool bGenerateNewChangeId = false;
-	FString GenerateNewChangeIdReason;
-	if (GetForceCompileOnLoad())
-	{
-		// If we are a standalone emitter, then we invalidate id's, which should cause systems dependent on us to regenerate.
-		UObject* OuterObj = GetOuter();
-		if (OuterObj == GetOutermost())
+		// Handle emitter inheritance.
+		if (Parent != nullptr)
 		{
-			GraphSource->InvalidateCachedCompileIds();
-			bGenerateNewChangeId = true;
-			GenerateNewChangeIdReason = TEXT("PostLoad - Force compile on load");
-			if (GEnableVerboseNiagaraChangeIdLogging)
-			{
-				UE_LOG(LogNiagara, Log, TEXT("InvalidateCachedCompileIds for %s because GbForceNiagaraCompileOnLoad = %d"), *GetPathName(), GbForceNiagaraCompileOnLoad);
-			}
+			Parent->ConditionalPostLoad();
 		}
-	}
-	
-	if (ChangeId.IsValid() == false)
-	{
-		// If the change id is already invalid we need to generate a new one, and can skip checking the owned scripts.
-		bGenerateNewChangeId = true;
-		GenerateNewChangeIdReason = TEXT("PostLoad - Change id was invalid.");
-		if (GEnableVerboseNiagaraChangeIdLogging)
+		if (ParentAtLastMerge != nullptr)
 		{
-			UE_LOG(LogNiagara, Log, TEXT("Change ID updated for emitter %s because the ID was invalid."), *GetPathName());
+			ParentAtLastMerge->ConditionalPostLoad();
 		}
-	}
-	else
-	{
-		for (UNiagaraScript* Script : AllScripts)
+		if (IsSynchronizedWithParent() == false)
 		{
-			if (Script->AreScriptAndSourceSynchronized() == false)
+			MergeChangesFromParent();
+		}
+
+		// Reset scripts if recompile is forced.
+		bool bGenerateNewChangeId = false;
+		FString GenerateNewChangeIdReason;
+		if (GetForceCompileOnLoad())
+		{
+			// If we are a standalone emitter, then we invalidate id's, which should cause systems dependent on us to regenerate.
+			UObject* OuterObj = GetOuter();
+			if (OuterObj == GetOutermost())
 			{
+				GraphSource->InvalidateCachedCompileIds();
 				bGenerateNewChangeId = true;
-				GenerateNewChangeIdReason = TEXT("PostLoad - Script out of sync");
+				GenerateNewChangeIdReason = TEXT("PostLoad - Force compile on load");
 				if (GEnableVerboseNiagaraChangeIdLogging)
 				{
-					UE_LOG(LogNiagara, Log, TEXT("Change ID updated for emitter %s because of a change to its script %s"), *GetPathName(), *Script->GetPathName());
+					UE_LOG(LogNiagara, Log, TEXT("InvalidateCachedCompileIds for %s because GbForceNiagaraCompileOnLoad = %d"), *GetPathName(), GbForceNiagaraCompileOnLoad);
 				}
 			}
 		}
-	}
-
-	if (bGenerateNewChangeId)
-	{
-		UpdateChangeId(GenerateNewChangeIdReason);
-	}
-
-	GraphSource->OnChanged().AddUObject(this, &UNiagaraEmitter::GraphSourceChanged);
-
-	EmitterSpawnScriptProps.Script->RapidIterationParameters.AddOnChangedHandler(
-		FNiagaraParameterStore::FOnChanged::FDelegate::CreateUObject(this, &UNiagaraEmitter::ScriptRapidIterationParameterChanged));
-	EmitterUpdateScriptProps.Script->RapidIterationParameters.AddOnChangedHandler(
-		FNiagaraParameterStore::FOnChanged::FDelegate::CreateUObject(this, &UNiagaraEmitter::ScriptRapidIterationParameterChanged));
-
-	if (SpawnScriptProps.Script)
-	{
-		SpawnScriptProps.Script->RapidIterationParameters.AddOnChangedHandler(
-			FNiagaraParameterStore::FOnChanged::FDelegate::CreateUObject(this, &UNiagaraEmitter::ScriptRapidIterationParameterChanged));
-	}
 	
-	if (UpdateScriptProps.Script)
-	{
-		UpdateScriptProps.Script->RapidIterationParameters.AddOnChangedHandler(
-			FNiagaraParameterStore::FOnChanged::FDelegate::CreateUObject(this, &UNiagaraEmitter::ScriptRapidIterationParameterChanged));
-	}
+		if (ChangeId.IsValid() == false)
+		{
+			// If the change id is already invalid we need to generate a new one, and can skip checking the owned scripts.
+			bGenerateNewChangeId = true;
+			GenerateNewChangeIdReason = TEXT("PostLoad - Change id was invalid.");
+			if (GEnableVerboseNiagaraChangeIdLogging)
+			{
+				UE_LOG(LogNiagara, Log, TEXT("Change ID updated for emitter %s because the ID was invalid."), *GetPathName());
+			}
+		}
+		else
+		{
+			for (UNiagaraScript* Script : AllScripts)
+			{
+				if (Script->AreScriptAndSourceSynchronized() == false)
+				{
+					bGenerateNewChangeId = true;
+					GenerateNewChangeIdReason = TEXT("PostLoad - Script out of sync");
+					if (GEnableVerboseNiagaraChangeIdLogging)
+					{
+						UE_LOG(LogNiagara, Log, TEXT("Change ID updated for emitter %s because of a change to its script %s"), *GetPathName(), *Script->GetPathName());
+					}
+				}
+			}
+		}
 
-	for (FNiagaraEventScriptProperties& EventScriptProperties : EventHandlerScriptProps)
-	{
-		EventScriptProperties.Script->RapidIterationParameters.AddOnChangedHandler(
-			FNiagaraParameterStore::FOnChanged::FDelegate::CreateUObject(this, &UNiagaraEmitter::ScriptRapidIterationParameterChanged));
-	}
+		if (bGenerateNewChangeId)
+		{
+			UpdateChangeId(GenerateNewChangeIdReason);
+		}
 
-	for (UNiagaraRendererProperties* Renderer : RendererProperties)
-	{
-		Renderer->OnChanged().AddUObject(this, &UNiagaraEmitter::RendererChanged);
+		GraphSource->OnChanged().AddUObject(this, &UNiagaraEmitter::GraphSourceChanged);
+
+		EmitterSpawnScriptProps.Script->RapidIterationParameters.AddOnChangedHandler(
+			FNiagaraParameterStore::FOnChanged::FDelegate::CreateUObject(this, &UNiagaraEmitter::ScriptRapidIterationParameterChanged));
+		EmitterUpdateScriptProps.Script->RapidIterationParameters.AddOnChangedHandler(
+			FNiagaraParameterStore::FOnChanged::FDelegate::CreateUObject(this, &UNiagaraEmitter::ScriptRapidIterationParameterChanged));
+
+		if (SpawnScriptProps.Script)
+		{
+			SpawnScriptProps.Script->RapidIterationParameters.AddOnChangedHandler(
+				FNiagaraParameterStore::FOnChanged::FDelegate::CreateUObject(this, &UNiagaraEmitter::ScriptRapidIterationParameterChanged));
+		}
+	
+		if (UpdateScriptProps.Script)
+		{
+			UpdateScriptProps.Script->RapidIterationParameters.AddOnChangedHandler(
+				FNiagaraParameterStore::FOnChanged::FDelegate::CreateUObject(this, &UNiagaraEmitter::ScriptRapidIterationParameterChanged));
+		}
+
+		for (FNiagaraEventScriptProperties& EventScriptProperties : EventHandlerScriptProps)
+		{
+			EventScriptProperties.Script->RapidIterationParameters.AddOnChangedHandler(
+				FNiagaraParameterStore::FOnChanged::FDelegate::CreateUObject(this, &UNiagaraEmitter::ScriptRapidIterationParameterChanged));
+		}
+
+		for (UNiagaraRendererProperties* Renderer : RendererProperties)
+		{
+			Renderer->OnChanged().AddUObject(this, &UNiagaraEmitter::RendererChanged);
+		}
 	}
 #endif
 }
@@ -528,6 +561,17 @@ void UNiagaraEmitter::PostEditChangeProperty(struct FPropertyChangedEvent& Prope
 		UNiagaraSystem::RequestCompileForEmitter(this);
 #endif
 	}
+	if (PropertyName == GET_MEMBER_NAME_CHECKED(UNiagaraEmitter, bOverrideGlobalSpawnCountScale))
+	{
+		if (GraphSource != nullptr)
+		{
+			GraphSource->MarkNotSynchronized(TEXT("Emitter Override Global Spawn Count Scale changed."));
+		}
+
+#if WITH_EDITORONLY_DATA
+		UNiagaraSystem::RequestCompileForEmitter(this);
+#endif
+	}
 
 	ThumbnailImageOutOfDate = true;
 	UpdateChangeId(TEXT("PostEditChangeProperty"));
@@ -538,6 +582,11 @@ void UNiagaraEmitter::PostEditChangeProperty(struct FPropertyChangedEvent& Prope
 UNiagaraEmitter::FOnPropertiesChanged& UNiagaraEmitter::OnPropertiesChanged()
 {
 	return OnPropertiesChangedDelegate;
+}
+
+UNiagaraEmitter::FOnPropertiesChanged& UNiagaraEmitter::OnRenderersChanged()
+{
+	return OnRenderersChangedDelegate;
 }
 #endif
 
@@ -728,6 +777,16 @@ UNiagaraEmitter::FOnEmitterCompiled& UNiagaraEmitter::OnEmitterVMCompiled()
 	return OnVMScriptCompiledDelegate;
 }
 
+void  UNiagaraEmitter::InvalidateCompileResults()
+{
+	TArray<UNiagaraScript*> Scripts;
+	GetScripts(Scripts, false);
+	for (int32 i = 0; i < Scripts.Num(); i++)
+	{
+		Scripts[i]->InvalidateCompileResults();
+	}
+}
+
 void UNiagaraEmitter::OnPostCompile()
 {
 	SyncEmitterAlias(TEXT("Emitter"), UniqueEmitterName);
@@ -768,6 +827,8 @@ void UNiagaraEmitter::OnPostCompile()
 	}
 
 	OnEmitterVMCompiled().Broadcast(this);
+
+	InitFastPathAttributeNames();
 }
 
 UNiagaraEmitter* UNiagaraEmitter::MakeRecursiveDeepCopy(UObject* DestOuter) const
@@ -1004,12 +1065,17 @@ bool UNiagaraEmitter::SetUniqueEmitterName(const FString& InName)
 	return false;
 }
 
-
-FNiagaraVariable UNiagaraEmitter::ToEmitterParameter(const FNiagaraVariable& EmitterVar)const
+TArray<UNiagaraRendererProperties*> UNiagaraEmitter::GetEnabledRenderers() const
 {
-	FNiagaraVariable Var = EmitterVar;
-	Var.SetName(*Var.GetName().ToString().Replace(TEXT("Emitter."), *(GetUniqueEmitterName() + TEXT("."))));
-	return Var;
+	TArray<UNiagaraRendererProperties*> Renderers;
+	for (UNiagaraRendererProperties* Renderer : RendererProperties)
+	{
+		if (Renderer && Renderer->GetIsEnabled() && Renderer->IsSimTargetSupported(this->SimTarget))
+		{
+			Renderers.Add(Renderer);
+		}
+	}
+	return Renderers;
 }
 
 void UNiagaraEmitter::AddRenderer(UNiagaraRendererProperties* Renderer)
@@ -1019,6 +1085,7 @@ void UNiagaraEmitter::AddRenderer(UNiagaraRendererProperties* Renderer)
 #if WITH_EDITOR
 	Renderer->OnChanged().AddUObject(this, &UNiagaraEmitter::RendererChanged);
 	UpdateChangeId(TEXT("Renderer added"));
+	OnRenderersChangedDelegate.Broadcast();
 #endif
 }
 
@@ -1029,6 +1096,7 @@ void UNiagaraEmitter::RemoveRenderer(UNiagaraRendererProperties* Renderer)
 #if WITH_EDITOR
 	Renderer->OnChanged().RemoveAll(this);
 	UpdateChangeId(TEXT("Renderer removed"));
+	OnRenderersChangedDelegate.Broadcast();
 #endif
 }
 
@@ -1123,41 +1191,49 @@ void UNiagaraEmitter::GraphSourceChanged()
 TStatId UNiagaraEmitter::GetStatID(bool bGameThread, bool bConcurrent)const
 {
 #if STATS
+	if (!StatID_GT.IsValidStat())
+	{
+		GenerateStatID();
+	}
+
 	if (bGameThread)
 	{
 		if (bConcurrent)
 		{
-			return StatID_GT;
+			return StatID_GT_CNC;
 		}
 		else
 		{
-			return StatID_GT_CNC;
+			return StatID_GT;
 		}
 	}
 	else
 	{
 		if (bConcurrent)
 		{
-			return StatID_RT;
+			return StatID_RT_CNC;
 		}
 		else
 		{
-			return StatID_RT_CNC;
+			return StatID_RT;
 		}
 	}
 #endif
 	return TStatId();
 }
-void UNiagaraEmitter::GenerateStatID()
+void UNiagaraEmitter::GenerateStatID()const
 {
 #if STATS
-	StatID_GT = FDynamicStats::CreateStatId<FStatGroup_STATGROUP_NiagaraEmitters>(GetName() + TEXT("[GT]"));
-	StatID_GT_CNC = FDynamicStats::CreateStatId<FStatGroup_STATGROUP_NiagaraEmitters>(GetName() + TEXT("[GT_CNC]"));
-	StatID_RT = FDynamicStats::CreateStatId<FStatGroup_STATGROUP_NiagaraEmitters>(GetName() + TEXT("[RT]"));
-	StatID_RT_CNC = FDynamicStats::CreateStatId<FStatGroup_STATGROUP_NiagaraEmitters>(GetName() + TEXT("[RT_CNC]"));
+	FString Name = GetOuter() ? GetOuter()->GetFName().ToString() : TEXT("");
+	Name += TEXT("/") + UniqueEmitterName;
+	StatID_GT = FDynamicStats::CreateStatId<FStatGroup_STATGROUP_NiagaraEmitters>(Name + TEXT("[GT]"));
+	StatID_GT_CNC = FDynamicStats::CreateStatId<FStatGroup_STATGROUP_NiagaraEmitters>(Name + TEXT("[GT_CNC]"));
+	StatID_RT = FDynamicStats::CreateStatId<FStatGroup_STATGROUP_NiagaraEmitters>(Name + TEXT("[RT]"));
+	StatID_RT_CNC = FDynamicStats::CreateStatId<FStatGroup_STATGROUP_NiagaraEmitters>(Name + TEXT("[RT_CNC]"));
 #endif
 }
 
+#if WITH_EDITORONLY_DATA
 UNiagaraEmitter* UNiagaraEmitter::GetParent() const
 {
 	return Parent;
@@ -1167,4 +1243,36 @@ void UNiagaraEmitter::RemoveParent()
 {
 	Parent = nullptr;
 	ParentAtLastMerge = nullptr;
+}
+#endif
+
+void UNiagaraEmitter::InitFastPathAttributeNames()
+{
+	auto InitParameters = [](const FNiagaraParameters& Parameters, const FString& EmitterName, FNiagaraFastPathAttributeNames& FastPathParameterNames)
+	{
+		FastPathParameterNames.System.Empty();
+		FastPathParameterNames.SystemFullNames.Empty();
+		FastPathParameterNames.Emitter.Empty();
+		FastPathParameterNames.EmitterFullNames.Empty();
+
+		FString SystemPrefix = TEXT("System.");
+		FString EmitterPrefix = EmitterName + TEXT(".");
+		for (const FNiagaraVariable& Parameter : Parameters.Parameters)
+		{
+			FString ParameterNameString = Parameter.GetName().ToString();
+			if (ParameterNameString.StartsWith(SystemPrefix))
+			{
+				FastPathParameterNames.System.Add(*(Parameter.GetName().ToString().RightChop(SystemPrefix.Len())));
+				FastPathParameterNames.SystemFullNames.Add(Parameter.GetName());
+			}
+			else if (ParameterNameString.StartsWith(EmitterPrefix))
+			{
+				FastPathParameterNames.Emitter.Add(*(Parameter.GetName().ToString().RightChop(EmitterPrefix.Len())));
+				FastPathParameterNames.EmitterFullNames.Add(Parameter.GetName());
+			}
+		}
+	};
+
+	InitParameters(SpawnScriptProps.Script->GetVMExecutableData().Parameters, UniqueEmitterName, SpawnFastPathAttributeNames);
+	InitParameters(UpdateScriptProps.Script->GetVMExecutableData().Parameters, UniqueEmitterName, UpdateFastPathAttributeNames);
 }

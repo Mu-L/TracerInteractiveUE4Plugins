@@ -17,6 +17,7 @@
 #include "SceneManagement.h"
 #include "EditorComponents.h"
 #include "Framework/Commands/Commands.h"
+#include "Editor.h"
 
 struct FAssetData;
 class FCachedJoystickState;
@@ -94,6 +95,7 @@ public:
 	bool IsCtrlButtonEvent() const { return (Key == EKeys::LeftControl || Key == EKeys::RightControl); }
 	bool IsShiftButtonEvent() const { return (Key == EKeys::LeftShift || Key == EKeys::RightShift); }
 	bool IsAltButtonEvent() const { return (Key == EKeys::LeftAlt || Key == EKeys::RightAlt); }
+	bool IsCommandButtonEvent() const { return (Key == EKeys::LeftCommand || Key == EKeys::RightCommand); }
 
 	bool IsLeftMouseButtonPressed() const { return IsButtonPressed( EKeys::LeftMouseButton ); }
 	bool IsMiddleMouseButtonPressed() const { return IsButtonPressed( EKeys::MiddleMouseButton ); }
@@ -107,7 +109,9 @@ public:
 	bool IsAltButtonPressed() const { return !( IsAltButtonEvent() && InputEvent == IE_Released ) && ( IsButtonPressed( EKeys::LeftAlt ) || IsButtonPressed( EKeys::RightAlt ) ); }
 	bool IsShiftButtonPressed() const { return !( IsShiftButtonEvent() && InputEvent == IE_Released ) && ( IsButtonPressed( EKeys::LeftShift ) || IsButtonPressed( EKeys::RightShift ) ); }
 	bool IsCtrlButtonPressed() const { return !( IsCtrlButtonEvent() && InputEvent == IE_Released ) && ( IsButtonPressed( EKeys::LeftControl ) || IsButtonPressed( EKeys::RightControl ) ); }
+	bool IsCommandButtonPressed() const { return !(IsCommandButtonEvent() && InputEvent == IE_Released) &&  (IsButtonPressed( EKeys::LeftCommand ) || IsButtonPressed( EKeys::RightCommand ) ); }
 	bool IsSpaceBarPressed() const { return IsButtonPressed( EKeys::SpaceBar ); }
+
 private:
 	/** Viewport the event was sent to */
 	FViewport* Viewport;
@@ -458,7 +462,9 @@ public:
 	void TakeHighResScreenShot();
 
 	/** Called when an editor mode has been (de)activated */
+	UE_DEPRECATED(4.24, "Use OnEditorModeIDChanged() instead.")
 	void OnEditorModeChanged(FEdMode* EditorMode, bool bIsEntering);
+	void OnEditorModeIDChanged(const FEditorModeID& EditorModeID, bool bIsEntering);
 
 	/** FViewElementDrawer interface */
 	virtual void Draw(const FSceneView* View,FPrimitiveDrawInterface* PDI) override;
@@ -1541,10 +1547,11 @@ protected:
 	int32 CachedLastMouseX = 0;
 	int32 CachedLastMouseY = 0;
 
-	/** True is the use is controling the light via a*/
-	bool bUserIsControllingSunLight = false;
-	float UserIsControllingSunLightTimer = 0.0f;
-	FTransform UserControlledSunLightMatrix;
+	/** True is the use is controling the light via a shorcut*/
+	bool bUserIsControllingAtmosphericLight0 = false;
+	bool bUserIsControllingAtmosphericLight1 = false;
+	float UserIsControllingAtmosphericLightTimer = 0.0f;
+	FTransform UserControlledAtmosphericLightMatrix;
 
 
 	// -1, -1 if not set

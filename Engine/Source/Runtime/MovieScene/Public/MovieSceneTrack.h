@@ -111,7 +111,7 @@ struct FMovieSceneTrackDisplayOptions
  * Base class for a track in a Movie Scene
  */
 UCLASS(abstract, DefaultToInstanced, MinimalAPI, BlueprintType)
-class UMovieSceneTrack
+class MOVIESCENE_VTABLE UMovieSceneTrack
 	: public UMovieSceneSignedObject
 {
 	GENERATED_BODY()
@@ -221,6 +221,10 @@ protected:
 	/** Intentionally not a UPROPERTY so this isn't serialized */
 	FMovieSceneBlendTypeField SupportedBlendTypes;
 
+	/** Whether evaluation of this track has been disabled via mute/solo */
+	UPROPERTY()
+	bool bIsEvalDisabled;
+
 public:
 
 	/**
@@ -246,6 +250,16 @@ public:
 		return SupportedBlendTypes.Num() != 0;
 	}
 
+	/** Set This Section as the one to key. If track doesn't support layered blends then don't implement
+	* @param InSection		Section that we want to key
+	*/
+	 virtual void SetSectionToKey(UMovieSceneSection* InSection) {};
+
+	/** Get the section we want to key. If track doesn't support layered blends it will return nulltpr.
+	* @return The section to key if one exists
+	*/
+	 virtual UMovieSceneSection* GetSectionToKey() const { return nullptr; }
+
 	/** Gets the greatest row index of all the sections owned by this track. */
 	MOVIESCENE_API int32 GetMaxRowIndex() const;
 
@@ -254,6 +268,16 @@ public:
 	 * @return Whether or not fixes were made. 
 	 */
 	MOVIESCENE_API bool FixRowIndices();
+
+	/**
+	* @return Whether evaluation of this track should be disabled due to mute/solo settings
+	*/
+	MOVIESCENE_API bool IsEvalDisabled() const { return bIsEvalDisabled; };
+
+	/**
+	* Called by Sequencer to set whether evaluation of this track should be disabled due to mute/solo settings
+	*/
+	MOVIESCENE_API void SetEvalDisabled(bool bEvalDisabled) { bIsEvalDisabled = bEvalDisabled; }
 
 public:
 
@@ -397,5 +421,6 @@ public:
 	 * @param Section The section that moved.
 	 */
 	virtual void OnSectionMoved(UMovieSceneSection& Section) { }
+
 #endif
 };

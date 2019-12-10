@@ -206,12 +206,22 @@ public:
 	/**
 	* Move Constructor
 	*/
-	FORCEINLINE TManagedArrayBase(TManagedArrayBase<ElementType>&& Other) = delete;
+	FORCEINLINE TManagedArrayBase(TManagedArrayBase<ElementType>&& Other)
+		: Array(MoveTemp(Other.Array))
+	{}
+	FORCEINLINE TManagedArrayBase(TArray<ElementType>&& Other)
+		: Array(MoveTemp(Other))
+	{}
 
 	/**
 	* Assignment operator
 	*/
-	FORCEINLINE TManagedArrayBase& operator=(TManagedArrayBase<ElementType>&& Other) = delete;
+	FORCEINLINE TManagedArrayBase& operator=(TManagedArrayBase<ElementType>&& Other)
+	{
+		Array = MoveTemp(Other.Array);
+		return *this;
+	}
+
 
 
 	/**
@@ -259,7 +269,16 @@ public:
 
 		Resize(Size);
 		InitHelper(Array, NewTypedArray, Size);
-	};
+	}
+
+	/**
+	 * Fill the array with \p Value.
+	 */
+	void Fill(const ElementType& Value)
+	{
+		for (int32 Idx = 0; Idx < Array.Num(); ++Idx)
+			Array[Idx] = Value;
+	}
 
 #if 0
 	virtual void Swap(int32 Index1, int32 Index2) override
@@ -275,7 +294,7 @@ public:
 		TManagedArrayBase<ElementType>& NewTypedArray = static_cast<TManagedArrayBase<ElementType>& >(NewArray);
 
 		Exchange(*this, NewTypedArray);
-	};
+	}
 
 	/**
 	* Returning a reference to the element at index.
@@ -354,6 +373,16 @@ public:
 		return Array.Find(Item);
 	}
 
+	/**
+	* Count the number of entries match \p Item.
+	*/
+	int32 Count(const ElementType& Item) const
+	{
+		int32 Num = 0;
+		for (int32 Idx = 0; Idx < Array.Num(); ++Idx)
+			Num += Array[Idx] == Item ? 1 : 0;
+		return Num;
+	}
 
 	/**
 	* Checks if index is in array range.
@@ -481,9 +510,21 @@ public:
 		: TManagedArrayBase<InElementType>(Other)
 	{}
 
+	FORCEINLINE TManagedArray(TManagedArray<InElementType>&& Other)
+		: TManagedArrayBase<InElementType>(MoveTemp(Other))
+	{}
+
+	FORCEINLINE TManagedArray(TArray<InElementType>&& Other)
+		: TManagedArrayBase<InElementType>(MoveTemp(Other))
+	{}
+
+	FORCEINLINE TManagedArray& operator=(TManagedArray<InElementType>&& Other)
+	{
+		TManagedArrayBase<InElementType>::operator=(MoveTemp(Other));
+		return *this;
+	}
+
 	FORCEINLINE TManagedArray(const TManagedArray<InElementType>& Other) = delete;
-	FORCEINLINE TManagedArray(TManagedArray<InElementType>&& Other) = delete;
-	FORCEINLINE TManagedArray& operator=(TManagedArray<InElementType>&& Other) = delete;
 
 	virtual ~TManagedArray()
 	{}
@@ -503,8 +544,11 @@ public:
 	{}
 
 	FORCEINLINE TManagedArray(const TManagedArray<int32>& Other) = delete;
-	FORCEINLINE TManagedArray(TManagedArray<int32>&& Other) = delete;
-	FORCEINLINE TManagedArray& operator=(TManagedArray<int32>&& Other) = delete;
+	FORCEINLINE TManagedArray(TManagedArray<int32>&& Other) = default;
+	FORCEINLINE TManagedArray(TArray<int32>&& Other)
+		: TManagedArrayBase<int32>(MoveTemp(Other))
+	{}
+	FORCEINLINE TManagedArray& operator=(TManagedArray<int32>&& Other) = default;
 
 	virtual ~TManagedArray()
 	{}
@@ -555,8 +599,11 @@ public:
 	{}
 
 	FORCEINLINE TManagedArray(const TManagedArray<TSet<int32>>& Other) = delete;
-	FORCEINLINE TManagedArray(TManagedArray<TSet<int32>>&& Other) = delete;
-	FORCEINLINE TManagedArray& operator=(TManagedArray<TSet<int32>>&& Other) = delete;
+	FORCEINLINE TManagedArray(TManagedArray<TSet<int32>>&& Other) = default;
+	FORCEINLINE TManagedArray(TArray<TSet<int32>>&& Other)
+		: TManagedArrayBase<TSet<int32>>(MoveTemp(Other))
+	{}
+	FORCEINLINE TManagedArray& operator=(TManagedArray<TSet<int32>>&& Other) = default;
 
 	virtual ~TManagedArray()
 	{}
@@ -622,8 +669,11 @@ public:
 	{}
 
 	FORCEINLINE TManagedArray(const TManagedArray<FIntVector>& Other) = delete;
-	FORCEINLINE TManagedArray(TManagedArray<FIntVector>&& Other) = delete;
-	FORCEINLINE TManagedArray& operator=(TManagedArray<FIntVector>&& Other) = delete;
+	FORCEINLINE TManagedArray(TManagedArray<FIntVector>&& Other) = default;
+	FORCEINLINE TManagedArray(TArray<FIntVector>&& Other)
+		: TManagedArrayBase<FIntVector>(MoveTemp(Other))
+	{}
+	FORCEINLINE TManagedArray& operator=(TManagedArray<FIntVector>&& Other) = default;
 
 	virtual ~TManagedArray()
 	{}

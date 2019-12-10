@@ -9,6 +9,7 @@
 #include "ISequencer.h"
 #include "ViewModels/NiagaraSystemViewModel.h"
 #include "ViewModels/NiagaraEmitterHandleViewModel.h"
+#include "ViewModels/NiagaraSystemSelectionViewModel.h"
 #include "NiagaraEmitterHandle.h"
 #include "NiagaraEmitter.h"
 #include "NiagaraScript.h"
@@ -33,7 +34,7 @@ void SNiagaraGeneratedCodeView::Construct(const FArguments& InArgs, TSharedRef<F
 	ensure(ScriptEnum);
 
 	SystemViewModel = InSystemViewModel;
-	SystemViewModel->OnSelectedEmitterHandlesChanged().AddRaw(this, &SNiagaraGeneratedCodeView::SelectedEmitterHandlesChanged);
+	SystemViewModel->GetSelectionViewModel()->OnEmitterHandleIdSelectionChanged().AddSP(this, &SNiagaraGeneratedCodeView::SystemSelectionChanged);
 	SystemViewModel->GetSystemScriptViewModel()->OnSystemCompiled().AddRaw(this, &SNiagaraGeneratedCodeView::OnCodeCompiled);
 
 	TSharedRef<SWidget> HeaderContentsFirstLine = SNew(SHorizontalBox)
@@ -329,7 +330,7 @@ void SNiagaraGeneratedCodeView::OnCodeCompiled()
 	DoSearch(SearchBox->GetText());
 }
 
-void SNiagaraGeneratedCodeView::SelectedEmitterHandlesChanged()
+void SNiagaraGeneratedCodeView::SystemSelectionChanged()
 {
 	UpdateUI();
 	DoSearch(SearchBox->GetText());
@@ -343,11 +344,11 @@ void SNiagaraGeneratedCodeView::UpdateUI()
 	Scripts.Add(System.GetSystemSpawnScript());
 	Scripts.Add(System.GetSystemUpdateScript());
 
-	TArray<TSharedRef<FNiagaraEmitterHandleViewModel>> SelectedEmitterHandles;
-	SystemViewModel->GetSelectedEmitterHandles(SelectedEmitterHandles);
-	if (SelectedEmitterHandles.Num() == 1)
+	TArray<FGuid> SelectedEmitterHandleIds = SystemViewModel->GetSelectionViewModel()->GetSelectedEmitterHandleIds();
+	if(SelectedEmitterHandleIds.Num() == 1)
 	{
-		FNiagaraEmitterHandle* Handle = SelectedEmitterHandles[0]->GetEmitterHandle();
+		TSharedPtr<FNiagaraEmitterHandleViewModel> SelectedEmitterHandleViewModel = SystemViewModel->GetEmitterHandleViewModelById(SelectedEmitterHandleIds[0]);
+		FNiagaraEmitterHandle* Handle = SelectedEmitterHandleViewModel.IsValid() ? SelectedEmitterHandleViewModel->GetEmitterHandle() : nullptr;
 		if (Handle)
 		{
 			TArray<UNiagaraScript*> EmitterScripts;
@@ -531,7 +532,11 @@ SNiagaraGeneratedCodeView::~SNiagaraGeneratedCodeView()
 {
 	if (SystemViewModel.IsValid())
 	{
-		SystemViewModel->OnSelectedEmitterHandlesChanged().RemoveAll(this);
+		if (SystemViewModel->GetSelectionViewModel())
+		{
+			SystemViewModel->GetSelectionViewModel()->OnEmitterHandleIdSelectionChanged().RemoveAll(this);
+		}
+
 		if (SystemViewModel->GetSystemScriptViewModel().IsValid())
 		{
 			SystemViewModel->GetSystemScriptViewModel()->OnSystemCompiled().RemoveAll(this);

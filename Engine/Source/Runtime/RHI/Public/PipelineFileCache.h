@@ -188,6 +188,9 @@ struct RHI_API FPipelineCacheFileFormatPSO
 	FString CommonToString() const;
 	static FString CommonHeaderLine();
 	void CommonFromString(const FString& Src);
+	
+	// Potential cases for seperating verify logic if requiired: RunTime-Logging, RunTime-UserCaching, RunTime-PreCompile, CommandLet-Cooking
+	bool Verify() const;
 };
 
 struct RHI_API FPipelineCacheFileFormatPSORead
@@ -319,10 +322,12 @@ public:
 	static uint64 SetGameUsageMaskWithComparison(uint64 GameUsageMask, FPSOMaskComparisonFn InComparisonFnPtr);
 	static uint64 GetGameUsageMask()	{ return GameUsageMask;}
 	
+	static void PreCompileComplete();
 private:
 	
 	static void RegisterPSOUsageDataUpdateForNextSave(FPSOUsageData& UsageData);
 	static void ClearOSPipelineCache();
+	static bool ShouldEnableFileCache();
 	
 private:
 	static FRWLock FileCacheLock;

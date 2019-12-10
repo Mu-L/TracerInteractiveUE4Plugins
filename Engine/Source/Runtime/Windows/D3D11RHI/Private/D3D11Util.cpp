@@ -235,20 +235,6 @@ static void TerminateOnOutOfMemory(HRESULT D3DResult, bool bCreatingTextures)
 	#define MAKE_D3DHRESULT( code)		MAKE_HRESULT( 1, _FACD3D, code )
 #endif	//MAKE_D3DHRESULT
 
-void VerifyD3D11Result(HRESULT D3DResult,const ANSICHAR* Code,const ANSICHAR* Filename,uint32 Line, ID3D11Device* Device)
-{
-	check(FAILED(D3DResult));
-
-	const FString& ErrorString = GetD3D11ErrorString(D3DResult, Device);
-
-	UE_LOG(LogD3D11RHI, Error,TEXT("%s failed \n at %s:%u \n with error %s"),ANSI_TO_TCHAR(Code),ANSI_TO_TCHAR(Filename),Line,*ErrorString);
-
-	TerminateOnDeviceRemoved(D3DResult, Device);
-	TerminateOnOutOfMemory(D3DResult, false);
-
-	UE_LOG(LogD3D11RHI, Fatal,TEXT("%s failed \n at %s:%u \n with error %s"),ANSI_TO_TCHAR(Code),ANSI_TO_TCHAR(Filename),Line,*ErrorString);
-}
-
 void VerifyD3D11ResultNoExit(HRESULT D3DResult, const ANSICHAR* Code, const ANSICHAR* Filename, uint32 Line, ID3D11Device* Device)
 {
 	check(FAILED(D3DResult));
@@ -256,6 +242,20 @@ void VerifyD3D11ResultNoExit(HRESULT D3DResult, const ANSICHAR* Code, const ANSI
 	const FString& ErrorString = GetD3D11ErrorString(D3DResult, Device);
 
 	UE_LOG(LogD3D11RHI, Error, TEXT("%s failed \n at %s:%u \n with error %s Error Code List: https://docs.microsoft.com/en-us/windows/desktop/direct3ddxgi/dxgi-error"), ANSI_TO_TCHAR(Code), ANSI_TO_TCHAR(Filename), Line, *ErrorString);
+}
+
+void VerifyD3D11Result(HRESULT D3DResult,const ANSICHAR* Code,const ANSICHAR* Filename,uint32 Line, ID3D11Device* Device)
+{
+	check(FAILED(D3DResult));
+
+	const FString& ErrorString = GetD3D11ErrorString(D3DResult, Device);
+
+	UE_LOG(LogD3D11RHI, Error, TEXT("%s failed \n at %s:%u \n with error %s"), ANSI_TO_TCHAR(Code), ANSI_TO_TCHAR(Filename), Line, *ErrorString);
+
+	TerminateOnDeviceRemoved(D3DResult, Device);
+	TerminateOnOutOfMemory(D3DResult, false);
+
+	UE_LOG(LogD3D11RHI, Fatal,TEXT("%s failed \n at %s:%u \n with error %s"),ANSI_TO_TCHAR(Code),ANSI_TO_TCHAR(Filename),Line,*ErrorString);
 }
 
 void VerifyD3D11ShaderResult(FRHIShader* Shader, HRESULT D3DResult, const ANSICHAR* Code, const ANSICHAR* Filename, uint32 Line, ID3D11Device* Device)
@@ -280,17 +280,17 @@ void VerifyD3D11ShaderResult(FRHIShader* Shader, HRESULT D3DResult, const ANSICH
 	}
 }
 
-void VerifyD3D11CreateTextureResult(HRESULT D3DResult,const ANSICHAR* Code,const ANSICHAR* Filename,uint32 Line,uint32 SizeX,uint32 SizeY,uint32 SizeZ,uint8 Format,uint32 NumMips,uint32 Flags,
+void VerifyD3D11CreateTextureResult(HRESULT D3DResult, int32 UEFormat,const ANSICHAR* Code,const ANSICHAR* Filename,uint32 Line,uint32 SizeX,uint32 SizeY,uint32 SizeZ,uint8 D3DFormat,uint32 NumMips,uint32 Flags,
 	D3D11_USAGE Usage, uint32 CPUAccessFlags, uint32 MiscFlags, uint32 SampleCount, uint32 SampleQuality,
 	const void* SubResPtr, uint32 SubResPitch, uint32 SubResSlicePitch, ID3D11Device* Device)
 {
 	check(FAILED(D3DResult));
 
 	const FString ErrorString = GetD3D11ErrorString(D3DResult, 0);
-	const TCHAR* D3DFormatString = GetD3D11TextureFormatString((DXGI_FORMAT)Format);
+	const TCHAR* D3DFormatString = GetD3D11TextureFormatString((DXGI_FORMAT)D3DFormat);
 
 	UE_LOG(LogD3D11RHI, Error,
-		TEXT("%s failed \n at %s:%u \n with error %s, \n Size=%ix%ix%i Format=%s(0x%08X), NumMips=%i, Flags=%s, Usage:0x%x, CPUFlags:0x%x, MiscFlags:0x%x, SampleCount:0x%x, SampleQuality:0x%x, SubresPtr:0x%p, SubresPitch:%i, SubresSlicePitch:%i"),
+		TEXT("%s failed \n at %s:%u \n with error %s, \n Size=%ix%ix%i PF=%d D3DFormat=%s(0x%08X), NumMips=%i, Flags=%s, Usage:0x%x, CPUFlags:0x%x, MiscFlags:0x%x, SampleCount:0x%x, SampleQuality:0x%x, SubresPtr:0x%p, SubresPitch:%i, SubresSlicePitch:%i"),
 		ANSI_TO_TCHAR(Code),
 		ANSI_TO_TCHAR(Filename),
 		Line,
@@ -298,8 +298,9 @@ void VerifyD3D11CreateTextureResult(HRESULT D3DResult,const ANSICHAR* Code,const
 		SizeX,
 		SizeY,
 		SizeZ,
+		UEFormat,
 		D3DFormatString,
-		Format,
+		D3DFormat,
 		NumMips,
 		*GetD3D11TextureFlagString(Flags),
 		Usage,
@@ -315,7 +316,7 @@ void VerifyD3D11CreateTextureResult(HRESULT D3DResult,const ANSICHAR* Code,const
 	TerminateOnOutOfMemory(D3DResult, true);
 
 	UE_LOG(LogD3D11RHI, Fatal,
-		TEXT("%s failed \n at %s:%u \n with error %s, \n Size=%ix%ix%i Format=%s(0x%08X), NumMips=%i, Flags=%s, Usage:0x%x, CPUFlags:0x%x, MiscFlags:0x%x, SampleCount:0x%x, SampleQuality:0x%x, SubresPtr:0x%p, SubresPitch:%i, SubresSlicePitch:%i"),
+		TEXT("%s failed \n at %s:%u \n with error %s, \n Size=%ix%ix%i PF=%d Format=%s(0x%08X), NumMips=%i, Flags=%s, Usage:0x%x, CPUFlags:0x%x, MiscFlags:0x%x, SampleCount:0x%x, SampleQuality:0x%x, SubresPtr:0x%p, SubresPitch:%i, SubresSlicePitch:%i"),
 		ANSI_TO_TCHAR(Code),
 		ANSI_TO_TCHAR(Filename),
 		Line,
@@ -323,8 +324,9 @@ void VerifyD3D11CreateTextureResult(HRESULT D3DResult,const ANSICHAR* Code,const
 		SizeX,
 		SizeY,
 		SizeZ,
+		UEFormat,
 		D3DFormatString,
-		Format,
+		D3DFormat,
 		NumMips,
 		*GetD3D11TextureFlagString(Flags),
 		Usage,
@@ -435,96 +437,6 @@ FD3D11BoundRenderTargets::~FD3D11BoundRenderTargets()
 	}
 }
 
-FD3D11DynamicBuffer::FD3D11DynamicBuffer(FD3D11DynamicRHI* InD3DRHI, D3D11_BIND_FLAG InBindFlags, uint32* InBufferSizes)
-	: D3DRHI(InD3DRHI)
-	, BindFlags(InBindFlags)
-	, LockedBufferIndex(-1)
-{
-	while (BufferSizes.Num() < MAX_BUFFER_SIZES && *InBufferSizes > 0)
-	{
-		uint32 Size = *InBufferSizes++;
-		BufferSizes.Add(Size);
-	}
-	check(*InBufferSizes == 0);
-	InitResource();
-}
-
-FD3D11DynamicBuffer::~FD3D11DynamicBuffer()
-{
-	ReleaseResource();
-}
-
-void FD3D11DynamicBuffer::InitRHI()
-{
-	D3D11_BUFFER_DESC Desc;
-	ZeroMemory( &Desc, sizeof( D3D11_BUFFER_DESC ) );
-	Desc.Usage = D3D11_USAGE_DYNAMIC;
-	Desc.BindFlags = BindFlags;
-	Desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-	Desc.MiscFlags = 0;
-
-	while (Buffers.Num() < BufferSizes.Num())
-	{
-		TRefCountPtr<ID3D11Buffer> Buffer;
-		Desc.ByteWidth = BufferSizes[Buffers.Num()];
-		VERIFYD3D11RESULT_EX(D3DRHI->GetDevice()->CreateBuffer(&Desc,NULL,Buffer.GetInitReference()), D3DRHI->GetDevice());
-		UpdateBufferStats(Buffer,true);
-		Buffers.Add(Buffer);
-	}
-}
-
-void FD3D11DynamicBuffer::ReleaseRHI()
-{
-	for (int32 i = 0; i < Buffers.Num(); ++i)
-	{
-		UpdateBufferStats(Buffers[i],false);
-	}
-	Buffers.Empty();
-}
-
-void* FD3D11DynamicBuffer::Lock(uint32 Size)
-{
-	check(LockedBufferIndex == -1 && Buffers.Num() > 0);
-	
-	int32 BufferIndex = 0;
-	int32 NumBuffers = Buffers.Num();
-	while (BufferIndex < NumBuffers && BufferSizes[BufferIndex] < Size)
-	{
-		BufferIndex++;
-	}
-	if (BufferIndex == NumBuffers)
-	{
-		BufferIndex--;
-
-		TRefCountPtr<ID3D11Buffer> Buffer;
-		D3D11_BUFFER_DESC Desc;
-		ZeroMemory( &Desc, sizeof( D3D11_BUFFER_DESC ) );
-		Desc.Usage = D3D11_USAGE_DYNAMIC;
-		Desc.BindFlags = BindFlags;
-		Desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-		Desc.MiscFlags = 0;
-		Desc.ByteWidth = Size;
-		VERIFYD3D11RESULT_EX(D3DRHI->GetDevice()->CreateBuffer(&Desc,NULL,Buffer.GetInitReference()), D3DRHI->GetDevice());
-		UpdateBufferStats(Buffers[BufferIndex],false);
-		UpdateBufferStats(Buffer,true);
-		Buffers[BufferIndex] = Buffer;
-		BufferSizes[BufferIndex] = Size;
-	}
-
-	LockedBufferIndex = BufferIndex;
-	D3D11_MAPPED_SUBRESOURCE MappedSubresource;
-	VERIFYD3D11RESULT_EX(D3DRHI->GetDeviceContext()->Map(Buffers[BufferIndex],0,D3D11_MAP_WRITE_DISCARD,0,&MappedSubresource), D3DRHI->GetDevice());
-	return MappedSubresource.pData;
-}
-
-ID3D11Buffer* FD3D11DynamicBuffer::Unlock()
-{
-	check(LockedBufferIndex != -1);
-	ID3D11Buffer* LockedBuffer = Buffers[LockedBufferIndex];
-	D3DRHI->GetDeviceContext()->Unmap(LockedBuffer,0);
-	LockedBufferIndex = -1;
-	return LockedBuffer;
-}
 
 //
 // Stat declarations.

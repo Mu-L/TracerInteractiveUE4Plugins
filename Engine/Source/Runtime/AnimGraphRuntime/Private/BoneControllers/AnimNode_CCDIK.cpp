@@ -46,6 +46,7 @@ FTransform FAnimNode_CCDIK::GetTargetTransform(const FTransform& InComponentTran
 
 void FAnimNode_CCDIK::EvaluateSkeletalControl_AnyThread(FComponentSpacePoseContext& Output, TArray<FBoneTransform>& OutBoneTransforms)
 {
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_ANIMNODE(EvaluateSkeletalControl_AnyThread)
 	const FBoneContainer& BoneContainer = Output.Pose.GetPose().GetBoneContainer();
 
 	// Update EffectorLocation if it is based off a bone position
@@ -71,7 +72,7 @@ void FAnimNode_CCDIK::EvaluateSkeletalControl_AnyThread(FComponentSpacePoseConte
 	OutBoneTransforms.AddUninitialized(NumTransforms);
 
 	// Gather chain links. These are non zero length bones.
-	TArray<CCDIKChainLink> Chain;
+	TArray<FCCDIKChainLink> Chain;
 	Chain.Reserve(NumTransforms);
 	// Start with Root Bone
 	{
@@ -80,7 +81,7 @@ void FAnimNode_CCDIK::EvaluateSkeletalControl_AnyThread(FComponentSpacePoseConte
 		const FTransform& BoneCSTransform = Output.Pose.GetComponentSpaceTransform(RootBoneIndex);
 
 		OutBoneTransforms[0] = FBoneTransform(RootBoneIndex, BoneCSTransform);
-		Chain.Add(CCDIKChainLink(BoneCSTransform, LocalTransform, 0));
+		Chain.Add(FCCDIKChainLink(BoneCSTransform, LocalTransform, 0));
 	}
 
 	// Go through remaining transforms
@@ -99,13 +100,13 @@ void FAnimNode_CCDIK::EvaluateSkeletalControl_AnyThread(FComponentSpacePoseConte
 
 		if (!FMath::IsNearlyZero(BoneLength))
 		{
-			Chain.Add(CCDIKChainLink(BoneCSTransform, LocalTransform, TransformIndex));
+			Chain.Add(FCCDIKChainLink(BoneCSTransform, LocalTransform, TransformIndex));
 		}
 		else
 		{
 			// Mark this transform as a zero length child of the last link.
 			// It will inherit position and delta rotation from parent link.
-			CCDIKChainLink & ParentLink = Chain[Chain.Num() - 1];
+			FCCDIKChainLink & ParentLink = Chain[Chain.Num() - 1];
 			ParentLink.ChildZeroLengthTransformIndices.Add(TransformIndex);
 		}
 	}
@@ -121,7 +122,7 @@ void FAnimNode_CCDIK::EvaluateSkeletalControl_AnyThread(FComponentSpacePoseConte
 		// First step: update bone transform positions from chain links.
 		for (int32 LinkIndex = 0; LinkIndex < NumChainLinks; LinkIndex++)
 		{
-			CCDIKChainLink const & ChainLink = Chain[LinkIndex];
+			FCCDIKChainLink const & ChainLink = Chain[LinkIndex];
 			OutBoneTransforms[ChainLink.TransformIndex].Transform = ChainLink.Transform;
 
 			// If there are any zero length children, update position of those
@@ -185,6 +186,7 @@ void FAnimNode_CCDIK::ResizeRotationLimitPerJoints(int32 NewSize)
 
 void FAnimNode_CCDIK::InitializeBoneReferences(const FBoneContainer& RequiredBones)
 {
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_ANIMNODE(InitializeBoneReferences)
 	TipBone.Initialize(RequiredBones);
 	RootBone.Initialize(RequiredBones);
 	EffectorTarget.InitializeBoneReferences(RequiredBones);
@@ -192,6 +194,7 @@ void FAnimNode_CCDIK::InitializeBoneReferences(const FBoneContainer& RequiredBon
 
 void FAnimNode_CCDIK::GatherDebugData(FNodeDebugData& DebugData)
 {
+	DECLARE_SCOPE_HIERARCHICAL_COUNTER_ANIMNODE(GatherDebugData)
 	FString DebugLine = DebugData.GetNodeName(this);
 
 	DebugData.AddDebugItem(DebugLine);

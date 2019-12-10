@@ -15,6 +15,26 @@
 #include "ClearQuad.h"
 #include "PipelineStateCache.h"
 
+FVector4 GetDepthOfFieldParameters(const FPostProcessSettings& PostProcessSettings)
+{
+	const float SkyFocusDistance = PostProcessSettings.DepthOfFieldSkyFocusDistance;
+
+	// *2 to go to account for Radius/Diameter, 100 for percent
+	const float DepthOfFieldVignetteSize = FMath::Max(0.0f, PostProcessSettings.DepthOfFieldVignetteSize / 100.0f * 2);
+
+	// doesn't make much sense to expose this property as the effect is very non linear and it would cost some performance to fix that
+	const float DepthOfFieldVignetteFeather = 10.0f / 100.0f;
+
+	const float DepthOfFieldVignetteMul = 1.0f / DepthOfFieldVignetteFeather;
+	const float DepthOfFieldVignetteAdd = (0.5f - DepthOfFieldVignetteSize) * DepthOfFieldVignetteMul;
+
+	return FVector4(
+		(SkyFocusDistance > 0) ? SkyFocusDistance : 100000000.0f, // very large if <0 to not mask out skybox, can be optimized to disable feature completely
+		DepthOfFieldVignetteMul,
+		DepthOfFieldVignetteAdd,
+		0.0f);
+}
+
 /** Encapsulates the DOF setup pixel shader. */
 // @param FarBlur 0:off, 1:on
 // @param NearBlur 0:off, 1:on, 2:on with Vignette
@@ -31,7 +51,7 @@ class FPostProcessDOFSetupPS : public FGlobalShader
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
 		FGlobalShader::ModifyCompilationEnvironment(Parameters,OutEnvironment);
-		OutEnvironment.SetDefine(TEXT("MOBILE_SHADING"), IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM4) ? 0u : 1u);
+		OutEnvironment.SetDefine(TEXT("MOBILE_SHADING"), IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5) ? 0u : 1u);
 		OutEnvironment.SetDefine(TEXT("NEAR_BLUR"), (uint32)(NearBlur >= 1));
 		OutEnvironment.SetDefine(TEXT("DOF_VIGNETTE"), (uint32)(NearBlur == 2));
 		OutEnvironment.SetDefine(TEXT("MRT_COUNT"), FarBlur + (NearBlur > 0));
@@ -69,7 +89,7 @@ public:
 
 		FGlobalShader::SetParameters<FViewUniformShaderParameters>(RHICmdList, ShaderRHI, Context.View.ViewUniformBuffer);
 
-		if (Context.GetFeatureLevel() < ERHIFeatureLevel::SM4)
+		if (Context.GetFeatureLevel() < ERHIFeatureLevel::SM5)
 		{
 			// Trying bilin here to attempt to alleviate some issues with 1/4 res input...
 			PostprocessParameter.SetPS(RHICmdList, ShaderRHI, Context, TStaticSamplerState<SF_Bilinear, AM_Border, AM_Border, AM_Clamp>::GetRHI());
@@ -82,11 +102,9 @@ public:
 		SceneTextureParameters.Set(RHICmdList, ShaderRHI, Context.View.FeatureLevel, ESceneTextureSetupMode::All);
 
 		{
-			FVector4 DepthOfFieldParamValues[2];
+			const FVector4 DepthOfFieldParamValue = GetDepthOfFieldParameters(Context.View.FinalPostProcessSettings);
 
-			FRCPassPostProcessDOFSetup::ComputeDepthOfFieldParams(Context, DepthOfFieldParamValues);
-
-			SetShaderValueArray(RHICmdList, ShaderRHI, DepthOfFieldParams, DepthOfFieldParamValues, 2);
+			SetShaderValue(RHICmdList, ShaderRHI, DepthOfFieldParams, DepthOfFieldParamValue);
 		}
 	}
 
@@ -311,7 +329,7 @@ class FPostProcessDOFRecombinePS : public FGlobalShader
 		OutEnvironment.SetDefine(TEXT("FAR_BLUR"), FarBlur);
 		OutEnvironment.SetDefine(TEXT("NEAR_BLUR"), NearBlur);
 		OutEnvironment.SetDefine(TEXT("SEPARATE_TRANSLUCENCY"), SeparateTranslucency);
-		OutEnvironment.SetDefine(TEXT("MOBILE_SHADING"), IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM4) ? 0u : 1u);
+		OutEnvironment.SetDefine(TEXT("MOBILE_SHADING"), IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5) ? 0u : 1u);
 	}
 
 	/** Default constructor. */
@@ -519,35 +537,4 @@ FPooledRenderTargetDesc FRCPassPostProcessDOFRecombine::ComputeOutputDesc(EPassO
 	Ret.ClearValue = FClearValueBinding(FLinearColor::Black);
 
 	return Ret;
-}
-
-// static
-void FRCPassPostProcessDOFSetup::ComputeDepthOfFieldParams(const FRenderingCompositePassContext& Context, FVector4 Out[2])
-{
-	// border between front and back layer as we don't use viewports (only possible with GS)
-	const uint32 SafetyBorder = 40;
-
-	uint32 FullRes = FSceneRenderTargets::Get(Context.RHICmdList).GetBufferSizeXY().Y;
-	uint32 HalfRes = FMath::DivideAndRoundUp(FullRes, (uint32)2);
-	uint32 BokehLayerSizeY = HalfRes * 2 + SafetyBorder;
-	float SkyFocusDistance = Context.View.FinalPostProcessSettings.DepthOfFieldSkyFocusDistance;
-	
-	// *2 to go to account for Radius/Diameter, 100 for percent
-	float DepthOfFieldVignetteSize = FMath::Max(0.0f, Context.View.FinalPostProcessSettings.DepthOfFieldVignetteSize / 100.0f * 2);
-	// doesn't make much sense to expose this property as the effect is very non linear and it would cost some performance to fix that
-	float DepthOfFieldVignetteFeather = 10.0f / 100.0f;
-	float DepthOfFieldVignetteMul = 1.0f / DepthOfFieldVignetteFeather;
-	float DepthOfFieldVignetteAdd = (0.5f - DepthOfFieldVignetteSize) * DepthOfFieldVignetteMul;
-	Out[0] = FVector4(
-		(SkyFocusDistance > 0) ? SkyFocusDistance : 100000000.0f,			// very large if <0 to not mask out skybox, can be optimized to disable feature completely
-		DepthOfFieldVignetteMul,
-		DepthOfFieldVignetteAdd,
-		Context.View.FinalPostProcessSettings.DepthOfFieldOcclusion);
-	FIntPoint ViewSize = Context.View.ViewRect.Size();
-	
-	// Scale and offset to put two views in one texture with safety border
-	float UsedYDivTextureY = HalfRes / (float)BokehLayerSizeY;
-	float YOffsetInPixel = HalfRes + SafetyBorder;
-	float YOffsetInUV = (HalfRes + SafetyBorder) / (float)BokehLayerSizeY;
-	Out[1] = FVector4(0.0f, YOffsetInUV, UsedYDivTextureY, YOffsetInPixel);
 }

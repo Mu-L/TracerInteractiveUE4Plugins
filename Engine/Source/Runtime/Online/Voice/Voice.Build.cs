@@ -41,7 +41,8 @@ public class Voice : ModuleRules
 		PrivateDependencyModuleNames.AddRange(
 			new string[] { 
 				"Core",
-                "AudioMixer"
+                "AudioMixer",
+				"SignalProcessing"
             }
 			);
 
@@ -54,7 +55,7 @@ public class Voice : ModuleRules
 		{
 			PublicFrameworks.AddRange(new string[] { "CoreAudio", "AudioUnit", "AudioToolbox" });
 		}
-		else if (Target.Platform == UnrealTargetPlatform.Linux && !bDontNeedCapture)
+		else if (Target.IsInPlatformGroup(UnrealPlatformGroup.Linux) && !bDontNeedCapture)
 		{
 			AddEngineThirdPartyPrivateStaticDependencies(Target, "SDL2");
 		}
@@ -68,10 +69,3 @@ public class Voice : ModuleRules
 		}
 	}
 }
-
-
-		
-
-
-
-		

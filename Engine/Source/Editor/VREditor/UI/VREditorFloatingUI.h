@@ -33,6 +33,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VR Mode UI")
 	FName PanelID;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Virtual Production UI")
+	AActor* ParentActor;
+
 	/** Optional offset from HMD where the window opens. Pass FTransform::Identity for default logic - window will open at controller location. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VR Mode UI")
 	FTransform PanelSpawnOffset;
@@ -41,7 +44,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VR Mode UI")
 	FVector2D PanelSize;
 
-	/** NOT IN USE YET! Custom mesh to use for the VR window. */
+	/** Optional custom mesh to use for the VR window. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VR Mode UI")
 	UStaticMesh* PanelMesh = nullptr;
 
@@ -49,9 +52,17 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VR Mode UI")
 	float EditorUISize;
 
-	//** Turn off handles under window? (X-To-Close, movement bar...) */
+	/** Turn off handles under window? (X-To-Close, movement bar...) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VR Mode UI")
 	bool bHideWindowHandles;
+
+	/** Turn off the widget's background to create a see-through look. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Virtual Production UI")
+	bool bMaskOutWidgetBackground;
+
+	/** If bHideWindowHandles is false, this window doesn't have a close button. (*/
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Virtual Production UI")
+	bool bNoCloseButton;
 };
 
 
@@ -66,7 +77,7 @@ class AVREditorFloatingUI : public AVREditorBaseActor
 public:
 
 	/** Default constructor which sets up safe defaults */
-	AVREditorFloatingUI();
+	AVREditorFloatingUI(const FObjectInitializer& ObjectInitializer);
 
 	/** Creates a FVREditorFloatingUI using a Slate widget, and sets up safe defaults */
 	void SetSlateWidget( class UVREditorUISystem& InitOwner, const VREditorPanelID& InID, const TSharedRef<SWidget>& InitSlateWidget, const FIntPoint InitResolution, const float InitScale, const EDockedTo InitDockedTo );
@@ -84,7 +95,7 @@ public:
 	}
 
 	/** Shows or hides the UI (also enables collision, and performs a transition effect) */
-	void ShowUI( const bool bShow, const bool bAllowFading = true, const float InitFadeDelay = 0.0f, const bool bInClearWidgetOnHide = false );
+	void VREDITOR_API ShowUI( const bool bShow, const bool bAllowFading = true, const float InitFadeDelay = 0.0f, const bool bInClearWidgetOnHide = false );
 
 	/** Sets the resolution of this floating UI panel and resets the window mesh accordingly. */
 	void SetResolution(const FIntPoint& InResolution);
@@ -150,7 +161,7 @@ public:
 	}
 
 	/** Gets the current user widget of this floating UI, return nullptr if using slate widget */
-	UUserWidget* GetUserWidget();
+	VREDITOR_API UUserWidget* GetUserWidget();
 
 	/** Gets the initial size of this UI */
 	float GetInitialScale() const;
@@ -169,7 +180,7 @@ public:
 
 	/** All params used to create this panel if this panel has a UMG widget and was created via BP. Invalid otherwise. */
 	UPROPERTY()
-	FVREditorFloatingUICreationContext CreationContext;
+	FVREditorFloatingUICreationContext CreationContext;	
 
 protected:
 

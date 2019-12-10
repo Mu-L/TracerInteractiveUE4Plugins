@@ -11,6 +11,7 @@
 #include "Internationalization/FastDecimalFormat.h"
 #include "Internationalization/StringTableRegistry.h"
 #include "Internationalization/Internationalization.h"
+#include "Internationalization/Cultures/LeetCulture.h"
 #include "Serialization/MemoryWriter.h"
 #include "Serialization/MemoryReader.h"
 #include "Misc/AutomationTest.h"
@@ -496,9 +497,10 @@ bool FTextTest::RunTest (const FString& Parameters)
 			// The original string in the native language.
 			FormattedTestLayer2_OriginalLanguageSourceString = FormattedTestLayer2.BuildSourceString();
 
+#if ENABLE_LOC_TESTING
 			{
 				// Swap to "LEET" culture to check if rebuilding works (verify the whole)
-				I18N.SetCurrentCulture("LEET");
+				I18N.SetCurrentCulture(FLeetCulture::StaticGetName());
 
 				// When changes are made to FormattedTestLayer2, please pull out the newly translated LEET string and update the below if-statement to keep the test passing!
 				FString LEETTranslatedString = FormattedTestLayer2.ToString();
@@ -512,6 +514,7 @@ bool FTextTest::RunTest (const FString& Parameters)
 					AddError( TEXT("Desired Output=") + DesiredOutput );
 				}
 			}
+#endif
 
 			// Swap to French-Canadian to check if rebuilding works (verify each numerical component)
 			{
@@ -563,8 +566,9 @@ bool FTextTest::RunTest (const FString& Parameters)
 			}
 		}
 
+#if ENABLE_LOC_TESTING
 		{
-			I18N.SetCurrentCulture("LEET");
+			I18N.SetCurrentCulture(FLeetCulture::StaticGetName());
 
 			FText FormattedEnglishTextHistoryAsLeet;
 			FText FormattedFrenchCanadianTextHistoryAsLeet;
@@ -627,6 +631,7 @@ bool FTextTest::RunTest (const FString& Parameters)
 			}
 		}
 	}
+#endif
 #else
 	AddWarning("ICU is disabled thus locale-aware formatting needed in rebuilding source text from history is disabled.");
 #endif
@@ -670,7 +675,7 @@ bool FTextRoundingTest::RunTest (const FString& Parameters)
 		TEXT("ToPositiveInfinity"),
 	};
 
-	static_assert(ERoundingMode::ToPositiveInfinity == ARRAY_COUNT(RoundingModeNames) - 1, "RoundingModeNames array needs updating");
+	static_assert(ERoundingMode::ToPositiveInfinity == UE_ARRAY_COUNT(RoundingModeNames) - 1, "RoundingModeNames array needs updating");
 
 	static const double InputValues[] = {
 		1000.1224,
@@ -702,7 +707,7 @@ bool FTextRoundingTest::RunTest (const FString& Parameters)
 		-1000.1256,
 	};
 
-	static const TCHAR* OutputValues[][ARRAY_COUNT(RoundingModeNames)] = 
+	static const TCHAR* OutputValues[][UE_ARRAY_COUNT(RoundingModeNames)] = 
 	{
 		// HalfToEven        | HalfFromZero      | HalfToZero        | FromZero          | ToZero            | ToNegativeInfinity | ToPositiveInfinity
 		{  TEXT("1000.122"),   TEXT("1000.122"),   TEXT("1000.122"),   TEXT("1000.123"),   TEXT("1000.122"),   TEXT("1000.122"),    TEXT("1000.123") },
@@ -734,7 +739,7 @@ bool FTextRoundingTest::RunTest (const FString& Parameters)
 		{ TEXT("-1000.126"),  TEXT("-1000.126"),  TEXT("-1000.126"),  TEXT("-1000.126"),  TEXT("-1000.125"),  TEXT("-1000.126"),   TEXT("-1000.125") },
 	};
 
-	static_assert(ARRAY_COUNT(InputValues) == ARRAY_COUNT(OutputValues), "The size of InputValues does not match OutputValues");
+	static_assert(UE_ARRAY_COUNT(InputValues) == UE_ARRAY_COUNT(OutputValues), "The size of InputValues does not match OutputValues");
 
 	FInternationalization& I18N = FInternationalization::Get();
 
@@ -762,7 +767,7 @@ bool FTextRoundingTest::RunTest (const FString& Parameters)
 	{
 		FormattingOptions.SetRoundingMode(InRoundingMode);
 
-		for (int32 TestValueIndex = 0; TestValueIndex < ARRAY_COUNT(InputValues); ++TestValueIndex)
+		for (int32 TestValueIndex = 0; TestValueIndex < UE_ARRAY_COUNT(InputValues); ++TestValueIndex)
 		{
 			DoSingleTest(InputValues[TestValueIndex], OutputValues[TestValueIndex][InRoundingMode], RoundingModeNames[InRoundingMode]);
 		}

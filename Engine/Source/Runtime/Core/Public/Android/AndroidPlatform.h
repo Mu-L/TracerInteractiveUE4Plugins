@@ -7,6 +7,7 @@
 #pragma once
 
 #include "GenericPlatform/GenericPlatform.h"
+#include "Clang/ClangPlatform.h"
 #include "Misc/Build.h"
 
 /** Define the android platform to be the active one **/
@@ -42,6 +43,7 @@ typedef FAndroidTypes FPlatformTypes;
 #define PLATFORM_MAX_FILEPATH_LENGTH_DEPRECATED		ANDROID_MAX_PATH
 #define PLATFORM_SUPPORTS_TEXTURE_STREAMING			1
 #define PLATFORM_REQUIRES_FILESERVER				1
+#define PLATFORM_WCHAR_IS_4_BYTES					1
 #define PLATFORM_TCHAR_IS_CHAR16					1
 #define PLATFORM_HAS_NO_EPROCLIM					1
 #define PLATFORM_USES_ES2							1

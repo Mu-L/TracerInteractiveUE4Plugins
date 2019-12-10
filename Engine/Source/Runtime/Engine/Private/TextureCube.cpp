@@ -103,7 +103,7 @@ uint32 UTextureCube::CalcTextureMemorySize( int32 MipCount ) const
 		FIntPoint MipExtents = CalcMipMapExtent(SizeX, SizeY, Format, FirstMip);
 		
 		uint32 TextureAlign = 0;
-		uint64 TextureSize = RHICalcTextureCubePlatformSize(MipExtents.X, Format, MipCount, 0, TextureAlign);
+		uint64 TextureSize = RHICalcTextureCubePlatformSize(MipExtents.X, Format, MipCount, 0, FRHIResourceCreateInfo(PlatformData->GetExtData()), TextureAlign);
 		Size = (uint32)TextureSize;
 	}
 	return Size;
@@ -139,7 +139,7 @@ public:
 		//Initialize the MipData array
 		for ( int32 FaceIndex=0;FaceIndex<6; FaceIndex++)
 		{
-			for( int32 MipIndex=0; MipIndex<ARRAY_COUNT(MipData[FaceIndex]); MipIndex++ )
+			for( int32 MipIndex=0; MipIndex<UE_ARRAY_COUNT(MipData[FaceIndex]); MipIndex++ )
 			{
 				MipData[FaceIndex][MipIndex] = NULL;
 			}
@@ -148,7 +148,8 @@ public:
 		check(Owner->GetNumMips() > 0);
 
 		TIndirectArray<FTexture2DMipMap>& Mips = InOwner->PlatformData->Mips;
-		for( int32 MipIndex=0; MipIndex<Mips.Num(); MipIndex++ )
+		const int32 FirstMipTailIndex = Mips.Num() - InOwner->PlatformData->GetNumMipsInTail();
+		for (int32 MipIndex = 0; MipIndex < FirstMipTailIndex; MipIndex++)
 		{
 			FTexture2DMipMap& Mip = Mips[MipIndex];
 			if( Mip.BulkData.GetBulkDataSize() <= 0 )
@@ -183,7 +184,7 @@ public:
 		// Make sure we're not leaking memory if InitRHI has never been called.
 		for (int32 i=0; i<6; i++)
 		{
-			for( int32 MipIndex=0; MipIndex<ARRAY_COUNT(MipData[i]); MipIndex++ )
+			for( int32 MipIndex=0; MipIndex<UE_ARRAY_COUNT(MipData[i]); MipIndex++ )
 			{
 				// free any mip data that was copied 
 				if( MipData[i][MipIndex] )
@@ -206,6 +207,7 @@ public:
 		// Create the RHI texture.
 		uint32 TexCreateFlags = (Owner->SRGB ? TexCreate_SRGB : 0)  | TexCreate_OfflineProcessed;
 		FRHIResourceCreateInfo CreateInfo;
+		CreateInfo.ExtData = Owner->PlatformData ? Owner->PlatformData->GetExtData() : 0;
 		TextureCubeRHI = RHICreateTextureCube( Owner->GetSizeX(), Owner->GetPixelFormat(), Owner->GetNumMips(), TexCreateFlags, CreateInfo );
 		TextureRHI = TextureCubeRHI;
 		TextureRHI->SetName(Owner->GetFName());
@@ -214,6 +216,7 @@ public:
 
 		// Read the mip-levels into the RHI texture.
 		int32 NumMips = Owner->GetNumMips();
+		check(NumMips < MAX_TEXTURE_MIP_COUNT);
 		for( int32 FaceIndex=0; FaceIndex<6; FaceIndex++ )
 		{
 			for(int32 MipIndex=0; MipIndex < NumMips; MipIndex++)
@@ -287,6 +290,7 @@ private:
 	 */
 	void GetData( int32 FaceIndex, int32 MipIndex, void* Dest, uint32 DestPitch )
 	{
+		check(MipIndex < MAX_TEXTURE_MIP_COUNT);
 		check( MipData[FaceIndex][MipIndex] );
 
 		// for platforms that returned 0 pitch from Lock, we need to just use the bulk data directly, never do 

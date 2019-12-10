@@ -609,11 +609,20 @@ void UMediaPlayer::SetDesiredPlayerName(FName PlayerName)
 
 bool UMediaPlayer::SetLooping(bool Looping)
 {
-	UE_LOG(LogMediaAssets, Verbose, TEXT("%s.SetLooping %s"), *GetFName().ToString(), *(Looping ? GTrue : GFalse).ToString());
+	const FCoreTexts& CoreTexts = FCoreTexts::Get();
+
+	UE_LOG(LogMediaAssets, Verbose, TEXT("%s.SetLooping %s"), *GetFName().ToString(), *(Looping ? CoreTexts.True : CoreTexts.False).ToString());
 
 	Loop = Looping;
 
 	return PlayerFacade->SetLooping(Looping);
+}
+
+
+void UMediaPlayer::SetMediaOptions(const UMediaSource* Options)
+{
+	UE_LOG(LogMediaAssets, Verbose, TEXT("%s.SetMediaOptions"), *GetFName().ToString());
+	PlayerFacade->SetMediaOptions(Options);
 }
 
 
@@ -645,14 +654,18 @@ bool UMediaPlayer::SetVideoTrackFrameRate(int32 TrackIndex, int32 FormatIndex, f
 
 bool UMediaPlayer::SetViewField(float Horizontal, float Vertical, bool Absolute)
 {
-	UE_LOG(LogMediaAssets, Verbose, TEXT("%s.SetViewField %f %f %s"), *GetFName().ToString(), Horizontal, Vertical, *(Absolute ? GTrue : GFalse).ToString());
+	const FCoreTexts& CoreTexts = FCoreTexts::Get();
+
+	UE_LOG(LogMediaAssets, Verbose, TEXT("%s.SetViewField %f %f %s"), *GetFName().ToString(), Horizontal, Vertical, *(Absolute ? CoreTexts.True : CoreTexts.False).ToString());
 	return PlayerFacade->SetViewField(Horizontal, Vertical, Absolute);
 }
 
 
 bool UMediaPlayer::SetViewRotation(const FRotator& Rotation, bool Absolute)
 {
-	UE_LOG(LogMediaAssets, Verbose, TEXT("%s.SetViewRotation %s %s"), *GetFName().ToString(), *Rotation.ToString(), *(Absolute ? GTrue : GFalse).ToString());
+	const FCoreTexts& CoreTexts = FCoreTexts::Get();
+
+	UE_LOG(LogMediaAssets, Verbose, TEXT("%s.SetViewRotation %s %s"), *GetFName().ToString(), *Rotation.ToString(), *(Absolute ? CoreTexts.True : CoreTexts.False).ToString());
 	return PlayerFacade->SetViewOrientation(FQuat(Rotation), Absolute);
 }
 

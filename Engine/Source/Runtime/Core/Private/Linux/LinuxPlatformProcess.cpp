@@ -12,7 +12,7 @@ const TCHAR* FLinuxPlatformProcess::BaseDir()
 	if (!bHaveResult)
 	{
 		char SelfPath[UNIX_MAX_PATH] = {0};
-		if (readlink( "/proc/self/exe", SelfPath, ARRAY_COUNT(SelfPath) - 1) == -1)
+		if (readlink( "/proc/self/exe", SelfPath, UE_ARRAY_COUNT(SelfPath) - 1) == -1)
 		{
 			int ErrNo = errno;
 			UE_LOG(LogHAL, Fatal, TEXT("readlink() failed with errno = %d (%s)"), ErrNo,
@@ -20,11 +20,11 @@ const TCHAR* FLinuxPlatformProcess::BaseDir()
 			// unreachable
 			return CachedResult;
 		}
-		SelfPath[ARRAY_COUNT(SelfPath) - 1] = 0;
+		SelfPath[UE_ARRAY_COUNT(SelfPath) - 1] = 0;
 
-		FCString::Strncpy(CachedResult, UTF8_TO_TCHAR(dirname(SelfPath)), ARRAY_COUNT(CachedResult) - 1);
-		CachedResult[ARRAY_COUNT(CachedResult) - 1] = 0;
-		FCString::Strncat(CachedResult, TEXT("/"), ARRAY_COUNT(CachedResult) - 1);
+		FCString::Strncpy(CachedResult, UTF8_TO_TCHAR(dirname(SelfPath)), UE_ARRAY_COUNT(CachedResult) - 1);
+		CachedResult[UE_ARRAY_COUNT(CachedResult) - 1] = 0;
+		FCString::Strncat(CachedResult, TEXT("/"), UE_ARRAY_COUNT(CachedResult) - 1);
 		bHaveResult = true;
 	}
 	return CachedResult;
@@ -32,5 +32,10 @@ const TCHAR* FLinuxPlatformProcess::BaseDir()
 
 const TCHAR* FLinuxPlatformProcess::GetBinariesSubdirectory()
 {
+	if (PLATFORM_CPU_ARM_FAMILY)
+	{
+		return TEXT("LinuxAArch64");
+	}
+
 	return TEXT("Linux");
 }

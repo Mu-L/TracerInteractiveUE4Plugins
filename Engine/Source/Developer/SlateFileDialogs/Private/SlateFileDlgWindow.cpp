@@ -874,14 +874,14 @@ void SSlateFileOpenDlg::BuildDirectoryPath()
 			BuiltPath = BuiltPath + TEXT("/") + AbsPath.Left(Idx);
 		}
 
-		FCString::Strcpy(Temp, ARRAY_COUNT(Temp), &AbsPath[Idx < AbsPath.Len() - 1 ? Idx + 1 : Idx]);
+		FCString::Strcpy(Temp, UE_ARRAY_COUNT(Temp), &AbsPath[Idx < AbsPath.Len() - 1 ? Idx + 1 : Idx]);
 
 		DirectoryNodesArray.Add(FDirNode(AbsPath.Left(Idx), nullptr));
 	}
 	else if (PLATFORM_LINUX)
 	{
 		// start with system base directory
-		FCString::Strcpy(Temp, ARRAY_COUNT(Temp), *AbsPath);
+		FCString::Strcpy(Temp, UE_ARRAY_COUNT(Temp), *AbsPath);
 
 		BuiltPath = "/";
 		DirectoryNodesArray.Add(FDirNode(FString(TEXT("/")), nullptr));
@@ -984,7 +984,7 @@ void SSlateFileOpenDlg::OnPathMenuItemClicked( FString ClickedPath )
 }
 
 
-TSharedPtr<SWidget> SSlateFileOpenDlg::OnGetCrumbDelimiterContent(const FString& CrumbData) const
+TSharedRef<SWidget> SSlateFileOpenDlg::OnGetCrumbDelimiterContent(const FString& CrumbData) const
 {
 	TSharedPtr<SWidget> Widget = SNullWidget::NullWidget;
 	TArray<FString> SubDirs;
@@ -1063,7 +1063,7 @@ TSharedPtr<SWidget> SSlateFileOpenDlg::OnGetCrumbDelimiterContent(const FString&
 			];
 	}
 
-	return Widget;
+	return Widget.ToSharedRef();
 }
 
 
@@ -1501,7 +1501,7 @@ void SSlateFileOpenDlg::ParseFilters()
 			if (FilterNameArray.Num() == 0)
 			{
 				TCHAR Temp[MAX_FILTER_LENGTH] = {0};
-				FCString::Strcpy(Temp, ARRAY_COUNT(Temp), *Filters);
+				FCString::Strcpy(Temp, UE_ARRAY_COUNT(Temp), *Filters);
 
 				// break path into tokens
 				TCHAR *ContextStr = nullptr;
@@ -1551,7 +1551,7 @@ bool SSlateFileOpenDlg::GetFilterExtension(FString &OutString)
 
 	// make a copy of filter string that we can modify
 	TCHAR Temp[MAX_FILTER_LENGTH] = {0};
-	FCString::Strcpy(Temp, ARRAY_COUNT(Temp), *(*FilterNameArray[FilterIndex].Get()));
+	FCString::Strcpy(Temp, UE_ARRAY_COUNT(Temp), *(*FilterNameArray[FilterIndex].Get()));
 
 	// find start of extension
 	TCHAR *FilterExt = FCString::Strchr(Temp, '.');

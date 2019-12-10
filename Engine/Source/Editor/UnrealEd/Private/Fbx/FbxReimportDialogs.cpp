@@ -18,7 +18,7 @@
 #include "Misc/FbxErrors.h"
 #include "HAL/FileManager.h"
 #include "Factories/FbxSceneImportFactory.h"
-#include "Toolkits/AssetEditorManager.h"
+
 #include "AssetRegistryModule.h"
 
 //Windows dialog popup
@@ -54,7 +54,7 @@
 #include "AnimEncoding.h"
 #include "ApexClothingUtils.h"
 #include "Engine/SkeletalMeshSocket.h"
-#include "Assets/ClothingAsset.h"
+#include "ClothingAsset.h"
 #include "Factories/FbxSkeletalMeshImportData.h"
 #include "Rendering/SkeletalMeshModel.h"
 

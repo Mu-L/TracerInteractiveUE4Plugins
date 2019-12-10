@@ -8,22 +8,30 @@
 
 class Error;
 
-static EJsonNotation TokenToNotationTable[] = 
-{ 
-	EJsonNotation::Error,			/*EJsonToken::None*/
-	EJsonNotation::Error,			/*EJsonToken::Comma*/
-	EJsonNotation::ObjectStart,		/*EJsonToken::CurlyOpen*/
-	EJsonNotation::ObjectEnd,		/*EJsonToken::CurlyClose*/
-	EJsonNotation::ArrayStart,		/*EJsonToken::SquareOpen*/
-	EJsonNotation::ArrayEnd,		/*EJsonToken::SquareClose*/
-	EJsonNotation::Error,			/*EJsonToken::Colon*/
-	EJsonNotation::String,			/*EJsonToken::String*/
-	EJsonNotation::Number,			/*EJsonToken::Number*/
-	EJsonNotation::Boolean,			/*EJsonToken::True*/
-	EJsonNotation::Boolean,			/*EJsonToken::False*/
-	EJsonNotation::Null,			/*EJsonToken::Null*/
+#define JSON_NOTATIONMAP_DEF \
+static EJsonNotation TokenToNotationTable[] =  \
+{ \
+	EJsonNotation::Error,			/*EJsonToken::None*/ \
+	EJsonNotation::Error,			/*EJsonToken::Comma*/ \
+	EJsonNotation::ObjectStart,		/*EJsonToken::CurlyOpen*/ \
+	EJsonNotation::ObjectEnd,		/*EJsonToken::CurlyClose*/ \
+	EJsonNotation::ArrayStart,		/*EJsonToken::SquareOpen*/ \
+	EJsonNotation::ArrayEnd,		/*EJsonToken::SquareClose*/ \
+	EJsonNotation::Error,			/*EJsonToken::Colon*/ \
+	EJsonNotation::String,			/*EJsonToken::String*/ \
+	EJsonNotation::Number,			/*EJsonToken::Number*/ \
+	EJsonNotation::Boolean,			/*EJsonToken::True*/ \
+	EJsonNotation::Boolean,			/*EJsonToken::False*/ \
+	EJsonNotation::Null,			/*EJsonToken::Null*/ \
 };
 
+#ifndef WITH_JSON_INLINED_NOTATIONMAP
+#define WITH_JSON_INLINED_NOTATIONMAP 0
+#endif // WITH_JSON_INLINED_NOTATIONMAP
+
+#if !WITH_JSON_INLINED_NOTATIONMAP
+JSON_NOTATIONMAP_DEF;
+#endif // WITH_JSON_INLINED_NOTATIONMAP
 
 template <class CharType = TCHAR>
 class TJsonReader
@@ -104,6 +112,10 @@ public:
 		}
 		while (ReadWasSuccess && (CurrentToken == EJsonToken::None));
 
+#if WITH_JSON_INLINED_NOTATIONMAP
+		JSON_NOTATIONMAP_DEF;
+#endif // WITH_JSON_INLINED_NOTATIONMAP
+
 		Notation = TokenToNotationTable[(int32)CurrentToken];
 		FinishedReadingRootObject = ParseState.Num() == 0;
 
@@ -149,6 +161,12 @@ public:
 	{ 
 		check(CurrentToken == EJsonToken::Number);
 		return NumberValue;
+	}
+
+	FORCEINLINE const FString& GetValueAsNumberString() const
+	{
+		check(CurrentToken == EJsonToken::Number);
+		return StringValue;
 	}
 	
 	FORCEINLINE bool GetValueAsBoolean() const 
@@ -579,6 +597,10 @@ private:
 		}
 
 		StringValue = MoveTemp(String);
+
+		// Inline combine any surrogate pairs in the data when loading into a UTF-32 string
+		StringConv::InlineCombineSurrogates(StringValue);
+
 		return true;
 	}
 
@@ -697,6 +719,7 @@ private:
 		// ensure the number has followed valid Json format
 		if (!Error && ((State == 2) || (State == 3) || (State == 6) || (State == 8)))
 		{
+			StringValue = String;
 			NumberValue = FCString::Atod(*String);
 			return true;
 		}

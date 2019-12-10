@@ -76,7 +76,7 @@ void USubUVAnimation::Serialize(FStructuredArchive::FRecord Record)
 
 	// Save a bool indicating whether this is cooked data
 	// This is needed when loading cooked data, to know to serialize differently
-	Record << NAMED_FIELD(bCooked);
+	Record << SA_VALUE(TEXT("bCooked"), bCooked);
 
 	if (FPlatformProperties::RequiresCookedData() && !bCooked && UnderlyingArchive.IsLoading())
 	{
@@ -85,7 +85,7 @@ void USubUVAnimation::Serialize(FStructuredArchive::FRecord Record)
 
 	if (bCooked)
 	{
-		DerivedData.Serialize(Record.EnterField(FIELD_NAME_TEXT("DerivedData")));
+		DerivedData.Serialize(Record.EnterField(SA_FIELD_NAME(TEXT("DerivedData"))));
 	}
 }
 
@@ -483,7 +483,7 @@ int32 ComputeNeighborCount(int32 X, int32 Y, int32 GlobalX, int32 GlobalY, int32
 {
 	int32 NeighborCount = 0;
 
-	for (int32 NeighborIndex = 0; NeighborIndex < ARRAY_COUNT(GNeighbors); NeighborIndex++)
+	for (int32 NeighborIndex = 0; NeighborIndex < UE_ARRAY_COUNT(GNeighbors); NeighborIndex++)
 	{
 		int32 NeighborX = X + GNeighbors[NeighborIndex].X;
 		int32 NeighborY = Y + GNeighbors[NeighborIndex].Y;
@@ -613,7 +613,7 @@ void FSubUVDerivedData::Build(UTexture2D* SubUVTexture, int32 SubImages_Horizont
 					{
 						TArray<int32> ConvexHullIndices;
 						// Compute the 2d convex hull of texels with non-zero alpha
-						ConvexHull2D::ComputeConvexHull2(PotentialHullVertices, ConvexHullIndices);
+						ConvexHull2D::ComputeConvexHullLegacy2(PotentialHullVertices, ConvexHullIndices);
 
 						bSubImageSuccess = ConvexHullIndices.Num() >= 3;
 

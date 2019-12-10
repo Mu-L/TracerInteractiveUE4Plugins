@@ -6,335 +6,21 @@
 #include "MathUtil.h"
 
 
-/**
- * Templated 3D Vector. Ported from g3Sharp library, with the intention of 
- * maintaining compatibility with existing g3Sharp code. Has an API
- * similar to WildMagic, GTEngine, Eigen, etc. 
- * 
- * Convenience typedefs for FVector3f/FVector3d/FVector3i are defined, and
- * should be preferentially used over the base template type
- * 
- * Implicit casts to/from FVector are defined, for all types.
- *  
- * @todo Possibly can be replaced/merged with Chaos TVector<T,N>
- */
-template <typename T>
-struct FVector3
-{
-	T X, Y, Z;
-
-	FVector3()
-	{
-	}
-	FVector3(T ValX, T ValY, T ValZ)
-		: X(ValX), Y(ValY), Z(ValZ)
-	{
-	}
-	FVector3(const T* Data)
-	{
-		X = Data[0];
-		Y = Data[1];
-		Z = Data[2];
-	}
-
-	inline operator const T*() const
-	{
-		return &X;
-	};
-	inline operator T*()
-	{
-		return &X;
-	}
-
-	inline operator FVector() const
-	{
-		return FVector((float)X, (float)Y, (float)Z);
-	}
-	inline FVector3(const FVector& Vec)
-	{
-		X = (T)Vec.X;
-		Y = (T)Vec.Y;
-		Z = (T)Vec.Z;
-	}
-
-
-	explicit inline operator FLinearColor() const
-	{
-		return FLinearColor((float)X, (float)Y, (float)Z);
-	}
-	inline FVector3(const FLinearColor& Color)
-	{
-		X = (T)Color.R;
-		Y = (T)Color.G;
-		Z = (T)Color.B;
-	}
-
-	explicit inline operator FColor() const
-	{
-		return FColor(
-			FMathf::Clamp((int)((float)X*255.0f), 0, 255),
-			FMathf::Clamp((int)((float)Y*255.0f), 0, 255),
-			FMathf::Clamp((int)((float)Z*255.0f), 0, 255));
-	}
-
-
-	static FVector3<T> Zero()
-	{
-		return FVector3<T>((T)0, (T)0, (T)0);
-	}
-	static FVector3<T> One()
-	{
-		return FVector3<T>((T)1, (T)1, (T)1);
-	}
-	static FVector3<T> UnitX()
-	{
-		return FVector3<T>((T)1, (T)0, (T)0);
-	}
-	static FVector3<T> UnitY()
-	{
-		return FVector3<T>((T)0, (T)1, (T)0);
-	}
-	static FVector3<T> UnitZ()
-	{
-		return FVector3<T>((T)0, (T)0, (T)1);
-	}
-	static FVector3<T> Max()
-	{
-		return FVector3<T>(TNumericLimits<T>::Max(), TNumericLimits<T>::Max(), TNumericLimits<T>::Max());
-	}
-
-	FVector3<T>& operator=(const FVector3<T>& V2)
-	{
-		X = V2.X;
-		Y = V2.Y;
-		Z = V2.Z;
-		return *this;
-	}
-
-	T& operator[](int Idx)
-	{
-		return (&X)[Idx];
-	}
-	const T& operator[](int Idx) const
-	{
-		return (&X)[Idx];
-	}
-
-	T Length() const
-	{
-		return TMathUtil<T>::Sqrt(X * X + Y * Y + Z * Z);
-	}
-	T SquaredLength() const
-	{
-		return X * X + Y * Y + Z * Z;
-	}
-
-	inline T Distance(const FVector3<T>& V2) const
-	{
-		T dx = V2.X - X;
-		T dy = V2.Y - Y;
-		T dz = V2.Z - Z;
-		return TMathUtil<T>::Sqrt(dx * dx + dy * dy + dz * dz);
-	}
-	inline T DistanceSquared(const FVector3<T>& V2) const
-	{
-		T dx = V2.X - X;
-		T dy = V2.Y - Y;
-		T dz = V2.Z - Z;
-		return dx * dx + dy * dy + dz * dz;
-	}
-
-	inline FVector3<T> operator-() const
-	{
-		return FVector3<T>(-X, -Y, -Z);
-	}
-
-	inline FVector3<T> operator+(const FVector3<T>& V2) const
-	{
-		return FVector3<T>(X + V2.X, Y + V2.Y, Z + V2.Z);
-	}
-
-	inline FVector3<T> operator-(const FVector3<T>& V2) const
-	{
-		return FVector3<T>(X - V2.X, Y - V2.Y, Z - V2.Z);
-	}
-
-	inline FVector3<T> operator+(const T& Scalar) const
-	{
-		return FVector3<T>(X + Scalar, Y + Scalar, Z + Scalar);
-	}
-
-	inline FVector3<T> operator-(const T& Scalar) const
-	{
-		return FVector3<T>(X - Scalar, Y - Scalar, Z - Scalar);
-	}
-
-	inline FVector3<T> operator*(const T& Scalar) const
-	{
-		return FVector3<T>(X * Scalar, Y * Scalar, Z * Scalar);
-	}
-
-	inline FVector3<T> operator*(const FVector3<T>& V2) const // component-wise
-	{
-		return FVector3<T>(X * V2.X, Y * V2.Y, Z * V2.Z);
-	}
-
-	inline FVector3<T> operator/(const T& Scalar) const
-	{
-		return FVector3<T>(X / Scalar, Y / Scalar, Z / Scalar);
-	}
-
-	inline FVector3<T>& operator+=(const FVector3<T>& V2)
-	{
-		X += V2.X;
-		Y += V2.Y;
-		Z += V2.Z;
-		return *this;
-	}
-
-	inline FVector3<T>& operator-=(const FVector3<T>& V2)
-	{
-		X -= V2.X;
-		Y -= V2.Y;
-		Z -= V2.Z;
-		return *this;
-	}
-
-	inline FVector3<T>& operator*=(const T& Scalar)
-	{
-		X *= Scalar;
-		Y *= Scalar;
-		Z *= Scalar;
-		return *this;
-	}
-
-	inline FVector3<T>& operator/=(const T& Scalar)
-	{
-		X /= Scalar;
-		Y /= Scalar;
-		Z /= Scalar;
-		return *this;
-	}
-
-	T Dot(const FVector3<T>& V2) const
-	{
-		return X * V2.X + Y * V2.Y + Z * V2.Z;
-	}
-
-	FVector3<T> Cross(const FVector3<T>& V2) const
-	{
-		return FVector3(
-			Y * V2.Z - Z * V2.Y,
-			Z * V2.X - X * V2.Z,
-			X * V2.Y - Y * V2.X);
-	}
-
-	// Angle in Degrees
-	T AngleD(const FVector3<T>& V2) const
-	{
-		T DotVal = Dot(V2);
-		T ClampedDot = (DotVal < (T)-1) ? (T)-1 : ((DotVal > (T)1) ? (T)1 : DotVal);
-		return (T)(acos(ClampedDot) * (T)(180.0 / 3.14159265358979323846));
-	}
-
-	// Angle in Radians
-	T AngleR(const FVector3<T>& V2) const
-	{
-		T DotVal = Dot(V2);
-		T ClampedDot = (DotVal < (T)-1) ? (T)-1 : ((DotVal > (T)1) ? (T)1 : DotVal);
-		return (T)acos(ClampedDot);
-	}
-
-	inline bool IsNormalized()
-	{
-		return TMathUtil<T>::Abs((X * X + Y * Y + Z * Z) - 1) < TMathUtil<T>::ZeroTolerance;
-	}
-
-	T Normalize(const T Epsilon = 0)
-	{
-		T length = Length();
-		if (length > Epsilon)
-		{
-			T invLength = ((T)1) / length;
-			X *= invLength;
-			Y *= invLength;
-			Z *= invLength;
-			return length;
-		}
-		X = Y = Z = (T)0;
-		return 0;
-	}
-
-	inline FVector3<T> Normalized(const T Epsilon = 0) const
-	{
-		T length = Length();
-		if (length > Epsilon)
-		{
-			T invLength = ((T)1) / length;
-			return FVector3<T>(X * invLength, Y * invLength, Z * invLength);
-		}
-		return FVector3<T>((T)0, (T)0, (T)0);
-	}
-
-	inline T MaxAbs() const
-	{
-		return TMathUtil<T>::Max3(TMathUtil<T>::Abs(X), TMathUtil<T>::Abs(Y), TMathUtil<T>::Abs(Z));
-	}
-
-	inline T MinAbs() const
-	{
-		return TMathUtil<T>::Min3(TMathUtil<T>::Abs(X), TMathUtil<T>::Abs(Y), TMathUtil<T>::Abs(Z));
-	}
-
-	static FVector3<T> Lerp(const FVector3<T>& A, const FVector3<T>& B, T Alpha)
-	{
-		T OneMinusAlpha = (T)1 - Alpha;
-		return FVector3<T>(OneMinusAlpha * A.X + Alpha * B.X,
-						   OneMinusAlpha * A.Y + Alpha * B.Y,
-						   OneMinusAlpha * A.Z + Alpha * B.Z);
-	}
-
-	inline bool operator==(const FVector3<T>& Other) const
-	{
-		return X == Other.X && Y == Other.Y && Z == Other.Z;
-	}
-};
-
-template <typename RealType>
-inline FVector3<RealType> operator*(RealType Scalar, const FVector3<RealType>& V)
-{
-	return FVector3<RealType>(Scalar * V.X, Scalar * V.Y, Scalar * V.Z);
-}
-
-typedef FVector3<float> FVector3f;
-typedef FVector3<double> FVector3d;
-typedef FVector3<int> FVector3i;
-
-template <typename T>
-FORCEINLINE uint32 GetTypeHash(const FVector3<T>& Vector)
-{
-	// (this is how FIntVector and all the other FVectors do their hash functions)
-	// Note: this assumes there's no padding that could contain uncompared data.
-	return FCrc::MemCrc_DEPRECATED(&Vector, sizeof(FVector3<T>));
-}
-
-
-
 
 
 
 /**
- * Templated 2D Vector. Ported from g3Sharp library, with the intention of
- * maintaining compatibility with existing g3Sharp code. Has an API
- * similar to WildMagic, GTEngine, Eigen, etc.
- *
- * Convenience typedefs for FVector2f/FVector2d/FVector2i are defined, and
- * should be preferentially used over the base template type
- *
- * Implicit casts to/from FVector2D are defined, for all types.
- *
- * @todo Possibly can be replaced/merged with Chaos TVector<T,N>
- */
+* Templated 2D Vector. Ported from g3Sharp library, with the intention of
+* maintaining compatibility with existing g3Sharp code. Has an API
+* similar to WildMagic, GTEngine, Eigen, etc.
+*
+* Convenience typedefs for FVector2f/FVector2d/FVector2i are defined, and
+* should be preferentially used over the base template type
+*
+* Implicit casts to/from FVector2D are defined, for all types.
+*
+* @todo Possibly can be replaced/merged with Chaos TVector<T,N>
+*/
 template <typename T>
 struct FVector2
 {
@@ -487,6 +173,11 @@ struct FVector2
 		return FVector2(X / Scalar, Y / Scalar);
 	}
 
+	inline FVector2<T> operator/(const FVector2<T>& V2) const // component-wise
+	{
+		return FVector2<T>(X / V2.X, Y / V2.Y);
+	}
+
 	inline FVector2<T>& operator+=(const FVector2<T>& V2)
 	{
 		X += V2.X;
@@ -536,6 +227,23 @@ struct FVector2
 		return (T)acos(ClampedDot);
 	}
 
+	// Angle in Radians
+	T SignedAngleR(const FVector2<T>& V2) const
+	{
+		T DotVal = Dot(V2);
+		T ClampedDot = (DotVal < (T)-1) ? (T)-1 : ((DotVal > (T)1) ? (T)1 : DotVal);
+		T Direction = Cross(V2);
+		if (Direction*Direction < TMathUtil<T>::ZeroTolerance)
+		{
+			return (DotVal < 0) ? TMathUtil<T>::Pi : (T)0;
+		}
+		else
+		{
+			T Sign = Direction < 0 ? (T)-1 : (T)1;
+			return Sign * TMathUtil<T>::ACos(ClampedDot);
+		}
+	}
+
 	T Normalize(const T Epsilon = 0)
 	{
 		T length = Length();
@@ -583,6 +291,334 @@ struct FVector2
 		return (B - A).DotPerp(C - A);
 	}
 };
+
+
+/**
+ * Templated 3D Vector. Ported from g3Sharp library, with the intention of 
+ * maintaining compatibility with existing g3Sharp code. Has an API
+ * similar to WildMagic, GTEngine, Eigen, etc. 
+ * 
+ * Convenience typedefs for FVector3f/FVector3d/FVector3i are defined, and
+ * should be preferentially used over the base template type
+ * 
+ * Implicit casts to/from FVector are defined, for all types.
+ *  
+ * @todo Possibly can be replaced/merged with Chaos TVector<T,N>
+ */
+template <typename T>
+struct FVector3
+{
+	T X, Y, Z;
+
+	FVector3()
+	{
+	}
+	FVector3(T ValX, T ValY, T ValZ)
+		: X(ValX), Y(ValY), Z(ValZ)
+	{
+	}
+	FVector3(const T* Data)
+	{
+		X = Data[0];
+		Y = Data[1];
+		Z = Data[2];
+	}
+	FVector3(const FVector2<T>& Data)
+	{
+		X = Data.X;
+		Y = Data.Y;
+		Z = (T)0;
+	}
+
+	inline operator const T*() const
+	{
+		return &X;
+	};
+	inline operator T*()
+	{
+		return &X;
+	}
+
+	inline operator FVector() const
+	{
+		return FVector((float)X, (float)Y, (float)Z);
+	}
+	inline FVector3(const FVector& Vec)
+	{
+		X = (T)Vec.X;
+		Y = (T)Vec.Y;
+		Z = (T)Vec.Z;
+	}
+
+
+	explicit inline operator FLinearColor() const
+	{
+		return FLinearColor((float)X, (float)Y, (float)Z);
+	}
+	inline FVector3(const FLinearColor& Color)
+	{
+		X = (T)Color.R;
+		Y = (T)Color.G;
+		Z = (T)Color.B;
+	}
+
+	explicit inline operator FColor() const
+	{
+		return FColor(
+			FMathf::Clamp((int)((float)X*255.0f), 0, 255),
+			FMathf::Clamp((int)((float)Y*255.0f), 0, 255),
+			FMathf::Clamp((int)((float)Z*255.0f), 0, 255));
+	}
+
+
+	static FVector3<T> Zero()
+	{
+		return FVector3<T>((T)0, (T)0, (T)0);
+	}
+	static FVector3<T> One()
+	{
+		return FVector3<T>((T)1, (T)1, (T)1);
+	}
+	static FVector3<T> UnitX()
+	{
+		return FVector3<T>((T)1, (T)0, (T)0);
+	}
+	static FVector3<T> UnitY()
+	{
+		return FVector3<T>((T)0, (T)1, (T)0);
+	}
+	static FVector3<T> UnitZ()
+	{
+		return FVector3<T>((T)0, (T)0, (T)1);
+	}
+	static FVector3<T> Max()
+	{
+		return FVector3<T>(TNumericLimits<T>::Max(), TNumericLimits<T>::Max(), TNumericLimits<T>::Max());
+	}
+
+	FVector3<T>& operator=(const FVector3<T>& V2)
+	{
+		X = V2.X;
+		Y = V2.Y;
+		Z = V2.Z;
+		return *this;
+	}
+
+	T& operator[](int Idx)
+	{
+		return (&X)[Idx];
+	}
+	const T& operator[](int Idx) const
+	{
+		return (&X)[Idx];
+	}
+
+	T Length() const
+	{
+		return TMathUtil<T>::Sqrt(X * X + Y * Y + Z * Z);
+	}
+	T SquaredLength() const
+	{
+		return X * X + Y * Y + Z * Z;
+	}
+
+	inline T Distance(const FVector3<T>& V2) const
+	{
+		T dx = V2.X - X;
+		T dy = V2.Y - Y;
+		T dz = V2.Z - Z;
+		return TMathUtil<T>::Sqrt(dx * dx + dy * dy + dz * dz);
+	}
+	inline T DistanceSquared(const FVector3<T>& V2) const
+	{
+		T dx = V2.X - X;
+		T dy = V2.Y - Y;
+		T dz = V2.Z - Z;
+		return dx * dx + dy * dy + dz * dz;
+	}
+
+	inline FVector3<T> operator-() const
+	{
+		return FVector3<T>(-X, -Y, -Z);
+	}
+
+	inline FVector3<T> operator+(const FVector3<T>& V2) const
+	{
+		return FVector3<T>(X + V2.X, Y + V2.Y, Z + V2.Z);
+	}
+
+	inline FVector3<T> operator-(const FVector3<T>& V2) const
+	{
+		return FVector3<T>(X - V2.X, Y - V2.Y, Z - V2.Z);
+	}
+
+	inline FVector3<T> operator+(const T& Scalar) const
+	{
+		return FVector3<T>(X + Scalar, Y + Scalar, Z + Scalar);
+	}
+
+	inline FVector3<T> operator-(const T& Scalar) const
+	{
+		return FVector3<T>(X - Scalar, Y - Scalar, Z - Scalar);
+	}
+
+	inline FVector3<T> operator*(const T& Scalar) const
+	{
+		return FVector3<T>(X * Scalar, Y * Scalar, Z * Scalar);
+	}
+
+	inline FVector3<T> operator*(const FVector3<T>& V2) const // component-wise
+	{
+		return FVector3<T>(X * V2.X, Y * V2.Y, Z * V2.Z);
+	}
+
+	inline FVector3<T> operator/(const T& Scalar) const
+	{
+		return FVector3<T>(X / Scalar, Y / Scalar, Z / Scalar);
+	}
+
+	inline FVector3<T> operator/(const FVector3<T>& V2) const // component-wise
+	{
+		return FVector3<T>(X / V2.X, Y / V2.Y, Z / V2.Z);
+	}
+
+	inline FVector3<T>& operator+=(const FVector3<T>& V2)
+	{
+		X += V2.X;
+		Y += V2.Y;
+		Z += V2.Z;
+		return *this;
+	}
+
+	inline FVector3<T>& operator-=(const FVector3<T>& V2)
+	{
+		X -= V2.X;
+		Y -= V2.Y;
+		Z -= V2.Z;
+		return *this;
+	}
+
+	inline FVector3<T>& operator*=(const T& Scalar)
+	{
+		X *= Scalar;
+		Y *= Scalar;
+		Z *= Scalar;
+		return *this;
+	}
+
+	inline FVector3<T>& operator/=(const T& Scalar)
+	{
+		X /= Scalar;
+		Y /= Scalar;
+		Z /= Scalar;
+		return *this;
+	}
+
+	T Dot(const FVector3<T>& V2) const
+	{
+		return X * V2.X + Y * V2.Y + Z * V2.Z;
+	}
+
+	FVector3<T> Cross(const FVector3<T>& V2) const
+	{
+		return FVector3(
+			Y * V2.Z - Z * V2.Y,
+			Z * V2.X - X * V2.Z,
+			X * V2.Y - Y * V2.X);
+	}
+
+	// Angle in Degrees
+	T AngleD(const FVector3<T>& V2) const
+	{
+		T DotVal = Dot(V2);
+		T ClampedDot = (DotVal < (T)-1) ? (T)-1 : ((DotVal > (T)1) ? (T)1 : DotVal);
+		return (T)(acos(ClampedDot) * (T)(180.0 / 3.14159265358979323846));
+	}
+
+	// Angle in Radians
+	T AngleR(const FVector3<T>& V2) const
+	{
+		T DotVal = Dot(V2);
+		T ClampedDot = (DotVal < (T)-1) ? (T)-1 : ((DotVal > (T)1) ? (T)1 : DotVal);
+		return (T)acos(ClampedDot);
+	}
+
+	inline bool IsNormalized()
+	{
+		return TMathUtil<T>::Abs((X * X + Y * Y + Z * Z) - 1) < TMathUtil<T>::ZeroTolerance;
+	}
+
+	T Normalize(const T Epsilon = 0)
+	{
+		T length = Length();
+		if (length > Epsilon)
+		{
+			T invLength = ((T)1) / length;
+			X *= invLength;
+			Y *= invLength;
+			Z *= invLength;
+			return length;
+		}
+		X = Y = Z = (T)0;
+		return 0;
+	}
+
+	inline FVector3<T> Normalized(const T Epsilon = 0) const
+	{
+		T length = Length();
+		if (length > Epsilon)
+		{
+			T invLength = ((T)1) / length;
+			return FVector3<T>(X * invLength, Y * invLength, Z * invLength);
+		}
+		return FVector3<T>((T)0, (T)0, (T)0);
+	}
+
+	inline T MaxAbs() const
+	{
+		return TMathUtil<T>::Max3(TMathUtil<T>::Abs(X), TMathUtil<T>::Abs(Y), TMathUtil<T>::Abs(Z));
+	}
+
+	inline T MinAbs() const
+	{
+		return TMathUtil<T>::Min3(TMathUtil<T>::Abs(X), TMathUtil<T>::Abs(Y), TMathUtil<T>::Abs(Z));
+	}
+
+	static FVector3<T> Lerp(const FVector3<T>& A, const FVector3<T>& B, T Alpha)
+	{
+		T OneMinusAlpha = (T)1 - Alpha;
+		return FVector3<T>(OneMinusAlpha * A.X + Alpha * B.X,
+						   OneMinusAlpha * A.Y + Alpha * B.Y,
+						   OneMinusAlpha * A.Z + Alpha * B.Z);
+	}
+
+	inline bool operator==(const FVector3<T>& Other) const
+	{
+		return X == Other.X && Y == Other.Y && Z == Other.Z;
+	}
+};
+
+template <typename RealType>
+inline FVector3<RealType> operator*(RealType Scalar, const FVector3<RealType>& V)
+{
+	return FVector3<RealType>(Scalar * V.X, Scalar * V.Y, Scalar * V.Z);
+}
+
+typedef FVector3<float> FVector3f;
+typedef FVector3<double> FVector3d;
+typedef FVector3<int> FVector3i;
+
+template <typename T>
+FORCEINLINE uint32 GetTypeHash(const FVector3<T>& Vector)
+{
+	// (this is how FIntVector and all the other FVectors do their hash functions)
+	// Note: this assumes there's no padding that could contain uncompared data.
+	return FCrc::MemCrc_DEPRECATED(&Vector, sizeof(FVector3<T>));
+}
+
+
+
+
 
 template <typename T>
 FORCEINLINE uint32 GetTypeHash(const FVector2<T>& Vector)

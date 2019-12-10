@@ -6,6 +6,26 @@
 #include "FABRIK.h"
 #include "RigUnit_FABRIK.generated.h"
 
+USTRUCT()
+struct FRigUnit_FABRIK_WorkData
+{
+	GENERATED_BODY()
+
+	FRigUnit_FABRIK_WorkData()
+	{
+		EffectorIndex = INDEX_NONE;
+	}
+
+	UPROPERTY()
+	TArray<FFABRIKChainLink> Chain;
+
+	UPROPERTY()
+	TArray<int32> BoneIndices;
+
+	UPROPERTY()
+	int32 EffectorIndex;
+};
+
 /**
  * The FABRIK solver can solve N-Bone chains using 
  * the Forward and Backward Reaching Inverse Kinematics algorithm.
@@ -16,12 +36,13 @@ struct FRigUnit_FABRIK : public FRigUnit_HighlevelBaseMutable
 {
 	GENERATED_BODY()
 
+	RIGVM_METHOD()
 	virtual void Execute(const FRigUnitContext& Context) override;
 
 	FRigUnit_FABRIK()
 	{
-		EffectorIndex = INDEX_NONE;
 		Precision = 1.f;
+		Weight = 1.f;
 		MaxIterations = 10;
 		EffectorTransform = FTransform::Identity;
 		bPropagateToChildren = false;
@@ -52,6 +73,12 @@ struct FRigUnit_FABRIK : public FRigUnit_HighlevelBaseMutable
 	float Precision;
 
 	/**
+	 * The weight of the solver - how much the IK should be applied.
+	 */
+	UPROPERTY(meta = (Input))
+	float Weight;
+
+	/**
 	 * If set to true all of the global transforms of the children
 	 * of this bone will be recalculated based on their local transforms.
 	 * Note: This is computationally more expensive than turning it off.
@@ -65,7 +92,6 @@ struct FRigUnit_FABRIK : public FRigUnit_HighlevelBaseMutable
 	UPROPERTY(meta = (Input))
 	int32 MaxIterations;
 
-	TArray<FABRIKChainLink> Chain;
-	TArray<int32> BoneIndices;
-	int32 EffectorIndex;
+	UPROPERTY(transient)
+	FRigUnit_FABRIK_WorkData WorkData;
 };

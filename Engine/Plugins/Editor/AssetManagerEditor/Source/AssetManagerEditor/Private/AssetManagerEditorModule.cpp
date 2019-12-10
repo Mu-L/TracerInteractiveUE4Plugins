@@ -33,7 +33,7 @@
 #include "Widgets/SToolTip.h"
 #include "PropertyCustomizationHelpers.h"
 #include "Toolkits/AssetEditorToolkit.h"
-#include "Toolkits/AssetEditorManager.h"
+
 #include "LevelEditor.h"
 #include "GraphEditorModule.h"
 #include "AssetData.h"
@@ -62,6 +62,7 @@
 #include "UObject/ConstructorHelpers.h"
 #include "Misc/HotReloadInterface.h"
 #include "Misc/ScopedSlowTask.h"
+#include "Subsystems/AssetEditorSubsystem.h"
 
 
 #define LOCTEXT_NAMESPACE "AssetManagerEditor"
@@ -302,8 +303,8 @@ public:
 	virtual void OpenAssetAuditUI(TArray<FAssetData> SelectedAssets) override;
 	virtual void OpenAssetAuditUI(TArray<FAssetIdentifier> SelectedIdentifiers) override;
 	virtual void OpenAssetAuditUI(TArray<FName> SelectedPackages) override;
-	virtual void OpenReferenceViewerUI(TArray<FAssetIdentifier> SelectedIdentifiers) override;
-	virtual void OpenReferenceViewerUI(TArray<FName> SelectedPackages) override;
+	virtual void OpenReferenceViewerUI(const TArray<FAssetIdentifier> SelectedIdentifiers, const FReferenceViewerParams ReferenceViewerParams = FReferenceViewerParams()) override;
+	virtual void OpenReferenceViewerUI(const TArray<FName> SelectedPackages, const FReferenceViewerParams ReferenceViewerParams = FReferenceViewerParams()) override;
 	virtual void OpenSizeMapUI(TArray<FAssetIdentifier> SelectedIdentifiers) override;
 	virtual void OpenSizeMapUI(TArray<FName> SelectedPackages) override;	
 	virtual bool GetStringValueForCustomColumn(const FAssetData& AssetData, FName ColumnName, FString& OutValue) override;
@@ -682,17 +683,17 @@ void FAssetManagerEditorModule::OpenAssetAuditUI(TArray<FName> SelectedPackages)
 	}
 }
 
-void FAssetManagerEditorModule::OpenReferenceViewerUI(TArray<FAssetIdentifier> SelectedIdentifiers)
+void FAssetManagerEditorModule::OpenReferenceViewerUI(const TArray<FAssetIdentifier> SelectedIdentifiers, const FReferenceViewerParams ReferenceViewerParams)
 {
 	if (SelectedIdentifiers.Num() > 0)
 	{
 		TSharedRef<SDockTab> NewTab = FGlobalTabmanager::Get()->InvokeTab(ReferenceViewerTabName);
 		TSharedRef<SReferenceViewer> ReferenceViewer = StaticCastSharedRef<SReferenceViewer>(NewTab->GetContent());
-		ReferenceViewer->SetGraphRootIdentifiers(SelectedIdentifiers);
+		ReferenceViewer->SetGraphRootIdentifiers(SelectedIdentifiers, ReferenceViewerParams);
 	}
 }
 
-void FAssetManagerEditorModule::OpenReferenceViewerUI(TArray<FName> SelectedPackages)
+void FAssetManagerEditorModule::OpenReferenceViewerUI(const TArray<FName> SelectedPackages, const FReferenceViewerParams ReferenceViewerParams)
 {
 	TArray<FAssetIdentifier> Identifiers;
 	for (FName Name : SelectedPackages)
@@ -700,7 +701,7 @@ void FAssetManagerEditorModule::OpenReferenceViewerUI(TArray<FName> SelectedPack
 		Identifiers.Add(FAssetIdentifier(Name));
 	}
 
-	OpenReferenceViewerUI(Identifiers);
+	OpenReferenceViewerUI(Identifiers, ReferenceViewerParams);
 }
 
 void FAssetManagerEditorModule::OpenSizeMapUI(TArray<FName> SelectedPackages)
@@ -884,7 +885,7 @@ TSharedRef<FExtender> FAssetManagerEditorModule::OnExtendAssetEditor(const TShar
 		// It's safe to modify the CommandList here because this is run as the editor UI is created and the payloads are safe
 		CommandList->MapAction(
 			FAssetManagerEditorCommands::Get().ViewReferences,
-			FExecuteAction::CreateRaw(this, &FAssetManagerEditorModule::OpenReferenceViewerUI, PackageNames));
+			FExecuteAction::CreateRaw(this, &FAssetManagerEditorModule::OpenReferenceViewerUI, PackageNames, FReferenceViewerParams()));
 
 		CommandList->MapAction(
 			FAssetManagerEditorCommands::Get().ViewSizeMap,
@@ -965,14 +966,14 @@ void FAssetManagerEditorModule::OnEditAssetIdentifiers(TArray<FAssetIdentifier> 
 	{
 		FScopedSlowTask SlowTask(0, LOCTEXT("LoadingSelectedObject", "Editing assets..."));
 		SlowTask.MakeDialogDelayed(.1f);
-		FAssetEditorManager& EditorManager = FAssetEditorManager::Get();
+		UAssetEditorSubsystem* AssetEditorSubsystem = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>();
 
 		for (const FAssetData& AssetData : AssetsToLoad)
 		{
 			UObject* EditObject = AssetData.GetAsset();
 			if (EditObject)
 			{
-				EditorManager.OpenEditorForAsset(EditObject);
+				AssetEditorSubsystem->OpenEditorForAsset(EditObject);
 			}
 		}
 	}
@@ -1557,12 +1558,15 @@ void FAssetManagerEditorModule::RefreshRegistryData()
 	UAssetManager::Get().UpdateManagementDatabase(true);
 
 	// Rescan registry sources, try to restore the current one
-	FString OldSourceName = CurrentRegistrySource->SourceName;
+	const FString OldSourceName = CurrentRegistrySource ? CurrentRegistrySource->SourceName : FString();
 
 	CurrentRegistrySource = nullptr;
 	InitializeRegistrySources(false);
 
-	SetCurrentRegistrySource(OldSourceName);
+	if (!OldSourceName.IsEmpty())
+	{
+		SetCurrentRegistrySource(OldSourceName);
+	}
 }
 
 bool FAssetManagerEditorModule::IsPackageInCurrentRegistrySource(FName PackageName)
@@ -2149,7 +2153,7 @@ bool FAssetManagerEditorModule::WriteCollection(FName CollectionName, ECollectio
 	else
 	{
 		UE_LOG(LogAssetManagerEditor, Warning, TEXT("Failed to create collection %s. %s"), *CollectionName.ToString(), *CollectionManager.GetLastError().ToString());
-		ResultsMessage = FText::Format(LOCTEXT("CreateCollectionFailed", "Failed to create collection {0}. {0}"), FText::FromName(CollectionName), CollectionManager.GetLastError());
+		ResultsMessage = FText::Format(LOCTEXT("CreateCollectionFailed", "Failed to create collection {0}. {1}"), FText::FromName(CollectionName), CollectionManager.GetLastError());
 	}
 
 	if (bShowFeedback)

@@ -841,9 +841,9 @@ void FMovieSceneFloatChannel::RefineCurvePoints(FFrameRate InTickResolution, dou
 		{
 			bool bSegmentIsLinear = true;
 
-			TTuple<double, double> Evaluated[ARRAY_COUNT(InterpTimes)];
+			TTuple<double, double> Evaluated[UE_ARRAY_COUNT(InterpTimes)];
 
-			for (int32 InterpIndex = 0; InterpIndex < ARRAY_COUNT(InterpTimes); ++InterpIndex)
+			for (int32 InterpIndex = 0; InterpIndex < UE_ARRAY_COUNT(InterpTimes); ++InterpIndex)
 			{
 				double& EvalTime  = Evaluated[InterpIndex].Get<0>();
 
@@ -864,7 +864,7 @@ void FMovieSceneFloatChannel::RefineCurvePoints(FFrameRate InTickResolution, dou
 			if (!bSegmentIsLinear)
 			{
 				// Add the point
-				InOutPoints.Insert(Evaluated, ARRAY_COUNT(Evaluated), Index+1);
+				InOutPoints.Insert(Evaluated, UE_ARRAY_COUNT(Evaluated), Index+1);
 				--Index;
 			}
 		}
@@ -894,6 +894,25 @@ void FMovieSceneFloatChannel::DuplicateKeys(TArrayView<const FKeyHandle> InHandl
 void FMovieSceneFloatChannel::DeleteKeys(TArrayView<const FKeyHandle> InHandles)
 {
 	GetData().DeleteKeys(InHandles);
+}
+
+void FMovieSceneFloatChannel::DeleteKeysFrom(FFrameNumber InTime, bool bDeleteKeysBefore)
+{
+	// Insert a key at the current time to maintain evaluation
+	if (GetData().GetTimes().Num() > 0)
+	{
+		int32 KeyHandleIndex = GetData().FindKey(InTime);
+		if (KeyHandleIndex == INDEX_NONE)
+		{
+			float Value = 0.f;
+			if (Evaluate(InTime, Value))
+			{
+				AddCubicKey(InTime, Value);
+			}
+		}
+	}
+
+	GetData().DeleteKeysFrom(InTime, bDeleteKeysBefore);
 }
 
 void FMovieSceneFloatChannel::ChangeFrameResolution(FFrameRate SourceRate, FFrameRate DestinationRate)
@@ -1037,6 +1056,7 @@ bool FMovieSceneFloatChannel::Serialize(FArchive& Ar)
 	return false;
 }
 
+#if WITH_EDITORONLY_DATA
 void FMovieSceneFloatChannel::PostSerialize(const FArchive& Ar)
 {
 	if (Ar.CustomVer(FSequencerObjectVersion::GUID) < FSequencerObjectVersion::ModifyLinearKeysForOldInterp)
@@ -1068,3 +1088,4 @@ void FMovieSceneFloatChannel::PostSerialize(const FArchive& Ar)
 		}
 	}
 }
+#endif

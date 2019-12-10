@@ -19,7 +19,7 @@ public:
 		const FGuid& InMessageLogGuidKey
 	);
 
-	void SetStandaloneScripts(UNiagaraScript* InScript, UNiagaraScript* InSourceScript);
+	void Initialize(UNiagaraScript* InScript, UNiagaraScript* InSourceScript);
 
 private:
 	virtual void OnVMScriptCompiled(UNiagaraScript* InScript) override;

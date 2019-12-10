@@ -235,7 +235,7 @@ public class AndroidPlatform : Platform
 	private static string GetFinalBatchName(string ApkName, DeploymentContext SC, string Architecture, string GPUArchitecture, bool bNoOBBInstall, EBatchType BatchType, UnrealTargetPlatform Target)
 	{
 		string Extension = ".bat";
-		if (Target == UnrealTargetPlatform.Linux)
+		if (Target == UnrealTargetPlatform.Linux || Target == UnrealTargetPlatform.LinuxAArch64)
 		{
 			Extension = ".sh";
 		}
@@ -414,17 +414,24 @@ public class AndroidPlatform : Platform
 		List<FileReference> FilesForObb = ObbFileFilter.ApplyToDirectory(new DirectoryReference(StageDirectoryPath), true);
 
 		bool OBBNeedsUpdate = false;
-		System.DateTime OBBTimeStamp = File.GetLastWriteTimeUtc(LocalObbName);
-		foreach (FileReference FileToObb in FilesForObb)
-		{
-			System.DateTime FileTimeStamp = File.GetLastWriteTimeUtc(FileToObb.FullName);
-			if(FileTimeStamp > OBBTimeStamp)
+
+		if (File.Exists(LocalObbName))
+		{ 
+			System.DateTime OBBTimeStamp = File.GetLastWriteTimeUtc(LocalObbName);
+			foreach (FileReference FileToObb in FilesForObb)
 			{
-				OBBNeedsUpdate = true;
-				break;
+				System.DateTime FileTimeStamp = File.GetLastWriteTimeUtc(FileToObb.FullName);
+				if (FileTimeStamp > OBBTimeStamp)
+				{
+					OBBNeedsUpdate = true;
+					break;
+				}
 			}
 		}
-
+		else
+		{
+			OBBNeedsUpdate = true;
+		}
 		Int64 OBBSizeAllowed = GetMaxOBBSizeAllowed(SC);
 		string LimitString = (OBBSizeAllowed < MaxOBBSizeAllowed) ? "2 GiB" : "4 GiB";
 
@@ -454,8 +461,8 @@ public class AndroidPlatform : Platform
 				FilesToObb = new List<FileReference>();
 
 				// Collect the filesize and place into Obb or Patch list
-				Int64 MainObbSize = 22 + 10;	// EOCD with comment (store version)
-				Int64 PatchObbSize = 22 + 10;	// EOCD with comment (store version)
+				Int64 MainObbSize = 22 + 10 + 4096;		// EOCD wit comment (store version) + padding
+				Int64 PatchObbSize = 22 + 10 + 4096;	// EOCD wit comment (store version) + padding
 				foreach (FileReference FileRef in FilesForObb)
 				{
 					FileInfo LocalFileInfo = new FileInfo(FileRef.FullName);

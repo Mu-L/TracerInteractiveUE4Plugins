@@ -86,12 +86,6 @@ struct FContentBrowserConfig
 	/** Whether the sources view should initially be expanded or not */
 	bool bExpandSourcesView;
 
-	/** Whether asset paths are shown in the Content Browser.  Only useful if you only want to show collections */
-	bool bShowAssetPathTree;
-
-	/** Forces collections to be initially visible, regardless of defaults */
-	bool bAlwaysShowCollections;
-
 	/** Collection to view initially */
 	FCollectionNameType SelectedCollectionName;
 
@@ -127,8 +121,6 @@ struct FContentBrowserConfig
 		, bCanShowClasses(true)
 		, bUseSourcesView(true)
 		, bExpandSourcesView(true)
-		, bShowAssetPathTree(true)
-		, bAlwaysShowCollections(false)
 		, SelectedCollectionName( NAME_None, ECollectionShareType::CST_Local )
 		, bUsePathPicker(true)
 		, bCanShowFilters(true)
@@ -183,6 +175,12 @@ struct FAssetPickerConfig
 
 	/** The asset that should be initially selected */
 	FAssetData InitialAssetSelection;
+
+	/** The handle to the property that opened this picker. Needed for contextual filtering. */
+	TSharedPtr<class IPropertyHandle> PropertyHandle;
+
+	/** The passed in property handle will be used to gather referencing assets. If additional referencing assets should be reported, supply them here. */
+	TArray<FAssetData> AdditionalReferencingAssets;
 
 	/** The delegate that fires when an asset was selected */
 	FOnAssetSelected OnAssetSelected;

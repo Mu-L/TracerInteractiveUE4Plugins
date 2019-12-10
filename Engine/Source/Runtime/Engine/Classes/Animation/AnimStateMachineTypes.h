@@ -30,6 +30,7 @@ namespace ETransitionLogicType
 	enum Type
 	{
 		TLT_StandardBlend UMETA(DisplayName="Standard Blend"),
+		TLT_Inertialization UMETA(DisplayName = "Inertialization"),
 		TLT_Custom UMETA(DisplayName="Custom")
 	};
 }
@@ -247,6 +248,10 @@ struct FBakedAnimationState
 	// Indices into the property array for player nodes in the state
 	UPROPERTY()
 	TArray<int32> PlayerNodeIndices;
+
+	// Indices into the property array for layer nodes in the state
+	UPROPERTY()
+	TArray<int32> LayerNodeIndices;
 
 	// Whether or not this state will ALWAYS reset it's state on reentry, regardless of remaining weight
 	UPROPERTY()

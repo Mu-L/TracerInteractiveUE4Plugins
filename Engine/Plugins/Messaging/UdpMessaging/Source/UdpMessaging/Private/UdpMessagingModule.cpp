@@ -8,8 +8,7 @@
 #include "Misc/CommandLine.h"
 #include "Misc/CoreDelegates.h"
 #include "Misc/App.h"
-#include "Modules/ModuleInterface.h"
-#include "Modules/ModuleManager.h"
+#include "Containers/Ticker.h"
 #include "Interfaces/IPv4/IPv4Endpoint.h"
 
 #if WITH_EDITOR
@@ -17,6 +16,8 @@
 	#include "ISettingsSection.h"
 #endif
 
+#include "Features/IModularFeatures.h"
+#include "INetworkMessagingExtension.h"
 #include "IUdpMessageTunnelConnection.h"
 #include "Shared/UdpMessagingSettings.h"
 #include "Transport/UdpMessageTransport.h"
@@ -29,10 +30,11 @@ DEFINE_LOG_CATEGORY(LogUdpMessaging);
 
 
 /**
- * Implements the UdpMessagingModule module.
+ * Implements the UdpMessagingModule module and the network messaging extension modular feature.
  */
 class FUdpMessagingModule
 	: public FSelfRegisteringExec
+	, public INetworkMessagingExtension
 	, public IModuleInterface
 {
 public:
@@ -168,11 +170,12 @@ public:
 				{
 					Ar.Log(TEXT("  Active Connections:"));
 
+					const FCoreTexts& CoreTexts = FCoreTexts::Get();
 					for (const auto& Connection : Connections)
 					{
 						Ar.Logf(TEXT("  > %s, Open: %s, Uptime: %s, Bytes Received: %i, Bytes Sent: %i"),
 							*Connection->GetName().ToString(),
-							Connection->IsOpen() ? *GYes.ToString() : *GNo.ToString(),
+							Connection->IsOpen() ? *CoreTexts.Yes.ToString() : *CoreTexts.No.ToString(),
 							*Connection->GetUptime().ToString(),
 							Connection->GetTotalBytesReceived(),
 							Connection->GetTotalBytesSent()
@@ -214,10 +217,9 @@ public:
 public:
 
 	// IModuleInterface interface
-
 	virtual void StartupModule() override
 	{
-		if (!SupportsNetworkedTransport())
+		if (!IsSupportEnabled())
 		{
 			return;
 		}
@@ -260,6 +262,8 @@ public:
 		FCoreDelegates::ApplicationWillDeactivateDelegate.AddRaw(this, &FUdpMessagingModule::HandleApplicationWillDeactivate);
 
 		RestartServices();
+
+		IModularFeatures::Get().RegisterModularFeature(INetworkMessagingExtension::ModularFeatureName, this);
 	}
 
 	virtual void ShutdownModule() override
@@ -287,11 +291,101 @@ public:
 #if PLATFORM_DESKTOP
 		ShutdownTunnel();
 #endif
+
+		IModularFeatures::Get().UnregisterModularFeature(INetworkMessagingExtension::ModularFeatureName, this);
 	}
 
 	virtual bool SupportsDynamicReloading() override
 	{
 		return true;
+	}
+
+	// INetworkMessagingExtension interface
+	virtual FName GetName() const
+	{
+		return UdpMessagingName;
+	}
+
+	virtual bool IsSupportEnabled() const
+	{
+#if !IS_PROGRAM && UE_BUILD_SHIPPING
+		return false;
+#else
+		// disallow unsupported platforms
+		if (!FPlatformMisc::SupportsMessaging())
+		{
+			return false;
+		}
+
+		// always allow in standalone Slate applications
+		if (!FApp::IsGame() && !IsRunningCommandlet())
+		{
+			return true;
+		}
+
+		// otherwise only allow if explicitly desired
+		return FParse::Param(FCommandLine::Get(), TEXT("Messaging"));
+#endif
+	}
+
+	virtual void RestartServices()
+	{
+		const UUdpMessagingSettings& Settings = *GetDefault<UUdpMessagingSettings>();
+
+		if (Settings.EnableTransport)
+		{
+			InitializeBridge();
+		}
+		else
+		{
+			ShutdownBridge();
+		}
+
+#if PLATFORM_DESKTOP
+		if (Settings.EnableTunnel)
+		{
+			InitializeTunnel();
+		}
+		else
+		{
+			ShutdownTunnel();
+		}
+#endif
+	}
+
+	virtual void ShutdownServices()
+	{
+		AdditionalStaticEndpoints.Empty();
+		ShutdownBridge();
+#if PLATFORM_DESKTOP
+		ShutdownTunnel();
+#endif
+	}
+
+	virtual void AddEndpoint(const FString& InEndpoint)
+	{
+		FIPv4Endpoint OutEndpoint;
+		if (FIPv4Endpoint::Parse(InEndpoint, OutEndpoint) && !AdditionalStaticEndpoints.Contains(OutEndpoint))
+		{
+			AdditionalStaticEndpoints.Add(OutEndpoint);
+			if (auto Transport = WeakBridgeTransport.Pin())
+			{
+				Transport->AddStaticEndpoint(OutEndpoint);
+			}
+		}
+	}
+
+	virtual void RemoveEndpoint(const FString& InEndpoint)
+	{
+		FIPv4Endpoint OutEndpoint;
+		if (FIPv4Endpoint::Parse(InEndpoint, OutEndpoint) && AdditionalStaticEndpoints.Contains(OutEndpoint))
+		{
+			AdditionalStaticEndpoints.Remove(OutEndpoint);
+			if (auto Transport = WeakBridgeTransport.Pin())
+			{
+				Transport->RemoveStaticEndpoint(OutEndpoint);
+			}
+		}
 	}
 
 protected:
@@ -331,6 +425,23 @@ protected:
 			ResaveSettings = true;
 		}
 
+		// Initialize the service with the additional endpoints added through the modular interface
+		TArray<FIPv4Endpoint> StaticEndpoints = AdditionalStaticEndpoints.Array();
+		
+		for (auto& StaticEndpoint : Settings->StaticEndpoints)
+		{
+			FIPv4Endpoint Endpoint;
+
+			if (FIPv4Endpoint::Parse(StaticEndpoint, Endpoint))
+			{
+				StaticEndpoints.Add(Endpoint);
+			}
+			else
+			{
+				UE_LOG(LogUdpMessaging, Warning, TEXT("Invalid UDP Messaging Static Endpoint '%s'"), *StaticEndpoint);
+			}
+		}
+
 		if (Settings->MulticastTimeToLive == 0)
 		{
 			Settings->MulticastTimeToLive = 1;
@@ -341,14 +452,14 @@ protected:
 		{
 			Settings->SaveConfig();
 		}
-
 		UE_LOG(LogUdpMessaging, Log, TEXT("Initializing bridge on interface %s to multicast group %s."), *UnicastEndpoint.ToString(), *MulticastEndpoint.ToText().ToString());
 
-		TSharedRef<FUdpMessageTransport, ESPMode::ThreadSafe> Transport = MakeShared<FUdpMessageTransport, ESPMode::ThreadSafe>(UnicastEndpoint, MulticastEndpoint, Settings->MulticastTimeToLive);
+		TSharedRef<FUdpMessageTransport, ESPMode::ThreadSafe> Transport = MakeShared<FUdpMessageTransport, ESPMode::ThreadSafe>(UnicastEndpoint, MulticastEndpoint, MoveTemp(StaticEndpoints), Settings->MulticastTimeToLive);
+		Transport->OnTransportError().BindRaw(this, &FUdpMessagingModule::HandleTransportError);
 		WeakBridgeTransport = Transport;
 		MessageBridge = FMessageBridgeBuilder()
 			.UsingTransport(Transport);
-}
+	}
 
 #if PLATFORM_DESKTOP
 	/** Initializes the message tunnel with the current settings. */
@@ -412,32 +523,6 @@ protected:
 	}
 #endif
 
-	/** Restarts the bridge and tunnel services. */
-	void RestartServices()
-	{
-		const UUdpMessagingSettings& Settings = *GetDefault<UUdpMessagingSettings>();
-
-		if (Settings.EnableTransport)
-		{
-			InitializeBridge();
-		}
-		else
-		{
-			ShutdownBridge();
-		}
-
-#if PLATFORM_DESKTOP
-		if (Settings.EnableTunnel)
-		{
-			InitializeTunnel();
-		}
-		else
-		{
-			ShutdownTunnel();
-		}
-#endif
-	}
-
 	/**
 	 * Parse command line arguments to override UdpMessagingSettings
 	 */
@@ -449,39 +534,23 @@ protected:
 			FParse::Bool(CommandLine, TEXT("-UDPMESSAGING_TRANSPORT_ENABLE="), Settings->EnableTransport);
 			FParse::Value(CommandLine, TEXT("-UDPMESSAGING_TRANSPORT_UNICAST="), Settings->UnicastEndpoint);
 			FParse::Value(CommandLine, TEXT("-UDPMESSAGING_TRANSPORT_MULTICAST="), Settings->MulticastEndpoint);
+			
+			FString StaticEndpoints;
+			FParse::Value(CommandLine, TEXT("-UDPMESSAGING_TRANSPORT_STATIC="), StaticEndpoints, false);
+			TArray<FString> CommandLineStaticEndpoints;
+			StaticEndpoints.ParseIntoArray(CommandLineStaticEndpoints, TEXT(","));
+			for (const FString& CmdStaticEndpoint : CommandLineStaticEndpoints)
+			{
+				Settings->StaticEndpoints.AddUnique(CmdStaticEndpoint);
+			}
 		}
-	}
-
-	/**
-	 * Checks whether networked message transport is supported.
-	 *
-	 * @return true if networked transport is supported, false otherwise.
-	 */
-	bool SupportsNetworkedTransport() const
-	{
-#if UE_BUILD_SHIPPING
-		return false;
-#else
-		// disallow unsupported platforms
-		if (!FPlatformMisc::SupportsMessaging())
-		{
-			return false;
-		}
-
-		// always allow in standalone Slate applications
-		if (!FApp::IsGame() && !IsRunningCommandlet())
-		{
-			return true;
-		}
-
-		// otherwise only allow if explicitly desired
-		return FParse::Param(FCommandLine::Get(), TEXT("Messaging"));
-#endif
 	}
 
 	/** Shuts down the message bridge. */
 	void ShutdownBridge()
 	{
+		StopAutoRepairRoutine();
+		WeakBridgeTransport.Reset();
 		if (MessageBridge.IsValid())
 		{
 			MessageBridge->Disable();
@@ -513,10 +582,7 @@ private:
 	/** Callback for when the application will be deactivated (i.e. sleep on iOS).*/
 	void HandleApplicationWillDeactivate()
 	{
-		ShutdownBridge();
-#if PLATFORM_DESKTOP
-		ShutdownTunnel();
-#endif
+		ShutdownServices();
 	}
 
 	/** Callback for when the settings were saved. */
@@ -535,7 +601,59 @@ private:
 		}
 	}
 
+	void HandleTransportError()
+	{
+		if (GetDefault<UUdpMessagingSettings>()->bAutoRepair)
+		{
+			StartAutoRepairRoutine();
+		}
+		else
+		{
+			UE_LOG(LogUdpMessaging, Error, TEXT("UDP messaging encountered an error. Please restart the service for proper functionality"));
+		}
+
+	}
+
+	void StartAutoRepairRoutine()
+	{
+		StopAutoRepairRoutine();
+		FTimespan CheckDelay(0, 0, 1);
+		uint32 CheckNumber = 1;
+		AutoRepairHandle = FTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([WeakTransport = WeakBridgeTransport, LastTime = FDateTime::UtcNow(), CheckDelay, CheckNumber](float DeltaTime) mutable
+		{
+			bool bContinue = true;
+			FDateTime UtcNow = FDateTime::UtcNow();
+			if (LastTime + (CheckDelay * CheckNumber) <= UtcNow)
+			{
+				++CheckNumber;
+				LastTime = UtcNow;
+				if (auto Transport = WeakTransport.Pin())
+				{
+					// if the restart fail, continue the routine.
+					bContinue = !Transport->RestartTransport();
+				}
+				// if we do not have a valid transport also stop the routine
+				else
+				{
+					bContinue = false;
+				}
+			}
+			return bContinue;
+		}), 1.0f);
+		UE_LOG(LogUdpMessaging, Warning, TEXT("UDP messaging encountered an error. Auto repair routine started for reinitialization"));
+	}
+
+	void StopAutoRepairRoutine()
+	{
+		if (AutoRepairHandle.IsValid())
+		{
+			FTicker::GetCoreTicker().RemoveTicker(AutoRepairHandle);
+		}
+	}
+
 private:
+	/** Name of the network messaging extension. */
+	static FName UdpMessagingName;
 
 	/** Holds the message bridge if present. */
 	TSharedPtr<IMessageBridge, ESPMode::ThreadSafe> MessageBridge;
@@ -543,11 +661,19 @@ private:
 	/** Holds the bridge transport if present.  */
 	TWeakPtr<FUdpMessageTransport, ESPMode::ThreadSafe> WeakBridgeTransport;
 
+	/** Holds additional static endpoints added through the modular feature interface. */
+	TSet<FIPv4Endpoint> AdditionalStaticEndpoints;
+
+	/** Holds the delegate handle for the auto repair routine. */
+	FDelegateHandle AutoRepairHandle;
+
 #if PLATFORM_DESKTOP
 	/** Holds the message tunnel if present. */
 	TSharedPtr<IUdpMessageTunnel> MessageTunnel;
 #endif
 };
+
+FName FUdpMessagingModule::UdpMessagingName("UdpMessaging");
 
 
 void EmptyLinkFunctionForStaticInitializationUdpMessagingTests()

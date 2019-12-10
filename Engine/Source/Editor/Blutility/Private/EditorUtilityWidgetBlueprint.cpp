@@ -23,7 +23,7 @@ UEditorUtilityWidgetBlueprint::UEditorUtilityWidgetBlueprint(const FObjectInitia
 void UEditorUtilityWidgetBlueprint::BeginDestroy()
 {
 	// Only cleanup script if it has been registered and we're not shutdowning editor
-	if (!GIsRequestingExit && RegistrationName != NAME_None)
+	if (!IsEngineExitRequested() && RegistrationName != NAME_None)
 	{
 		IBlutilityModule* BlutilityModule = FModuleManager::GetModulePtr<IBlutilityModule>("Blutility");
 		if (BlutilityModule)
@@ -71,8 +71,12 @@ TSharedRef<SWidget> UEditorUtilityWidgetBlueprint::CreateUtilityWidget()
 	UClass* BlueprintClass = GeneratedClass;
 	TSubclassOf<UEditorUtilityWidget> WidgetClass = BlueprintClass;
 	UWorld* World = GEditor->GetEditorWorldContext().World();
-	if (!CreatedUMGWidget && World)
+	if (World)
 	{
+		if (CreatedUMGWidget)
+		{
+			CreatedUMGWidget->Rename(nullptr, GetTransientPackage());
+		}
 		CreatedUMGWidget = CreateWidget<UEditorUtilityWidget>(World, WidgetClass);
 	}
 
@@ -105,8 +109,7 @@ void UEditorUtilityWidgetBlueprint::ChangeTabWorld(UWorld* World, EMapChangeType
 		{
 			CreatedTab.Pin()->SetContent(SNullWidget::NullWidget);
 		}
-		
-		if(CreatedUMGWidget)
+		if (CreatedUMGWidget)
 		{
 			CreatedUMGWidget->Rename(nullptr, GetTransientPackage());
 			CreatedUMGWidget = nullptr;

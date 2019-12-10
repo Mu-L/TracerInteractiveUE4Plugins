@@ -153,7 +153,7 @@ static struct FValidatePixelFormats
 {
 	FValidatePixelFormats()
 	{
-		for (int32 X = 0; X < ARRAY_COUNT(GPixelFormats); ++X)
+		for (int32 X = 0; X < UE_ARRAY_COUNT(GPixelFormats); ++X)
 		{
 			// Make sure GPixelFormats has an entry for every unreal format
 			check(X == GPixelFormats[X].UnrealFormat);
@@ -244,8 +244,8 @@ class FBlackVolumeTextureResourceBulkDataInterface : public FResourceBulkDataInt
 public:
 
 	/** Default constructor. */
-	FBlackVolumeTextureResourceBulkDataInterface()
-		: Color(0)
+	FBlackVolumeTextureResourceBulkDataInterface(uint8 Alpha)
+		: Color(0, 0, 0, Alpha)
 	{
 	}
 
@@ -281,7 +281,7 @@ private:
 /**
  * A class representing a 1x1x1 black volume texture.
  */
-template <EPixelFormat PixelFormat>
+template <EPixelFormat PixelFormat, uint8 Alpha>
 class FBlackVolumeTexture : public FTexture
 {
 public:
@@ -294,7 +294,7 @@ public:
 		if (GSupportsTexture3D)
 		{
 			// Create the texture.
-			FBlackVolumeTextureResourceBulkDataInterface BlackTextureBulkData;
+			FBlackVolumeTextureResourceBulkDataInterface BlackTextureBulkData(Alpha);
 			FRHIResourceCreateInfo CreateInfo(&BlackTextureBulkData);
 			CreateInfo.DebugName = TEXT("BlackVolumeTexture");
 			FTexture3DRHIRef Texture3D = RHICreateTexture3D(1,1,1,PixelFormat,1,TexCreate_ShaderResource,CreateInfo);
@@ -303,7 +303,7 @@ public:
 		else
 		{
 			// Create a texture, even though it's not a volume texture
-			FBlackVolumeTextureResourceBulkDataInterface BlackTextureBulkData;
+			FBlackVolumeTextureResourceBulkDataInterface BlackTextureBulkData(Alpha);
 			FRHIResourceCreateInfo CreateInfo(&BlackTextureBulkData);
 			FTexture2DRHIRef Texture2D = RHICreateTexture2D(1, 1, PixelFormat, 1, 1, TexCreate_ShaderResource, CreateInfo);
 			TextureRHI = Texture2D;
@@ -332,10 +332,11 @@ public:
 };
 
 /** Global black volume texture resource. */
-FTexture* GBlackVolumeTexture = new TGlobalResource<FBlackVolumeTexture<PF_B8G8R8A8>>();
+FTexture* GBlackVolumeTexture = new TGlobalResource<FBlackVolumeTexture<PF_B8G8R8A8, 0>>();
+FTexture* GBlackAlpha1VolumeTexture = new TGlobalResource<FBlackVolumeTexture<PF_B8G8R8A8, 255>>();
 
 /** Global black volume texture resource. */
-FTexture* GBlackUintVolumeTexture = new TGlobalResource<FBlackVolumeTexture<PF_R8G8B8A8_UINT>>();
+FTexture* GBlackUintVolumeTexture = new TGlobalResource<FBlackVolumeTexture<PF_R8G8B8A8_UINT, 0>>();
 
 class FBlackArrayTexture : public FTexture
 {
@@ -343,10 +344,10 @@ public:
 	// FResource interface.
 	virtual void InitRHI() override
 	{
-		if (GetFeatureLevel() >= ERHIFeatureLevel::SM4)
+		if (GetFeatureLevel() >= ERHIFeatureLevel::SM5)
 		{
 			// Create the texture RHI.
-			FBlackVolumeTextureResourceBulkDataInterface BlackTextureBulkData;
+			FBlackVolumeTextureResourceBulkDataInterface BlackTextureBulkData(0);
 			FRHIResourceCreateInfo CreateInfo(&BlackTextureBulkData);
 			CreateInfo.DebugName = TEXT("BlackArrayTexture");
 			FTexture2DArrayRHIRef TextureArray = RHICreateTexture2DArray(1, 1, 1, PF_B8G8R8A8, 1, 1, TexCreate_ShaderResource, CreateInfo);
@@ -911,6 +912,23 @@ RENDERCORE_API bool MobileSupportsGPUScene(EShaderPlatform Platform)
 	return (CVar && CVar->GetValueOnAnyThread() != 0) ? true : false;
 }
 
+RENDERCORE_API bool GPUSceneUseTexture2D(EShaderPlatform Platform)
+{
+	if (IsMobilePlatform(Platform))
+	{
+		static TConsoleVariableData<int32>* CVar = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.Mobile.UseGPUSceneTexture"));
+		if (Platform == SP_OPENGL_ES3_1_ANDROID)
+		{
+			return true;
+		}
+		else
+		{
+			return (CVar && CVar->GetValueOnAnyThread() != 0) ? true : false;
+		}
+	}
+	return false;
+}
+
 RENDERCORE_API bool AllowPixelDepthOffset(EShaderPlatform Platform)
 {
 	if (IsMobilePlatform(Platform))
@@ -960,31 +978,31 @@ RENDERCORE_API void RenderUtilsInit()
 {
 	if (GUseForwardShading)
 	{
-		GForwardShadingPlatformMask = ~0u;
+		GForwardShadingPlatformMask = ~0ull;
 	}
 
 	static IConsoleVariable* DBufferVar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.DBuffer"));
 	if (DBufferVar && DBufferVar->GetInt())
 	{
-		GDBufferPlatformMask = ~0u;
+		GDBufferPlatformMask = ~0ull;
 	}
 
 	static IConsoleVariable* BasePassVelocityCVar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.BasePassOutputsVelocity"));
 	if (BasePassVelocityCVar && BasePassVelocityCVar->GetInt())
 	{
-		GBasePassVelocityPlatformMask = ~0u;
+		GBasePassVelocityPlatformMask = ~0ull;
 	}
 
 	static IConsoleVariable* SelectiveBasePassOutputsCVar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.SelectiveBasePassOutputs"));
 	if (SelectiveBasePassOutputsCVar && SelectiveBasePassOutputsCVar->GetInt())
 	{
-		GSelectiveBasePassOutputsPlatformMask = ~0u;
+		GSelectiveBasePassOutputsPlatformMask = ~0ull;
 	}
 
 	static IConsoleVariable* DistanceFieldsCVar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.DistanceFields")); 
 	if (DistanceFieldsCVar && DistanceFieldsCVar->GetInt())
 	{
-		GDistanceFieldsPlatformMask = ~0u;
+		GDistanceFieldsPlatformMask = ~0ull;
 	}
 
 #if WITH_EDITOR
@@ -1098,7 +1116,7 @@ public:
 	{
 		TResourceArray<uint16, INDEXBUFFER_ALIGNMENT> Indices;
 		
-		int32 NumIndices = ARRAY_COUNT(GCubeIndices);
+		int32 NumIndices = UE_ARRAY_COUNT(GCubeIndices);
 		Indices.AddUninitialized(NumIndices);
 		FMemory::Memcpy(Indices.GetData(), GCubeIndices, NumIndices * sizeof(uint16));
 

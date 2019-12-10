@@ -22,11 +22,6 @@ FDisplayClusterClusterNodeCtrlSlave::~FDisplayClusterClusterNodeCtrlSlave()
 
 
 //////////////////////////////////////////////////////////////////////////////////////////////
-// IPDisplayClusterNodeController
-//////////////////////////////////////////////////////////////////////////////////////////////
-
-
-//////////////////////////////////////////////////////////////////////////////////////////////
 // IPDisplayClusterClusterSyncProtocol
 //////////////////////////////////////////////////////////////////////////////////////////////
 void FDisplayClusterClusterNodeCtrlSlave::WaitForGameStart()
@@ -49,29 +44,34 @@ void FDisplayClusterClusterNodeCtrlSlave::WaitForTickEnd()
 	ClusterSyncClient->WaitForTickEnd();
 }
 
-void FDisplayClusterClusterNodeCtrlSlave::GetDeltaTime(float& deltaTime)
+void FDisplayClusterClusterNodeCtrlSlave::GetDeltaTime(float& DeltaSeconds)
 {
-	ClusterSyncClient->GetDeltaTime(deltaTime);
+	ClusterSyncClient->GetDeltaTime(DeltaSeconds);
 }
 
-void FDisplayClusterClusterNodeCtrlSlave::GetTimecode(FTimecode& timecode, FFrameRate& frameRate)
+void FDisplayClusterClusterNodeCtrlSlave::GetTimecode(FTimecode& Timecode, FFrameRate& FrameRate)
 {
-	ClusterSyncClient->GetTimecode(timecode, frameRate);
+	ClusterSyncClient->GetTimecode(Timecode, FrameRate);
 }
 
-void FDisplayClusterClusterNodeCtrlSlave::GetSyncData(FDisplayClusterMessage::DataType& data)
+void FDisplayClusterClusterNodeCtrlSlave::GetSyncData(FDisplayClusterMessage::DataType& SyncData, EDisplayClusterSyncGroup SyncGroup)
 {
-	ClusterSyncClient->GetSyncData(data);
+	ClusterSyncClient->GetSyncData(SyncData, SyncGroup);
 }
 
-void FDisplayClusterClusterNodeCtrlSlave::GetInputData(FDisplayClusterMessage::DataType& data)
+void FDisplayClusterClusterNodeCtrlSlave::GetInputData(FDisplayClusterMessage::DataType& InputData)
 {
-	ClusterSyncClient->GetInputData(data);
+	ClusterSyncClient->GetInputData(InputData);
 }
 
-void FDisplayClusterClusterNodeCtrlSlave::GetEventsData(FDisplayClusterMessage::DataType& data)
+void FDisplayClusterClusterNodeCtrlSlave::GetEventsData(FDisplayClusterMessage::DataType& EventsData)
 {
-	ClusterSyncClient->GetEventsData(data);
+	ClusterSyncClient->GetEventsData(EventsData);
+}
+
+void FDisplayClusterClusterNodeCtrlSlave::GetNativeInputData(FDisplayClusterMessage::DataType& NativeInputData)
+{
+	ClusterSyncClient->GetNativeInputData(NativeInputData);
 }
 
 
@@ -148,18 +148,6 @@ bool FDisplayClusterClusterNodeCtrlSlave::InitializeClients()
 	return ClusterSyncClient.IsValid() && SwapSyncClient.IsValid() && ClusterEventsClient.IsValid();
 }
 
-
-#define START_CLIENT(CLN, ADDR, PORT, TRY_AMOUNT, TRY_DELAY, RESULT) \
-	if (CLN->Connect(ADDR, PORT, TRY_AMOUNT, TRY_DELAY)) \
-	{ \
-		UE_LOG(LogDisplayClusterCluster, Log, TEXT("%s connected to the server %s:%d"), *CLN->GetName(), *ADDR, PORT); \
-	} \
-	else \
-	{ \
-		UE_LOG(LogDisplayClusterCluster, Error, TEXT("%s couldn't connect to the server %s:%d"), *CLN->GetName(), *ADDR, PORT); \
-		RESULT = false; \
-	}
-
 bool FDisplayClusterClusterNodeCtrlSlave::StartClients()
 {
 	if (!FDisplayClusterClusterNodeCtrlBase::StartClients())
@@ -179,16 +167,10 @@ bool FDisplayClusterClusterNodeCtrlSlave::StartClients()
 
 	const FDisplayClusterConfigNetwork CfgNetwork = GDisplayCluster->GetPrivateConfigMgr()->GetConfigNetwork();
 
-	bool Result = true;
-	START_CLIENT(ClusterSyncClient, MasterCfg.Addr, MasterCfg.Port_CS, CfgNetwork.ClientConnectTriesAmount, CfgNetwork.ClientConnectRetryDelay, Result);
-	START_CLIENT(SwapSyncClient, MasterCfg.Addr, MasterCfg.Port_SS, CfgNetwork.ClientConnectTriesAmount, CfgNetwork.ClientConnectRetryDelay, Result);
-	START_CLIENT(ClusterEventsClient, MasterCfg.Addr, MasterCfg.Port_CE, CfgNetwork.ClientConnectTriesAmount, CfgNetwork.ClientConnectRetryDelay, Result);
-
-	return Result;
+	return StartClientWithLogs(ClusterSyncClient.Get(),   MasterCfg.Addr, MasterCfg.Port_CS, CfgNetwork.ClientConnectTriesAmount, CfgNetwork.ClientConnectRetryDelay)
+		&& StartClientWithLogs(SwapSyncClient.Get(),      MasterCfg.Addr, MasterCfg.Port_SS, CfgNetwork.ClientConnectTriesAmount, CfgNetwork.ClientConnectRetryDelay)
+		&& StartClientWithLogs(ClusterEventsClient.Get(), MasterCfg.Addr, MasterCfg.Port_CE, CfgNetwork.ClientConnectTriesAmount, CfgNetwork.ClientConnectRetryDelay);
 }
-
-#undef START_CLIENT
-
 
 void FDisplayClusterClusterNodeCtrlSlave::StopClients()
 {

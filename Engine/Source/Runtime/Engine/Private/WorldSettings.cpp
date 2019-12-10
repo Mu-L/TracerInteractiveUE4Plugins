@@ -97,7 +97,7 @@ PRAGMA_ENABLE_DEPRECATION_WARNINGS
 	MatineeTimeDilation = 1.0f;
 	DemoPlayTimeDilation = 1.0f;
 	PackedLightAndShadowMapTextureSize = 1024;
-	bHidden = false;
+	SetHidden(false);
 
 	DefaultColorScale = FVector(1.0f, 1.0f, 1.0f);
 	DefaultMaxDistanceFieldOcclusionDistance = 600;
@@ -180,22 +180,12 @@ void AWorldSettings::PreInitializeComponents()
 				{
 					FActorSpawnParameters SpawnParameters;
 					SpawnParameters.Owner = this;
-					SpawnParameters.Instigator = Instigator;
+					SpawnParameters.Instigator = GetInstigator();
 					SpawnParameters.ObjectFlags |= RF_Transient;	// We never want to save particle event managers into a map
 					World->MyParticleEventManager = World->SpawnActor<AParticleEventManager>(ParticleEventManagerClass, SpawnParameters);
 				}
 			}
 		}
-	}
-}
-
-void AWorldSettings::PostInitializeComponents()
-{
-	Super::PostInitializeComponents();
-
-	if (GEngine->IsConsoleBuild())
-	{
-		GEngine->bUseConsoleInput = true;
 	}
 }
 
@@ -252,7 +242,8 @@ void AWorldSettings::NotifyBeginPlay()
 		for (FActorIterator It(World); It; ++It)
 		{
 			SCOPE_CYCLE_COUNTER(STAT_ActorBeginPlay);
-			It->DispatchBeginPlay();
+			const bool bFromLevelLoad = true;
+			It->DispatchBeginPlay(bFromLevelLoad);
 		}
 		World->bBegunPlay = true;
 	}
@@ -565,6 +556,12 @@ bool AWorldSettings::CanEditChange(const UProperty* InProperty) const
 				return LightmassSettings.EnvironmentIntensity > 0;
 			}
 		}
+
+		if (PropertyName == GET_MEMBER_NAME_STRING_CHECKED(AWorldSettings, OverrideBaseMaterial) ||
+			PropertyName == GET_MEMBER_NAME_STRING_CHECKED(AWorldSettings, HierarchicalLODSetup))
+		{
+			return bEnableHierarchicalLODSystem && HLODSetupAsset.IsNull();
+		}
 	}
 
 	return Super::CanEditChange(InProperty);
@@ -709,6 +706,8 @@ void UHierarchicalLODSetup::PostEditChangeProperty(struct FPropertyChangedEvent&
 			}
 		}
 	}
+
+	Super::PostEditChangeProperty(PropertyChangedEvent);
 }
 #endif // WITH_EDITOR
 

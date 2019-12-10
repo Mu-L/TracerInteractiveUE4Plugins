@@ -109,7 +109,7 @@ bool FShaderCompileXGEThreadRunnable_XmlInterface::IsSupported()
 	{
 		IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
 
-		for (int PathIndex = 0; PathIndex < ARRAY_COUNT(Paths); PathIndex++)
+		for (int PathIndex = 0; PathIndex < UE_ARRAY_COUNT(Paths); PathIndex++)
 		{
 			if (PlatformFile.FileExists(Paths[PathIndex]))
 			{
@@ -125,7 +125,7 @@ bool FShaderCompileXGEThreadRunnable_XmlInterface::IsSupported()
 		}
 	}
 
-	return 
+	return
 		(XGEShaderCompilerVariables::Enabled == 1) && // XGE is enabled by CVar or command line.
 		(XGEShaderCompilerVariables::Mode    != 2) && // XGE xml mode is allowed (not force disabled).
 		bXgeFound;                             // We've found the xgConsole executable.
@@ -349,7 +349,7 @@ static void WriteScriptFileFooter(FArchive* ScriptFile)
 		"\t</Project>\r\n"
 		"</BuildSet>\r\n";
 
-	ScriptFile->Serialize((void*)HeaderFooter, sizeof(ANSICHAR) * (ARRAY_COUNT(HeaderFooter) - 1));
+	ScriptFile->Serialize((void*)HeaderFooter, sizeof(ANSICHAR) * (UE_ARRAY_COUNT(HeaderFooter) - 1));
 }
 
 void FShaderCompileXGEThreadRunnable_XmlInterface::GatherResultsFromXGE()
@@ -780,7 +780,7 @@ int32 FShaderCompileXGEThreadRunnable_InterceptionInterface::CompilingLoop()
 		// Different batches.
 		TArray<FJobBatch> JobBatches;
 
-		
+
 		for (int32 i = 0; i < PendingJobs.Num(); i++)
 		{
 			// Randomize the shader compile jobs a little.
@@ -876,8 +876,21 @@ int32 FShaderCompileXGEThreadRunnable_InterceptionInterface::CompilingLoop()
 
 		if (Result.bCompleted)
 		{
-			// Open the output file, and serialize in the completed jobs.
-			FArchive* OutputFileAr = IFileManager::Get().CreateFileReader(*Task->OutputFilePath, FILEREAD_Silent);
+			// Check the output file exists. If it does, attempt to open it and serialize in the completed jobs.
+			FArchive* OutputFileAr = nullptr;
+			if (IFileManager::Get().FileExists(*Task->OutputFilePath))
+			{
+				float TimeWaited = 0.0f;
+				OutputFileAr = IFileManager::Get().CreateFileReader(*Task->OutputFilePath, FILEREAD_Silent);
+				while (OutputFileAr == nullptr && TimeWaited < 5.0f)
+				{
+					UE_LOG(LogShaderCompilers, Warning, TEXT("Expected XGE output file '%s' exists but can't be opened for read, waiting 1 second to try again.."), *Task->OutputFilePath);
+					FPlatformProcess::Sleep(1.0f);
+					TimeWaited += 1.0f;
+					OutputFileAr = IFileManager::Get().CreateFileReader(*Task->OutputFilePath, FILEREAD_Silent);
+				}
+			}
+
 			if (OutputFileAr)
 			{
 				FShaderCompileUtilities::DoReadTaskResults(Task->ShaderJobs, *OutputFileAr);
@@ -888,7 +901,7 @@ int32 FShaderCompileXGEThreadRunnable_InterceptionInterface::CompilingLoop()
 				// Reading result from XGE job failed, so recompile shaders in current job batch locally
 				bOutputFileReadFailed = true;
 
-				UE_LOG(LogShaderCompilers, Error, TEXT("Reschedule shader compilation after XGE job failed: %s"), *Task->OutputFilePath);
+				UE_LOG(LogShaderCompilers, Warning, TEXT("Rescheduling shader compilation to run locally after XGE job failed: %s"), *Task->OutputFilePath);
 
 				for (FShaderCommonCompileJob* Job : Task->ShaderJobs)
 				{

@@ -23,6 +23,7 @@
 #include "Templates/AndOrNot.h"
 #include "Templates/IsArrayOrRefOfType.h"
 #include "Templates/TypeHash.h"
+#include "Templates/IsFloatingPoint.h"
 
 struct FStringFormatArg;
 template<typename KeyType,typename ValueType,typename SetAllocator ,typename KeyFuncs > class TMap;
@@ -1508,7 +1509,20 @@ public:
 	 * @return true if this string matches the *?-type wildcard given. 
 	 * @warning This is a simple, SLOW routine. Use with caution
 	 */
-	bool MatchesWildcard(const FString& Wildcard, ESearchCase::Type SearchCase = ESearchCase::IgnoreCase) const;
+	bool MatchesWildcard(const TCHAR* Wildcard, ESearchCase::Type SearchCase = ESearchCase::IgnoreCase) const;
+
+	/**
+	 * Searches this string for a given wild card
+	 *
+	 * @param Wildcard		*?-type wildcard
+	 * @param SearchCase	Indicates whether the search is case sensitive or not ( defaults to ESearchCase::IgnoreCase )
+	 * @return true if this string matches the *?-type wildcard given.
+	 * @warning This is a simple, SLOW routine. Use with caution
+	 */
+	FORCEINLINE bool MatchesWildcard(const FString& Wildcard, ESearchCase::Type SearchCase = ESearchCase::IgnoreCase) const
+	{
+		return MatchesWildcard(*Wildcard, SearchCase);
+	}
 
 	/**
 	 * Removes whitespace characters from the front of this string.
@@ -1756,8 +1770,8 @@ public:
 
 	/**
 	 * Converts a string into a boolean value
-	 *   1, "True", "Yes", GTrue, GYes, and non-zero integers become true
-	 *   0, "False", "No", GFalse, GNo, and unparsable values become false
+	 *   1, "True", "Yes", FCoreTexts::True, FCoreTexts::Yes, and non-zero integers become true
+	 *   0, "False", "No", FCoreTexts::False, FCoreTexts::No, and unparsable values become false
 	 *
 	 * @return The boolean value
 	 */
@@ -2137,19 +2151,42 @@ inline FString LexToSanitizedString(double Value)
 	return FString::SanitizeFloat(Value);
 }
 
-
 /** Parse a string into this type, returning whether it was successful */
 /** Specialization for arithmetic types */
 template<typename T>
 static typename TEnableIf<TIsArithmetic<T>::Value, bool>::Type
 LexTryParseString(T& OutValue, const TCHAR* Buffer)
 {
-	if (FCString::IsNumeric(Buffer))
+	if (Buffer[0] == '\0')
 	{
-		LexFromString(OutValue, Buffer);
-		return true;
+		OutValue = 0;
+		return false;
 	}
-	return false;
+
+	LexFromString(OutValue, Buffer);
+	if (OutValue == 0 && FMath::IsFinite(OutValue))
+	{
+		bool bSawZero = false;
+		TCHAR C = *Buffer;
+		while (C != '\0' && (C == '+' || C == '-' || FChar::IsWhitespace(C)))
+		{
+			C = *(++Buffer);
+		}
+
+		while (C != '\0' && !FChar::IsWhitespace(C) && (TIsFloatingPoint<T>::Value || C != '.'))
+		{
+			bSawZero = bSawZero || (C == '0');
+			if (!bSawZero && C != '.')
+			{
+				return false;
+			}
+
+			C = *(++Buffer);
+		}
+		return bSawZero;
+	}
+	
+	return true;
 }
 
 /** Try and parse a bool - always returns true */
@@ -2236,6 +2273,12 @@ FORCEINLINE const TCHAR* ToCStr(const TCHAR* Ptr)
 FORCEINLINE const TCHAR* ToCStr(const FString& Str)
 {
 	return *Str;
+}
+
+namespace StringConv
+{
+	/** Inline combine any UTF-16 surrogate pairs in the given string */
+	CORE_API void InlineCombineSurrogates(FString& Str);
 }
 
 /*----------------------------------------------------------------------------

@@ -95,6 +95,16 @@ public:
 	/** Gets the LOD draw distance */
 	float GetDrawDistance() const { return LODDrawDistance; }
 	float GetLODDrawDistance() const { return LODDrawDistance; }
+	float GetLODDrawDistanceWithOverride() const;
+
+	/** 
+	 * Set LOD Parent component for all of our components, normally associated with an ALODActor. 
+	 * @param InLODParent			This component used to compute visibility when hierarchical LOD is enabled. 
+	 * @param InParentDrawDistance	Updates the MinDrawDistances of the LODParent
+	 * @param bInApplyToImposters	Whether this should be applied to imposters instanced static meshes components.
+	 */
+	void SetLODParent(UPrimitiveComponent* InLODParent, float InParentDrawDistance, bool bInApplyToImposters);
+
 
 	/** Get the key that we use to check if we need to (re)build */
 	const FName& GetKey() const { return Key; }
@@ -227,6 +237,9 @@ public:
 
 	/** Returns instanced static mesh components that represents the imposters found in this LODActor. */
 	TArray<UInstancedStaticMeshComponent*> GetImpostersStaticMeshComponents() const { TArray<UInstancedStaticMeshComponent*> ISM; ImpostersStaticMeshComponents.GenerateValueArray(ISM); return ISM; }
+
+	/** Returns an array of distances that are used to override individual LOD actors min draw distances. */
+	static const TArray<float>& GetHLODDistanceOverride();
 
 private:
 	// Called when CVars are changed to check to see if the maximum HLOD level value has changed

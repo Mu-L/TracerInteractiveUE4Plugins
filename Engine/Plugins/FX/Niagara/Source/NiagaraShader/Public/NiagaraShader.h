@@ -22,17 +22,6 @@ class UClass;
 
 template<typename TBufferStruct> class TUniformBufferRef;
 
-template<typename ParameterType> 
-struct TUniformParameter
-{
-	int32 Index;
-	ParameterType ShaderParameter;
-	friend FArchive& operator<<(FArchive& Ar,TUniformParameter<ParameterType>& P)
-	{
-		return Ar << P.Index << P.ShaderParameter;
-	}
-};
-
 /** Base class of all shaders that need material parameters. */
 class NIAGARASHADER_API FNiagaraShader : public FShader
 {
@@ -108,12 +97,17 @@ public:
 	FShaderUniformBufferParameter EmitterConstantBufferParam;
 	FShaderUniformBufferParameter DataInterfaceUniformBufferParam;
 	FShaderUniformBufferParameter ViewUniformBufferParam;
+	FShaderParameter SimStartParam;
 	FShaderParameter EmitterTickCounterParam;
+	FShaderParameter EmitterSpawnInfoOffsetsParam;
+	FShaderParameter EmitterSpawnInfoParamsParam;
 	FShaderParameter NumEventsPerParticleParam;
 	FShaderParameter NumParticlesPerEventParam;
 	FShaderParameter CopyInstancesBeforeStartParam;
 	FShaderParameter NumSpawnedInstancesParam;
 	FShaderParameter UpdateStartInstanceParam;
+	FShaderParameter ShaderStageIndexParam;
+	FShaderParameter IterationInterfaceCount;
 	FShaderParameter ComponentBufferSizeReadParam;
 	FShaderParameter ComponentBufferSizeWriteParam;
 	FRWShaderParameter EventIntUAVParams[MAX_CONCURRENT_EVENT_DATASETS];

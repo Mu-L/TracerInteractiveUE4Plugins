@@ -61,8 +61,8 @@ class D3D11RHI_API FD3D11Viewport : public FRHIViewport
 {
 public:
 
-	FD3D11Viewport(class FD3D11DynamicRHI* InD3DRHI): D3DRHI(InD3DRHI), FrameSyncEvent(InD3DRHI){}
-	FD3D11Viewport(class FD3D11DynamicRHI* InD3DRHI,HWND InWindowHandle,uint32 InSizeX,uint32 InSizeY,bool bInIsFullscreen, EPixelFormat InPreferredPixelFormat);
+	FD3D11Viewport(class FD3D11DynamicRHI* InD3DRHI) : D3DRHI(InD3DRHI), bFullscreenLost(false), FrameSyncEvent(InD3DRHI) {}
+	FD3D11Viewport(class FD3D11DynamicRHI* InD3DRHI, HWND InWindowHandle, uint32 InSizeX, uint32 InSizeY, bool bInIsFullscreen, EPixelFormat InPreferredPixelFormat);
 	~FD3D11Viewport();
 
 	virtual void Resize(uint32 InSizeX, uint32 InSizeY, bool bInIsFullscreen, EPixelFormat PreferredPixelFormat);
@@ -71,17 +71,24 @@ public:
 	 * If the swap chain has been invalidated by DXGI, resets the swap chain to the expected state; otherwise, does nothing.
 	 * Called once/frame by the game thread on all viewports.
 	 * @param bIgnoreFocus - Whether the reset should happen regardless of whether the window is focused.
-     */
+	 */
 	void ConditionalResetSwapChain(bool bIgnoreFocus);
+
+	/**
+	 * Called whenever the Viewport is moved to see if it has moved between HDR or LDR monitors
+	 */
+	void CheckHDRMonitorStatus();
+
 
 	/** Presents the swap chain. 
 	 * Returns true if Present was done by Engine.
- 	 */
+	 */
 	bool Present(bool bLockToVsync);
 
 	// Accessors.
 	FIntPoint GetSizeXY() const { return FIntPoint(SizeX, SizeY); }
 	FD3D11Texture2D* GetBackBuffer() const { return BackBuffer; }
+	EColorSpaceAndEOTF GetPixelColorSpace() const { return PixelColorSpace; }
 
 	void WaitForFrameEventCompletion()
 	{
@@ -114,6 +121,8 @@ public:
 
 protected:
 
+	void ResetSwapChainInternal(bool bIgnoreFocus);
+
 	/** Presents the frame synchronizing with DWM. */
 	void PresentWithVsyncDWM();
 
@@ -133,8 +142,11 @@ protected:
 	uint32 MaximumFrameLatency;
 	uint32 SizeX;
 	uint32 SizeY;
-	bool bIsFullscreen;
+	uint32 BackBufferCount;
+	bool bIsFullscreen : 1;
+	bool bFullscreenLost : 1;
 	EPixelFormat PixelFormat;
+	EColorSpaceAndEOTF PixelColorSpace;
 	bool bIsValid;
 #if PLATFORM_HOLOLENS
 	TRefCountPtr<IDXGISwapChain1> SwapChain;

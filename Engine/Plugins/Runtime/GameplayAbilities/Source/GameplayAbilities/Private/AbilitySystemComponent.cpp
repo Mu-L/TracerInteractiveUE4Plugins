@@ -650,6 +650,11 @@ FActiveGameplayEffectHandle UAbilitySystemComponent::ApplyGameplayEffectSpecToSe
 		{
 			return FActiveGameplayEffectHandle();
 		}
+
+		if (!Spec.Def->RemovalTagRequirements.IsEmpty() && Spec.Def->RemovalTagRequirements.RequirementsMet(MyTags) == true)
+		{
+			return FActiveGameplayEffectHandle();
+		}
 	}
 
 	// Custom application requirement check
@@ -780,21 +785,11 @@ FActiveGameplayEffectHandle UAbilitySystemComponent::ApplyGameplayEffectSpecToSe
 	{
 		ABILITY_LOG(Warning, TEXT("%s is periodic but also applies GameplayEffects to its target. GameplayEffects will only be applied once, not every period."), *Spec.Def->GetPathName());
 	}
-
-	// ------------------------------------------------------
-	//	Remove gameplay effects with tags
-	//		Remove any active gameplay effects that match the RemoveGameplayEffectsWithTags in the definition for this spec
-	//		Only call this if we are the Authoritative owner and we have some RemoveGameplayEffectsWithTags.CombinedTag to remove
-	// ------------------------------------------------------
-	if (bIsNetAuthority && Spec.Def->RemoveGameplayEffectsWithTags.CombinedTags.Num() > 0)
+	
+	// evaluate if any active effects need to be removed by the application of this effect
+	if (bIsNetAuthority)
 	{
-		// Clear tags is always removing all stacks.
-		FGameplayEffectQuery ClearQuery = FGameplayEffectQuery::MakeQuery_MatchAnyOwningTags(Spec.Def->RemoveGameplayEffectsWithTags.CombinedTags);
-		if (MyHandle.IsValid())
-		{
-			ClearQuery.IgnoreHandles.Add(MyHandle);
-		}
-		ActiveGameplayEffects.RemoveActiveEffects(ClearQuery, -1);
+		ActiveGameplayEffects.AttemptRemoveActiveEffectsOnEffectApplication(Spec, MyHandle);
 	}
 	
 	// ------------------------------------------------------
@@ -1164,10 +1159,7 @@ void UAbilitySystemComponent::AddGameplayCue_Internal(const FGameplayTag Gamepla
 				if (GameplayCueContainer.bMinimalReplication)
 				{
 					// For *replicated to sim proxies only* container, Create a Server Initiated PK to avoid double playing on the auto proxy in mixed replication mode (Original Hack)
-					if (ScopedPredictionKey.IsValidKey())
-					{
-						PredictionKeyForRPC = FPredictionKey::CreateNewServerInitiatedKey(this);
-					}
+					PredictionKeyForRPC = FPredictionKey::CreateNewServerInitiatedKey(this);
 				}
 				else
 				{
@@ -2110,24 +2102,53 @@ void UAbilitySystemComponent::Debug_Internal(FAbilitySystemComponentDebugInfo& I
 	{
 		FString DebugTitle("");
 		// Category
-		if (Info.bShowAbilities) DebugTitle += TEXT("ABILITIES ");
-		if (Info.bShowAttributes) DebugTitle += TEXT("ATTRIBUTES ");
-		if (Info.bShowGameplayEffects) DebugTitle += TEXT("GAMEPLAYEFFECTS ");
+		if (Info.bShowAbilities)
+		{
+			DebugTitle += TEXT("ABILITIES ");
+		}
+		if (Info.bShowAttributes)
+		{
+			DebugTitle += TEXT("ATTRIBUTES ");
+		}
+		if (Info.bShowGameplayEffects)
+		{
+			DebugTitle += TEXT("GAMEPLAYEFFECTS ");
+		}
 		// Avatar info
 		if (AvatarActor)
 		{
+			const ENetRole AvatarRole = AvatarActor->GetLocalRole();
 			DebugTitle += FString::Printf(TEXT("for avatar %s "), *AvatarActor->GetName());
-			if (AvatarActor->Role == ROLE_AutonomousProxy) DebugTitle += TEXT("(local player) ");
-			else if (AvatarActor->Role == ROLE_SimulatedProxy) DebugTitle += TEXT("(simulated) ");
-			else if (AvatarActor->Role == ROLE_Authority) DebugTitle += TEXT("(authority) ");
+			if (AvatarRole == ROLE_AutonomousProxy)
+			{
+				DebugTitle += TEXT("(local player) ");
+			}
+			else if (AvatarRole == ROLE_SimulatedProxy)
+			{
+				DebugTitle += TEXT("(simulated) ");
+			}
+			else if (AvatarRole == ROLE_Authority)
+			{
+				DebugTitle += TEXT("(authority) ");
+			}
 		}
 		// Owner info
 		if (OwnerActor && OwnerActor != AvatarActor)
 		{
+			const ENetRole OwnerRole = OwnerActor->GetLocalRole();
 			DebugTitle += FString::Printf(TEXT("for owner %s "), *OwnerActor->GetName());
-			if (OwnerActor->Role == ROLE_AutonomousProxy) DebugTitle += TEXT("(autonomous) ");
-			else if (OwnerActor->Role == ROLE_SimulatedProxy) DebugTitle += TEXT("(simulated) ");
-			else if (OwnerActor->Role == ROLE_Authority) DebugTitle += TEXT("(authority) ");
+			if (OwnerRole == ROLE_AutonomousProxy)
+			{
+				DebugTitle += TEXT("(autonomous) ");
+			}
+			else if (OwnerRole == ROLE_SimulatedProxy)
+			{
+				DebugTitle += TEXT("(simulated) ");
+			}
+			else if (OwnerRole == ROLE_Authority)
+			{
+				DebugTitle += TEXT("(authority) ");
+			}
 		}
 
 		if (Info.Canvas)
@@ -2151,7 +2172,19 @@ void UAbilitySystemComponent::Debug_Internal(FAbilitySystemComponentDebugInfo& I
 		Info.Canvas->SetDrawColor(FColor::White);
 	}
 
-	DebugLine(Info, FString::Printf(TEXT("Owned Tags: %s"), *OwnerTags.ToStringSimple()), 4.f, 0.f, 4);
+	FString TagsStrings;
+	int32 TagCount = 1;
+	const int32 NumTags = OwnerTags.Num();
+	for (FGameplayTag Tag : OwnerTags)
+	{
+		TagsStrings.Append(FString::Printf(TEXT("%s (%d)"), *Tag.ToString(), GetTagCount(Tag)));
+
+		if (TagCount++ < NumTags)
+		{
+			TagsStrings += TEXT(", ");
+		}
+	}
+	DebugLine(Info, FString::Printf(TEXT("Owned Tags: %s"), *TagsStrings), 4.f, 0.f, 4);
 
 	if (BlockedAbilityTags.GetExplicitGameplayTags().Num() > 0)
 	{

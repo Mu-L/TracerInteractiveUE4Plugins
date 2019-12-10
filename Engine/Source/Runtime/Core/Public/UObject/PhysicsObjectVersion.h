@@ -11,8 +11,10 @@ struct CORE_API FPhysicsObjectVersion
 	{
 		// Before any version changes were made
 		BeforeCustomVersionWasAdded = 0,
-
-
+		// Adding PerShapeData to serialization
+		PerShapeData,
+		// Add serialization from handle back to particle
+		SerializeGTGeometryParticles,
 		// -----<new versions can be added above this line>-------------------------------------------------
 		VersionPlusOne,
 		LatestVersion = VersionPlusOne - 1

@@ -15,7 +15,6 @@
 #include "GeometryCollection/GeometryCollectionSimulationTypes.h"
 #include "GeometryCollection/GeometryCollectionSimulationCoreTypes.h"
 #include "Physics/Experimental/PhysScene_Chaos.h"
-#include "Physics/Experimental/PhysScene_LLImmediate.h"
 #include "GeometryCollection/GeometryDynamicCollection.h"
 #include "GeometryCollectionObject.h"
 #include "GeometryCollectionEditorSelection.h"
@@ -30,7 +29,7 @@
 
 struct FGeometryCollectionConstantData;
 struct FGeometryCollectionDynamicData;
-class FGeometryCollectionPhysicsObject;
+class FGeometryCollectionPhysicsProxy;
 class UGeometryCollectionComponent;
 class UBoxComponent;
 class UGeometryCollectionCache;
@@ -276,7 +275,7 @@ public:
 	virtual void SendRenderDynamicData_Concurrent() override;
 	FORCEINLINE void SetRenderStateDirty() { bRenderStateDirty = true; }
 	virtual void BeginPlay() override;
-	virtual void EndPlay(EEndPlayReason::Type ReasonEnd) override;
+	virtual void EndPlay(const EEndPlayReason::Type ReasonEnd) override;
 
 	//~ Begin UActorComponent Interface. 
 
@@ -489,11 +488,9 @@ public:
 	FORCEINLINE const TArray<int32>& GetHighlightedBones() const { return HighlightedBones; }
 #endif
 
-#if INCLUDE_CHAOS
-	const TSharedPtr<FPhysScene_Chaos> GetPhysicsScene() const;
+	FPhysScene_Chaos* GetPhysicsScene() const;
 	AChaosSolverActor* GetPhysicsSolverActor() const;
-	const FGeometryCollectionPhysicsObject* GetPhysicsObject() const { return PhysicsObject; }
-#endif  // #if INCLUDE_CHAOS
+	const FGeometryCollectionPhysicsProxy* GetPhysicsProxy() const { return PhysicsProxy; }
 
 #if GEOMETRYCOLLECTION_EDITOR_SELECTION
 	/** Enable/disable the scene proxy per transform selection mode. When disabled the per material id default selection is used instead. */
@@ -509,7 +506,8 @@ public:
 #endif  // #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
 
 	/**/
-	const TManagedArray<int32>& GetRigidBodyIdArray() const { return RigidBodyIds; }
+	//const TManagedArray<int32>& GetRigidBodyIdArray() const { return RigidBodyIds; }
+	const TManagedArray<FGuid>& GetRigidBodyGuidArray() const { return RestCollection->GetGeometryCollection()->GetAttribute<FGuid>(FName("GUID"), FGeometryCollection::TransformGroup); }
 	const TArray<bool>& GetDisabledFlags() const { return DisabledFlags; }
 
 	virtual void OnCreatePhysicsState() override;
@@ -518,7 +516,7 @@ public:
 	virtual bool HasValidPhysicsState() const override;
 
 	// Mirrored from the proxy on a sync
-	TManagedArray<int32> RigidBodyIds;
+	//TManagedArray<int32> RigidBodyIds;
 	TArray<bool> DisabledFlags;
 	int32 BaseRigidBodyIndex;
 	int32 NumParticlesAdded;
@@ -612,7 +610,7 @@ private:
 	//@todo(mlentine): Don't have one per geo collection
 	TUniquePtr<Chaos::TChaosPhysicsMaterial<float>> ChaosMaterial;
 
-	FGeometryCollectionPhysicsObject* PhysicsObject;
+	FGeometryCollectionPhysicsProxy* PhysicsProxy;
 	TUniquePtr<FGeometryDynamicCollection> DynamicCollection;
 	TArray<FManagedArrayBase**> CopyOnWriteAttributeList;
 

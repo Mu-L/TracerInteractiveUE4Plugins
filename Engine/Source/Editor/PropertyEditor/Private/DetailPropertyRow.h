@@ -15,6 +15,8 @@
 #include "IDetailPropertyRow.h"
 #include "PropertyEditorHelpers.h"
 
+struct FAddPropertyParams;
+
 class FCustomChildrenBuilder;
 class IDetailGroup;
 
@@ -100,10 +102,10 @@ public:
 	/** 
 	 * @return The visibility of this property
 	 */
-	EVisibility GetPropertyVisibility() const { return PropertyVisibility.Get(); }
+	EVisibility GetPropertyVisibility() const;
 
-	static void MakeExternalPropertyRowCustomization(TSharedPtr<FStructOnScope> StructData, FName PropertyName, TSharedRef<FDetailCategoryImpl> ParentCategory, struct FDetailLayoutCustomization& OutCustomization);
-	static void MakeExternalPropertyRowCustomization(const TArray<UObject*>& InObjects, FName PropertyName, TSharedRef<FDetailCategoryImpl> ParentCategory, struct FDetailLayoutCustomization& OutCustomization, TOptional<bool> bAllowChildrenOverride = TOptional<bool>(), TOptional<bool> bCreateCategoryNodesOverride = TOptional<bool>());
+	static void MakeExternalPropertyRowCustomization(TSharedPtr<FStructOnScope> StructData, FName PropertyName, TSharedRef<FDetailCategoryImpl> ParentCategory, struct FDetailLayoutCustomization& OutCustomization, const FAddPropertyParams& Parameters);
+	static void MakeExternalPropertyRowCustomization(const TArray<UObject*>& InObjects, FName PropertyName, TSharedRef<FDetailCategoryImpl> ParentCategory, struct FDetailLayoutCustomization& OutCustomization, const FAddPropertyParams& Parameters);
 
 private:
 	/**
@@ -161,6 +163,9 @@ private:
 	 * @return	The property customization for the node, or null if one does not exist
 	 */
 	static TSharedPtr<IPropertyTypeCustomization> GetPropertyCustomization( const TSharedRef<FPropertyNode>& InPropertyNode, const TSharedRef<FDetailCategoryImpl>& InParentCategory );
+
+	/** Does the given property node require a key node to be created, or is a key property editor sufficient? */
+	static bool NeedsKeyNode(TSharedRef<FPropertyNode> InPropertyNode, TSharedRef<FDetailCategoryImpl> InParentCategory);
 
 private:
 	/** User driven enabled state */

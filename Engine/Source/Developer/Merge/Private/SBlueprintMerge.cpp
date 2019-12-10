@@ -28,6 +28,7 @@
 #include "Framework/Notifications/NotificationManager.h"
 #include "Widgets/Notifications/SNotificationList.h"
 #include "SMergeAssetPickerView.h"
+#include "Subsystems/AssetEditorSubsystem.h"
 
 #define LOCTEXT_NAMESPACE "SBlueprintMerge"
 
@@ -339,7 +340,7 @@ void SBlueprintMerge::OnStartMerge()
 		{
 			UBlueprint* LocalBlueprint = GetTargetBlueprint();
 			// we use this to suppress blueprint compilation during StaticDuplicateObject()
-			TGuardValue<bool> GuardDuplicatingReadOnly(LocalBlueprint->bDuplicatingReadOnly, true);
+			FGuardValue_Bitfield(LocalBlueprint->bDuplicatingReadOnly, true);
 
 			UPackage* TransientPackage = GetTransientPackage();
 			Data.BlueprintLocal = Cast<const UBlueprint>(StaticDuplicateObject(LocalBlueprint, TransientPackage,
@@ -472,38 +473,18 @@ void SBlueprintMerge::OnAcceptLocal()
 		// we use the emptiness of LocalBackupPath as a sentinel value (to 
 		// determine how we should replace the TargetBlueprint)... if 
 		// Data.BlueprintLocal is malformed (and not ok to copy), then 
-		// LocalBackupPath should be valid (and we need to copy the file on disk 
-		// instead)
+		// LocalBackupPath should be valid (and we need to replace with
+		// the backup instead)
 		if (LocalBackupPath.IsEmpty())
 		{
 			NewBlueprint = FKismetEditorUtilities::ReplaceBlueprint(TargetBlueprint, Data.BlueprintLocal);
 		}
 		else
 		{
-			UPackage* TargetPackage = TargetBlueprint->GetOutermost();
+			const FString BlueprintName = TargetBlueprint->GetName();
+			const UBlueprint* LocalBackupBlueprint = Cast<const UBlueprint>(FMergeToolUtils::LoadAssetFromPackage(LocalBackupPath, BlueprintName));
 
-			FString PackageFilename;
-			if (FPackageName::DoesPackageExist(TargetPackage->GetName(), /*Guid =*/nullptr, &PackageFilename))
-			{
-				FString SrcFilename = LocalBackupPath;
-				auto OverwriteBlueprintFile = [TargetBlueprint, &PackageFilename, &SrcFilename](UBlueprint* /*UnloadedBP*/)
-				{
-					if (IFileManager::Get().Copy(*PackageFilename, *SrcFilename) != COPY_OK)
-					{
-						const FText TargetName = FText::FromName(TargetBlueprint->GetFName());
-						const FText ErrorMessage = FText::Format(LOCTEXT("FailedMergeLocalCopy", "Failed to overwrite {0} target file."), TargetName);
-						FSlateNotificationManager::Get().AddNotification(FNotificationInfo(ErrorMessage));
-					}
-				};
-				// we have to wait until the package is unloaded (and the file is 
-				// unlocked) before we can overwrite the file; so we defer the
-				// copy until then by adding it to the OnBlueprintUnloaded delegate
-				FKismetEditorUtilities::FOnBlueprintUnloaded::FDelegate OnPackageUnloaded = FKismetEditorUtilities::FOnBlueprintUnloaded::FDelegate::CreateLambda(OverwriteBlueprintFile);
-					
-				FDelegateHandle OnPackageUnloadedDelegateHandle = FKismetEditorUtilities::OnBlueprintUnloaded.Add(OnPackageUnloaded);
-				NewBlueprint = FKismetEditorUtilities::ReloadBlueprint(TargetBlueprint);
-				FKismetEditorUtilities::OnBlueprintUnloaded.Remove(OnPackageUnloadedDelegateHandle);
-			}
+			NewBlueprint = FKismetEditorUtilities::ReplaceBlueprint(TargetBlueprint, LocalBackupBlueprint);
 		}
 	}
 
@@ -540,11 +521,14 @@ void SBlueprintMerge::ResolveMerge(UBlueprint* ResultantBlueprint)
 	UBlueprint* TargetBlueprint = GetTargetBlueprint();
 	if (ResultantBlueprint != TargetBlueprint)
 	{
-		if (TargetBlueprint)
+		if (GEditor)
 		{
-			FAssetEditorManager::Get().CloseAllEditorsForAsset(TargetBlueprint);
+			if (TargetBlueprint)
+			{
+				GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->CloseAllEditorsForAsset(TargetBlueprint);
+			}
+			GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(ResultantBlueprint);
 		}
-		FAssetEditorManager::Get().OpenEditorForAsset(ResultantBlueprint);
 	}
 	
 	// should come before CloseMergeTool(), because CloseMergeTool() makes its

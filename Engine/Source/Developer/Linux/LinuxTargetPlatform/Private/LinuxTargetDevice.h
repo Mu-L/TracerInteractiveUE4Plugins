@@ -62,7 +62,7 @@ public:
 #if PLATFORM_LINUX	// if running natively, support simplified, local deployment
 		OutAppId = TEXT("");
 
-		FString PlatformName = TEXT("Linux");
+		FString PlatformName = FPlatformProcess::GetBinariesSubdirectory();
 		FString DeploymentDir = FPaths::EngineIntermediateDir() / TEXT("Devices") / PlatformName;
 
 		// delete previous build
@@ -143,29 +143,30 @@ public:
 		return false;
 	}
 
-	virtual bool Launch( const FString& AppId, EBuildConfigurations::Type BuildConfiguration, EBuildTargets::Type BuildTarget, const FString& Params, uint32* OutProcessId ) override
+	virtual bool Launch( const FString& AppId, EBuildConfiguration BuildConfiguration, EBuildTargetType TargetType, const FString& Params, uint32* OutProcessId ) override
 	{
 #if PLATFORM_LINUX	// if running natively, support launching in place
 		// build executable path
-		FString PlatformName = TEXT("Linux");
+
+		FString PlatformName = FPlatformProcess::GetBinariesSubdirectory();
 		FString ExecutablePath = FPaths::EngineIntermediateDir() / TEXT("Devices") / PlatformName / TEXT("Engine") / TEXT("Binaries") / PlatformName;
 
-		if (BuildTarget == EBuildTargets::Game)
+		if (TargetType == EBuildTargetType::Game)
 		{
 			ExecutablePath /= TEXT("UE4Game");
 		}
-		else if (BuildTarget == EBuildTargets::Server)
+		else if (TargetType == EBuildTargetType::Server)
 		{
 			ExecutablePath /= TEXT("UE4Server");
 		}
-		else if (BuildTarget == EBuildTargets::Editor)
+		else if (TargetType == EBuildTargetType::Editor)
 		{
 			ExecutablePath /= TEXT("UE4Editor");
 		}
 
-		if (BuildConfiguration != EBuildConfigurations::Development)
+		if (BuildConfiguration != EBuildConfiguration::Development)
 		{
-			ExecutablePath += FString::Printf(TEXT("-%s-%s"), *PlatformName, EBuildConfigurations::ToString(BuildConfiguration));
+			ExecutablePath += FString::Printf(TEXT("-%s-%s"), *PlatformName, LexToString(BuildConfiguration));
 		}
 
 		// launch the game
@@ -265,7 +266,7 @@ public:
 		char ReadLinkCmd[ReadLinkSize] = { 0 };
 		FCStringAnsi::Sprintf(ReadLinkCmd, "/proc/%lld/exe", ProcessId);
 		char ProcessPath[UNIX_MAX_PATH + 1] = { 0 };
-		int32 Ret = readlink(ReadLinkCmd, ProcessPath, ARRAY_COUNT(ProcessPath) - 1);
+		int32 Ret = readlink(ReadLinkCmd, ProcessPath, UE_ARRAY_COUNT(ProcessPath) - 1);
 		if (Ret != -1)
 		{
 			struct stat st;

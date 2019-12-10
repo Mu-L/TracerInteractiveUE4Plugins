@@ -6,13 +6,6 @@ D3D12Adapter.cpp:D3D12 Adapter implementation.
 
 #include "D3D12RHIPrivate.h"
 
-static TAutoConsoleVariable<int32> CVarTransientUniformBufferAllocatorSizeKB(
-	TEXT("D3D12.TransientUniformBufferAllocatorSizeKB"),
-	10 * 1024,
-	TEXT(""),
-	ECVF_ReadOnly
-);
-
 #if ENABLE_RESIDENCY_MANAGEMENT
 bool GEnableResidencyManagement = true;
 static TAutoConsoleVariable<int32> CVarResidencyManagement(
@@ -357,6 +350,13 @@ void FD3D12Adapter::CreateRootDevice(bool bWithDebug)
 			UE_LOG(LogD3D12RHI, Log, TEXT("Enabling multi-GPU with %d nodes"), Desc.NumDeviceNodes);
 		}
 	}
+
+	// Viewport ignores AFR if PresentGPU is specified.
+	int32 Dummy;
+	if (!FParse::Value(FCommandLine::Get(), TEXT("PresentGPU="), Dummy) && FParse::Param(FCommandLine::Get(), TEXT("AFR")))
+	{
+		GNumAlternateFrameRenderingGroups = GNumExplicitGPUsForRendering;
+	}
 #endif
 }
 
@@ -452,7 +452,17 @@ void FD3D12Adapter::InitializeDevices()
 
 		CreateSignatures();
 
-		//Create all of the FD3D12Devices
+		// Context redirectors allow RHI commands to be executed on multiple GPUs at the
+		// same time in a multi-GPU system. Redirectors have a physical mask for the GPUs
+		// they can support and an active mask which restricts commands to operate on a
+		// subset of the physical GPUs. The default context redirectors used by the
+		// immediate command list can support all physical GPUs, whereas context containers
+		// used by the parallel command lists might only support a subset of GPUs in the
+		// system.
+		DefaultContextRedirector.SetPhysicalGPUMask(FRHIGPUMask::All());
+		DefaultAsyncComputeContextRedirector.SetPhysicalGPUMask(FRHIGPUMask::All());
+
+		// Create all of the FD3D12Devices.
 		for (uint32 GPUIndex : FRHIGPUMask::All())
 		{
 			Devices[GPUIndex] = new FD3D12Device(FRHIGPUMask::FromIndex(GPUIndex), this);
@@ -465,13 +475,6 @@ void FD3D12Adapter::InitializeDevices()
 				DefaultAsyncComputeContextRedirector.SetPhysicalContext(&Devices[GPUIndex]->GetDefaultAsyncComputeContext());
 			}
 		}
-
-		DefaultContextRedirector.SetGPUMask(FRHIGPUMask::All());
-		DefaultAsyncComputeContextRedirector.SetGPUMask(FRHIGPUMask::All());
-
-		// Initialize the immediate command list GPU mask now that everything is set.
-		FRHICommandListExecutor::GetImmediateCommandList().SetGPUMask(FRHIGPUMask::All());
-		FRHICommandListExecutor::GetImmediateAsyncComputeCommandList().SetGPUMask(FRHIGPUMask::All());
 
 		GPUProfilingData.Init();
 
@@ -530,7 +533,7 @@ void FD3D12Adapter::CreateSignatures()
 	D3D12_COMMAND_SIGNATURE_DESC commandSignatureDesc = {};
 	commandSignatureDesc.NumArgumentDescs = 1;
 	commandSignatureDesc.ByteStride = 20;
-	commandSignatureDesc.NodeMask = (uint32)FRHIGPUMask::All();
+	commandSignatureDesc.NodeMask = FRHIGPUMask::All().GetNative();
 
 	D3D12_INDIRECT_ARGUMENT_DESC indirectParameterDesc[1] = {};
 	commandSignatureDesc.pArgumentDescs = indirectParameterDesc;
@@ -567,11 +570,13 @@ void FD3D12Adapter::Cleanup()
 	}
 #endif // D3D12_RHI_RAYTRACING
 
+#if WITH_MGPU
 	// Manually destroy the effects as we can't do it in their destructor.
 	for (auto& Effect : TemporalEffectMap)
 	{
 		Effect.Value.Destroy();
 	}
+#endif
 
 	// Ask all initialized FRenderResources to release their RHI resources.
 	for (TLinkedList<FRenderResource*>::TIterator ResourceIt(FRenderResource::GetResourceList()); ResourceIt; ResourceIt.Next())
@@ -586,16 +591,7 @@ void FD3D12Adapter::Cleanup()
 		ResourceIt->ReleaseDynamicRHI();
 	}
 
-	TransientUniformBufferAllocator.Destroy();
-
 	FRHIResource::FlushPendingDeletes();
-
-	// Clean up the asnyc texture thread allocators
-	for (int32 i = 0; i < GetOwningRHI()->NumThreadDynamicHeapAllocators; i++)
-	{
-		GetOwningRHI()->ThreadDynamicHeapAllocatorArray[i]->Destroy<FD3D12ScopeLock>();
-		delete(GetOwningRHI()->ThreadDynamicHeapAllocatorArray[i]);
-	}
 
 	// Cleanup resources
 	DeferredDeletionQueue.Clear();
@@ -656,6 +652,7 @@ void FD3D12Adapter::EndFrame()
 	GetDeferredDeletionQueue().ReleaseResources();
 }
 
+#if WITH_MGPU
 FD3D12TemporalEffect* FD3D12Adapter::GetTemporalEffect(const FName& EffectName)
 {
 	FD3D12TemporalEffect* Effect = TemporalEffectMap.Find(EffectName);
@@ -669,14 +666,19 @@ FD3D12TemporalEffect* FD3D12Adapter::GetTemporalEffect(const FName& EffectName)
 	check(Effect);
 	return Effect;
 }
+#endif // WITH_MGPU
 
 FD3D12FastConstantAllocator& FD3D12Adapter::GetTransientUniformBufferAllocator()
 {
-	// Multi-GPU support : is using device 0 always appropriate here?
-	return *TransientUniformBufferAllocator.GetObjectForThisThread([this]() -> FD3D12FastConstantAllocator*
+	class FTransientUniformBufferAllocator : public FD3D12FastConstantAllocator, public TThreadSingleton<FTransientUniformBufferAllocator>
 	{
-		FD3D12FastConstantAllocator* Alloc = new FD3D12FastConstantAllocator(Devices[0], FRHIGPUMask::All(), CVarTransientUniformBufferAllocatorSizeKB.GetValueOnAnyThread() * 1024);
-		Alloc->Init();
+		using FD3D12FastConstantAllocator::FD3D12FastConstantAllocator;
+	};
+
+	// Multi-GPU support : is using device 0 always appropriate here?
+	return FTransientUniformBufferAllocator::Get([this]() -> FTransientUniformBufferAllocator*
+	{
+		FTransientUniformBufferAllocator* Alloc = new FTransientUniformBufferAllocator(Devices[0], FRHIGPUMask::All());
 		return Alloc;
 	});
 }

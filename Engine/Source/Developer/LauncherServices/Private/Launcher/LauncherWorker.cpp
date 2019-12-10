@@ -316,6 +316,10 @@ FString FLauncherWorker::CreateUATCommand( const ILauncherProfileRef& InProfile,
 			{
 				ServerPlatforms += TEXT("+Linux");
 			}
+			else if (PlatformInfo->TargetPlatformName == FName("LinuxAArch64Server"))
+			{
+				ServerPlatforms += TEXT("+LinuxAArch64");
+			}
 			else if (PlatformInfo->TargetPlatformName == FName("WindowsServer"))
 			{
 				ServerPlatforms += TEXT("+Win64");
@@ -328,6 +332,10 @@ FString FLauncherWorker::CreateUATCommand( const ILauncherProfileRef& InProfile,
 			{
 				Platforms += TEXT("+Linux");
 			}
+			else if (PlatformInfo->TargetPlatformName == FName("LinuxAArch64NoEditor") || PlatformInfo->TargetPlatformName == FName("LinuxAArch64Client"))
+			{
+				Platforms += TEXT("+LinuxAArch64");
+			}
 			else if (PlatformInfo->TargetPlatformName == FName("WindowsNoEditor") || PlatformInfo->TargetPlatformName == FName("Windows") || PlatformInfo->TargetPlatformName == FName("WindowsClient"))
 			{
 				Platforms += TEXT("+Win64");
@@ -339,6 +347,10 @@ FString FLauncherWorker::CreateUATCommand( const ILauncherProfileRef& InProfile,
 			else if (PlatformInfo->TargetPlatformName == FName("IOSClient"))
 			{
 				Platforms += TEXT("+IOS");
+			}
+			else if (PlatformInfo->TargetPlatformName == FName("TVOSClient"))
+			{
+				Platforms += TEXT("+TVOS");
 			}
 			else if (PlatformInfo->TargetPlatformName == FName("HoloLens"))
 			{

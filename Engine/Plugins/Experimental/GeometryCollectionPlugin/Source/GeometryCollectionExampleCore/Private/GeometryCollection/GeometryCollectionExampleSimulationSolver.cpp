@@ -16,11 +16,13 @@
 #include "Field/FieldSystemNodes.h"
 #include "GeometryCollection/GeometryDynamicCollection.h"
 #include "GeometryCollection/GeometryCollectionSimulationTypes.h"
-#include "SolverObjects/GeometryCollectionPhysicsObject.h"
-#include "SolverObjects/SolverObjects.h"
+#include "PhysicsProxy/GeometryCollectionPhysicsProxy.h"
+#include "PhysicsProxy/PhysicsProxies.h"
 #include "Chaos/ErrorReporter.h"
 #include "Chaos/Defines.h"
 #include "ChaosSolversModule.h"
+#include "PhysicsSolver.h"
+#include "EventsData.h"
 
 #define SMALL_THRESHOLD 1e-4
 
@@ -33,9 +35,8 @@ namespace GeometryCollectionExample
 {
 
 	template<class T>
-	bool Solver_AdvanceNoObjects(ExampleResponse&& R)
+	void Solver_AdvanceNoObjects()
 	{
-#if INCLUDE_CHAOS
 		Chaos::FPBDRigidsSolver* Solver = FChaosSolversModule::GetModule()->CreateSolver(true);
 		Solver->SetHasFloor(false);
 		Solver->SetEnabled(true);
@@ -43,17 +44,13 @@ namespace GeometryCollectionExample
 		FinalizeSolver(*Solver);
 
 		FChaosSolversModule::GetModule()->DestroySolver(Solver);
-#endif
-
-		return !R.HasError();
 	}
-	template bool Solver_AdvanceNoObjects<float>(ExampleResponse&& R);
+	template void Solver_AdvanceNoObjects<float>();
 
 
 	template<class T>
-	bool Solver_AdvanceDisabledObjects(ExampleResponse&& R)
+	void Solver_AdvanceDisabledObjects()
 	{
-#if INCLUDE_CHAOS
 		TSharedPtr<FGeometryCollection> RestCollection = GeometryCollection::MakeCubeElement(FTransform::Identity, FVector(1.0));
 		TSharedPtr<FGeometryDynamicCollection> DynamicCollection = GeometryCollectionToGeometryDynamicCollection(RestCollection.Get());
 
@@ -67,11 +64,13 @@ namespace GeometryCollectionExample
 			BuildSimulationData(ErrorReporter,*RestCollection, InParams.Shared);
 		};
 
-		FGeometryCollectionPhysicsObject* PhysObject = new FGeometryCollectionPhysicsObject(nullptr, DynamicCollection.Get(), InitFunc, nullptr, nullptr);;
+		FGeometryCollectionPhysicsProxy* PhysObject = new FGeometryCollectionPhysicsProxy(nullptr, DynamicCollection.Get(), InitFunc, nullptr, nullptr);;
 		PhysObject->Initialize();
 
 		Chaos::FPBDRigidsSolver* Solver = FChaosSolversModule::GetModule()->CreateSolver(true);
+#if CHAOS_PARTICLEHANDLE_TODO
 		Solver->RegisterObject(PhysObject);
+#endif
 		Solver->SetHasFloor(false);
 		Solver->SetEnabled(true);
 		PhysObject->ActivateBodies();
@@ -82,33 +81,29 @@ namespace GeometryCollectionExample
 
 		// never touched
 		TManagedArray<FTransform>& RestTransform = RestCollection->Transform;
-		R.ExpectTrue(FMath::Abs(RestTransform[0].GetTranslation().Z) < SMALL_THRESHOLD);
+		EXPECT_LT(FMath::Abs(RestTransform[0].GetTranslation().Z), SMALL_THRESHOLD);
 
 		// simulated
 		TManagedArray<FTransform>& Transform = DynamicCollection->Transform;
-		R.ExpectTrue(Transform.Num() == 1);
-		R.ExpectTrue(FMath::Abs(Transform[0].GetTranslation().Z) < SMALL_THRESHOLD);
+		EXPECT_EQ(Transform.Num(), 1);
+		EXPECT_LT(FMath::Abs(Transform[0].GetTranslation().Z), SMALL_THRESHOLD);
 
 		FChaosSolversModule::GetModule()->DestroySolver(Solver);
 
 		delete PhysObject;
-
-#endif
-		return !R.HasError();
 	}
-	template bool Solver_AdvanceDisabledObjects<float>(ExampleResponse&& R);
+	template void Solver_AdvanceDisabledObjects<float>();
 
 	template<class T>
-	bool Solver_AdvanceDisabledClusteredObjects(ExampleResponse&& R)
+	void Solver_AdvanceDisabledClusteredObjects()
 	{
-#if INCLUDE_CHAOS
 		TSharedPtr<FGeometryCollection> RestCollection = GeometryCollection::MakeCubeElement(FTransform(FQuat::MakeFromEuler(FVector(0, 0, 0.)), FVector(0, -10, 10)), FVector(1.0));
 		RestCollection->AppendGeometry(*GeometryCollection::MakeCubeElement(FTransform(FQuat::MakeFromEuler(FVector(0, 0, 0.)), FVector(0, 10, 10)), FVector(1.0)));
-		R.ExpectTrue(RestCollection->Transform.Num() == 2);
+		EXPECT_EQ(RestCollection->Transform.Num(), 2);
 
 
 		FGeometryCollectionClusteringUtility::ClusterAllBonesUnderNewRoot(RestCollection.Get());
-		R.ExpectTrue(RestCollection->Transform.Num() == 3);
+		EXPECT_EQ(RestCollection->Transform.Num(), 3);
 		RestCollection->Transform[2] = FTransform(FQuat::MakeFromEuler(FVector(90.f, 0, 0.)), FVector(0, 0, 40));
 
 		//GeometryCollectionAlgo::PrintParentHierarchy(RestCollection.Get());
@@ -127,11 +122,13 @@ namespace GeometryCollectionExample
 		};
 
 
-		FGeometryCollectionPhysicsObject* PhysObject = new FGeometryCollectionPhysicsObject(nullptr, DynamicCollection.Get(), InitFunc, nullptr, nullptr);
+		FGeometryCollectionPhysicsProxy* PhysObject = new FGeometryCollectionPhysicsProxy(nullptr, DynamicCollection.Get(), InitFunc, nullptr, nullptr);
 		PhysObject->Initialize();
 
 		Chaos::FPBDRigidsSolver* Solver = FChaosSolversModule::GetModule()->CreateSolver(true);
+#if CHAOS_PARTICLEHANDLE_TODO
 		Solver->RegisterObject(PhysObject);
+#endif
 		Solver->SetHasFloor(true);
 		Solver->SetEnabled(true);
 		PhysObject->ActivateBodies();
@@ -142,7 +139,6 @@ namespace GeometryCollectionExample
 		for (int Frame = 0; Frame < 10; Frame++)
 		{
 			Solver->AdvanceSolverBy(1 / 24.);
-			const Chaos::TPBDRigidParticles<float, 3>& Particles = PhysObject->GetSolver()->GetRigidParticles();
 			CurrentRigidDistance = (Transform[1].GetTranslation() - Transform[0].GetTranslation()).Size();
 		}
 
@@ -150,25 +146,15 @@ namespace GeometryCollectionExample
 
 		delete PhysObject;
 
-#endif
-
-
-		return !R.HasError();
 	}
-	template bool Solver_AdvanceDisabledClusteredObjects<float>(ExampleResponse&& R);
+	template void Solver_AdvanceDisabledClusteredObjects<float>();
 
 
 	template<class T>
-	bool Solver_ValidateReverseMapping(ExampleResponse&& R)
+	void Solver_ValidateReverseMapping()
 	{
-#if INCLUDE_CHAOS
 		TUniquePtr<Chaos::TChaosPhysicsMaterial<T>> PhysicalMaterial = MakeUnique<Chaos::TChaosPhysicsMaterial<T>>();
-		PhysicalMaterial->Friction = 0;
-		PhysicalMaterial->Restitution = 0;
-		PhysicalMaterial->SleepingLinearThreshold = 0;
-		PhysicalMaterial->SleepingAngularThreshold = 0;
-		PhysicalMaterial->DisabledLinearThreshold = 0;
-		PhysicalMaterial->DisabledAngularThreshold = 0;
+		InitMaterialToZero(PhysicalMaterial);
 
 		Chaos::FPBDRigidsSolver* Solver = FChaosSolversModule::GetModule()->CreateSolver(true);
 		Solver->SetHasFloor(true);
@@ -178,24 +164,17 @@ namespace GeometryCollectionExample
 
 		for (int32 i = 0; i < 10; i++)
 		{
-			TSharedPtr<FGeometryCollection> RestCollection = GeometryCollection::MakeCubeElement(FTransform::Identity, FVector(1.0));
-			TSharedPtr<FGeometryDynamicCollection> DynamicCollection = GeometryCollectionToGeometryDynamicCollection(RestCollection.Get());
+			TSharedPtr<FGeometryCollection> RestCollection = nullptr;
+			TSharedPtr<FGeometryDynamicCollection> DynamicCollection = nullptr;
 
-			auto InitFunc = [&RestCollection, &DynamicCollection, &PhysicalMaterial](FSimulationParameters& InParams)
-			{
-				InParams.RestCollection = RestCollection.Get();
-				InParams.DynamicCollection = DynamicCollection.Get();
-				InParams.PhysicalMaterial  = MakeSerializable(PhysicalMaterial);
-				InParams.Shared.SizeSpecificData[0].CollisionType = ECollisionTypeEnum::Chaos_Volumetric;
-				InParams.Simulating = true;
-				Chaos::FErrorReporter ErrorReporter;
-				BuildSimulationData(ErrorReporter, *RestCollection, InParams.Shared);
-			};
+			InitCollectionsParameters InitParams = { FTransform::Identity, FVector(1.0), nullptr, (int32)EObjectStateTypeEnum::Chaos_Object_Kinematic };
+			InitCollections(PhysicalMaterial, RestCollection, DynamicCollection, InitParams);
 
-			FGeometryCollectionPhysicsObject* PhysObject = new FGeometryCollectionPhysicsObject(nullptr, DynamicCollection.Get(), InitFunc, nullptr, nullptr);;
-			PhysObject->Initialize();
+			FGeometryCollectionPhysicsProxy* PhysObject = RigidBodySetup(PhysicalMaterial, RestCollection, DynamicCollection);
 
+#if CHAOS_PARTICLEHANDLE_TODO
 			Solver->RegisterObject(PhysObject);
+#endif
 			PhysObject->ActivateBodies();
 
 			RestArray.Add(RestCollection);
@@ -205,44 +184,38 @@ namespace GeometryCollectionExample
 
 		Solver->AdvanceSolverBy(1 / 24.);
 
-		const Chaos::TArrayCollectionArray<SolverObjectWrapper> & SolverMapping = Solver->GetSolverObjectReverseMapping();
+#if TODO_REIMPLEMENT_PHYSICS_PROXY_REVERSE_MAPPING
+		const Chaos::TArrayCollectionArray<PhysicsProxyWrapper> & SolverMapping = Solver->GetPhysicsProxyReverseMapping();
 		const Chaos::TArrayCollectionArray<int32> & ParticleMapping = Solver->GetParticleIndexReverseMapping();
 
-		R.ExpectTrue(SolverMapping.Num() == 11);
-		R.ExpectTrue(ParticleMapping.Num() == 11);
+		EXPECT_EQ(SolverMapping.Num(), 11);
+		EXPECT_EQ(ParticleMapping.Num(), 11);
 
-		R.ExpectTrue(ParticleMapping[0] == INDEX_NONE);
-		R.ExpectTrue(ParticleMapping[1] == 0);
+		EXPECT_EQ(ParticleMapping[0], INDEX_NONE);
+		EXPECT_EQ(ParticleMapping[1], 0);
 
-		R.ExpectTrue(SolverMapping[0].SolverObject == nullptr);
-		R.ExpectTrue(SolverMapping[0].Type == ESolverObjectType::NoneType);
+		EXPECT_EQ(SolverMapping[0].PhysicsProxy, nullptr);
+		EXPECT_EQ(SolverMapping[0].Type, EPhysicsProxyType::NoneType);
 
-		R.ExpectTrue(SolverMapping[5].SolverObject != nullptr);
-		R.ExpectTrue(SolverMapping[5].Type == ESolverObjectType::GeometryCollectionType);
+		EXPECT_EQ(SolverMapping[5].PhysicsProxy != nullptr);
+		EXPECT_EQ(SolverMapping[5].Type, EPhysicsProxyType::GeometryCollectionType);
 
-		const TManagedArray<int32> & RigidBodyID = static_cast<FGeometryCollectionPhysicsObject*>(SolverMapping[5].SolverObject)->
+		const TManagedArray<int32> & RigidBodyID = static_cast<FGeometryCollectionPhysicsProxy*>(SolverMapping[5].PhysicsProxy)->
 			GetGeometryDynamicCollection_PhysicsThread()->GetAttribute<int32>("RigidBodyID", FGeometryCollection::TransformGroup);
-		R.ExpectTrue(RigidBodyID.Num() == 1);
-		R.ExpectTrue(RigidBodyID[0] == 5);
+		EXPECT_EQ(RigidBodyID.Num(), 1);
+		EXPECT_EQ(RigidBodyID[0], 5);
+#endif
 
 		FChaosSolversModule::GetModule()->DestroySolver(Solver);
 
-#endif
-		return !R.HasError();
 	}
-	template bool Solver_ValidateReverseMapping<float>(ExampleResponse&& R);
+	template void Solver_ValidateReverseMapping<float>();
 
-#if INCLUDE_CHAOS
 	template<class T>
 	void CommonInit(int32 NumObjects, bool UseClusters, Chaos::FPBDRigidsSolver** SolverInOut, TUniquePtr<Chaos::TChaosPhysicsMaterial<T>>& PhysicalMaterial, TArray<TSharedPtr<FGeometryCollection>>& RestArray, TArray<TSharedPtr<FGeometryDynamicCollection>>& DynamicArray)
 	{
 		PhysicalMaterial = MakeUnique<Chaos::TChaosPhysicsMaterial<T>>();
-		PhysicalMaterial->Friction = 0;
-		PhysicalMaterial->Restitution = 0;
-		PhysicalMaterial->SleepingLinearThreshold = 0;
-		PhysicalMaterial->SleepingAngularThreshold = 0;
-		PhysicalMaterial->DisabledLinearThreshold = 0;
-		PhysicalMaterial->DisabledAngularThreshold = 0;
+		InitMaterialToZero(PhysicalMaterial);
 
 		*SolverInOut = FChaosSolversModule::GetModule()->CreateSolver(true);
 		Chaos::FPBDRigidsSolver* Solver = *SolverInOut;
@@ -270,24 +243,17 @@ namespace GeometryCollectionExample
 			
 			TSharedPtr<FGeometryDynamicCollection> DynamicCollection = GeometryCollectionToGeometryDynamicCollection(RestCollection.Get());
 
-			auto InitFunc = [&RestCollection, &DynamicCollection, &PhysicalMaterial](FSimulationParameters& InParams)
+			auto CustomFunc = [&RestCollection, &DynamicCollection, &PhysicalMaterial](FSimulationParameters& InParams)
 			{
-				InParams.RestCollection = RestCollection.Get();
-				InParams.DynamicCollection = DynamicCollection.Get();
-				InParams.PhysicalMaterial = MakeSerializable(PhysicalMaterial);
-				InParams.Shared.SizeSpecificData[0].CollisionType = ECollisionTypeEnum::Chaos_Volumetric;
 				InParams.Shared.SizeSpecificData[0].ImplicitType = EImplicitTypeEnum::Chaos_Implicit_Box;
-				InParams.DamageThreshold = { 0.1f };
-				InParams.Simulating = true;
-				Chaos::FErrorReporter ErrorReporter;
-				BuildSimulationData(ErrorReporter, *RestCollection, InParams.Shared);
 			};
 
-			FGeometryCollectionPhysicsObject* PhysObject = new FGeometryCollectionPhysicsObject(nullptr, DynamicCollection.Get(), InitFunc, nullptr, nullptr);;
-			PhysObject->Initialize();
+			FGeometryCollectionPhysicsProxy* PhysObject = RigidBodySetup(PhysicalMaterial, RestCollection, DynamicCollection, CustomFunc);
 			PhysObject->SetCollisionParticlesPerObjectFraction(1.0);
 
+#if CHAOS_PARTICLEHANDLE_TODO
 			Solver->RegisterObject(PhysObject);
+#endif
 			Solver->SetHasFloor(true);
 			Solver->SetEnabled(true);
 			PhysObject->ActivateBodies();
@@ -298,13 +264,33 @@ namespace GeometryCollectionExample
 
 		Solver->AdvanceSolverBy(1 / 24.);
 	}
-#endif // INCLUDE_CHAOS
+
+	class EventHarvester
+	{
+	public:
+		EventHarvester(Chaos::FPBDRigidsSolver* Solver)
+		{
+			Solver->GetEventManager()->RegisterHandler<Chaos::FCollisionEventData>(Chaos::EEventType::Collision, this, &EventHarvester::HandleCollisionEvents);
+			Solver->GetEventManager()->RegisterHandler<Chaos::FBreakingEventData>(Chaos::EEventType::Breaking, this, &EventHarvester::HandleBreakingEvents);
+		}
+
+		void HandleCollisionEvents(const Chaos::FCollisionEventData& Events)
+		{
+			CollisionEventData = Events;
+		}
+
+		void HandleBreakingEvents(const Chaos::FBreakingEventData& Events)
+		{
+			BreakingEventData = Events;
+		}
+
+		Chaos::FCollisionEventData CollisionEventData;
+		Chaos::FBreakingEventData BreakingEventData;
+	};
 
 	template<class T>
-	bool Solver_CollisionEventFilter(ExampleResponse&& R)
+	void Solver_CollisionEventFilter()
 	{
-#if INCLUDE_CHAOS
-
 		float TestMassThreshold = 6.0f;
 
 		Chaos::FPBDRigidsSolver* Solver;
@@ -323,9 +309,11 @@ namespace GeometryCollectionExample
 
 		Solver->SetGenerateCollisionData(true);
 		Solver->SetCollisionFilterSettings(CollisionFilterSettings);
+		EventHarvester Events(Solver);
 
+#if TODO_REIMPLEMENT_GET_RIGID_PARTICLES
 		// modify mass for filter test
-		Chaos::TPBDRigidParticles<float, 3>& Particles = Solver->GetRigidParticles();
+		FParticlesType& Particles = (FParticlesType&)Solver->GetRigidParticles();
 		for (int32 i = 0; i < 10; i++)
 		{
 			Particles.M(i) = i;
@@ -338,42 +326,34 @@ namespace GeometryCollectionExample
 			Solver->SyncEvents_GameThread();
 			Solver->AdvanceSolverBy(1 / 24.);
 
-			Chaos::FPBDRigidsSolver::FScopedGetEventsData SopedAccess = Solver->ScopedGetEventsData();
-			const Chaos::FPBDRigidsSolver::FAllCollisionDataMaps& CollisionMaps = SopedAccess.GetAllCollisions_Maps();
-
-			Impact = (CollisionMaps.AllCollisionData != nullptr);
+			const auto& AllCollisionsArray = Events.CollisionEventData.CollisionData.AllCollisionsArray;
+			Impact = (AllCollisionsArray.Num() > 0);
 
 			if (Impact)
 			{
 				// any objects with a mass of less than 6 are removed from returned collision data
-				const auto& AllCollisionsArray = CollisionMaps.AllCollisionData->AllCollisionsArray;
-				R.ExpectTrue(AllCollisionsArray.Num() == 4);
+				EXPECT_EQ(AllCollisionsArray.Num(), 4);
 
 				for (const auto& Collision : AllCollisionsArray)
 				{ 
-					R.ExpectTrue(Particles.M(Collision.ParticleIndex) >= TestMassThreshold);
-					R.ExpectTrue(Collision.Mass1 >= TestMassThreshold);
-					R.ExpectTrue(Collision.Velocity1.Z < 0.0f);
-					R.ExpectTrue(Collision.Mass2 == 0.0f);
-					R.ExpectTrue(Collision.Velocity2.Z == 0.0f);
+					EXPECT_GE(Particles.M(Collision.ParticleIndex), TestMassThreshold);
+					EXPECT_GE(Collision.Mass1, TestMassThreshold);
+					EXPECT_LT(Collision.Velocity1.Z, 0.0f);
+					EXPECT_EQ(Collision.Mass2, 0.0f);
+					EXPECT_EQ(Collision.Velocity2.Z, 0.0f);
 				}
 			}
-
 		} while (!Impact);
 
+#endif
 		FChaosSolversModule::GetModule()->DestroySolver(Solver);
 
-#endif
-		return !R.HasError();
 	}
-	template bool Solver_CollisionEventFilter<float>(ExampleResponse&& R);
-
+	template void Solver_CollisionEventFilter<float>();
 
 	template<class T>
-	bool Solver_BreakingEventFilter(ExampleResponse&& R)
+	void Solver_BreakingEventFilter()
 	{
-#if INCLUDE_CHAOS
-
 		float TestMass = 6.0f;
 
 		Chaos::FPBDRigidsSolver* Solver;
@@ -393,13 +373,15 @@ namespace GeometryCollectionExample
 		Solver->SetGenerateBreakingData(true);
 		Solver->SetBreakingFilterSettings(BreakingFilterSettings);
 
+		EventHarvester Events(Solver);
+
+#if TODO_REIMPLEMENT_GET_RIGID_PARTICLES
 		// modify mass for filter test
 		Chaos::TPBDRigidParticles<float, 3>& Particles = Solver->GetRigidParticles();
-		Particles.M(1) = TestMass+1.0f;
+		Particles.M(1) = TestMass + 1.0f;
 		Particles.M(2) = TestMass - 1.0f;
 		Particles.M(3) = TestMass - 2.0f;
-		Particles.M(4) = TestMass+2.0f;
-
+		Particles.M(4) = TestMass + 2.0f;
 
 		bool Impact = false;
 		do
@@ -409,39 +391,33 @@ namespace GeometryCollectionExample
 			Solver->AdvanceSolverBy(1 / 24.);
 			FinalizeSolver(*Solver);
 
-			Chaos::FPBDRigidsSolver::FScopedGetEventsData SopedAccess = Solver->ScopedGetEventsData();
-			const Chaos::FPBDRigidsSolver::FAllBreakingDataMaps& BreakingMaps = SopedAccess.GetAllBreakings_Maps();
-
-			Impact = (BreakingMaps.AllBreakingData != nullptr);
+			const auto& AllBreakingsArray = Events.BreakingEventData.BreakingData.AllBreakingsArray;
+			Impact = (AllBreakingsArray.Num() > 0);
 
 			if (Impact)
 			{
-				R.ExpectTrue(Particles.Disabled(0) == false); // ground
-				R.ExpectTrue(Particles.Disabled(1) == false); // piece1 active 6 mass
-				R.ExpectTrue(Particles.Disabled(2) == false); // piece2 active 0.5 mass
-				R.ExpectTrue(Particles.Disabled(3) == false); // piece3 active 0.5 mass
-				R.ExpectTrue(Particles.Disabled(4) == false); // cluster active 7 mass
-				R.ExpectTrue(Particles.Disabled(5) == true); // cluster
+				EXPECT_EQ(Particles.Disabled(0), false); // ground
+				EXPECT_EQ(Particles.Disabled(1), false); // piece1 active 6 mass
+				EXPECT_EQ(Particles.Disabled(2), false); // piece2 active 0.5 mass
+				EXPECT_EQ(Particles.Disabled(3), false); // piece3 active 0.5 mass
+				EXPECT_EQ(Particles.Disabled(4), false); // cluster active 7 mass
+				EXPECT_EQ(Particles.Disabled(5), true); // cluster
 
 				// breaking data
-				const auto& AllBreakingsArray = BreakingMaps.AllBreakingData->AllBreakingsArray;
-				R.ExpectTrue(AllBreakingsArray.Num() == 2); // 2 pieces filtered out of 4
+				EXPECT_EQ(AllBreakingsArray.Num(), 2); // 2 pieces filtered out of 4
 
-				R.ExpectTrue(AllBreakingsArray[0].ParticleIndex == 4);
-				R.ExpectTrue(AllBreakingsArray[0].Mass == TestMass + 2.0f);
-				R.ExpectTrue(AllBreakingsArray[1].ParticleIndex == 1);
-				R.ExpectTrue(AllBreakingsArray[1].Mass == TestMass + 1.0f);
+				EXPECT_EQ(AllBreakingsArray[0].ParticleIndex, 4);
+				EXPECT_EQ(AllBreakingsArray[0].Mass, TestMass + 2.0f);
+				EXPECT_EQ(AllBreakingsArray[1].ParticleIndex, 1);
+				EXPECT_EQ(AllBreakingsArray[1].Mass, TestMass + 1.0f);
 
 			}
-
 		} while (!Impact);
 
-		FChaosSolversModule::GetModule()->DestroySolver(Solver);
-
 #endif
-		return !R.HasError();
+		FChaosSolversModule::GetModule()->DestroySolver(Solver);
 	}
-	template bool Solver_BreakingEventFilter<float>(ExampleResponse&& R);
+	template void Solver_BreakingEventFilter<float>();
 }
 
 

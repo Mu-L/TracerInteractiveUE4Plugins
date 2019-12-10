@@ -211,6 +211,10 @@ void RHIInit(bool bHasEditorToken)
 			{
 				GDynamicRHI->Init();
 
+#if WITH_MGPU
+				AFRUtils::StaticInitialize();
+#endif
+
 				GRHICommandList.GetImmediateCommandList().SetContext(GDynamicRHI->RHIGetDefaultContext());
 				GRHICommandList.GetImmediateAsyncComputeCommandList().SetComputeContext(GDynamicRHI->RHIGetDefaultAsyncComputeContext());
 
@@ -345,6 +349,12 @@ void FDynamicRHI::RHITransferVertexBufferUnderlyingResource(FRHIVertexBuffer* De
 	UE_LOG(LogRHI, Fatal, TEXT("RHITransferVertexBufferUnderlyingResource isn't implemented for the current RHI"));
 }
 
+FUnorderedAccessViewRHIRef FDynamicRHI::RHICreateUnorderedAccessView(FRHITexture* Texture, uint32 MipLevel, uint8 Format)
+{
+	UE_LOG(LogRHI, Fatal, TEXT("RHICreateUnorderedAccessView with Format parameter isn't implemented for the current RHI"));
+	return RHICreateUnorderedAccessView(Texture, MipLevel);
+}
+
 void FDynamicRHI::RHIUpdateShaderResourceView(FRHIShaderResourceView* SRV, FRHIVertexBuffer* VertexBuffer, uint32 Stride, uint8 Format)
 {
 	UE_LOG(LogRHI, Fatal, TEXT("RHIUpdateShaderResourceView isn't implemented for the current RHI"));
@@ -419,3 +429,13 @@ FRenderQueryPoolRHIRef RHICreateRenderQueryPool(ERenderQueryType QueryType, uint
 {
 	return GDynamicRHI->RHICreateRenderQueryPool(QueryType, NumQueries);
 }
+
+EColorSpaceAndEOTF FDynamicRHI::RHIGetColorSpace(FRHIViewport* Viewport)
+{
+	return EColorSpaceAndEOTF::ERec709_sRGB;
+}
+
+void FDynamicRHI::RHICheckViewportHDRStatus(FRHIViewport* Viewport)
+{
+}
+

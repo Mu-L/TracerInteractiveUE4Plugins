@@ -68,10 +68,10 @@ void UGameplayDebuggerLocalController::Initialize(AGameplayDebuggerCategoryRepli
 		SettingsCDO->CategorySlot5, SettingsCDO->CategorySlot6, SettingsCDO->CategorySlot7, SettingsCDO->CategorySlot8, SettingsCDO->CategorySlot9 };
 
 	bool bIsNumpadOnly = true;
-	for (int32 Idx = 0; Idx < ARRAY_COUNT(CategorySlots); Idx++)
+	for (int32 Idx = 0; Idx < UE_ARRAY_COUNT(CategorySlots); Idx++)
 	{
 		bool bHasPattern = false;
-		for (int32 PatternIdx = 0; PatternIdx < ARRAY_COUNT(NumpadKeys); PatternIdx++)
+		for (int32 PatternIdx = 0; PatternIdx < UE_ARRAY_COUNT(NumpadKeys); PatternIdx++)
 		{
 			if (CategorySlots[Idx] == NumpadKeys[PatternIdx])
 			{
@@ -210,6 +210,13 @@ void UGameplayDebuggerLocalController::DrawHeader(FGameplayDebuggerCanvasContext
 	float DebugActorSizeX = 0.0f, DebugActorSizeY = 0.0f;
 	CanvasContext.MeasureString(DebugActorDesc, DebugActorSizeX, DebugActorSizeY);
 	CanvasContext.PrintAt(CanvasContext.Canvas->SizeX - PaddingRight - DebugActorSizeX, UsePaddingTop, DebugActorDesc);
+
+	const FString VLogDesc = FString::Printf(TEXT("VLog: {cyan}%s"), CachedReplicator->GetVisLogSyncData().DeviceIDs.Len() > 0
+			? *CachedReplicator->GetVisLogSyncData().DeviceIDs
+			: TEXT("not recording to file"));
+	float VLogSizeX = 0.0f, VLogSizeY = 0.0f;
+	CanvasContext.MeasureString(VLogDesc, VLogSizeX, VLogSizeY);
+	CanvasContext.PrintAt(CanvasContext.Canvas->SizeX - PaddingRight - VLogSizeX, UsePaddingTop + LineHeight, VLogDesc);
 
 	const FString TimestampDesc = FString::Printf(TEXT("Time: %.2fs"), CachedReplicator->GetWorld()->GetTimeSeconds());
 	float TimestampSizeX = 0.0f, TimestampSizeY = 0.0f;
@@ -626,7 +633,7 @@ void UGameplayDebuggerLocalController::OnSelectActorTick()
 		const FVector ViewDir = CameraRotation.Vector();
 		for (APawn* TestPawn  : TActorRange<APawn>(OwnerPC->GetWorld()))
 		{
-			if (!TestPawn->bHidden && TestPawn->GetActorEnableCollision() &&
+			if (!TestPawn->IsHidden() && TestPawn->GetActorEnableCollision() &&
 				!TestPawn->IsA(ASpectatorPawn::StaticClass()) &&
 				TestPawn != OwnerPC->GetPawn())
 			{

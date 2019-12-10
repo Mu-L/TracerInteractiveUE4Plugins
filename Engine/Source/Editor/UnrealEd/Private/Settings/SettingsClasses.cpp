@@ -36,6 +36,8 @@
 #include "Settings/SkeletalMeshEditorSettings.h"
 #include "DeviceProfiles/DeviceProfile.h"
 #include "DeviceProfiles/DeviceProfileManager.h"
+#include "DesktopPlatformModule.h"
+#include "InstalledPlatformInfo.h"
 
 #define LOCTEXT_NAMESPACE "SettingsClasses"
 
@@ -131,13 +133,62 @@ USkeletalMeshEditorSettings::USkeletalMeshEditorSettings(const FObjectInitialize
 /* UEditorExperimentalSettings interface
  *****************************************************************************/
 
+static TAutoConsoleVariable<int32> CVarEditorHDRSupport(
+	TEXT("Editor.HDRSupport"),
+	0,
+	TEXT("Sets whether or not we should allow the editor to run on HDR monitors"),
+	ECVF_Default);
+
+static TAutoConsoleVariable<float> CVarEditorHDRNITLevel(
+	TEXT("Editor.HDRNITLevel"),
+	160.0f,
+	TEXT("Sets The desired NIT level of the editor when running on HDR"),
+	ECVF_Default);
+
 UEditorExperimentalSettings::UEditorExperimentalSettings( const FObjectInitializer& ObjectInitializer )
 	: Super(ObjectInitializer)
-	, bLandscapeLayerSystem(false)
+	, bHDREditor(false)
+	, HDREditorNITLevel(160.0f)
 	, bEnableLocalizationDashboard(true)
 	, bUseOpenCLForConvexHullDecomp(false)
 	, bAllowPotentiallyUnsafePropertyEditing(false)
 {
+}
+
+bool UEditorExperimentalSettings::IsClassAllowedToRecompileDuringPIE(UClass* TestClass) const
+{
+	if (TestClass != nullptr)
+	{
+		// Rebuild the list if necessary (if the list was edited, either number of entires or value, ResolvedBaseClassesToAllowRecompilingDuringPlayInEditor will get reset below)
+		if (ResolvedBaseClassesToAllowRecompilingDuringPlayInEditor.Num() != BaseClassesToAllowRecompilingDuringPlayInEditor.Num())
+		{
+			ResolvedBaseClassesToAllowRecompilingDuringPlayInEditor.Reset();
+			for (TSoftClassPtr<UObject> BaseClassPtr : BaseClassesToAllowRecompilingDuringPlayInEditor)
+			{
+				if (UClass* BaseClass = BaseClassPtr.Get())
+				{
+					ResolvedBaseClassesToAllowRecompilingDuringPlayInEditor.Add(BaseClass);
+				}
+			}
+		}
+
+		// See if the test class matches any of the enabled base classes
+		for (UClass* BaseClass : ResolvedBaseClassesToAllowRecompilingDuringPlayInEditor)
+		{
+			if ((BaseClass != nullptr) && TestClass->IsChildOf(BaseClass))
+			{
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+void UEditorExperimentalSettings::PostInitProperties()
+{
+	CVarEditorHDRSupport->Set(bHDREditor ? 1 : 0, ECVF_SetByProjectSetting);
+	CVarEditorHDRNITLevel->Set(HDREditorNITLevel, ECVF_SetByProjectSetting);
+	Super::PostInitProperties();
 }
 
 void UEditorExperimentalSettings::PostEditChangeProperty( struct FPropertyChangedEvent& PropertyChangedEvent )
@@ -159,11 +210,20 @@ void UEditorExperimentalSettings::PostEditChangeProperty( struct FPropertyChange
 			FModuleManager::Get().LoadModule(TEXT("EnvironmentQueryEditor"));
 		}
 	}
-
+	else if (Name == FName(TEXT("bHDREditor")))
+	{
+		CVarEditorHDRSupport->Set(bHDREditor ? 1 : 0, ECVF_SetByProjectSetting);
+	}
+	else if (Name == FName(TEXT("HDREditorNITLevel")))
+	{
+		CVarEditorHDRNITLevel->Set(HDREditorNITLevel, ECVF_SetByProjectSetting);
+	}
 	if (!FUnrealEdMisc::Get().IsDeletePreferences())
 	{
 		SaveConfig();
 	}
+
+	ResolvedBaseClassesToAllowRecompilingDuringPlayInEditor.Reset();
 
 	SettingChangedEvent.Broadcast(Name);
 }
@@ -430,6 +490,11 @@ void ULevelEditorPlaySettings::PostEditChangeProperty(struct FPropertyChangedEve
 		}
 	}
 
+	if (PropertyChangedEvent.MemberProperty && PropertyChangedEvent.MemberProperty->GetFName() == GET_MEMBER_NAME_CHECKED(ULevelEditorPlaySettings, NetworkEmulationSettings))
+	{
+		NetworkEmulationSettings.OnPostEditChange(PropertyChangedEvent);
+	}
+
 	Super::PostEditChangeProperty(PropertyChangedEvent);
 }
 
@@ -439,6 +504,8 @@ void ULevelEditorPlaySettings::PostInitProperties()
 
 	NewWindowWidth = FMath::Max(0, NewWindowWidth);
 	NewWindowHeight = FMath::Max(0, NewWindowHeight);
+
+	NetworkEmulationSettings.OnPostInitProperties();
 
 #if WITH_EDITOR
 	FCoreDelegates::OnSafeFrameChangedEvent.AddUObject(this, &ULevelEditorPlaySettings::SwapSafeZoneTypes);
@@ -667,8 +734,8 @@ ULevelEditorViewportSettings::ULevelEditorViewportSettings( const FObjectInitial
 	BillboardScale = 1.0f;
 	TransformWidgetSizeAdjustment = 0.0f;
 	MeasuringToolUnits = MeasureUnits_Centimeters;
-	bAllowArcballRotate = true;
-	bAllowScreenRotate = true;
+	bAllowArcballRotate = false;
+	bAllowScreenRotate = false;
 	// Set a default preview mesh
 	PreviewMeshes.Add(FSoftObjectPath("/Engine/EditorMeshes/ColorCalibrator/SM_ColorCalibrator.SM_ColorCalibrator"));
 }
@@ -775,6 +842,15 @@ void ULevelEditorViewportSettings::PostEditChangeProperty( struct FPropertyChang
 /* UProjectPackagingSettings interface
  *****************************************************************************/
 
+const UProjectPackagingSettings::FConfigurationInfo UProjectPackagingSettings::ConfigurationInfo[PPBC_MAX] = 
+{
+	/* PPBC_Debug */         { EBuildConfiguration::Debug, LOCTEXT("DebugConfiguration", "Debug"), LOCTEXT("DebugConfigurationTooltip", "Package the game in Debug configuration") },
+	/* PPBC_DebugGame */     { EBuildConfiguration::DebugGame, LOCTEXT("DebugGameConfiguration", "DebugGame"), LOCTEXT("DebugGameConfigurationTooltip", "Package the game in DebugGame configuration") },
+	/* PPBC_Development */   { EBuildConfiguration::Development, LOCTEXT("DevelopmentConfiguration", "Development"), LOCTEXT("DevelopmentConfigurationTooltip", "Package the game in Development configuration") },
+	/* PPBC_Test */          { EBuildConfiguration::Test, LOCTEXT("TestConfiguration", "Test"), LOCTEXT("TestConfigurationTooltip", "Package the game in Test configuration") },
+	/* PPBC_Shipping */      { EBuildConfiguration::Shipping, LOCTEXT("ShippingConfiguration", "Shipping"), LOCTEXT("ShippingConfigurationTooltip", "Package the game in Shipping configuration") },
+};
+
 UProjectPackagingSettings::UProjectPackagingSettings( const FObjectInitializer& ObjectInitializer )
 	: Super(ObjectInitializer)
 {
@@ -851,7 +927,7 @@ void UProjectPackagingSettings::PostEditChangeProperty( FPropertyChangedEvent& P
 	}
 	else if (Name == FName(TEXT("ForDistribution")))
 	{
-		if (ForDistribution && BuildConfiguration != EProjectPackagingBuildConfigurations::PPBC_Shipping && BuildConfiguration != EProjectPackagingBuildConfigurations::PPBC_ShippingClient)
+		if (ForDistribution && BuildConfiguration != EProjectPackagingBuildConfigurations::PPBC_Shipping)
 		{
 			BuildConfiguration = EProjectPackagingBuildConfigurations::PPBC_Shipping;
 			// force serialization for "Build COnfiguration"
@@ -1063,6 +1139,59 @@ bool UProjectPackagingSettings::RemoveBlueprintAssetFromNativizationList(const c
 	}
 
 	return false;
+}
+
+TArray<EProjectPackagingBuildConfigurations> UProjectPackagingSettings::GetValidPackageConfigurations()
+{
+	// Check if the project has code
+	FProjectStatus ProjectStatus;
+	bool bHasCode = IProjectManager::Get().QueryStatusForCurrentProject(ProjectStatus) && ProjectStatus.bCodeBasedProject;
+
+	// If if does, find all the targets
+	const TArray<FTargetInfo>* Targets = nullptr;
+	if (bHasCode)
+	{
+		Targets = &(FDesktopPlatformModule::Get()->GetTargetsForCurrentProject());
+	}
+
+	// Set up all the configurations
+	TArray<EProjectPackagingBuildConfigurations> Configurations;
+	for (int32 Idx = 0; Idx < PPBC_MAX; Idx++)
+	{
+		EProjectPackagingBuildConfigurations PackagingConfiguration = (EProjectPackagingBuildConfigurations)Idx;
+
+		// Check the target type is valid
+		const UProjectPackagingSettings::FConfigurationInfo& Info = UProjectPackagingSettings::ConfigurationInfo[Idx];
+		if(!bHasCode && Info.Configuration == EBuildConfiguration::DebugGame)
+		{
+			continue;
+		}
+
+		Configurations.Add(PackagingConfiguration);
+	}
+	return Configurations;
+}
+
+const FTargetInfo* UProjectPackagingSettings::GetBuildTargetInfo() const
+{
+	const FTargetInfo* DefaultGameTarget = nullptr;
+	const FTargetInfo* DefaultClientTarget = nullptr;
+	for (const FTargetInfo& Target : FDesktopPlatformModule::Get()->GetTargetsForCurrentProject())
+	{
+		if (Target.Name == BuildTarget)
+		{
+			return &Target;
+		}
+		else if (Target.Type == EBuildTargetType::Game && (DefaultGameTarget == nullptr || Target.Name < DefaultGameTarget->Name))
+		{
+			DefaultGameTarget = &Target;
+		}
+		else if (Target.Type == EBuildTargetType::Client && (DefaultClientTarget == nullptr || Target.Name < DefaultClientTarget->Name))
+		{
+			DefaultClientTarget = &Target;
+		}
+	}
+	return (DefaultGameTarget != nullptr)? DefaultGameTarget : DefaultClientTarget;
 }
 
 int32 UProjectPackagingSettings::FindBlueprintInNativizationList(const UBlueprint* InBlueprint) const

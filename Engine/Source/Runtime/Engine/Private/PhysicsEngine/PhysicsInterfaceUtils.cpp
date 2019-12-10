@@ -70,7 +70,7 @@ FCollisionFilterData CreateTraceQueryFilterData(const uint8 MyChannel, const boo
 	}
 
 	// word1 encodes 'what i block', word2 encodes 'what i touch'
-	for (int32 i = 0; i<ARRAY_COUNT(InCollisionResponseContainer.EnumArray); i++)
+	for (int32 i = 0; i<UE_ARRAY_COUNT(InCollisionResponseContainer.EnumArray); i++)
 	{
 		if (InCollisionResponseContainer.EnumArray[i] == ECR_Block)
 		{
@@ -93,10 +93,13 @@ FCollisionFilterData CreateTraceQueryFilterData(const uint8 MyChannel, const boo
 #define TRACE_MULTI		1
 #define TRACE_SINGLE	0
 
+#endif
+
 /** Utility for creating a PhysX PxFilterData for performing a query (trace) against the scene */
 FCollisionFilterData CreateQueryFilterData(const uint8 MyChannel, const bool bTraceComplex, const FCollisionResponseContainer& InCollisionResponseContainer, const struct FCollisionQueryParams& QueryParam, const struct FCollisionObjectQueryParams & ObjectParam, const bool bMultitrace)
 {
-	if (ObjectParam.IsValid())
+#if WITH_PHYSX
+	if(ObjectParam.IsValid())
 	{
 		return CreateObjectQueryFilterData(bTraceComplex, (bMultitrace ? TRACE_MULTI : TRACE_SINGLE), ObjectParam);
 	}
@@ -104,6 +107,9 @@ FCollisionFilterData CreateQueryFilterData(const uint8 MyChannel, const bool bTr
 	{
 		return CreateTraceQueryFilterData(MyChannel, bTraceComplex, InCollisionResponseContainer, QueryParam);
 	}
-}
-
+#else 
+	//#TODO implement chaos
+	ensure(false);
+	return FCollisionFilterData();
 #endif
+}

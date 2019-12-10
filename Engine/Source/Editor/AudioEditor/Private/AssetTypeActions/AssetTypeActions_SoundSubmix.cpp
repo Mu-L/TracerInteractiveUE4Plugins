@@ -15,10 +15,9 @@ void FAssetTypeActions_SoundSubmix::OpenAssetEditor( const TArray<UObject*>& InO
 {
 	EToolkitMode::Type Mode = EditWithinLevelEditor.IsValid() ? EToolkitMode::WorldCentric : EToolkitMode::Standalone;
 
-	for (auto ObjIt = InObjects.CreateConstIterator(); ObjIt; ++ObjIt)
+	for (UObject* Obj : InObjects)
 	{
-		USoundSubmix* SoundSubmix = Cast<USoundSubmix>(*ObjIt);
-		if (SoundSubmix != nullptr)
+		if (USoundSubmix* SoundSubmix = Cast<USoundSubmix>(Obj))
 		{
 			IAudioEditorModule* AudioEditorModule = &FModuleManager::LoadModuleChecked<IAudioEditorModule>( "AudioEditor" );
 			AudioEditorModule->CreateSoundSubmixEditor(Mode, EditWithinLevelEditor, SoundSubmix);
@@ -26,4 +25,13 @@ void FAssetTypeActions_SoundSubmix::OpenAssetEditor( const TArray<UObject*>& InO
 	}
 }
 
+const TArray<FText>& FAssetTypeActions_SoundSubmix::GetSubMenus() const
+{
+	static const TArray<FText> SubMenus
+	{
+		FText(LOCTEXT("AssetSoundMixSubMenu", "Mix"))
+	};
+
+	return SubMenus;
+}
 #undef LOCTEXT_NAMESPACE

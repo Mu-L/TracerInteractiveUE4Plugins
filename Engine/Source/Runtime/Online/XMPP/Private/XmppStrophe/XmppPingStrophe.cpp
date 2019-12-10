@@ -7,13 +7,15 @@
 #include "XmppLog.h"
 #include "Misc/Guid.h"
 #include "Misc/EmbeddedCommunication.h"
+#include "Containers/BackgroundableTicker.h"
 
 #if WITH_XMPP_STROPHE
 
-const FName FXmppPingStrophe::TickRequesterId = FName("StrophePing");
+#define TickRequesterId FName("StrophePing")
 
 FXmppPingStrophe::FXmppPingStrophe(FXmppConnectionStrophe& InConnectionManager)
-	: ConnectionManager(InConnectionManager)
+	: FTickerObjectBase(0.0f, FBackgroundableTicker::GetCoreTicker())
+	, ConnectionManager(InConnectionManager)
 	, TimeSinceLastClientPing(0.0f)
 	, bWaitingForPong(false)
 	, SecondsSinceLastServerPong(0.0f)
@@ -227,5 +229,7 @@ void FXmppPingStrophe::CleanupMessages()
 		FEmbeddedCommunication::AllowSleep(TickRequesterId);
 	}
 }
+
+#undef TickRequesterId
 
 #endif

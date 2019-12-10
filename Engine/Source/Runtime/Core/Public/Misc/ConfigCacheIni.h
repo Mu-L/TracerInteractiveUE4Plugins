@@ -18,7 +18,7 @@
 #include "Math/Vector.h"
 #include "Math/Rotator.h"
 #include "Misc/Paths.h"
-#include "Serialization/StructuredArchiveFromArchive.h"
+#include "Serialization/StructuredArchive.h"
 
 CORE_API DECLARE_LOG_CATEGORY_EXTERN(LogConfig, Log, All);
 
@@ -260,11 +260,11 @@ struct FIniFilename
 	/** Ini filename */
 	FString Filename;
 	/** If true this ini file is required to generate the output ini. */
-	bool bRequired;
+	bool bRequired = false;
 	/** Used as ID for looking up an INI Hierarchy */
 	FString CacheKey;
 
-	FIniFilename(const FString& InFilename, bool InIsRequired, FString InCacheKey=FString(TEXT("")))
+	explicit FIniFilename(const FString& InFilename, bool InIsRequired=false, FString InCacheKey=FString(TEXT("")))
 		: Filename(InFilename)
 		, bRequired(InIsRequired) 
 		, CacheKey(InCacheKey)
@@ -281,14 +281,30 @@ struct FConfigCommandlineOverride
 #endif // ALLOW_INI_OVERRIDE_FROM_COMMANDLINE
 
 
-typedef TMap<int32, FIniFilename> FConfigFileHierarchy;
+class FConfigFileHierarchy : public TMap<int32, FIniFilename>
+{
+private:
+	int32 KeyGen = 0;
+
+public:
+	FConfigFileHierarchy();
+
+private:
+	int32 GenerateDynamicKey();
+
+	int32 AddStaticLayer(FIniFilename Filename, int32 LayerIndex, int32 LayerExpansionIndex = 0, int32 PlatformIndex = 0);
+	int32 AddDynamicLayer(FIniFilename Filename);
+
+	friend class FConfigFile;
+};
 
 // One config file.
 
 class FConfigFile : public TMap<FString,FConfigSection>
 {
 public:
-	bool Dirty, NoSave;
+	bool Dirty;
+	bool NoSave;
 
 	/** The name of this config file */	
 	FName Name;
@@ -387,6 +403,12 @@ public:
 	/** Checks the command line for any overridden config settings */
 	CORE_API static void OverrideFromCommandline(FConfigFile* File, const FString& Filename);
 
+	/** Checks the command line for any overridden config file settings */
+	CORE_API static void OverrideFileFromCommandline(FString& Filename);
+
+	/** Appends a new INI file to the SourceIniHierarchy and combines it */
+	CORE_API void AddDynamicLayerToHeirarchy(const FString& Filename);
+
 private:
 
 	// This holds per-object config class names, with their ArrayOfStructKeys. Since the POC sections are all unique,
@@ -410,6 +432,17 @@ private:
 	 */
 	void ProcessPropertyAndWriteForDefaults(int32 IniCombineThreshold, const TArray<FConfigValue>& InCompletePropertyToProcess, FString& OutText, const FString& SectionName, const FString& PropertyName);
 
+	/**
+	 * Creates a chain of ini filenames to load and combine.
+	 *
+	 * @param InBaseIniName Ini name.
+	 * @param InPlatformName Platform name, nullptr means to use the current platform
+	 * @param OutHierarchy An array which is to receive the generated hierachy of ini filenames.
+	 */
+	void AddStaticLayersToHierarchy(const TCHAR* InBaseIniName, const TCHAR* InPlatformName, const TCHAR* EngineConfigDir, const TCHAR* SourceConfigDir);
+
+	// for AddStaticLayersToHierarchy
+	friend class FConfigCacheIni;
 };
 
 /**
@@ -853,22 +886,10 @@ private:
 	EConfigCacheType Type;
 };
 
-/**
- * Helper function to read the contents of an ini file and a specified group of cvar parameters, where sections in the ini file are marked [InName@InGroupNumber]
- * @param InSectionBaseName - The base name of the section to apply cvars from (i.e. the bit before the @)
- * @param InGroupNumber - The group number required
- * @param InIniFilename - The ini filename
- * @param SetBy anything in ECVF_LastSetMask e.g. ECVF_SetByScalability
- */
+UE_DEPRECATED(4.24, "This functionality to generate Scalability@Level section string has been moved to Scalability.cpp. Explictly construct section you need manually.")
 CORE_API void ApplyCVarSettingsGroupFromIni(const TCHAR* InSectionBaseName, int32 InGroupNumber, const TCHAR* InIniFilename, uint32 SetBy);
 
-/**
-* Helper function to read the contents of an ini file and a specified group of cvar parameters, where sections in the ini file are marked [InName@TagName]
-* @param InSectionBaseName - The base name of the section to apply cvars from (i.e. the bit before the @)
-* @param InSectionTag - The group name required. e.g. 'Cine'
-* @param InIniFilename - The ini filename
-* @param SetBy anything in ECVF_LastSetMask e.g. ECVF_SetByScalability
-*/
+UE_DEPRECATED(4.24, "This functionality to generate Scalability@Level section string has been moved to Scalability.cpp. Explictly construct section you need manually.")
 CORE_API void ApplyCVarSettingsGroupFromIni(const TCHAR* InSectionBaseName, const TCHAR* InSectionTag, const TCHAR* InIniFilename, uint32 SetBy);
 
 /**
@@ -879,7 +900,13 @@ CORE_API void ApplyCVarSettingsGroupFromIni(const TCHAR* InSectionBaseName, cons
  */
 CORE_API void ApplyCVarSettingsFromIni(const TCHAR* InSectionBaseName, const TCHAR* InIniFilename, uint32 SetBy, bool bAllowCheating = false);
 
-
+/**
+ * Helper function to operate a user defined function for each CVar key/value pair in the specified section in an ini file
+ * @param InSectionName - The name of the section to apply cvars from
+ * @param InIniFilename - The ini filename
+ * @param InEvaluationFunction - The evaluation function to be called for each key/value pair
+ */
+CORE_API void ForEachCVarInSectionFromIni(const TCHAR* InSectionName, const TCHAR* InIniFilename, TFunction<void(IConsoleVariable* CVar, const FString& KeyString, const FString& ValueString)> InEvaluationFunction);
 
 /**
  * CVAR Ini history records all calls to ApplyCVarSettingsFromIni and can re run them 

@@ -68,15 +68,15 @@ void FMacPlatformProcess::FreeDllHandle( void* DllHandle )
 	dlclose( DllHandle );
 }
 
-FString FMacPlatformProcess::GenerateApplicationPath( const FString& AppName, EBuildConfigurations::Type BuildConfiguration)
+FString FMacPlatformProcess::GenerateApplicationPath( const FString& AppName, EBuildConfiguration BuildConfiguration)
 {
 	SCOPED_AUTORELEASE_POOL;
 	
 	FString PlatformName = TEXT("Mac");
 	FString ExecutableName = AppName;
-	if (BuildConfiguration != EBuildConfigurations::Development)
+	if (BuildConfiguration != EBuildConfiguration::Development)
 	{
-		ExecutableName += FString::Printf(TEXT("-%s-%s"), *PlatformName, EBuildConfigurations::ToString(BuildConfiguration));
+		ExecutableName += FString::Printf(TEXT("-%s-%s"), *PlatformName, LexToString(BuildConfiguration));
 	}
 	
 	NSURL* CurrentBundleURL = [[NSBundle mainBundle] bundleURL];
@@ -675,12 +675,21 @@ bool FMacPlatformProcess::GetProcReturnCode( FProcHandle& ProcessHandle, int32* 
 		return false;
 	}
 
-	*ReturnCode = [(NSTask*)ProcessHandle.Get() terminationStatus];
+	if (ReturnCode)
+	{
+		*ReturnCode = [(NSTask*)ProcessHandle.Get() terminationStatus];
+	}
 	return true;
 }
 
 bool FMacPlatformProcess::IsApplicationRunning( uint32 ProcessId )
 {
+	// PID 0 is not a valid user application so lets ignore it as valid
+	if (ProcessId == 0)
+	{
+		return false;
+	}
+
 	errno = 0;
 	getpriority(PRIO_PROCESS, ProcessId);
 	return errno == 0;
@@ -897,8 +906,8 @@ const TCHAR* FMacPlatformProcess::ComputerName()
 
 	if( !Result[0] )
 	{
-		ANSICHAR AnsiResult[ARRAY_COUNT(Result)];
-		gethostname(AnsiResult, ARRAY_COUNT(Result));
+		ANSICHAR AnsiResult[UE_ARRAY_COUNT(Result)];
+		gethostname(AnsiResult, UE_ARRAY_COUNT(Result));
 		FCString::Strcpy(Result, ANSI_TO_TCHAR(AnsiResult));
 	}
 	return Result;
@@ -935,8 +944,12 @@ const TCHAR* FMacPlatformProcess::UserName(bool bOnlyAlphaNumeric)
 
 void FMacPlatformProcess::SetCurrentWorkingDirectoryToBaseDir()
 {
+#if defined(DISABLE_CWD_CHANGES) && DISABLE_CWD_CHANGES != 0
+	check(false);
+#else
 	FPlatformMisc::CacheLaunchDir();
 	chdir([FString(BaseDir()).GetNSString() fileSystemRepresentation]);
+#endif
 }
 
 FString FMacPlatformProcess::GetCurrentWorkingDirectory()
@@ -1113,7 +1126,7 @@ bool FMacPlatformProcess::WritePipe(void* WritePipe, const FString& Message, FSt
 
 	// Convert input to UTF8CHAR
 	uint32 BytesAvailable = Message.Len();
-	UTF8CHAR * Buffer = new UTF8CHAR[BytesAvailable + 1];
+	UTF8CHAR * Buffer = new UTF8CHAR[BytesAvailable + 2];
 	for (uint32 i = 0; i < BytesAvailable; i++)
 	{
 		Buffer[i] = Message[i];

@@ -151,9 +151,10 @@ FDisplayClusterRenderSyncPolicySoftwareDX11::~FDisplayClusterRenderSyncPolicySof
 
 bool FDisplayClusterRenderSyncPolicySoftwareDX11::SynchronizeClusterRendering(int32& InOutSyncInterval)
 {
+	check(IsInRenderingThread());
 	if(!(GEngine && GEngine->GameViewport && GEngine->GameViewport->Viewport))
 	{
-		UE_LOG(LogDisplayClusterRenderSync, Error, TEXT("Couldn't get a D3D11 viewport."));
+		UE_LOG(LogDisplayClusterRenderSync, Warning, TEXT("Couldn't get a D3D11 viewport."));
 		// Tell a caller to present the frame by himself
 		return true;
 	}

@@ -539,10 +539,6 @@ struct ENGINE_API FBlueprintCookedComponentInstancingData
 {
 	GENERATED_USTRUCT_BODY()
 
-	/** Flag indicating whether or not this contains valid cooked data. Note that an empty changed property list can also be a valid template data context. */
-	UPROPERTY()
-	bool bHasValidCookedData;
-
 	/** List of property info records with values that differ between the template and the component class CDO. This list will be generated at cook time. */
 	UPROPERTY()
 	TArray<struct FBlueprintComponentChangedPropertyInfo> ChangedPropertyList;
@@ -554,7 +550,11 @@ struct ENGINE_API FBlueprintCookedComponentInstancingData
 	UClass* ComponentTemplateClass;
 
 	/** Source template object flags (recorded at load time and used for instancing). */
-	EObjectFlags ComponentTemplateFlags;
+	TEnumAsByte<EObjectFlags> ComponentTemplateFlags;
+
+	/** Flag indicating whether or not this contains valid cooked data. Note that an empty changed property list can also be a valid template data context. */
+	UPROPERTY()
+	bool bHasValidCookedData;
 
 	/** Default constructor. */
 	FBlueprintCookedComponentInstancingData()
@@ -591,6 +591,37 @@ private:
 	TArray<uint8> CachedPropertyData;
 };
 
+/** Utility struct to store class overrides for components. */
+USTRUCT()
+struct FBPComponentClassOverride
+{
+	GENERATED_BODY()
+
+	/** The component name an override is being specified for. */
+	UPROPERTY()
+	FName ComponentName;
+
+	/** The class to use when constructing the component. */
+	UPROPERTY()
+	UClass* ComponentClass;
+
+	FBPComponentClassOverride()
+		: ComponentClass(nullptr)
+	{
+	}
+
+	FBPComponentClassOverride(FName InComponentName, UClass* InComponentClass)
+		: ComponentName(InComponentName)
+		, ComponentClass(InComponentClass)
+	{
+	}
+
+	bool operator==(const FName OtherComponentName) const
+	{
+		return (ComponentName == OtherComponentName);
+	}
+};
+
 UCLASS()
 class ENGINE_API UBlueprintGeneratedClass : public UClass
 {
@@ -609,6 +640,12 @@ public:
 	UPROPERTY()
 	uint8 bHasCookedComponentInstancingData:1;
 
+#if WITH_EDITORONLY_DATA
+	/** Used to check if this class has sparse data that can be serialized. This will be false when loading the data if it hasn't already been saved out. */
+	UPROPERTY()
+	uint32 bIsSparseClassDataSerializable : 1;
+#endif // WITH_EDITORONLY_DATA
+
 private:
 	/** Flag to make sure the custom property list has been initialized */
 	uint8 bCustomPropertyListForPostConstructionInitialized:1;
@@ -625,6 +662,10 @@ public:
 	/** Array of templates for timelines that should be created */
 	UPROPERTY()
 	TArray<class UTimelineTemplate*> Timelines;
+
+	/** Array of blueprint overrides of component classes in parent classes */
+	UPROPERTY()
+	TArray<FBPComponentClassOverride> ComponentClassOverrides;
 
 	/** 'Simple' construction script - graph of components to instance */
 	UPROPERTY()
@@ -658,6 +699,9 @@ public:
 	/** Property guid map */
 	UPROPERTY()
 	TMap<FName,FGuid> PropertyGuids;
+
+	UPROPERTY(Transient)
+	TArray<UFunction*> CalledFunctions;
 #endif //WITH_EDITORONLY_DATA
 
 	// Mapping of changed properties & data to apply when instancing components in a cooked build (one entry per named AddComponent node template for fast lookup at runtime).
@@ -712,9 +756,10 @@ public:
 	virtual void PurgeClass(bool bRecompilingOnLoad) override;
 	virtual void Bind() override;
 	virtual void GetDefaultObjectPreloadDependencies(TArray<UObject*>& OutDeps) override;
-	virtual UObject* FindArchetype(UClass* ArchetypeClass, const FName ArchetypeName) const override;
+	virtual UObject* FindArchetype(const UClass* ArchetypeClass, const FName ArchetypeName) const override;
 
 	virtual void InitPropertiesFromCustomList(uint8* DataPtr, const uint8* DefaultDataPtr) override;
+	virtual void SetupObjectInitializer(FObjectInitializer& ObjectInitializer) const override;
 
 protected:
 

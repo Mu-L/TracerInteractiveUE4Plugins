@@ -14,8 +14,6 @@ class UControlRigSkeletalMeshComponent : public UDebugSkelMeshComponent
 	virtual void InitAnim(bool bForceReinit) override;
 
 	// BEGIN UDebugSkeletalMeshComponent interface
-	virtual void ShowReferencePose(bool bRefPose) override;
-	virtual bool IsReferencePoseShown() const override;
 	virtual void SetCustomDefaultPose() override;
 	virtual const FReferenceSkeleton& GetReferenceSkeleton() const override
 	{
@@ -33,6 +31,9 @@ class UControlRigSkeletalMeshComponent : public UDebugSkelMeshComponent
 	{
 		return DebugDrawBones.Num();
 	}
+
+	virtual void EnablePreview(bool bEnable, class UAnimationAsset * PreviewAsset) override;
+
 	// END UDebugSkeletalMeshComponent interface
 
 public:

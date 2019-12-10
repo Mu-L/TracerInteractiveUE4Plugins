@@ -117,7 +117,8 @@ namespace DetailLayoutHelpers
 						}
 					}
 
-					FPropertyAndParent PropertyAndParent(*Property, ParentProperty, Objects);
+					TSharedPtr<IPropertyHandle> ChildHandle = PropertyEditorHelpers::GetPropertyHandle(ChildNodePtr.ToSharedRef(), nullptr, nullptr);
+					FPropertyAndParent PropertyAndParent(ChildHandle.ToSharedRef(), Objects);
 					const bool bIsUserVisible = InUpdateArgs.IsPropertyVisible(PropertyAndParent);
 
 					// Inners of customized in structs should not be taken into consideration for customizing.  They are not designed to be individually customized when their parent is already customized
@@ -180,6 +181,24 @@ namespace DetailLayoutHelpers
 
 							// Add a property to the default category
 							FDetailCategoryImpl& CategoryImpl = DetailLayout.DefaultCategory(CategoryName);
+							{
+								FText CategoryDisplayName = CategoryImpl.GetDisplayName();
+								if (CategoryDisplayName.IsEmpty() || CategoryDisplayName.IsCultureInvariant())
+								{
+									const FString CategorySourceText = CategoryName.ToString();
+									const FString CategoryKey = Property->GetFullGroupName(false);
+
+									if (FText::FindText(TEXT("UObjectCategory"), CategoryKey, /*OUT*/CategoryDisplayName, &CategorySourceText))
+									{
+										// Category names in English are typically gathered in their non-pretty form (eg "UserInterface" rather than "User Interface"), so skip 
+										// applying the localized variant if the text matches the raw category name, as in this case the pretty printer will do a better job
+										if (!CategorySourceText.Equals(CategoryDisplayName.ToString(), ESearchCase::CaseSensitive))
+										{
+											CategoryImpl.SetDisplayName(CategoryName, CategoryDisplayName);
+										}
+									}
+								}
+							}
 							CategoryImpl.AddPropertyNode(ChildNodePtr.ToSharedRef(), InstanceName);
 						}
 

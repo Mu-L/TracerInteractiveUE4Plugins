@@ -4,6 +4,7 @@
 
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/DeclarativeSyntaxSupport.h"
+#include "AssetData.h"
 
 class UNiagaraStackParameterStoreEntry;
 class SNiagaraParameterEditor;
@@ -23,8 +24,6 @@ public:
 
 private:
 	FReply DeleteClicked();
-
-	TSharedRef<SWidget> OnGetAvailableHandleMenu();
 
 	TSharedRef<SWidget> ConstructValueStructWidget();
 
@@ -51,6 +50,9 @@ private:
 	FText GetInputIconToolTip() const;
 
 	FSlateColor GetInputIconColor() const;
+
+	void OnAssetSelectedFromPicker(const FAssetData& InAssetData);
+	FString GetCurrentAssetPath() const;
 
 private:
 	UNiagaraStackParameterStoreEntry* StackEntry;

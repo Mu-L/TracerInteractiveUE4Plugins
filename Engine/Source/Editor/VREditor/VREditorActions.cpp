@@ -13,7 +13,7 @@
 #include "Framework/Application/SlateApplication.h"
 #include "ILevelEditor.h"
 #include "LevelEditor.h"
-#include "Toolkits/AssetEditorManager.h"
+
 #include "Developer/AssetTools/Public/IAssetTools.h"
 #include "Developer/AssetTools/Public/AssetToolsModule.h"
 #include "Modules/ModuleManager.h"
@@ -30,6 +30,7 @@
 #include "LevelEditorActions.h"
 #include "UObject/UObjectIterator.h"
 #include "Factories/Factory.h"
+#include "Subsystems/AssetEditorSubsystem.h"
 
 #define LOCTEXT_NAMESPACE "VREditorActions"
 
@@ -155,6 +156,11 @@ void FVREditorActionCallbacks::SetGizmoMode(UVREditorMode* InVRMode, EGizmoHandl
 		InVRMode->GetWorldInteraction().SetGizmoHandleType(InGizmoMode);
 		UpdateGizmoCoordinateSystemText(InVRMode);
 	}
+}
+
+EGizmoHandleTypes FVREditorActionCallbacks::GetGizmoMode(const UVREditorMode* InVRMode)
+{
+	return InVRMode->GetWorldInteraction().GetCurrentGizmoType();
 }
 
 ECheckBoxState FVREditorActionCallbacks::IsActiveGizmoMode(UVREditorMode* InVRMode, EGizmoHandleTypes InGizmoMode)
@@ -416,12 +422,12 @@ void FVREditorActionCallbacks::CreateNewSequence(UVREditorMode* InVRMode)
 	InVRMode->GetUISystem().SequencerOpenendFromRadialMenu(true);
 
 	// Open the Sequencer window
-	FAssetEditorManager::Get().OpenEditorForAsset(NewAsset);
+	GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(NewAsset);
 }
 
 void FVREditorActionCallbacks::CloseSequencer(UMovieSceneSequence* OpenSequence)
 {
-	IAssetEditorInstance* SequencerEditor = FAssetEditorManager::Get().FindEditorForAsset(OpenSequence, false);
+	IAssetEditorInstance* SequencerEditor = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->FindEditorForAsset(OpenSequence, false);
 	if (SequencerEditor != nullptr)
 	{
 		SequencerEditor->CloseWindow();
@@ -605,15 +611,7 @@ void FVREditorActionCallbacks::ChangeEditorModes(FEditorModeID InMode)
 	GLevelEditorModeTools().ActivateMode(InMode);
 
 	// Find and disable any other 'visible' modes since we only ever allow one of those active at a time.
-	TArray<FEdMode*> ActiveModes;
-	GLevelEditorModeTools().GetActiveModes(ActiveModes);
-	for (FEdMode* Mode : ActiveModes)
-	{
-		if (Mode->GetID() != InMode && Mode->GetModeInfo().bVisible)
-		{
-			GLevelEditorModeTools().DeactivateMode(Mode->GetID());
-		}
-	}
+	GLevelEditorModeTools().DeactivateOtherVisibleModes(InMode);
 }
 
 ECheckBoxState FVREditorActionCallbacks::EditorModeActive(FEditorModeID InMode)

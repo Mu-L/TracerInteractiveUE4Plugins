@@ -27,6 +27,7 @@
 #include "SceneUtils.h"
 #include "LightmapUniformShaderParameters.h"
 #include "DynamicBufferAllocator.h"
+#include "Rendering/SkyAtmosphereCommonData.h"
 
 class FCanvas;
 class FLightMap;
@@ -44,6 +45,8 @@ class ULightMapTexture2D;
 class UMaterialInstanceDynamic;
 class UMaterialInterface;
 class UShadowMapTexture2D;
+class USkyAtmosphereComponent;
+class FSkyAtmosphereRenderSceneInfo;
 class USkyLightComponent;
 struct FDynamicMeshVertex;
 class ULightMapVirtualTexture2D;
@@ -171,6 +174,11 @@ public:
 	 */
 	virtual UMaterialInstanceDynamic* GetReusableMID(class UMaterialInterface* InSource) = 0;
 
+	/**
+	 * Clears the pool of mids being referenced by this view state 
+	 */
+	virtual void ClearMIDPool() = 0;
+
 #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
 	/** If frozen view matrices are available, set those as active on the SceneView */
 	virtual void ActivateFrozenViewMatrices(FSceneView& SceneView) = 0;
@@ -197,6 +205,8 @@ public:
 
 	//
 	virtual uint32 GetCurrentTemporalAASampleIndex() const = 0;
+
+	virtual uint32 GetCurrentUnclampedTemporalAASampleIndex() const = 0;
 
 	virtual void SetSequencerState(ESequencerState InSequencerState) = 0;
 
@@ -306,7 +316,9 @@ static const int32 LQ_LIGHTMAP_COEF_INDEX = 2;
 
 /** Compile out low quality lightmaps to save memory */
 // @todo-mobile: Need to fix this!
-#define ALLOW_LQ_LIGHTMAPS (PLATFORM_DESKTOP || PLATFORM_IOS || PLATFORM_ANDROID || PLATFORM_HTML5 || PLATFORM_SWITCH || PLATFORM_LUMIN || PLATFORM_HOLOLENS)
+#ifndef ALLOW_LQ_LIGHTMAPS
+#define ALLOW_LQ_LIGHTMAPS (PLATFORM_DESKTOP || PLATFORM_IOS || PLATFORM_ANDROID || PLATFORM_SWITCH || PLATFORM_LUMIN || PLATFORM_HOLOLENS)
+#endif
 
 /** Compile out high quality lightmaps to save memory */
 #define ALLOW_HQ_LIGHTMAPS 1
@@ -606,7 +618,7 @@ public:
 		InvUniformPenumbraSize(FVector4(0, 0, 0, 0)),
 		Type(SMIT_None)
 	{
-		for (int Channel = 0; Channel < ARRAY_COUNT(bChannelValid); Channel++)
+		for (int Channel = 0; Channel < UE_ARRAY_COUNT(bChannelValid); Channel++)
 		{
 			bChannelValid[Channel] = false;
 		}
@@ -989,15 +1001,31 @@ public:
 	}
 };
 
-inline bool DoesPlatformSupportDistanceFieldShadowing(EShaderPlatform Platform)
+inline bool DoesPlatformSupportDistanceFields(EShaderPlatform Platform)
 {
-	// Hasn't been tested elsewhere yet
-	return Platform == SP_PCD3D_SM5 || Platform == SP_PS4
+	return Platform == SP_PCD3D_SM5
+		|| Platform == SP_PS4
 		|| IsMetalSM5Platform(Platform)
 		|| Platform == SP_XBOXONE_D3D12
 		|| IsVulkanSM5Platform(Platform)
-	    || Platform == SP_SWITCH || Platform == SP_SWITCH_FORWARD
+		|| Platform == SP_SWITCH
+		|| Platform == SP_SWITCH_FORWARD
 		|| FDataDrivenShaderPlatformInfo::GetInfo(Platform).bSupportsDistanceFields;
+}
+
+inline bool DoesPlatformSupportDistanceFieldShadowing(EShaderPlatform Platform)
+{
+	return DoesPlatformSupportDistanceFields(Platform);
+}
+
+inline bool DoesPlatformSupportDistanceFieldAO(EShaderPlatform Platform)
+{
+	return DoesPlatformSupportDistanceFields(Platform);
+}
+
+inline bool DoesPlatformSupportDistanceFieldGI(EShaderPlatform Platform)
+{
+	return (Platform == SP_PCD3D_SM5) && DoesPlatformSupportDistanceFields(Platform);
 }
 
 BEGIN_GLOBAL_SHADER_PARAMETER_STRUCT(FMobileReflectionCaptureShaderParameters,ENGINE_API)
@@ -1040,6 +1068,8 @@ public:
 	uint8 bHasStaticLighting:1;
 	uint8 bCastVolumetricShadow:1;
 	uint8 bCastRayTracedShadow:1;
+	uint8 bAffectReflection:1;
+	uint8 bAffectGlobalIllumination:1;
 	TEnumAsByte<EOcclusionCombineMode> OcclusionCombineMode;
 	float AverageBrightness;
 	float IndirectLightingIntensity;
@@ -1051,6 +1081,8 @@ public:
 	float MinOcclusion;
 	FLinearColor OcclusionTint;
 	int32 SamplesPerPixel;
+
+	bool IsMovable() { return bMovable; }
 
 #if RHI_RAYTRACING
 	bool IsDirtyImportanceSamplingData;
@@ -1085,8 +1117,42 @@ public:
 
 private:
 	FLinearColor LightColor;
+	const uint8 bMovable : 1;
 };
 
+/** Represents a USkyAtmosphereComponent to the rendering thread. */
+class ENGINE_API FSkyAtmosphereSceneProxy
+{
+public:
+
+	// Initialization constructor.
+	FSkyAtmosphereSceneProxy(const USkyAtmosphereComponent* InComponent);
+	~FSkyAtmosphereSceneProxy();
+
+	bool IsMultiScatteringEnabled() const { return AtmosphereSetup.MultiScatteringFactor > 0.0f; }
+	FLinearColor GetSkyLuminanceFactor() const { return SkyLuminanceFactor; }
+	FLinearColor GetTransmittanceAtZenith() const { return TransmittanceAtZenith; };
+	float GetAerialPespectiveViewDistanceScale() const { return AerialPespectiveViewDistanceScale; }
+	float GetHeightFogContribution() const { return HeightFogContribution; }
+
+	const FAtmosphereSetup& GetAtmosphereSetup() const { return AtmosphereSetup; }
+
+	FVector GetAtmosphereLightDirection(int32 AtmosphereLightIndex, const FVector& DefaultDirection) const;
+
+	bool bStaticLightingBuilt;
+	FSkyAtmosphereRenderSceneInfo* RenderSceneInfo;
+private:
+
+	FAtmosphereSetup AtmosphereSetup;
+
+	FLinearColor TransmittanceAtZenith;
+	FLinearColor SkyLuminanceFactor;
+	float AerialPespectiveViewDistanceScale;
+	float HeightFogContribution;
+
+	bool OverrideAtmosphericLight[NUM_ATMOSPHERE_LIGHTS];
+	FVector OverrideAtmosphericLightDirection[NUM_ATMOSPHERE_LIGHTS];
+};
 
 /** Shader paraneter structure for rendering lights. */
 BEGIN_SHADER_PARAMETER_STRUCT(FLightShaderParameters, ENGINE_API)
@@ -1317,12 +1383,14 @@ public:
 	inline bool CastsStaticShadow() const { return bCastStaticShadow; }
 	inline bool CastsTranslucentShadows() const { return bCastTranslucentShadows; }
 	inline bool CastsVolumetricShadow() const { return bCastVolumetricShadow; }
+	inline bool CastsHairStrandsDeepShadow() const { return bCastHairStrandsDeepShadow; }
 	inline bool CastsRaytracedShadow() const { return bCastRaytracedShadow; }
 	inline bool AffectReflection() const { return bAffectReflection; }
 	inline bool AffectGlobalIllumination() const { return bAffectGlobalIllumination; }
 	inline bool CastsShadowsFromCinematicObjectsOnly() const { return bCastShadowsFromCinematicObjectsOnly; }
 	inline bool CastsModulatedShadows() const { return bCastModulatedShadows; }
 	inline const FLinearColor& GetModulatedShadowColor() const { return ModulatedShadowColor; }
+	inline const float GetShadowAmount() const { return ShadowAmount; }
 	inline bool AffectsTranslucentLighting() const { return bAffectTranslucentLighting; }
 	inline bool Transmission() const { return bTransmission; }
 	inline bool UseRayTracedDistanceFieldShadows() const { return bUseRayTracedDistanceFieldShadows; }
@@ -1360,8 +1428,10 @@ public:
 	// Atmosphere / Fog related functions.
 
 	inline bool IsUsedAsAtmosphereSunLight() const { return bUsedAsAtmosphereSunLight; }
+	inline uint8 GetAtmosphereSunLightIndex() const { return AtmosphereSunLightIndex; }
 	virtual void SetAtmosphereRelatedProperties(FLinearColor TransmittanceFactor, FLinearColor SunOuterSpaceLuminance) {}
 	virtual FLinearColor GetOuterSpaceLuminance() const { return FLinearColor::White; }
+	virtual FLinearColor GetTransmittanceFactor() const { return FLinearColor::White; }
 	static float GetSunOnEarthHalfApexAngleRadian() 
 	{ 
 		const float SunOnEarthApexAngleDegree = 0.545f;	// Apex angle == angular diameter
@@ -1480,7 +1550,7 @@ protected:
 	const uint8 bTransmission : 1;
 
 	const uint8 bCastVolumetricShadow : 1;
-
+	const uint8 bCastHairStrandsDeepShadow : 1;
 	const uint8 bCastShadowsFromCinematicObjectsOnly : 1;
 
 	const uint8 bForceCachedShadowsForMovablePrimitives : 1;
@@ -1491,7 +1561,7 @@ protected:
 	/** Whether the light affects objects in reflections, when ray-traced reflection is enabled. */
 	const uint8 bAffectReflection : 1;
 
-	/** Whether the light affects objects in reflections, when ray-traced global illumination is enabled. */
+	/** Whether the light affects global illumination, when ray-traced global illumination is enabled. */
 	const uint8 bAffectGlobalIllumination : 1;
 
 	/** Whether the light affects translucency or not.  Disabling this can save GPU time when there are many small lights. */
@@ -1516,6 +1586,9 @@ protected:
 	/** Whether the light supports rendering in tiled deferred pass */
 	uint8 bTiledDeferredLightingSupported : 1;
 
+	/** The index of the atmospheric light. Multiple lights can be considered when computing the sky/atmospheric scattering. */
+	const uint8 AtmosphereSunLightIndex;
+
 	/** The light type (ELightComponentType) */
 	const uint8 LightType;
 
@@ -1538,6 +1611,9 @@ protected:
 	
 	/** Modulated shadow color. */
 	FLinearColor ModulatedShadowColor;
+
+	/** Control the amount of shadow occlusion. */
+	float ShadowAmount;
 
 	/** Samples per pixel for ray tracing */
 	uint32 SamplesPerPixel;
@@ -1993,7 +2069,6 @@ private:
 	 */
 	uint32 bHasOpaqueMaterial : 1;
 	uint32 bHasMaskedMaterial : 1;
-	uint32 bHasTranslucentMaterialWithVelocity : 1;
 	uint32 bRenderInMainPass : 1;
 
 public:
@@ -2002,7 +2077,6 @@ public:
 	bool GetHasOpaqueMaterial() const { return bHasOpaqueMaterial; }
 	bool GetHasMaskedMaterial() const { return bHasMaskedMaterial; }
 	bool GetHasOpaqueOrMaskedMaterial() const { return bHasOpaqueMaterial || bHasMaskedMaterial; }
-	bool GetHasTranslucentMaterialWithVelocity() const { return bHasTranslucentMaterialWithVelocity; }
 	bool GetRenderInMainPass() const { return bRenderInMainPass; }
 };
 
@@ -2777,12 +2851,24 @@ float ENGINE_API ComputeBoundsScreenSize(const FVector4& BoundsOrigin, const flo
 /**
  * Computes the screen radius squared of a given sphere bounds in the given view. This is used at
  * runtime instead of ComputeBoundsScreenSize to avoid a square root.
+ * It is a wrapper for the version below that does not take a FSceneView reference but parameters directly
  * @param Origin - Origin of the bounds in world space
  * @param SphereRadius - Radius of the sphere to use to calculate screen coverage
  * @param View - The view to calculate the display factor for
  * @return float - The screen size calculated
  */
 float ENGINE_API ComputeBoundsScreenRadiusSquared(const FVector4& Origin, const float SphereRadius, const FSceneView& View);
+
+/**
+ * Computes the screen radius squared of a given sphere bounds in the given view. This is used at
+ * runtime instead of ComputeBoundsScreenSize to avoid a square root.
+ * @param Origin - Origin of the bounds in world space
+ * @param SphereRadius - Radius of the sphere to use to calculate screen coverage
+ * @param ViewOrigin - The view origin involved in the calculation
+ * @param ProjMatrix - The projection matrix of the view involved in the calculation
+ * @return float - The screen size calculated
+ */
+float ENGINE_API ComputeBoundsScreenRadiusSquared(const FVector4& BoundsOrigin, const float SphereRadius, const FVector4& ViewOrigin, const FMatrix& ProjMatrix);
 
 /**
  * Computes the draw distance of a given sphere bounds in the given view with the specified screen size.
@@ -2909,6 +2995,7 @@ struct FReadOnlyCVARCache
 	bool bEnableAtmosphericFog;
 	bool bEnableLowQualityLightmaps;
 	bool bAllowStaticLighting;
+	bool bSupportSkyAtmosphere;
 
 	// Mobile specific
 	bool bMobileAllowMovableDirectionalLights;

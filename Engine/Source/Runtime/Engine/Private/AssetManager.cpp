@@ -17,6 +17,7 @@
 #include "HAL/PlatformFilemanager.h"
 #include "IPlatformFilePak.h"
 #include "Stats/StatsMisc.h"
+#include "Internationalization/PackageLocalizationManager.h"
 
 #if WITH_EDITOR
 #include "Editor.h"
@@ -407,9 +408,9 @@ int32 UAssetManager::ScanPathsForPrimaryAssets(FPrimaryAssetType PrimaryAssetTyp
 		int32 DotIndex = INDEX_NONE;
 		if (Path.FindChar('.', DotIndex))
 		{
-			FString PackageName = FPackageName::ObjectPathToPackageName(Path);
+			FString PackageName = Path.Mid(0, DotIndex); //avoid re-searching for index inside FPackageName::ObjectPathToPackageName
 
-			PackageNames.AddUnique(PackageName);
+			PackageNames.AddUnique(MoveTemp(PackageName));
 		}
 		else
 		{
@@ -524,14 +525,15 @@ int32 UAssetManager::ScanPathsForPrimaryAssets(FPrimaryAssetType PrimaryAssetTyp
 			else
 			{
 				// Warn that 'Foo' conflicts with 'Bar', but only once per conflict
-				static TSet<FString> IssuedWarnings;
+				static TSet<TPair<FPrimaryAssetType, FPrimaryAssetType>> IssuedWarnings;
 
-				FString ConflictMsg = FString::Printf(TEXT("Ignoring PrimaryAssetType %s - Conflicts with %s"), *PrimaryAssetType.ToString(), *PrimaryAssetId.PrimaryAssetType.ToString());
-
-				if (!IssuedWarnings.Contains(ConflictMsg))
+				TTuple<FPrimaryAssetType, FPrimaryAssetType> ConflictPair(PrimaryAssetType, PrimaryAssetId.PrimaryAssetType);
+				if (!IssuedWarnings.Contains(ConflictPair))
 				{
+					FString ConflictMsg = FString::Printf(TEXT("Ignoring PrimaryAssetType %s - Conflicts with %s"), *PrimaryAssetType.ToString(), *PrimaryAssetId.PrimaryAssetType.ToString());
+
 					UE_LOG(LogAssetManager, Display, TEXT("%s"), *ConflictMsg);
-					IssuedWarnings.Add(ConflictMsg);
+					IssuedWarnings.Add(ConflictPair);
 				}
 			}
 			continue;
@@ -1937,6 +1939,7 @@ bool UAssetManager::OnAssetRegistryAvailableAfterInitialization(FName InName, FA
 		if (bLoaded)
 		{
 			LocalAssetRegistry.AppendState(OutNewState);
+			FPackageLocalizationManager::Get().ConditionalUpdateCache();
 
 			TArray<FAssetData> NewAssetData;
 			bool bRebuildReferenceList = false;
@@ -2463,6 +2466,55 @@ void UAssetManager::DumpLoadedAssetState()
 	}
 }
 
+static FAutoConsoleCommand CVarDumpBundlesForAsset(
+	TEXT("AssetManager.DumpBundlesForAsset"),
+	TEXT("Shows a list of all bundles for the specified primary asset by primary asset id (i.e. Map:Entry)"),
+	FConsoleCommandWithArgsDelegate::CreateStatic(UAssetManager::DumpBundlesForAsset),
+	ECVF_Cheat);
+
+void UAssetManager::DumpBundlesForAsset(const TArray<FString>& Args)
+{
+	if (Args.Num() < 1)
+	{
+		UE_LOG(LogAssetManager, Warning, TEXT("Too few arguments for DumpBundlesForAsset. Include the primary asset id (i.e. Map:Entry)"));
+		return;
+	}
+
+	FString PrimaryAssetIdString = Args[0];
+	if (!PrimaryAssetIdString.Contains(TEXT(":")))
+	{
+		UE_LOG(LogAssetManager, Warning, TEXT("Incorrect argument for DumpBundlesForAsset. Arg should be the primary asset id (i.e. Map:Entry)"));
+		return;
+	}
+
+	if (!UAssetManager::IsValid())
+	{
+		UE_LOG(LogAssetManager, Warning, TEXT("DumpBundlesForAsset Failed. Invalid asset manager."));
+		return;
+	}
+
+	UAssetManager& Manager = Get();
+
+	FPrimaryAssetId PrimaryAssetId(PrimaryAssetIdString);
+	const TMap<FName, FAssetBundleEntry>* FoundMap = Manager.CachedAssetBundles.Find(PrimaryAssetId);
+	if (!FoundMap)
+	{
+		UE_LOG(LogAssetManager, Display, TEXT("Could not find bundles for primary asset %s."), *PrimaryAssetIdString);
+		return;
+	}
+
+	UE_LOG(LogAssetManager, Display, TEXT("Dumping bundles for primary asset %s..."), *PrimaryAssetIdString);
+	for (auto MapIt = FoundMap->CreateConstIterator(); MapIt; ++MapIt)
+	{
+		const FAssetBundleEntry& Entry = MapIt.Value();
+		UE_LOG(LogAssetManager, Display, TEXT("  Bundle: %s (%d assets)"), *Entry.BundleName.ToString(), Entry.BundleAssets.Num());
+		for (const FSoftObjectPath& Path : Entry.BundleAssets)
+		{
+			UE_LOG(LogAssetManager, Display, TEXT("    %s"), *Path.ToString());
+		}
+	}
+}
+
 static FAutoConsoleCommand CVarDumpAssetRegistryInfo(
 	TEXT("AssetManager.DumpAssetRegistryInfo"),
 	TEXT("Dumps extended info about asset registry to log"),
@@ -2579,6 +2631,8 @@ void UAssetManager::ScanPrimaryAssetTypesFromConfig()
 		{
 			continue;
 		}
+
+		UE_CLOG(AssetTypeMap.Find(TypeInfo.PrimaryAssetType), LogAssetManager, Error, TEXT("Found multiple \"%s\" Primary Asset Type entries in \"Primary Asset Types To Scan\" config. Only a single entry per type is supported."), *TypeInfo.PrimaryAssetType.ToString());
 
 		ScanPathsForPrimaryAssets(TypeInfo.PrimaryAssetType, TypeInfo.AssetScanPaths, TypeInfo.AssetBaseClassLoaded, TypeInfo.bHasBlueprintClasses, TypeInfo.bIsEditorOnly, false);
 
@@ -2747,7 +2801,7 @@ bool UAssetManager::IsPathExcludedFromScan(const FString& Path) const
 {
 	const UAssetManagerSettings& Settings = GetSettings();
 
-	for (const FDirectoryPath& ExcludedPath : GetSettings().DirectoriesToExclude)
+	for (const FDirectoryPath& ExcludedPath : Settings.DirectoriesToExclude)
 	{
 		if (Path.Contains(ExcludedPath.Path))
 		{
@@ -3032,7 +3086,10 @@ void UAssetManager::UpdateManagementDatabase(bool bForceRefresh)
 
 
 	TMultiMap<FAssetIdentifier, FAssetIdentifier> PrimaryAssetIdManagementMap;
-	TArray<int32> ChunkList, ExistingChunkList, OverrideChunkList;
+	TArray<int32> ChunkList;
+	TArray<int32> ExistingChunkList;
+
+	CachedChunkMap.Empty(); // Remove previous entries before we start adding to it
 
 	// Update management parent list, which is PrimaryAssetId -> PrimaryAssetId
 	for (const TPair<FName, TSharedRef<FPrimaryAssetTypeData>>& TypePair : AssetTypeMap)
@@ -3095,6 +3152,7 @@ void UAssetManager::UpdateManagementDatabase(bool bForceRefresh)
 	{
 		// Update the editor preview chunk package list for all chunks, but only if we actually care about chunks
 		// bGenerateChunks is settable per platform, but should be enabled on the default platform for preview to work
+		TArray<int32> OverrideChunkList;
 		for (FName PackageName : PackagesToUpdateChunksFor)
 		{
 			ChunkList.Reset();
@@ -3507,9 +3565,14 @@ void UAssetManager::OnInMemoryAssetDeleted(UObject *Object)
 void UAssetManager::OnObjectPreSave(UObject* Object)
 {
 	// If this is in the asset manager dictionary, make sure it actually has a primary asset id that matches
-	FPrimaryAssetId FoundPrimaryAssetId = GetPrimaryAssetIdForPath(FSoftObjectPath(Object));
+	const bool bIsAssetOrClass = Object->IsAsset() || Object->IsA(UClass::StaticClass()); 
+	if (!bIsAssetOrClass)
+	{
+		return;
+	}
 
-	if ((Object->IsAsset() || Object->IsA(UClass::StaticClass())) && FoundPrimaryAssetId.IsValid())
+	FPrimaryAssetId FoundPrimaryAssetId = GetPrimaryAssetIdForPath(*Object->GetPathName());
+	if (FoundPrimaryAssetId.IsValid())
 	{
 		TSharedRef<FPrimaryAssetTypeData>* FoundType = AssetTypeMap.Find(FoundPrimaryAssetId.PrimaryAssetType);
 		FPrimaryAssetId ObjectPrimaryAssetId = Object->GetPrimaryAssetId();
@@ -3771,7 +3834,7 @@ static FAutoConsoleCommandWithWorldAndArgs CVarLoadPrimaryAssetsWithType(
 // Cheat command to unload all assets of a given type
 static FAutoConsoleCommandWithWorldAndArgs CVarUnloadPrimaryAssetsWithType(
 	TEXT("AssetManager.UnloadPrimaryAssetsWithType"),
-	TEXT("Loads all assets of a given type"),
+	TEXT("Unloads all assets of a given type"),
 	FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(
 		[](const TArray<FString>& Params, UWorld* World)
 {
@@ -3782,13 +3845,13 @@ static FAutoConsoleCommandWithWorldAndArgs CVarUnloadPrimaryAssetsWithType(
 
 	for (const FString& Param : Params)
 	{
-		const FPrimaryAssetType TypeToLoad(*Param);
+		const FPrimaryAssetType TypeToUnload(*Param);
 
 		FPrimaryAssetTypeInfo Info;
-		if (UAssetManager::Get().GetPrimaryAssetTypeInfo(TypeToLoad, /*out*/ Info))
+		if (UAssetManager::Get().GetPrimaryAssetTypeInfo(TypeToUnload, /*out*/ Info))
 		{
-			UE_LOG(LogAssetManager, Log, TEXT("UnloadPrimaryAssetsWithType(%s)"), *Param);
-			UAssetManager::Get().LoadPrimaryAssetsWithType(TypeToLoad);
+			int32 NumUnloaded = UAssetManager::Get().UnloadPrimaryAssetsWithType(TypeToUnload);
+			UE_LOG(LogAssetManager, Log, TEXT("UnloadPrimaryAssetsWithType(%s): Unloaded %d assets"), *Param, NumUnloaded);
 		}
 		else
 		{

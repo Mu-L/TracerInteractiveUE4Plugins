@@ -186,10 +186,9 @@ private:
 			else if (Scope->Visibility == ESlowTaskVisibility::Default && !Scope->DefaultMessage.IsEmpty())
 			{
 				const auto TimeOpen = FPlatformTime::Seconds() - Scope->StartTime;
-				const auto WorkDone = ScopeStack->GetProgressFraction(Index);
 
-				// We only show visible scopes if they have been opened a while, and have a reasonable amount of work left
-				if (WorkDone * TimeOpen > VisibleScopeThreshold)
+				// We only show visible scopes if they have been opened a while
+				if (TimeOpen > VisibleScopeThreshold)
 				{
 					DynamicProgressIndices.Add(Index);
 				}
@@ -449,7 +448,7 @@ void FFeedbackContextEditor::StartSlowTask( const FText& Task, bool bShowCancelB
 
 			SlowTaskWindowRef->SetContent(
 				SNew(SSlowTaskWidget)
-				.ScopeStack(ScopeStack)
+				.ScopeStack(GetScopeStackSharedPtr())
 				.OnCancelClickedDelegate( OnCancelClicked )
 			);
 
@@ -527,7 +526,7 @@ void FFeedbackContextEditor::ProgressReported( const float TotalProgressInterp, 
 	else if (FPlatformSplash::IsShown())
 	{
 		// Always show the top-most message
-		for (auto& Scope : *ScopeStack)
+		for (auto& Scope : ScopeStack)
 		{
 			const FText ThisMessage = Scope->GetCurrentMessage();
 			if (!ThisMessage.IsEmpty())

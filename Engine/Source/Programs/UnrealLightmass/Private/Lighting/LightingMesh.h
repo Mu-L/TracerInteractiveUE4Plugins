@@ -14,6 +14,7 @@ namespace Lightmass
 class FLight;
 class FScene;
 class FMeshAreaLight;
+class FStaticMeshStaticLightingMesh;
 
 /** The vertex data used to build static lighting. */
 struct FStaticLightingVertex: public FStaticLightingVertexData
@@ -25,7 +26,7 @@ struct FStaticLightingVertex: public FStaticLightingVertexData
 		WorldPosition = InVertex.WorldPosition;
 		WorldTangentZ = InVertex.WorldTangentZ;
 
-		for (int32 i = 0; i < ARRAY_COUNT(TextureCoordinates); i++)
+		for (int32 i = 0; i < UE_ARRAY_COUNT(TextureCoordinates); i++)
 		{
 			TextureCoordinates[i] = InVertex.TextureCoordinates[i];
 		}
@@ -331,6 +332,10 @@ protected:
 	static TMap<FStaticLightingMesh*, int32> MeshToIndexMap;
 
 public:
+
+	virtual FStaticMeshStaticLightingMesh* GetInstanceableStaticMesh() { return nullptr; }
+
+	virtual const FStaticMeshStaticLightingMesh* GetInstanceableStaticMesh() const { return nullptr; }
 
 	/** Virtual destructor. */
 	virtual ~FStaticLightingMesh() {}

@@ -32,9 +32,14 @@ enum class EOodleEnableMode : uint8
 };
 
 
-#if HAS_OODLE_SDK
+#if HAS_OODLE_NET_SDK
 
-#if UE4_OODLE_VER >= 200
+#if UE4_OODLE_VER >= 270
+#include "oodle2net.h"
+	#if HAS_OODLE_DATA_SDK // allow data SDK usage if we have it
+	#include "oodle2.h"
+	#endif
+#elif UE4_OODLE_VER >= 200
 #include "oodle2.h"
 #else
 #include "oodle.h"
@@ -299,6 +304,11 @@ public:
 	void InitializeDictionaries();
 
 	/**
+	 * Lazy dictionary initialization, triggered by receiving a compressed packet from the remote connection
+	 */
+	void RemoteInitializeDictionaries();
+
+	/**
 	 * Initializes FOodleDictionary data, from the specified dictionary file
 	 *
 	 * @param FilePath			The dictionary file path
@@ -430,12 +440,9 @@ public:
 class FOodleComponentModuleInterface : public FPacketHandlerComponentModuleInterface
 {
 private:
-	/** Reference to the Oodle library handle */
-	void* OodleDllHandle;
 
 public:
 	FOodleComponentModuleInterface()
-		: OodleDllHandle(nullptr)
 	{
 	}
 

@@ -6,6 +6,7 @@
 #include "Stats/Stats.h"
 #include "Misc/CoreStats.h"
 #include "Misc/EventPool.h"
+#include "Misc/LazySingleton.h"
 #include "Templates/Atomic.h"
 #include "HAL/PlatformStackWalk.h"
 #include "ProfilingDebugging/MiscTrace.h"
@@ -248,10 +249,10 @@ void FThreadManager::GetAllThreadStackBackTraces(TArray<FThreadStackBackTrace>& 
 	StackTraces.Empty(NumThreads);
 	GetAllThreadStackBackTraces_ProcessSingle(CurThreadId, GGameThreadId, TEXT("GameThread"), StackTraces.AddDefaulted_GetRef());
 
-	for (TMap<uint32, FRunnableThread*>::TConstIterator It(Threads); It; ++It)
+	for (const TPair<uint32, FRunnableThread*>& Pair : Threads)
 	{
-		const uint32 Id = It->Key;
-		const FString& Name = It->Value->GetThreadName();
+		const uint32 Id = Pair.Key;
+		const FString& Name = Pair.Value->GetThreadName();
 		GetAllThreadStackBackTraces_ProcessSingle(CurThreadId, Id, *Name, StackTraces.AddDefaulted_GetRef());
 	}
 }
@@ -260,8 +261,11 @@ void FThreadManager::GetAllThreadStackBackTraces(TArray<FThreadStackBackTrace>& 
 FThreadManager& FThreadManager::Get()
 {
 	static FThreadManager Singleton;
+	FThreadManager::bIsInitialized = true;
 	return Singleton;
 }
+
+bool FThreadManager::bIsInitialized = false;
 
 
 /*-----------------------------------------------------------------------------
@@ -316,7 +320,7 @@ void FEvent::ResetForStats()
 }
 
 FScopedEvent::FScopedEvent()
-	: Event(FEventPool<EEventPoolTypes::AutoReset>::Get().GetEventFromPool())
+	: Event(TLazySingleton<FEventPool<EEventPoolTypes::AutoReset>>::Get().GetEventFromPool())
 { }
 
 bool FScopedEvent::IsReady()
@@ -325,7 +329,7 @@ bool FScopedEvent::IsReady()
 	{
 		if ( Event->Wait(1) )
 		{
-			FEventPool<EEventPoolTypes::AutoReset>::Get().ReturnToPool(Event);
+			TLazySingleton<FEventPool<EEventPoolTypes::AutoReset>>::Get().ReturnToPool(Event);
 			Event = nullptr;
 			return true;
 		}
@@ -339,7 +343,7 @@ FScopedEvent::~FScopedEvent()
 	if ( Event )
 	{
 		Event->Wait();
-		FEventPool<EEventPoolTypes::AutoReset>::Get().ReturnToPool(Event);
+		TLazySingleton<FEventPool<EEventPoolTypes::AutoReset>>::Get().ReturnToPool(Event);
 		Event = nullptr;
 	}
 }
@@ -369,7 +373,7 @@ FRunnableThread::FRunnableThread()
 
 FRunnableThread::~FRunnableThread()
 {
-	if (!GIsRequestingExit)
+	if (!IsEngineExitRequested())
 	{
 		FThreadManager::Get().RemoveThread(this);
 	}
@@ -491,11 +495,27 @@ protected:
 			SET_DWORD_STAT( STAT_ThreadPoolDummyCounter, 0 );
 			// We need to wait for shorter amount of time
 			bool bContinueWaiting = true;
+
+			// Unless we're collecting stats there doesn't appear to be any reason to wake
+			// up again until there's work to do (or it's time to die)
+
+#if STATS
+			if (FThreadStats::IsCollectingData())
+			{
 			while( bContinueWaiting )
 			{				
 				DECLARE_SCOPE_CYCLE_COUNTER( TEXT( "FQueuedThread::Run.WaitForWork" ), STAT_FQueuedThread_Run_WaitForWork, STATGROUP_ThreadPoolAsyncTasks );
+
 				// Wait for some work to do
+
 				bContinueWaiting = !DoWorkEvent->Wait( 10 );
+			}
+			}
+#endif
+
+			if (bContinueWaiting)
+			{
+				DoWorkEvent->Wait();
 			}
 
 			IQueuedWork* LocalQueuedWork = QueuedWork;

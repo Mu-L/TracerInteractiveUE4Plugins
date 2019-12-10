@@ -4,11 +4,15 @@
 #include "CoreMinimal.h"
 #include "PhysicsInterfaceDeclaresCore.h"
 
+#include "Chaos/CollisionFilterData.h"
+
+struct FBodyInstance;
 
 struct FActorCreationParams
 {
 	FActorCreationParams()
 		: Scene(nullptr)
+		, BodyInstance(nullptr)
 		, InitialTM(FTransform::Identity)
 		, bStatic(false)
 		, bQueryOnly(false)
@@ -17,24 +21,12 @@ struct FActorCreationParams
 	{}
 
 	FPhysScene* Scene;
+	FBodyInstance* BodyInstance;
 	FTransform InitialTM;
 	bool bStatic;
 	bool bQueryOnly;
 	bool bEnableGravity;
 	char* DebugName;
-};
-
-struct FCollisionFilterData
-{
-	uint32 Word0;
-	uint32 Word1;
-	uint32 Word2;
-	uint32 Word3;
-
-	FORCEINLINE FCollisionFilterData()
-	{
-		Word0 = Word1 = Word2 = Word3 = 0;
-	}
 };
 
 /**
@@ -57,6 +49,7 @@ enum class ECollisionShapeType : uint8
 	Convex,
 	Trimesh,
 	Heightfield,
+	Scaled,
 	None
 };
 

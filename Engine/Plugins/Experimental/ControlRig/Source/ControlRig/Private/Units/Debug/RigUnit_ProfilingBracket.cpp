@@ -4,16 +4,18 @@
 #include "Units/RigUnitContext.h"
 #include "KismetAnimationLibrary.h"
 
-void FRigUnit_StartProfilingTimer::Execute(const FRigUnitContext& Context)
+FRigUnit_StartProfilingTimer_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	if (Context.State == EControlRigState::Update)
 	{
 		UKismetAnimationLibrary::K2_StartProfilingTimer();
 	}
 }
 
-void FRigUnit_EndProfilingTimer::Execute(const FRigUnitContext& Context)
+FRigUnit_EndProfilingTimer_Execute()
 {
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
 	if (Context.State == EControlRigState::Init)
 	{
 		AccumulatedTime = 0.f;

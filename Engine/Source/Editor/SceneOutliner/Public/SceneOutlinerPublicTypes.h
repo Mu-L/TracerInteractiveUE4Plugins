@@ -10,6 +10,7 @@
 #include "SceneOutlinerFilters.h"
 
 class FExtender;
+struct FToolMenuContext;
 
 enum class ESceneOutlinerMode : uint8
 {
@@ -21,7 +22,15 @@ enum class ESceneOutlinerMode : uint8
 
 	/** Sets the outliner to operate as a component 'picker'. */
 	ComponentPicker,
+
+	/** 
+	 * Set the outliner to be a custom displayer of the scene hierarchy
+	 * This mode allow a user to manually change the default behavior of the scene outliner
+	 */
+	Custom,
 };
+
+DECLARE_DELEGATE_TwoParams(FSceneOutlinerModifyContextMenu, FName& /* MenuName */, FToolMenuContext& /* MenuContext */);
 
 namespace SceneOutliner
 {
@@ -97,19 +106,19 @@ namespace SceneOutliner
 		/** Mode to operate in */
 		ESceneOutlinerMode Mode;
 
-		/**	Invoked whenever the user attempts to delete an actor from within the Scene Outliner */
+		/**	Invoked whenever the user attempts to delete an actor from within a Scene Outliner in the actor browsing mode */
 		FCustomSceneOutlinerDeleteDelegate CustomDelete;
 
 		/** Override default context menu handling */
 		FOnContextMenuOpening ContextMenuOverride;
 
-		/** Extend default context menu handling */
-		TSharedPtr<FExtender> DefaultMenuExtender;
+		/** Modify context menu before display */
+		FSceneOutlinerModifyContextMenu ModifyContextMenu;
 
 		/** Map of column types available to the scene outliner, along with default ordering */
 		TMap<FName, FColumnInfo> ColumnMap;
 		
-		/** Whether the Scene Outliner should display parenta actors in a Tree */
+		/** Whether the Scene Outliner should display parent actors in a Tree */
 		bool bShowParentTree : 1;
 
 		/** True to only show folders in this outliner */
@@ -154,7 +163,14 @@ namespace SceneOutliner
 		/** Optional collection of filters to use when filtering in the Scene Outliner */
 		TSharedPtr<FOutlinerFilters> Filters;
 
-		/** Broadcasts whenever the Scene Outliners selection changes */
+		/**
+		 * (Old comment) : Broadcasts whenever the Scene Outliners selection changes
+		 *
+		 * This variable will be depecrated as this give the false intuition that it will broadcast when the created scene outliner selection has changed.
+		 * In truth this is only broadcasted by the scene outliners when they are in the actor browsing mode.
+		 * Also it's by any scene outliner, not necessary the one instanced by this initialization options.
+		 */
+		UE_DEPRECATED(4.24, "Use FSceneOutlinerDelegates::Get().SelectionChanged instead.")
 		FSimpleMulticastDelegate::FDelegate OnSelectionChanged;
 		
 		/** If not null, it will force the Scene Outliner to only display this world and it will remove the chose world from the UI */

@@ -7,14 +7,13 @@
 #include "Editor.h"
 #include "Engine/Selection.h"
 #include "IMeshEditorModeEditingContract.h"
-#include "MeshAttributes.h"
-#include "MeshDescription.h"
+#include "StaticMeshAttributes.h"
 #include "MeshEditor/MeshEditorMode.h"
 #include "PackageTools.h"
 #include "Settings/EditorExperimentalSettings.h"
 #include "ScopedTransaction.h"
 #include "Engine/StaticMeshActor.h"
-#include "Layers/ILayers.h"
+#include "Layers/LayersSubsystem.h"
 #include "IMeshBuilderModule.h"
 #include "Materials/Material.h"
 #include "AssetSelection.h"
@@ -48,7 +47,8 @@ static AActor* AddActor(ULevel* InLevel, UClass* Class)
 	}
 
 	// If this actor is part of any layers (set in its default properties), add them into the visible layers list.
-	GEditor->Layers->SetLayersVisibility(Actor->Layers, true);
+	ULayersSubsystem* Layers = GEditor->GetEditorSubsystem<ULayersSubsystem>();
+	Layers->SetLayersVisibility(Actor->Layers, true);
 
 	// Clean up.
 	Actor->MarkPackageDirty();
@@ -273,7 +273,7 @@ void USplitMeshCommand::Execute(IMeshEditorModeEditingContract& MeshEditorMode)
 		TSet<FPolygonGroupID> PolygonGroupSet;
 		for(const FPolygonID PolygonId : NewPolygonIds)
 		{
-			const TArray<FVertexInstanceID>& VertexInstanceIds = Mesh->GetMeshDescription()->GetPolygonPerimeterVertexInstances(PolygonId);
+			const TArray<FVertexInstanceID>& VertexInstanceIds = Mesh->GetMeshDescription()->GetPolygonVertexInstances(PolygonId);
 			// @todo (mlentine): Remove this when we don't need duplicate vertex instance ids.
 			TArray<FVertexInstanceID> NewVertexInstanceIds;
 			for(const FVertexInstanceID& VertexInstanceId : VertexInstanceIds)
@@ -297,7 +297,7 @@ void USplitMeshCommand::Execute(IMeshEditorModeEditingContract& MeshEditorMode)
 				CopyAllAttributesToDifferentElement(NewMeshDescription->VertexInstanceAttributes(), Mesh->GetMeshDescription()->VertexInstanceAttributes(), NewVertexInstanceID, VertexInstanceId);
 			}
 			TArray<FEdgeID> EdgeIds;
-			Mesh->GetMeshDescription()->GetPolygonEdges(PolygonId, EdgeIds);
+			Mesh->GetMeshDescription()->GetPolygonPerimeterEdges(PolygonId, EdgeIds);
 			for(const FEdgeID EdgeId : EdgeIds)
 			{
 				if(!EdgeSet.Contains(EdgeId))
@@ -321,7 +321,6 @@ void USplitMeshCommand::Execute(IMeshEditorModeEditingContract& MeshEditorMode)
 
 		FElementIDRemappings Remappings;
 		NewMeshDescription->Compact(Remappings);
-		NewMeshDescription->TriangulateMesh();
 		for(int32 PolygonIdIndex = 0; PolygonIdIndex <= GroupId.GetValue(); ++PolygonIdIndex)
 		{
 			NewStaticMesh->StaticMaterials.Add(UMaterial::GetDefaultMaterial(MD_Surface));

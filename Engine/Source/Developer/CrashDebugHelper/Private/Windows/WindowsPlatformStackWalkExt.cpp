@@ -20,6 +20,14 @@
 
 #pragma comment( lib, "dbgeng.lib" )
 
+// Use _NT_SYMBOL_PATH for non development builds. We don't want shipping crash reporter to try to 
+// access build servers for example.
+#if !UE_BUILD_SHIPPING
+	#define ALLOW_UNREAL_ACCESS_TO_NT_SYMBOL_PATH 1
+#else
+	#define ALLOW_UNREAL_ACCESS_TO_NT_SYMBOL_PATH 0
+#endif
+
 static IDebugClient5* Client = NULL;
 static IDebugControl4* Control = NULL;
 static IDebugSymbols3* Symbol = NULL;
@@ -33,8 +41,6 @@ FWindowsPlatformStackWalkExt::~FWindowsPlatformStackWalkExt()
 {
 	ShutdownStackWalking();
 }
-
-
 
 bool FWindowsPlatformStackWalkExt::InitStackWalking()
 {
@@ -228,6 +234,15 @@ void FWindowsPlatformStackWalkExt::SetSymbolPathsFromModules()
 			CombinedPath += TEXT( ";" );
 		}
 
+#if ALLOW_UNREAL_ACCESS_TO_NT_SYMBOL_PATH
+		FString SymbolPathEnvironmentVariable = FPlatformMisc::GetEnvironmentVariable(L"_NT_SYMBOL_PATH");
+		if (!SymbolPathEnvironmentVariable.IsEmpty())
+		{
+			CombinedPath += SymbolPathEnvironmentVariable;
+			CombinedPath += ";";
+		}
+#endif
+
 		// Set the symbol path
 		Symbol->SetImagePathWide( *CombinedPath );
 		Symbol->SetSymbolPathWide( *CombinedPath );
@@ -256,7 +271,7 @@ void FWindowsPlatformStackWalkExt::SetSymbolPathsFromModules()
 
 	TCHAR SymbolPath[16384] = { 0 };
 
-	Symbol->GetSymbolPathWide( SymbolPath, ARRAY_COUNT(SymbolPath), NULL );
+	Symbol->GetSymbolPathWide( SymbolPath, UE_ARRAY_COUNT(SymbolPath), NULL );
 	TArray<FString> SymbolPaths;
 	FString( SymbolPath ).ParseIntoArray(SymbolPaths, TEXT(";"), true );
 
@@ -266,7 +281,7 @@ void FWindowsPlatformStackWalkExt::SetSymbolPathsFromModules()
 		UE_LOG( LogCrashDebugHelper, Log, TEXT( "    %s" ), *It );
 	}
 
-	Symbol->GetImagePathWide( SymbolPath, ARRAY_COUNT( SymbolPath ), NULL );
+	Symbol->GetImagePathWide( SymbolPath, UE_ARRAY_COUNT( SymbolPath ), NULL );
 	TArray<FString> ImagePaths;
 	FString( SymbolPath ).ParseIntoArray( ImagePaths, TEXT( ";" ), true );
 	
@@ -415,7 +430,7 @@ void FWindowsPlatformStackWalkExt::GetExceptionInfo()
 	ULONG ProcessID = 0;
 	ULONG ThreadId = 0;
 	TCHAR Description[MAX_PATH] = { 0 };
-	Control->GetLastEventInformationWide( &ExceptionType, &ProcessID, &ThreadId, NULL, 0, NULL, Description, ARRAY_COUNT( Description ), NULL );
+	Control->GetLastEventInformationWide( &ExceptionType, &ProcessID, &ThreadId, NULL, 0, NULL, Description, UE_ARRAY_COUNT( Description ), NULL );
 
 	Exception.Code = ExceptionType;
 	Exception.ProcessId = ProcessID;

@@ -47,6 +47,16 @@ struct FPlatformOpenGLContext;
 #define GL_RGBA16F    0x881A
 #endif
 
+
+// for platform extensions: from OpenGLShaders.h
+extern "C" struct FOpenGLShaderDeviceCapabilities;
+
+// for platform extensions: from OpenGLResources.h
+typedef TArray<ANSICHAR> FAnsiCharArray;
+
+// for platform extensions: from OpenGLDrvPrivate.h
+extern "C" struct FOpenGLTextureFormat;
+
 // Base static class
 class FOpenGLBase
 {
@@ -76,6 +86,7 @@ public:
 
 	static void ProcessQueryGLInt();
 	static void ProcessExtensions(const FString& ExtensionsString);
+	static void SetupDefaultGLContextState(const FString& ExtensionsString) {};
 
 	static FORCEINLINE bool SupportsMapBuffer()							{ return true; }
 	static FORCEINLINE bool SupportsDepthTexture()						{ return true; }
@@ -303,7 +314,7 @@ public:
 	static FORCEINLINE const ANSICHAR* GetStringIndexed(GLenum Name, GLuint Index) UGL_REQUIRED(NULL)
 	static FORCEINLINE GLuint GetMajorVersion() UGL_REQUIRED(0)
 	static FORCEINLINE GLuint GetMinorVersion() UGL_REQUIRED(0)
-	static FORCEINLINE ERHIFeatureLevel::Type GetFeatureLevel() UGL_REQUIRED(ERHIFeatureLevel::SM4)
+	static FORCEINLINE ERHIFeatureLevel::Type GetFeatureLevel() UGL_REQUIRED(ERHIFeatureLevel::SM5)
 	static FORCEINLINE EShaderPlatform GetShaderPlatform() UGL_REQUIRED(SP_OPENGL_SM4)
 	static FORCEINLINE FString GetAdapterName() UGL_REQUIRED(TEXT(""))
 	static FORCEINLINE void BlendFuncSeparatei(GLuint Buf, GLenum SrcRGB, GLenum DstRGB, GLenum SrcAlpha, GLenum DstAlpha) UGL_REQUIRED_VOID
@@ -357,7 +368,8 @@ public:
 	static FORCEINLINE void GetProgramBinary(GLuint Program, GLsizei BufSize, GLsizei *Length, GLenum *BinaryFormat, void *Binary) UGL_OPTIONAL_VOID
 	static FORCEINLINE void ProgramBinary(GLuint Program, GLenum BinaryFormat, const void *Binary, GLsizei Length) UGL_OPTIONAL_VOID
 
-
+	static FORCEINLINE void FrameBufferFetchBarrier() UGL_OPTIONAL_VOID
+	
 	static FPlatformOpenGLDevice*	CreateDevice() UGL_REQUIRED(NULL)
 	static FPlatformOpenGLContext*	CreateContext( FPlatformOpenGLDevice* Device, void* WindowHandle ) UGL_REQUIRED(NULL)
 
@@ -379,6 +391,26 @@ public:
 	static FORCEINLINE GLuint CreateShader(GLenum Type)								{ return glCreateShader(Type); }
 	static FORCEINLINE GLuint CreateProgram()										{ return glCreateProgram(); }
 	static FORCEINLINE bool TimerQueryDisjoint()									{ return false; }
+
+	// Calling glBufferData() to discard-reupload is slower than calling glBufferSubData() on some platforms,
+	// because changing glBufferData() with a different size (from before) may incur extra validation.
+	// To use glBufferData() discard trick: set to this to true - otherwise, glBufferSubData() will used.
+	static FORCEINLINE bool DiscardFrameBufferToResize()							{ return true; }
+
+	static FORCEINLINE EPixelFormat PreferredPixelFormatHint(EPixelFormat PreferredPixelFormat)
+	{
+		// Use a default pixel format if none was specified	
+		if (PreferredPixelFormat == EPixelFormat::PF_Unknown)
+		{
+			PreferredPixelFormat = EPixelFormat::PF_B8G8R8A8;
+		}
+		return PreferredPixelFormat;
+	}
+
+	// for platform extensions
+	static void PE_GetCurrentOpenGLShaderDeviceCapabilities(FOpenGLShaderDeviceCapabilities& Capabilities);
+	static bool PE_GLSLToDeviceCompatibleGLSL(FAnsiCharArray& GlslCodeOriginal, const FString& ShaderName, GLenum TypeEnum, const FOpenGLShaderDeviceCapabilities& Capabilities, FAnsiCharArray& GlslCode) UGL_OPTIONAL(false)
+	static void PE_SetupTextureFormat(void(*SetupTextureFormat)(EPixelFormat, const FOpenGLTextureFormat&)) UGL_OPTIONAL_VOID
 
 protected:
 	static GLint MaxTextureImageUnits;
@@ -653,13 +685,6 @@ protected:
 #define GL_DISPATCH_INDIRECT_BUFFER       0x90EE
 #define GL_DISPATCH_INDIRECT_BUFFER_BINDING 0x90EF
 #define GL_COMPUTE_SHADER_BIT             0x00000020
-#endif
-
-#if PLATFORM_HTML5
-// WebGL has this in core spec: http://www.khronos.org/registry/webgl/specs/latest/1.0/#6.6
-#ifndef GL_DEPTH_STENCIL_ATTACHMENT
-#define GL_DEPTH_STENCIL_ATTACHMENT					0x821A
-#endif
 #endif
 
 #ifndef GL_GPU_DISJOINT_EXT

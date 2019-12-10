@@ -317,6 +317,78 @@ public:
 			LOCTEXT("TakesMenu", "Takes"),
 			LOCTEXT("TakesMenuTooltip", "Sub section takes"),
 			FNewMenuDelegate::CreateLambda([=](FMenuBuilder& InMenuBuilder){ AddTakesMenu(InMenuBuilder); }));
+
+		MenuBuilder.AddMenuEntry(
+			LOCTEXT("PlayableDirectly_Label", "Playable Directly"),
+			LOCTEXT("PlayableDirectly_Tip", "When enabled, this sequence will also support being played directly outside of the master sequence. Disable this to save some memory on complex hierarchies of sequences."),
+			FSlateIcon(),
+			FUIAction(
+				FExecuteAction::CreateRaw(this, &FSubSection::TogglePlayableDirectly),
+				FCanExecuteAction::CreateLambda([]{ return true; }),
+				FGetActionCheckState::CreateRaw(this, &FSubSection::IsPlayableDirectly)
+			),
+			NAME_None,
+			EUserInterfaceActionType::ToggleButton
+		);
+	}
+
+	void TogglePlayableDirectly()
+	{
+		TSharedPtr<ISequencer> SequencerPtr = Sequencer.Pin();
+		if (SequencerPtr)
+		{
+			FScopedTransaction Transaction(LOCTEXT("SetPlayableDirectly_Transaction", "Set Playable Directly"));
+
+			TArray<UMovieSceneSection*> SelectedSections;
+			SequencerPtr->GetSelectedSections(SelectedSections);
+
+			const bool bNewPlayableDirectly = IsPlayableDirectly() != ECheckBoxState::Checked;
+
+			for (UMovieSceneSection* Section : SelectedSections)
+			{
+				if (UMovieSceneSubSection* SubSection = Cast<UMovieSceneSubSection>(Section))
+				{
+					UMovieSceneSequence* Sequence = SubSection->GetSequence();
+					if (Sequence->IsPlayableDirectly() != bNewPlayableDirectly)
+					{
+						Sequence->SetPlayableDirectly(bNewPlayableDirectly);
+					}
+				}
+			}
+		}
+	}
+
+	ECheckBoxState IsPlayableDirectly() const
+	{
+		ECheckBoxState CheckboxState = ECheckBoxState::Undetermined;
+
+		TSharedPtr<ISequencer> SequencerPtr = Sequencer.Pin();
+		if (SequencerPtr)
+		{
+			TArray<UMovieSceneSection*> SelectedSections;
+			SequencerPtr->GetSelectedSections(SelectedSections);
+
+			for (UMovieSceneSection* Section : SelectedSections)
+			{
+				if (UMovieSceneSubSection* SubSection = Cast<UMovieSceneSubSection>(Section))
+				{
+					UMovieSceneSequence* Sequence = SubSection->GetSequence();
+					if (Sequence)
+					{
+						if (CheckboxState == ECheckBoxState::Undetermined)
+						{
+							CheckboxState = Sequence->IsPlayableDirectly() ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+						}
+						else if (CheckboxState == ECheckBoxState::Checked != Sequence->IsPlayableDirectly())
+						{
+							return ECheckBoxState::Undetermined;
+						}
+					}
+				}
+			}
+		}
+
+		return CheckboxState;
 	}
 
 	void BeginResizeSection()
@@ -390,18 +462,37 @@ private:
 
 	void AddTakesMenu(FMenuBuilder& MenuBuilder)
 	{
-		TArray<uint32> TakeNumbers;
+		TArray<FAssetData> AssetData;
 		uint32 CurrentTakeNumber = INDEX_NONE;
-		MovieSceneToolHelpers::GatherTakes(&SectionObject, TakeNumbers, CurrentTakeNumber);
+		MovieSceneToolHelpers::GatherTakes(&SectionObject, AssetData, CurrentTakeNumber);
 
-		for (auto TakeNumber : TakeNumbers)
+		AssetData.Sort([this](const FAssetData &A, const FAssetData &B) {
+			uint32 TakeNumberA = INDEX_NONE;
+			uint32 TakeNumberB = INDEX_NONE;
+			if (MovieSceneToolHelpers::GetTakeNumber(&SectionObject, A, TakeNumberA) && MovieSceneToolHelpers::GetTakeNumber(&SectionObject, B, TakeNumberB))
+			{
+				return TakeNumberA < TakeNumberB;
+			}
+			return true;
+		});
+
+		for (auto ThisAssetData : AssetData)
 		{
-			MenuBuilder.AddMenuEntry(
-				FText::Format(LOCTEXT("TakeNumber", "Take {0}"), FText::AsNumber(TakeNumber)),
-				FText::Format(LOCTEXT("TakeNumberTooltip", "Switch to take {0}"), FText::AsNumber(TakeNumber)),
-				TakeNumber == CurrentTakeNumber ? FSlateIcon(FEditorStyle::GetStyleSetName(), "Sequencer.Star") : FSlateIcon(FEditorStyle::GetStyleSetName(), "Sequencer.Empty"),
-				FUIAction(FExecuteAction::CreateSP(SubTrackEditor.Pin().ToSharedRef(), &FSubTrackEditor::SwitchTake, TakeNumber))
-			);
+			uint32 TakeNumber = INDEX_NONE;
+			if (MovieSceneToolHelpers::GetTakeNumber(&SectionObject, ThisAssetData, TakeNumber))
+			{
+				UObject* TakeObject = ThisAssetData.GetAsset();
+
+				if (TakeObject)
+				{
+					MenuBuilder.AddMenuEntry(
+						FText::Format(LOCTEXT("TakeNumber", "Take {0}"), FText::AsNumber(TakeNumber)),
+						FText::Format(LOCTEXT("TakeNumberTooltip", "Switch to {0}"), FText::FromString(TakeObject->GetPathName())),
+						TakeNumber == CurrentTakeNumber ? FSlateIcon(FEditorStyle::GetStyleSetName(), "Sequencer.Star") : FSlateIcon(FEditorStyle::GetStyleSetName(), "Sequencer.Empty"),
+						FUIAction(FExecuteAction::CreateSP(SubTrackEditor.Pin().ToSharedRef(), &FSubTrackEditor::SwitchTake, TakeObject))
+					);
+				}
+			}
 		}
 	}
 
@@ -885,7 +976,7 @@ FKeyPropertyResult FSubTrackEditor::HandleRecordNewSequenceInternal(FFrameNumber
 	return KeyPropertyResult;
 }
 
-void FSubTrackEditor::SwitchTake(uint32 TakeNumber)
+void FSubTrackEditor::SwitchTake(UObject* TakeObject)
 {
 	bool bSwitchedTake = false;
 
@@ -902,8 +993,6 @@ void FSubTrackEditor::SwitchTake(uint32 TakeNumber)
 		}
 
 		UMovieSceneSubSection* Section = Cast<UMovieSceneSubSection>(Sections[SectionIndex]);
-
-		UObject* TakeObject = MovieSceneToolHelpers::GetTake(Section, TakeNumber);
 
 		if (TakeObject && TakeObject->IsA(UMovieSceneSequence::StaticClass()))
 		{

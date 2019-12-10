@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "EdMode.h"
 #include "InteractiveToolsContext.h"
+#include "Delegates/Delegate.h"
 #include "EdModeInteractiveToolsContext.generated.h"
 
 /**
@@ -31,10 +32,12 @@ public:
 	// default behavior is to accept active tool
 	virtual void TerminateActiveToolsOnSaveWorld();
 
+	// default behavior is to accept active tool
+	virtual void TerminateActiveToolsOnWorldTearDown();
+
 	IToolsContextQueriesAPI* GetQueriesAPI() const { return QueriesAPI; }
 	IToolsContextTransactionsAPI* GetTransactionAPI() const { return TransactionAPI; }
 	IToolsContextAssetAPI* GetAssetAPI() const { return AssetAPI; }
-	IComponentSourceFactory* GetComponentSourceFactory() const { return SourceFactory; }
 
 	virtual void PostInvalidation();
 
@@ -43,6 +46,8 @@ public:
 
 	virtual void Tick(FEditorViewportClient* ViewportClient, float DeltaTime);
 	virtual void Render(const FSceneView* View, FViewport* Viewport, FPrimitiveDrawInterface* PDI);
+
+	virtual bool ProcessEditDelete();
 
 	virtual bool InputKey(FEditorViewportClient* ViewportClient, FViewport* Viewport, FKey Key, EInputEvent Event);
 
@@ -68,11 +73,23 @@ public:
 	virtual void EndTool(EToolShutdownType ShutdownType);
 
 
+public:
+	// forwards message to OnToolNotificationMessage delegate
+	virtual void PostToolNotificationMessage(const FText& Message);
+	virtual void PostToolWarningMessage(const FText& Message);
+
+	DECLARE_MULTICAST_DELEGATE_OneParam(FEdModeToolsContextToolNotification, const FText&);
+	FEdModeToolsContextToolNotification OnToolNotificationMessage;
+	FEdModeToolsContextToolNotification OnToolWarningMessage;
+
+
 protected:
 	// we hide these 
 	virtual void Initialize(IToolsContextQueriesAPI* QueriesAPI, IToolsContextTransactionsAPI* TransactionsAPI) override;
 	virtual void Shutdown() override;
 
+	virtual void DeactivateActiveTool(EToolSide WhichSide, EToolShutdownType ShutdownType);
+	virtual void DeactivateAllActiveTools();
 
 public:
 	UPROPERTY()
@@ -81,19 +98,34 @@ public:
 protected:
 	FEdMode* EditorMode;
 
+	// called when PIE is about to start, shuts down active tools
 	FDelegateHandle BeginPIEDelegateHandle;
+	// called before a Save starts. This currently shuts down active tools.
 	FDelegateHandle PreSaveWorldDelegateHandle;
+	// called when a map is changed
+	FDelegateHandle WorldTearDownDelegateHandle;
 
+	// EdMode implementation of InteractiveToolFramework APIs - see ToolContextInterfaces.h
 	IToolsContextQueriesAPI* QueriesAPI;
 	IToolsContextTransactionsAPI* TransactionAPI;
 	IToolsContextAssetAPI* AssetAPI;
-	IComponentSourceFactory* SourceFactory;
 
+	// if true, we invalidate the ViewportClient on next tick
 	bool bInvalidationPending;
 
 	/** Input event instance used to keep track of various button states, etc, that we cannot directly query on-demand */
 	FInputDeviceState CurrentMouseState;
 
+	// Utility function to convert viewport x/y from mouse events (and others?) into scene ray.
+	// Copy-pasted from other Editor code, seems kind of expensive?
 	static FRay GetRayFromMousePos(FEditorViewportClient* ViewportClient, FViewport* Viewport, int MouseX, int MouseY);
+
+
+	// editor UI state that we set before starting tool and when exiting tool
+	// Currently disabling anti-aliasing during active Tools because it causes PDI flickering
+	bool bHaveSavedEditorState = false;
+	bool bSavedAntiAliasingState = false;
+	void SaveEditorStateAndSetForTool();
+	void RestoreEditorState();
 
 };

@@ -18,13 +18,13 @@ protected:
 	UPROPERTY(Transient)
 	class ALandscape* OwningLandscape;
 
-	UPROPERTY(Category = "Settings", EditAnywhere)
+	UPROPERTY(Category = "Settings", EditAnywhere, BlueprintReadWrite)
 	bool AffectHeightmap;
 
-	UPROPERTY(Category = "Settings", EditAnywhere)
+	UPROPERTY(Category = "Settings", EditAnywhere, BlueprintReadWrite)
 	bool AffectWeightmap;
 
-	UPROPERTY(Category = "Settings", EditAnywhere)
+	UPROPERTY(Category = "Settings", EditAnywhere, BlueprintReadWrite)
 	TArray<FName> AffectedWeightmapLayers;
 
 	UPROPERTY(Transient)
@@ -43,7 +43,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Landscape")
 	void RequestLandscapeUpdate();
 
+	UFUNCTION(BlueprintImplementableEvent)
+	void GetBlueprintRenderDependencies(TArray<UTexture2D*>& OutStreamableAssets);
+
 #if WITH_EDITOR
+	virtual void GetRenderDependencies(TSet<UTexture2D*>& OutStreamableAssets);
+
 	virtual void SetOwningLandscape(class ALandscape* InOwningLandscape);
 	class ALandscape* GetOwningLandscape() const;
 
@@ -51,7 +56,8 @@ public:
 	bool IsAffectingWeightmap() const { return AffectWeightmap; }
 	bool IsAffectingWeightmapLayer(const FName& InLayerName) const;
 	bool IsVisible() const { return bIsVisible; }
-	
+	bool IsLayerUpdatePending() const;
+
 	void SetIsVisible(bool bInIsVisible);
 	void SetAffectsHeightmap(bool bInAffectsHeightmap);
 	void SetAffectsWeightmap(bool bInAffectsWeightmap);

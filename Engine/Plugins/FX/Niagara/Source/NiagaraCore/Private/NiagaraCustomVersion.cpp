@@ -8,4 +8,4 @@ const FGuid FNiagaraCustomVersion::GUID(0xFCF57AFA, 0x50764283, 0xB9A9E658, 0xFF
 // Register the custom version with core
 FCustomVersionRegistration GRegisterNiagaraCustomVersion(FNiagaraCustomVersion::GUID, FNiagaraCustomVersion::LatestVersion, TEXT("NiagaraVer"));
 
-const FGuid FNiagaraCustomVersion::LatestScriptCompileVersion(0x24B8D6D9, 0xA7E54715, 0x81664661, 0xB039200E);
+const FGuid FNiagaraCustomVersion::LatestScriptCompileVersion(0x908C3A78, 0x6E39F14C, 0x8E1C1A93, 0xDD667695);

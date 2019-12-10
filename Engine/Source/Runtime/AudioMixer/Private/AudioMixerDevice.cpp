@@ -5,18 +5,19 @@
 #include "AudioMixerSubmix.h"
 #include "AudioMixerSourceVoice.h"
 #include "AudioPluginUtilities.h"
-#include "UObject/UObjectHash.h"
 #include "AudioMixerEffectsManager.h"
+#include "Sound/AudioSettings.h"
+#include "Sound/SoundSubmixSend.h"
 #include "SubmixEffects/AudioMixerSubmixEffectReverb.h"
 #include "SubmixEffects/AudioMixerSubmixEffectReverbFast.h"
 #include "SubmixEffects/AudioMixerSubmixEffectEQ.h"
 #include "SubmixEffects/AudioMixerSubmixEffectDynamicsProcessor.h"
 #include "DSP/Noise.h"
 #include "DSP/SinOsc.h"
+#include "UObject/UObjectHash.h"
 #include "UObject/UObjectIterator.h"
 #include "Runtime/HeadMountedDisplay/Public/IHeadMountedDisplayModule.h"
 #include "Misc/App.h"
-#include "Sound/AudioSettings.h"
 #include "ProfilingDebugging/CsvProfiler.h"
 #include "Async/Async.h"
 
@@ -33,7 +34,7 @@ FAutoConsoleVariableRef CVarDisableSubmixEQ(
 	ECVF_Default);
 
 // Link to "Audio" profiling category
-CSV_DECLARE_CATEGORY_MODULE_EXTERN(AUDIOMIXER_API, Audio);
+CSV_DECLARE_CATEGORY_MODULE_EXTERN(AUDIOMIXERCORE_API, Audio);
 
 namespace Audio
 {
@@ -163,7 +164,7 @@ namespace Audio
 			OpenStreamParams.OutputDeviceIndex = AUDIO_MIXER_DEFAULT_DEVICE_INDEX; // TODO: Support overriding which audio device user wants to open, not necessarily default.
 			OpenStreamParams.SampleRate = SampleRate;
 			OpenStreamParams.AudioMixer = this;
-			OpenStreamParams.MaxChannels = GetMaxChannels();
+			OpenStreamParams.MaxSources = GetMaxSources();
 
 			FString DefaultDeviceName = AudioMixerPlatform->GetDefaultDeviceName();
 
@@ -204,11 +205,10 @@ namespace Audio
 				// Initialize some data that depends on speaker configuration, etc.
 				InitializeChannelAzimuthMap(PlatformInfo.NumChannels);
 
-				// We initialize the number of sources to be 2 times the max channels
-				// This extra source count is used for "stopping sources", which are sources
-				// which are fading out (very quickly) to avoid discontinuities when stopping sounds
 				FSourceManagerInitParams SourceManagerInitParams;
-				SourceManagerInitParams.NumSources = GetMaxChannels() + NumStoppingVoices;
+				SourceManagerInitParams.NumSources = GetMaxSources();
+
+				// TODO: Migrate this to project settings properly
 				SourceManagerInitParams.NumSourceWorkers = 4;
 
 				SourceManager.Init(SourceManagerInitParams);
@@ -229,7 +229,7 @@ namespace Audio
 				}
 
 				// Create a new ambisonics mixer.
-				IAudioSpatializationFactory* SpatializationPluginFactory = AudioPluginUtilities::GetDesiredSpatializationPlugin(AudioPluginUtilities::CurrentPlatform);
+				IAudioSpatializationFactory* SpatializationPluginFactory = AudioPluginUtilities::GetDesiredSpatializationPlugin();
 				if (SpatializationPluginFactory != nullptr)
 				{
 					AmbisonicsMixer = SpatializationPluginFactory->CreateNewAmbisonicsMixer(this);
@@ -842,7 +842,7 @@ namespace Audio
 		UE_LOG(LogAudioMixer, Display, TEXT("Audio Mixer Platform Settings:"));
 		UE_LOG(LogAudioMixer, Display, TEXT("	Sample Rate:						  %d"), Settings.SampleRate);
 		UE_LOG(LogAudioMixer, Display, TEXT("	Callback Buffer Frame Size Requested: %d"), Settings.CallbackBufferFrameSize);
-		UE_LOG(LogAudioMixer, Display, TEXT("	Callback Buffer Frame Size To Use:	  %d"), AudioMixerPlatform->GetNumFrames(PlatformSettings.CallbackBufferFrameSize));
+		UE_LOG(LogAudioMixer, Display, TEXT("	Callback Buffer Frame Size To Use:	  %d"), AudioMixerPlatform->GetNumFrames(Settings.CallbackBufferFrameSize));
 		UE_LOG(LogAudioMixer, Display, TEXT("	Number of buffers to queue:			  %d"), Settings.NumBuffers);
 		UE_LOG(LogAudioMixer, Display, TEXT("	Max Channels (voices):				  %d"), Settings.MaxChannels);
 		UE_LOG(LogAudioMixer, Display, TEXT("	Number of Async Source Workers:		  %d"), Settings.NumSourceWorkers);
@@ -897,6 +897,11 @@ namespace Audio
 		{
 			MasterSubmixInstances[EMasterSubmixType::Master]->ClearSoundEffectSubmixes();
 		});
+	}
+
+	void FMixerDevice::UpdateModulationControls(const uint32 InSourceId, const FSoundModulationControls& InControls)
+	{
+		SourceManager.UpdateModulationControls(InSourceId, InControls);
 	}
 
 	void FMixerDevice::UpdateSourceEffectChain(const uint32 SourceEffectChainId, const TArray<FSourceEffectChainEntry>& SourceEffectChain, const bool bPlayEffectChainTails)

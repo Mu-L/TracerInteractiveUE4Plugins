@@ -4,13 +4,8 @@
 
 #include "BoneControllers/AnimNode_SkeletalControlBase.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Physics/ImmediatePhysics/ImmediatePhysicsDeclares.h"
 #include "AnimNode_RigidBody.generated.h"
-
-namespace ImmediatePhysics
-{
-	struct FSimulation;
-	struct FActorHandle;
-}
 
 struct FBodyInstance;
 struct FConstraintInstance;
@@ -50,6 +45,7 @@ struct ANIMGRAPHRUNTIME_API FAnimNode_RigidBody : public FAnimNode_SkeletalContr
 	virtual void EvaluateComponentPose_AnyThread(FComponentSpacePoseContext& Output) override;
 	virtual void EvaluateSkeletalControl_AnyThread(FComponentSpacePoseContext& Output, TArray<FBoneTransform>& OutBoneTransforms) override;
 	virtual void OnInitializeAnimInstance(const FAnimInstanceProxy* InProxy, const UAnimInstance* InAnimInstance) override;
+	virtual bool NeedsOnInitializeAnimInstance() const override { return true; }
 	virtual void PreUpdate(const UAnimInstance* InAnimInstance) override;
 	virtual void UpdateInternal(const FAnimationUpdateContext& Context) override;
 	virtual bool HasPreUpdate() const override { return true; }
@@ -69,6 +65,7 @@ private:
 	FTransform CurrentTransform;
 	FTransform PreviousTransform;
 
+	UPhysicsAsset* UsePhysicsAsset;
 public:
 	/** Override gravity*/
 	UPROPERTY(EditAnywhere, Category = Settings, meta = (PinHiddenByDefault, editcondition = "bOverrideWorldGravity"))
@@ -119,7 +116,7 @@ private:
 	ETeleportType ResetSimulatedTeleportType;
 
 public:
-	UPROPERTY(EditAnywhere, Category = Settings, meta=(InlineEditConditionToggle))
+	UPROPERTY(EditAnywhere, Category = Settings, meta = (InlineEditConditionToggle))
 	uint8 bEnableWorldGeometry : 1;
 
 	UPROPERTY(EditAnywhere, Category = Settings, meta = (InlineEditConditionToggle))

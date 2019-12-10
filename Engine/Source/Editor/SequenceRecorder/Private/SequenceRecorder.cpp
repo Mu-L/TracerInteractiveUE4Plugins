@@ -13,7 +13,7 @@
 #include "Framework/Application/SlateApplication.h"
 #include "Editor.h"
 #include "EngineGlobals.h"
-#include "Toolkits/AssetEditorManager.h"
+
 #include "LevelEditor.h"
 #include "AnimationRecorder.h"
 #include "ActorRecording.h"
@@ -28,7 +28,7 @@
 #include "Framework/Notifications/NotificationManager.h"
 #include "Widgets/Notifications/SNotificationList.h"
 #include "LevelSequenceActor.h"
-#include "ILevelViewport.h"
+#include "IAssetViewport.h"
 #include "Tracks/MovieSceneAudioTrack.h"
 #include "Sections/MovieSceneAudioSection.h"
 #include "Sound/SoundWave.h"
@@ -42,6 +42,7 @@
 #include "ScopedTransaction.h"
 #include "Features/IModularFeatures.h"
 #include "ScopedTransaction.h"
+#include "Subsystems/AssetEditorSubsystem.h"
 
 #define LOCTEXT_NAMESPACE "SequenceRecorder"
 
@@ -1127,7 +1128,7 @@ bool FSequenceRecorder::StopRecording(bool bAllowLooping)
 				{
 					TArray<UObject*> Assets;
 					Assets.Add(LevelSequence);
-					FAssetEditorManager::Get().OpenEditorForAssets(Assets);
+					GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAssets(Assets);
 				});
 				Info.HyperlinkText = FText::Format(LOCTEXT("OpenNewAnimationHyperlink", "Open {0}"), FText::FromString(LevelSequence->GetName()));
 				TSharedPtr<SNotificationItem> Notification = FSlateNotificationManager::Get().AddNotification(Info);
@@ -1523,7 +1524,7 @@ void FSequenceRecorder::SetImmersive()
 	if (Settings->bImmersiveMode)
 	{
 		FLevelEditorModule& LevelEditorModule = FModuleManager::Get().LoadModuleChecked<FLevelEditorModule>("LevelEditor");
-		TSharedPtr< ILevelViewport > ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
+		TSharedPtr< IAssetViewport > ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
 
 		if( ActiveLevelViewport.IsValid() )
 		{
@@ -1547,7 +1548,7 @@ void FSequenceRecorder::RestoreImmersive()
 	if (Settings->bImmersiveMode)
 	{
 		FLevelEditorModule& LevelEditorModule = FModuleManager::Get().LoadModuleChecked<FLevelEditorModule>("LevelEditor");
-		TSharedPtr< ILevelViewport > ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
+		TSharedPtr< IAssetViewport > ActiveLevelViewport = LevelEditorModule.GetFirstActiveViewport();
 
 		if( ActiveLevelViewport.IsValid() )
 		{

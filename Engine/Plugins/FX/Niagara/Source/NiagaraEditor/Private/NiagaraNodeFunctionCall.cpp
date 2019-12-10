@@ -16,7 +16,10 @@
 #include "NiagaraNodeParameterMapGet.h"
 #include "NiagaraConstants.h"
 #include "NiagaraCustomVersion.h"
+#include "NiagaraDataInterfaceSkeletalMesh.h"
+#include "SNiagaraGraphNodeFunctionCallWithSpecifiers.h"
 #include "Misc/SecureHash.h"
+#include "ViewModels/Stack/NiagaraStackGraphUtilities.h"
 
 #define LOCTEXT_NAMESPACE "NiagaraNodeFunctionCall"
 
@@ -76,6 +79,71 @@ void UNiagaraNodeFunctionCall::PostLoad()
 	if (FunctionDisplayName.IsEmpty())
 	{
 		ComputeNodeName();
+	}
+}
+
+void UNiagaraNodeFunctionCall::UpgradeDIFunctionCalls()
+{
+	UClass* InterfaceClass = nullptr;
+	UNiagaraDataInterface* InterfaceCDO = nullptr;
+	if (Signature.IsValid() && FunctionScript == nullptr)
+	{
+		if (Signature.Inputs.Num() > 0)
+		{
+			if (Signature.Inputs[0].GetType().IsDataInterface())
+			{
+				InterfaceClass = Signature.Inputs[0].GetType().GetClass();
+				InterfaceCDO = Cast<UNiagaraDataInterface>(InterfaceClass->GetDefaultObject());
+			}
+		}
+	}
+
+	FString UpgradeNote;
+
+	//TODO: Move this out into DI specific functions or helper classes?
+	if (InterfaceClass && InterfaceCDO)
+	{		
+		if (InterfaceClass == UNiagaraDataInterfaceSkeletalMesh::StaticClass())
+		{
+			if (Signature.Name == TEXT("RandomTriCoord"))
+			{
+				if (Signature.Inputs.Num() == 1)//If this is before we added the additional seed inputs. TODO: Add a per DI version number to make this simpler and clearer. In this case we can detect old data easy enough but a version number is better.
+				{
+					UpgradeNote = TEXT("Adding RandomInfo parameter to support deterministic random sampling.");
+
+					Signature.Inputs.Add(FNiagaraVariable(FNiagaraTypeDefinition(FNiagaraRandInfo::StaticStruct()), TEXT("RandomInfo")));
+					ReallocatePins();
+				}
+			}
+		}
+	}
+
+	if (!UpgradeNote.IsEmpty())
+	{
+		UE_LOG(LogNiagaraEditor, Log, TEXT("Upgradeing Niagara Data Interface fuction call node. This may cause unnessessary recompiles. Please resave these assets if this occurs. Or use fx.UpgradeAllNiagaraAssets."));
+		UE_LOG(LogNiagaraEditor, Log, TEXT("Node: %s"), *GetFullName());
+		if (InterfaceCDO)
+		{
+			UE_LOG(LogNiagaraEditor, Log, TEXT("Interface: %s"), *InterfaceCDO->GetFullName());
+		}
+		UE_LOG(LogNiagaraEditor, Log, TEXT("Function: %s"), *Signature.GetName());
+		UE_LOG(LogNiagaraEditor, Log, TEXT("Upgrade Note: %s"),* UpgradeNote);
+	}
+}
+
+TSharedPtr<SGraphNode> UNiagaraNodeFunctionCall::CreateVisualWidget()
+{
+	if (!FunctionScript && FunctionSpecifiers.Num() == 0)
+	{
+		FunctionSpecifiers = Signature.FunctionSpecifiers;
+	}
+	if (FunctionSpecifiers.Num() == 0)
+	{
+		return Super::CreateVisualWidget();
+	}
+	else
+	{
+		return SNew(SNiagaraGraphNodeFunctionCallWithSpecifiers, this);
 	}
 }
 
@@ -385,6 +453,16 @@ void UNiagaraNodeFunctionCall::Compile(class FHlslNiagaraTranslator* Translator,
 		Options.bFilterDuplicates = true;
 		FunctionGraph->FindInputNodes(FunctionInputNodes, Options);
 
+		// We check which module inputs are not used so we can later remove them from the compilation of the
+		// parameter map that sets the input values for our function. This is mainly done to prevent data interfaces being
+		// initialized as parameter when they are not used in the function or module.
+		TSet<FName> HiddenPinNames;
+		for (UEdGraphPin* Pin : FNiagaraStackGraphUtilities::GetUnusedFunctionInputPins(*this, FCompileConstantResolver(Translator)))
+		{
+			HiddenPinNames.Add(Pin->PinName);
+		}
+		Translator->EnterFunctionCallNode(HiddenPinNames);
+
 		for (UNiagaraNodeInput* FunctionInputNode : FunctionInputNodes)
 		{
 			//Finds the matching Pin in the caller.
@@ -467,6 +545,7 @@ void UNiagaraNodeFunctionCall::Compile(class FHlslNiagaraTranslator* Translator,
 
 		FCompileConstantResolver ConstantResolver(Translator);
 		FNiagaraEditorUtilities::SetStaticSwitchConstants(GetCalledGraph(), CallerInputPins, ConstantResolver);
+		Translator->ExitFunctionCallNode();
 	}
 	else if (Signature.IsValid())
 	{
@@ -494,8 +573,10 @@ void UNiagaraNodeFunctionCall::Compile(class FHlslNiagaraTranslator* Translator,
 				}
 			}
 		}
-
+		Translator->EnterFunctionCallNode(TSet<FName>());
+		Signature.FunctionSpecifiers = FunctionSpecifiers;
 		bError = CompileInputPins(Translator, Inputs);
+		Translator->ExitFunctionCallNode();
 	}		
 	else
 	{
@@ -614,7 +695,7 @@ void UNiagaraNodeFunctionCall::SubsumeExternalDependencies(TMap<const UObject*, 
 	}
 }
 
-void UNiagaraNodeFunctionCall::GatherExternalDependencyIDs(ENiagaraScriptUsage InMasterUsage, const FGuid& InMasterUsageId, TArray<FNiagaraCompileHash>& InReferencedCompileHashes, TArray<FGuid>& InReferencedIDs, TArray<UObject*>& InReferencedObjs) const
+void UNiagaraNodeFunctionCall::GatherExternalDependencyData(ENiagaraScriptUsage InMasterUsage, const FGuid& InMasterUsageId, TArray<FNiagaraCompileHash>& InReferencedCompileHashes, TArray<UObject*>& InReferencedObjs) const
 {
 	if (FunctionScript && FunctionScript->GetOutermost() != this->GetOutermost())
 	{
@@ -624,15 +705,16 @@ void UNiagaraNodeFunctionCall::GatherExternalDependencyIDs(ENiagaraScriptUsage I
 		// We don't know which graph type we're referencing, so we try them all... may need to replace this with something faster in the future.
 		if (FunctionGraph)
 		{
+			FunctionGraph->RebuildCachedCompileIds();
 			for (int32 i = (int32)ENiagaraScriptUsage::Function; i <= (int32)ENiagaraScriptUsage::DynamicInput; i++)
 			{
-				FGuid FoundGuid = FunctionGraph->ComputeCompileID((ENiagaraScriptUsage)i, FGuid(0, 0, 0, 0));
-				if (FoundGuid.IsValid())
+				FGuid FoundGuid = FunctionGraph->GetBaseId((ENiagaraScriptUsage)i, FGuid(0, 0, 0, 0));
+				FNiagaraCompileHash FoundCompileHash = FunctionGraph->GetCompileDataHash((ENiagaraScriptUsage)i, FGuid(0, 0, 0, 0));
+				if (FoundGuid.IsValid() && FoundCompileHash.IsValid())
 				{
-					InReferencedIDs.Add(FoundGuid);
+					InReferencedCompileHashes.Add(FoundCompileHash);
 					InReferencedObjs.Add(FunctionGraph);
-
-					FunctionGraph->GatherExternalDependencyIDs((ENiagaraScriptUsage)i, FGuid(0, 0, 0, 0), InReferencedCompileHashes, InReferencedIDs, InReferencedObjs);
+					FunctionGraph->GatherExternalDependencyData((ENiagaraScriptUsage)i, FGuid(0, 0, 0, 0), InReferencedCompileHashes, InReferencedObjs);
 				}
 			}
 		}

@@ -15,6 +15,7 @@ public class Core : ModuleRules
 		PrivateDependencyModuleNames.Add("BuildSettings");
 
 		PublicDependencyModuleNames.Add("TraceLog");
+		PublicIncludePaths.Add("Runtime/TraceLog/Public");
 
 		PrivateIncludePaths.AddRange(
 			new string[] {
@@ -128,23 +129,13 @@ public class Core : ModuleRules
 		}
 		else if (Target.IsInPlatformGroup(UnrealPlatformGroup.Unix))
         {
-			PublicIncludePaths.Add(string.Format("Runtime/Core/Public/{0}", Target.Platform.ToString()));
 			AddEngineThirdPartyPrivateStaticDependencies(Target,
 				"zlib",
 				"jemalloc"
                 );
 
 			// Core uses dlopen()
-			PublicAdditionalLibraries.Add("dl");
-        }
-		else if (Target.Platform == UnrealTargetPlatform.HTML5)
-		{
-            PrivateDependencyModuleNames.Add("HTML5JS");
-            PrivateDependencyModuleNames.Add("MapPakDownloader");
-        }
-        else if (Target.Platform == UnrealTargetPlatform.PS4)
-        {
-            PublicAdditionalLibraries.Add("SceRtc_stub_weak"); //ORBIS SDK rtc.h, used in PS4Time.cpp
+			PublicSystemLibraries.Add("dl");
         }
 
 		if ( Target.bCompileICU == true )
@@ -189,34 +180,36 @@ public class Core : ModuleRules
 
 		WhitelistRestrictedFolders.Add("Private/NoRedist");
 
-        if (Target.Platform == UnrealTargetPlatform.XboxOne)
+        if (Target.Platform == UnrealTargetPlatform.XboxOne ||
+            (Target.bWithDirectXMath && (Target.Platform == UnrealTargetPlatform.Win64 || Target.Platform == UnrealTargetPlatform.Win32)))
         {
             PublicDefinitions.Add("WITH_DIRECTXMATH=1");
-        }
-        else if ((Target.Platform == UnrealTargetPlatform.Win64) ||
-                (Target.Platform == UnrealTargetPlatform.Win32) ||
-				(Target.Platform == UnrealTargetPlatform.HoloLens))
-        {
-			// To enable this requires Win8 SDK
-            PublicDefinitions.Add("WITH_DIRECTXMATH=0");  // Enable to test on Win64/32.
-
-            //PublicDependencyModuleNames.AddRange(  // Enable to test on Win64/32.
-			//    new string[] {
-			//    "DirectXMath"
-            //});
         }
         else
         {
             PublicDefinitions.Add("WITH_DIRECTXMATH=0");
         }
 
-        // Decide if validating memory allocator (aka MallocStomp) can be used on the current platform.
-        // Run-time validation must be enabled through '-stompmalloc' command line argument.
+		// Set a macro to allow FApp::GetBuildTargetType() to detect client targts
+		if(Target.Type == TargetRules.TargetType.Client)
+		{
+			PrivateDefinitions.Add("IS_CLIENT_TARGET=1");
+		}
+		else
+		{
+			PrivateDefinitions.Add("IS_CLIENT_TARGET=0");
+		}
 
-        bool bWithMallocStomp = false;
+		// Decide if validating memory allocator (aka MallocStomp) can be used on the current platform.
+		// Run-time validation must be enabled through '-stompmalloc' command line argument.
+
+		bool bWithMallocStomp = false;
         if (Target.Configuration != UnrealTargetConfiguration.Shipping)
         {
-			if (Target.Platform == UnrealTargetPlatform.Mac || Target.Platform == UnrealTargetPlatform.Linux || Target.Platform == UnrealTargetPlatform.Win64)
+			if (Target.Platform == UnrealTargetPlatform.Mac ||
+				Target.Platform == UnrealTargetPlatform.Linux ||
+				Target.Platform == UnrealTargetPlatform.LinuxAArch64 ||
+				Target.Platform == UnrealTargetPlatform.Win64)
 			// Target.Platform == UnrealTargetPlatform.Win32: // 32-bit windows can technically be supported, but will likely run out of virtual memory space quickly
 			// Target.Platform == UnrealTargetPlatform.XboxOne: // XboxOne could be supported, as it's similar enough to Win64
 			{

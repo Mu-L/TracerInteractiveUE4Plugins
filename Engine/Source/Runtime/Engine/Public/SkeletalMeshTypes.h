@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "PrimitiveSceneProxy.h"
 #include "Materials/MaterialInterface.h"
+#include "ComponentReregisterContext.h"
 
 class FMaterialRenderProxy;
 class FMeshElementCollector;
@@ -122,7 +123,8 @@ struct ESkeletalMeshVertexFlags
 		None = 0x0,
 		UseFullPrecisionUVs = 0x1,
 		HasVertexColors = 0x2,
-		UseHighPrecisionTangentBasis = 0x4
+		UseHighPrecisionTangentBasis = 0x4,
+		BuildAdjacencyIndexBuffer = 0x8
 	};
 };
 
@@ -293,12 +295,13 @@ public:
 
 	virtual void OnTransformChanged() override;
 
+	virtual uint8 GetCurrentFirstLODIdx_RenderThread() const final override
+	{
+		return GetCurrentFirstLODIdx_Internal();
+	}
+
 	const TArray<FMatrix>& GetMeshObjectReferenceToLocalMatrices() const;
 	const TIndirectArray<FSkeletalMeshLODRenderData>& GetSkeletalMeshRenderDataLOD() const;
-
-#if RHI_RAYTRACING
-	bool bAnySegmentUsesWorldPositionOffset : 1;
-#endif
 
 protected:
 	AActor* Owner;
@@ -309,6 +312,12 @@ protected:
 	const USkeletalMesh* SkeletalMeshForDebug;
 	class UPhysicsAsset* PhysicsAssetForDebug;
 
+public:
+#if RHI_RAYTRACING
+	bool bAnySegmentUsesWorldPositionOffset : 1;
+#endif
+
+protected:
 	/** data copied for rendering */
 	uint8 bForceWireframe : 1;
 	uint8 bIsCPUSkinned : 1;
@@ -381,6 +390,8 @@ protected:
 
 	void GetMeshElementsConditionallySelectable(const TArray<const FSceneView*>& Views, const FSceneViewFamily& ViewFamily, bool bInSelectable, uint32 VisibilityMap, FMeshElementCollector& Collector) const;
 
+	/** Only call on render thread timeline */
+	uint8 GetCurrentFirstLODIdx_Internal() const;
 private:
 	void CreateBaseMeshBatch(const FSceneView* View, const FSkeletalMeshLODRenderData& LODData, const int32 LODIndex, const int32 SectionIndex, const FSectionElementInfo& SectionElementInfo, FMeshBatch& Mesh) const;
 };
@@ -405,3 +416,35 @@ private:
 	bool bRefreshBounds;
 };
 
+#if WITH_EDITOR
+
+//Helper to scope skeletal mesh post edit change.
+class ENGINE_API FScopedSkeletalMeshPostEditChange
+{
+public:
+	/*
+	 * This constructor increment the skeletal mesh PostEditChangeStackCounter. If the stack counter is zero before the increment
+	 * the skeletal mesh component will be unregister from the world. The component will also release there rendering resources.
+	 * Parameters:
+	 * @param InbCallPostEditChange - if we are the first scope PostEditChange will be called.
+	 * @param InbReregisterComponents - if we are the first scope we will re register component from world and also component render data.
+	 */
+	FScopedSkeletalMeshPostEditChange(USkeletalMesh* InSkeletalMesh, bool InbCallPostEditChange = true, bool InbReregisterComponents = true);
+
+	/*
+	 * This destructor decrement the skeletal mesh PostEditChangeStackCounter. If the stack counter is zero after the decrement,
+	 * the skeletal mesh PostEditChange will be call. The component will also be register to the world and there render data resources will be rebuild.
+	 */
+	~FScopedSkeletalMeshPostEditChange();
+
+	void SetSkeletalMesh(USkeletalMesh* InSkeletalMesh);
+
+private:
+	USkeletalMesh* SkeletalMesh;
+	bool bReregisterComponents;
+	bool bCallPostEditChange;
+	FSkinnedMeshComponentRecreateRenderStateContext* RecreateExistingRenderStateContext;
+	TIndirectArray<FComponentReregisterContext> ComponentReregisterContexts;
+};
+
+#endif

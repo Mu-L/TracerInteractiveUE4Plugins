@@ -12,6 +12,7 @@
 #include "UObject/GCObject.h"
 #include "AI/NavDataGenerator.h"
 #include "NavMesh/RecastHelpers.h"
+#include "NavDebugTypes.h"
 
 #if WITH_RECAST
 
@@ -30,6 +31,7 @@ struct FKAggregateGeom;
 
 #define MAX_VERTS_PER_POLY	6
 
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
 struct FRecastBuildConfig : public rcConfig
 {
 	/** controls whether voxel filterring will be applied (via FRecastTileGenerator::ApplyVoxelFilter) */
@@ -50,6 +52,7 @@ struct FRecastBuildConfig : public rcConfig
 	/** chunk size for ChunkyMonotone partitioning */
 	int32 TileCacheChunkSize;
 
+	UE_DEPRECATED(4.24, "FRecastBuildConfig.PolyMaxHeight has been deprecated as it has no use")
 	int32 PolyMaxHeight;
 	/** indicates what's the limit of navmesh polygons per tile. This value is calculated from other
 	 *	factors - DO NOT SET IT TO ARBITRARY VALUE */
@@ -78,11 +81,13 @@ struct FRecastBuildConfig : public rcConfig
 		bMarkLowHeightAreas = false;
 		bFilterLowSpanSequences = false;
 		bFilterLowSpanFromTileCache = false;
+		// Still initializing, even though the property is deprecated, to avoid static analysis warnings
 		PolyMaxHeight = 10;
 		MaxPolysPerTile = -1;
 		AgentIndex = 0;
 	}
 };
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
 
 struct FRecastVoxelCache
 {
@@ -497,6 +502,11 @@ public:
 	static void ExportRigidBodyGeometry(UBodySetup& BodySetup, TNavStatArray<FVector>& OutTriMeshVertexBuffer, TNavStatArray<int32>& OutTriMeshIndexBuffer, TNavStatArray<FVector>& OutConvexVertexBuffer, TNavStatArray<int32>& OutConvexIndexBuffer, TNavStatArray<int32>& OutShapeBuffer, const FTransform& LocalToWorld = FTransform::Identity);
 	static void ExportAggregatedGeometry(const FKAggregateGeom& AggGeom, TNavStatArray<FVector>& OutConvexVertexBuffer, TNavStatArray<int32>& OutConvexIndexBuffer, TNavStatArray<int32>& OutShapeBuffer, const FTransform& LocalToWorld = FTransform::Identity);
 
+#if !UE_BUILD_SHIPPING
+	/** Converts data encoded in EncodedData.CollisionData to FNavDebugMeshData format */
+	static void GetDebugGeometry(const FNavigationRelevantData& EncodedData, FNavDebugMeshData& DebugMeshData);
+#endif  // !UE_BUILD_SHIPPING
+
 protected:
 	// Performs initial setup of member variables so that generator is ready to
 	// do its thing from this point on. Called just after construction by ARecastNavMesh
@@ -626,6 +636,8 @@ protected:
 	uint32 bInitialized:1;
 
 	uint32 bRestrictBuildingToActiveTiles:1;
+
+	uint32 bSortTilesWithSeedLocations:1;
 
 	/** Runtime generator's version, increased every time all tile generators get invalidated
 	 *	like when navmesh size changes */

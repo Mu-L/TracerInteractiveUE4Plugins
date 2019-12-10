@@ -16,28 +16,28 @@ namespace UnrealBuildTool
 	public class MacTargetRules
 	{
 		/// <summary>
-		/// Whether to generate dSYM files
-		/// Lists Architectures that you want to build
+		/// Whether to generate dSYM files.
+		/// Lists Architectures that you want to build.
 		/// </summary>
 		[XmlConfigFile(Category = "BuildConfiguration", Name = "bGeneratedSYMFile")]
 		public bool bGenerateDsymFile = true;
 
 		/// <summary>
-		/// Enables address sanitizer (ASan)
+		/// Enables address sanitizer (ASan).
 		/// </summary>
 		[CommandLine("-EnableASan")]
 		[XmlConfigFile(Category = "BuildConfiguration", Name = "bEnableAddressSanitizer")]
 		public bool bEnableAddressSanitizer = false;
 
 		/// <summary>
-		/// Enables thread sanitizer (TSan)
+		/// Enables thread sanitizer (TSan).
 		/// </summary>
 		[CommandLine("-EnableTSan")]
 		[XmlConfigFile(Category = "BuildConfiguration", Name = "bEnableThreadSanitizer")]
 		public bool bEnableThreadSanitizer = false;
 
 		/// <summary>
-		/// Enables undefined behavior sanitizer (UBSan)
+		/// Enables undefined behavior sanitizer (UBSan).
 		/// </summary>
 		[CommandLine("-EnableUBSan")]
 		[XmlConfigFile(Category = "BuildConfiguration", Name = "bEnableUndefinedBehaviorSanitizer")]
@@ -346,6 +346,10 @@ namespace UnrealBuildTool
 			if(Target.MacPlatform.bEnableUndefinedBehaviorSanitizer || (UndefSanitizerMode != null && UndefSanitizerMode == "YES"))
 			{
 				Options |= MacToolChainOptions.EnableUndefinedBehaviorSanitizer;
+			}
+			if(Target.bShouldCompileAsDLL)
+			{
+				Options |= MacToolChainOptions.OutputDylib;
 			}
 			return new MacToolChain(Target.ProjectFile, Options);
 		}

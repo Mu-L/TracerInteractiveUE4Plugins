@@ -11,7 +11,6 @@
 #include "Containers/IndirectArray.h"
 #include "Stats/Stats.h"
 #include "Containers/List.h"
-#include "Templates/ScopedPointer.h"
 #include "Async/AsyncWork.h"
 #include "Async/AsyncFileHandle.h"
 #include "RHI.h"
@@ -24,6 +23,7 @@
 
 class FTexture2DResourceMem;
 class UTexture2D;
+class UTexture2DArray;
 class IVirtualTexture;
 
 /** Maximum number of slices in texture source art. */
@@ -32,13 +32,16 @@ class IVirtualTexture;
 #ifndef FORCE_ENABLE_TEXTURE_STREAMING
 #define FORCE_ENABLE_TEXTURE_STREAMING 0
 #endif
-#define TEXTURE2DMIPMAP_USE_COMPACT_BULKDATA (!(WITH_EDITORONLY_DATA) && !(UE_SERVER) && FORCE_ENABLE_TEXTURE_STREAMING && PLATFORM_SUPPORTS_TEXTURE_STREAMING)
+
+#define TEXTURE2DMIPMAP_USE_COMPACT_BULKDATA (!(WITH_EDITORONLY_DATA) && !(UE_SERVER) && FORCE_ENABLE_TEXTURE_STREAMING && PLATFORM_SUPPORTS_TEXTURE_STREAMING && !USE_NEW_BULKDATA)
+
 
 /**
  * A 2D texture mip-map.
  */
 struct FTexture2DMipMap
 {
+#if TEXTURE2DMIPMAP_USE_COMPACT_BULKDATA
 	class FCompactByteBulkData
 	{
 	public:
@@ -52,7 +55,7 @@ struct FTexture2DMipMap
 		FCompactByteBulkData& operator=(const FCompactByteBulkData& Other);
 		FCompactByteBulkData& operator=(FCompactByteBulkData&& Other);
 
-		void Serialize(FArchive& Ar, UObject* Owner, int32 MipIdx);
+		void Serialize(FArchive& Ar, UObject* Owner, int32 MipIdx, bool bAttemptFileMapping);
 
 		uint32 GetBulkDataOffsetInFile() const { return OffsetInFile; }
 		uint32 GetBulkDataSize() const { return BulkDataSize; }
@@ -60,9 +63,13 @@ struct FTexture2DMipMap
 		uint32 GetElementCount() const { return BulkDataSize; }
 		uint32 GetElementSize() const { return sizeof(uint8); }
 		void SetBulkDataFlags(uint32 Flags) { BulkDataFlags |= Flags; }
+		void ResetBulkDataFlags(uint32 Flags) { BulkDataFlags = Flags; }
 		void ClearBulkDataFlags(uint32 FlagsToClear) { BulkDataFlags &= ~FlagsToClear; }
 		bool CanLoadFromDisk() const { return !IsInlined(); }
 		bool IsAvailableForUse() const { return !(BulkDataFlags & BULKDATA_Unused); }
+		bool IsOptional() const { return (BulkDataFlags & BULKDATA_OptionalPayload) != 0; }
+		bool IsInlined() const { return (GetBulkDataFlags() & BULKDATA_PayloadInSeperateFile) == 0 && (GetBulkDataFlags() & BULKDATA_PayloadAtEndOfFile) == 0; }
+		bool InSeperateFile() const { return (GetBulkDataFlags() & BULKDATA_PayloadInSeperateFile) != 0; }
 		bool IsBulkDataLoaded() const { return IsInlined(); }
 		bool IsAsyncLoadingComplete() const { return true; }
 		bool IsStoredCompressedOnDisk() const { return !!(BulkDataFlags & BULKDATA_SerializeCompressed); }
@@ -71,6 +78,8 @@ struct FTexture2DMipMap
 		void Unlock() const;
 		void* Realloc(int32 NumBytes);
 		void GetCopy(void** Dest, bool bDiscardInternalCopy = true);
+
+		FBulkDataIORequest* CreateStreamingRequest(const FString& Filename, int64 OffsetInBulkData, int64 BytesToRead, EAsyncIOPriorityAndFlags Priority, FAsyncFileCallBack* CompleteCallback, uint8* UserSuppliedMemory) const;
 
 		/**
 		 * FCompactByteBulkData doesn't support GetFilename. Use FTexturePlatformData::CachedPackageFileName
@@ -89,8 +98,11 @@ struct FTexture2DMipMap
 		uint8* TexelData;
 
 		void Reset();
-		bool IsInlined() const { return !(BulkDataFlags & BULKDATA_Force_NOT_InlinePayload); }
+		
 	};
+#else
+	struct FCompactByteBulkData {};
+#endif
 
 	/** Width of the mip-map. */
 	int32 SizeX;
@@ -99,6 +111,7 @@ struct FTexture2DMipMap
 	/** Depth of the mip-map. */
 	int32 SizeZ;
 	/** Bulk data if stored in the package. */
+
 	typename TChooseClass<TEXTURE2DMIPMAP_USE_COMPACT_BULKDATA, FCompactByteBulkData, FByteBulkData>::Result BulkData;
 
 	/** Default constructor. */
@@ -155,7 +168,7 @@ public:
 	 * Minimal initialization constructor.
 	 *
 	 * @param InOwner			UTexture2D which this FTexture2DResource represents.
-	 * @param InitialMipCount	Initial number of miplevels to upload to card
+	 * @param InitialMipCount	Initial number of mip levels to upload to card
 	 * @param InFilename		Filename to read data from
  	 */
 	FTexture2DResource( UTexture2D* InOwner, int32 InitialMipCount );
@@ -169,7 +182,6 @@ public:
 	virtual void RefreshSamplerStates() override;
 
 	// FRenderResource interface.
-
 	/**
 	 * Called when the resource is initialized. This is only called by the rendering thread.
 	 */
@@ -226,7 +238,7 @@ private:
 	int32 CurrentFirstMip;
 	
 	/** Local copy/ cache of mip data between creation and first call to InitRHI.							*/
-	void*				MipData[MAX_TEXTURE_MIP_COUNT];
+	TArray<void*, TInlineAllocator<MAX_TEXTURE_MIP_COUNT> > MipData;
 
 	/** 2D texture version of TextureRHI which is used to lock the 2D texture during mip transitions.		*/
 	FTexture2DRHIRef	Texture2DRHI;
@@ -393,6 +405,8 @@ public:
 		bPreventingReallocation(false)
 	{}
 
+	FTexture2DArrayResource(UTexture2DArray* InOwner);
+
 	// Rendering thread functions
 
 	/** 
@@ -431,6 +445,13 @@ public:
 		return SizeY;
 	}
 
+	/** Returns the number of slices(textures) in this array. */
+	uint32 GetNumSlices() const
+	{
+		return NumSlices;
+	}
+
+
 	/** Prevents reallocation from removals of the texture array until EndPreventReallocation is called. */
 	void BeginPreventReallocation();
 
@@ -441,12 +462,20 @@ private:
 
 	/** Texture data, has to persist past the first InitRHI call, because more textures may be added later. */
 	TMap<const UTexture2D*, FTextureArrayDataEntry> CachedData;
+	TArray<FTextureArrayDataEntry>					CachedInitialData;
+	FName LODGroupStatName;
+	UTexture2DArray* Owner;
+
 	uint32 SizeX;
 	uint32 SizeY;
 	uint32 NumMips;
+	uint32 NumSlices;
 	TextureGroup LODGroup;
 	EPixelFormat Format;
 	ESamplerFilter Filter;
+	ESamplerAddressMode SamplerXAddress;
+	ESamplerAddressMode SamplerYAddress;
+	ESamplerAddressMode SamplerZAddress;
 
 	bool bSRGB;
 	bool bDirty;

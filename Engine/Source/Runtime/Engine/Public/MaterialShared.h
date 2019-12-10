@@ -11,7 +11,6 @@
 #include "Misc/Guid.h"
 #include "Engine/EngineTypes.h"
 #include "Templates/RefCounting.h"
-#include "Templates/ScopedPointer.h"
 #include "Templates/UniquePtr.h"
 #include "Misc/SecureHash.h"
 #include "RHI.h"
@@ -119,13 +118,14 @@ enum EMaterialValueType
 	MCT_Float                 = 8|4|2|1,
 	MCT_Texture2D	          = 1 << 4,
 	MCT_TextureCube	          = 1 << 5,
-	MCT_VolumeTexture         = 1 << 6,
-	MCT_StaticBool            = 1 << 7,
-	MCT_Unknown               = 1 << 8,
-	MCT_MaterialAttributes	  = 1 << 9,
-	MCT_TextureExternal       = 1 << 10,
-	MCT_TextureVirtual        = 1 << 11,
-	MCT_Texture               = MCT_Texture2D | MCT_TextureCube | MCT_VolumeTexture | MCT_TextureExternal | MCT_TextureVirtual,
+	MCT_Texture2DArray		  = 1 << 6,
+	MCT_VolumeTexture         = 1 << 7,
+	MCT_StaticBool            = 1 << 8,
+	MCT_Unknown               = 1 << 9,
+	MCT_MaterialAttributes	  = 1 << 10,
+	MCT_TextureExternal       = 1 << 11,
+	MCT_TextureVirtual        = 1 << 12,
+	MCT_Texture               = MCT_Texture2D | MCT_TextureCube | MCT_Texture2DArray |  MCT_VolumeTexture | MCT_TextureExternal | MCT_TextureVirtual,
 
 	/** Used internally when sampling from virtual textures */
 	MCT_VTPageTableResult     = 1 << 13,
@@ -274,14 +274,14 @@ public:
 /**
  * A texture expression.
  */
-class FMaterialUniformExpressionTexture: public FMaterialUniformExpression
+class FMaterialUniformExpressionTexture : public FMaterialUniformExpression
 {
 	DECLARE_MATERIALUNIFORMEXPRESSION_TYPE(FMaterialUniformExpressionTexture);
 
 public:
 	FMaterialUniformExpressionTexture();
 	FMaterialUniformExpressionTexture(int32 InTextureIndex, EMaterialSamplerType InSamplerType, ESamplerSourceMode InSamplerSource, bool InVirtualTexture);
-	FMaterialUniformExpressionTexture(int32 InTextureIndex, int32 InLayerIndex, EMaterialSamplerType InSamplerType);
+	FMaterialUniformExpressionTexture(int32 InTextureIndex, int16 InTextureLayerIndex, int16 InPageTableLayerIndex, EMaterialSamplerType InSamplerType);
 
 	/** Sets an override texture. */
 	void SetTransientOverrideTextureValue(UTexture* InOverrideTexture);
@@ -297,8 +297,10 @@ public:
 
 	/** Gets texture index which is the index in the full set of referenced textures for this material. */
 	int32 GetTextureIndex() const { return TextureIndex; }
-	/** Gets the layer index in the virtual texture stack if this is fixed. If we don't have a fixed layer then we will allocate during compilation (and not store here). */
-	int32 GetLayerIndex() const { return LayerIndex; }
+	/** Gets the texture layer index in the virtual texture stack if this is fixed. If we don't have a fixed layer then we will allocate during compilation (and not store here). */
+	int32 GetTextureLayerIndex() const { return TextureLayerIndex; }
+	/** Gets the page table channel index in the virtual texture stack if this is fixed. If we don't have a fixed layer then we will allocate during compilation (and not store here). */
+	int32 GetPageTableLayerIndex() const { return PageTableLayerIndex; }
 
 #if WITH_EDITORONLY_DATA
 	/** Get the sampling/decoding logic to compile in the shader for this texture. */
@@ -311,15 +313,18 @@ public:
 	/** Get the UTexture referenced by this expression (can be a nullptr). */
 	virtual void GetTextureValue(const FMaterialRenderContext& Context, const FMaterial& Material, const UTexture*& OutValue) const;
 	/** Get the URuntimeVirtualTexture referenced by this expression (can be a nullptr). */
-	virtual void GetTextureValue(const FMaterial& Material, const URuntimeVirtualTexture*& OutValue) const;
+	virtual void GetTextureValue(const FMaterialRenderContext& Context, const FMaterial& Material, const URuntimeVirtualTexture*& OutValue) const;
+
 	/** Get the UTexture referenced by this expression including any transient override logic. */
 	virtual void GetGameThreadTextureValue(const UMaterialInterface* MaterialInterface, const FMaterial& Material, UTexture*& OutValue, bool bAllowOverride = true) const;
 
 protected:
 	/** Index into FMaterial::GetReferencedTextures */
 	int32 TextureIndex;
-	/** Fixed layer in virtual texture stack if preallocated */
-	int32 LayerIndex;
+	/** Texture layer index in virtual texture stack if preallocated */
+	int16 TextureLayerIndex;
+	/** Page table layer index in virtual texture stack if preallocated */
+	int16 PageTableLayerIndex;
 #if WITH_EDITORONLY_DATA
 	/** Sampler logic for this expression */
 	EMaterialSamplerType SamplerType;
@@ -478,6 +483,7 @@ public:
 			+ UniformScalarExpressions.GetAllocatedSize()
 			+ Uniform2DTextureExpressions.GetAllocatedSize()
 			+ UniformCubeTextureExpressions.GetAllocatedSize()
+			+ Uniform2DArrayTextureExpressions.GetAllocatedSize()
 			+ UniformVolumeTextureExpressions.GetAllocatedSize()
 			+ UniformVirtualTextureExpressions.GetAllocatedSize()
 			+ UniformExternalTextureExpressions.GetAllocatedSize()
@@ -505,6 +511,7 @@ protected:
 	TArray<TRefCountPtr<FMaterialUniformExpression> > UniformScalarExpressions;
 	TArray<TRefCountPtr<FMaterialUniformExpressionTexture> > Uniform2DTextureExpressions;
 	TArray<TRefCountPtr<FMaterialUniformExpressionTexture> > UniformCubeTextureExpressions;
+	TArray<TRefCountPtr<FMaterialUniformExpressionTexture> > Uniform2DArrayTextureExpressions;
 	TArray<TRefCountPtr<FMaterialUniformExpressionTexture> > UniformVolumeTextureExpressions;
 	TArray<TRefCountPtr<FMaterialUniformExpressionTexture> > UniformVirtualTextureExpressions;
 	TArray<TRefCountPtr<FMaterialUniformExpressionExternalTexture> > UniformExternalTextureExpressions;
@@ -552,7 +559,7 @@ public:
 
 	ENGINE_API void Serialize(FArchive& Ar);
 
-	ENGINE_API bool IsSceneTextureUsed(ESceneTextureId TexId) const { return UsedSceneTextures & (1 << TexId); }
+	ENGINE_API bool IsSceneTextureUsed(ESceneTextureId TexId) const { return (UsedSceneTextures & (1 << TexId)) != 0; }
 	ENGINE_API void SetIsSceneTextureUsed(ESceneTextureId TexId) { UsedSceneTextures |= (1 << TexId); }
 
 	FUniformExpressionSet UniformExpressionSet;
@@ -697,9 +704,11 @@ private:
 	/** Was the shadermap Id loaded in from a cooked resource. */
 	bool bIsCookedId;
 
-	/** Static parameters and base Id. */
-	FStaticParameterSet ParameterSet;
-	FString ParameterSetLayerParametersKey;
+	/** Relevant portions of StaticParameterSet from material. */
+	TArray<FStaticSwitchParameter> StaticSwitchParameters;
+	TArray<FStaticComponentMaskParameter> StaticComponentMaskParameters;
+	TArray<FStaticTerrainLayerWeightParameter> TerrainLayerWeightParameters;
+	TArray<FStaticMaterialLayersParameter::ID> MaterialLayersParameterIDs;
 public:
 	/** Guids of any functions the material was dependent on. */
 	TArray<FGuid> ReferencedFunctions;
@@ -729,7 +738,7 @@ public:
 	
 	FMaterialShaderMapId()
 		: QualityLevel(EMaterialQualityLevel::High)
-		, FeatureLevel(ERHIFeatureLevel::SM4)
+		, FeatureLevel(ERHIFeatureLevel::SM5)
 #if WITH_EDITOR
 		, Usage(EMaterialShaderMapUsage::Default)
 		, bIsCookedId(false)
@@ -792,7 +801,7 @@ public:
 #endif
 
 	/** 
-	* Tests this set against another for equality, disregarding override settings.
+	* Tests this set against another for equality
 	* 
 	* @param ReferenceSet	The set to compare against
 	* @return				true if the sets are equal
@@ -804,22 +813,20 @@ public:
 		return !(*this == ReferenceSet);
 	}
 
-#if WITH_EDITOR
-	/** Updates the Id's static parameter set */	
-	void UpdateParameterSet(const FStaticParameterSet& StaticParameters);
-	
-	const FStaticParameterSet& GetParameterSet() const
-	{
-		return ParameterSet;
-	}
+	/** Ensure content is valid - for example overrides are set deterministically for serialization and sorting */
+	bool IsContentValid() const;
 
-	const FString& GetParameterSetLayerParametersKey() const
-	{
-		return ParameterSetLayerParametersKey;
-	}
+#if WITH_EDITOR
+	/** Updates the Id's static parameter set data. Reset the override parameters for deterministic serialization *and* comparison */
+	void UpdateFromParameterSet(const FStaticParameterSet& StaticParameters);
 
 	/** Appends string representations of this Id to a key string. */
 	void AppendKeyString(FString& KeyString) const;
+
+	const TArray<FStaticSwitchParameter> &GetStaticSwitchParameters() const 					{ return StaticSwitchParameters; }
+	const TArray<FStaticComponentMaskParameter> &GetStaticComponentMaskParameters() const 		{ return StaticComponentMaskParameters; }
+	const TArray<FStaticTerrainLayerWeightParameter> &GetTerrainLayerWeightParameters() const 	{ return TerrainLayerWeightParameters; }
+	const TArray<FStaticMaterialLayersParameter::ID> &GetMaterialLayersParameterIDs() const		{ return MaterialLayersParameterIDs; }
 
 	/** Returns true if the requested shader type is a dependency of this shader map Id. */
 	bool ContainsShaderType(const FShaderType* ShaderType, int32 PermutationId) const;
@@ -1107,7 +1114,7 @@ public:
 	uint32 GetEstimatedNumVirtualTextureLookups() const { return MaterialCompilationOutput.EstimatedNumVirtualTextureLookups; }
 #endif
 	uint32 GetNumVirtualTextureStacks() const { return MaterialCompilationOutput.UniformExpressionSet.VTStacks.Num(); }
-	bool UsesSceneTexture(uint32 TexId) const { return MaterialCompilationOutput.UsedSceneTextures & (1ull << TexId); }
+	bool UsesSceneTexture(uint32 TexId) const { return (MaterialCompilationOutput.UsedSceneTextures & (1ull << TexId)) != 0; }
 
 	bool IsValidForRendering(bool bFailOnInvalid = false) const
 	{
@@ -1336,16 +1343,16 @@ private:
 };
 
 /** Returns whether the given expression class is allowed. */
-extern ENGINE_API bool IsAllowedExpressionType(UClass* Class, bool bMaterialFunction);
+extern ENGINE_API bool IsAllowedExpressionType(const UClass* const Class, const bool bMaterialFunction);
 
 /** Parses a string into multiple lines, for use with tooltips. */
-extern ENGINE_API void ConvertToMultilineToolTip(const FString& InToolTip, int32 TargetLineLength, TArray<FString>& OutToolTip);
+extern ENGINE_API void ConvertToMultilineToolTip(const FString& InToolTip, const int32 TargetLineLength, TArray<FString>& OutToolTip);
 
 /** Given a combination of EMaterialValueType flags, get text descriptions of all types */
-extern ENGINE_API void GetMaterialValueTypeDescriptions(uint32 MaterialValueType, TArray<FText>& OutDescriptions);
+extern ENGINE_API void GetMaterialValueTypeDescriptions(const uint32 MaterialValueType, TArray<FText>& OutDescriptions);
 
 /** Check whether a combination of EMaterialValueType flags can be connected */
-extern ENGINE_API bool CanConnectMaterialValueTypes(uint32 InputType, uint32 OutputType);
+extern ENGINE_API bool CanConnectMaterialValueTypes(const uint32 InputType, const uint32 OutputType);
 
 /**
  * FMaterial serves 3 intertwined purposes:
@@ -1365,7 +1372,7 @@ public:
 		RenderingThreadShaderMap(NULL),
 		QualityLevel(EMaterialQualityLevel::High),
 		bHasQualityLevelUsage(false),
-		FeatureLevel(ERHIFeatureLevel::SM4),
+		FeatureLevel(ERHIFeatureLevel::SM5),
 		bContainsInlineShaders(false),
 		bLoadedCookedShaderMapId(false)
 	{}
@@ -1376,7 +1383,7 @@ public:
 	ENGINE_API virtual ~FMaterial();
 
 	/**
-	 * Caches the material shaders for this material with no static parameters on the given platform.
+	 * Caches the material shaders for this material on the given platform.
 	 * This is used by material resources of UMaterials.
 	 */
 	ENGINE_API bool CacheShaders(EShaderPlatform Platform, const ITargetPlatform* TargetPlatform = nullptr);
@@ -1385,7 +1392,7 @@ public:
 	 * Caches the material shaders for the given static parameter set and platform.
 	 * This is used by material resources of UMaterialInstances.
 	 */
-	ENGINE_API bool CacheShaders(const FMaterialShaderMapId& ShaderMapId, EShaderPlatform Platform, const ITargetPlatform* TargetPlatform = nullptr);
+	ENGINE_API bool CacheShaders(const FMaterialShaderMapId& ShaderMapId, const FStaticParameterSet &StaticParameterSet, EShaderPlatform Platform, const ITargetPlatform* TargetPlatform = nullptr);
 
 	/**
 	 * Should the shader for this material with the given platform, shader type and vertex 
@@ -1416,6 +1423,7 @@ public:
 
 	// Material properties.
 	ENGINE_API virtual void GetShaderMapId(EShaderPlatform Platform, FMaterialShaderMapId& OutId) const;
+	ENGINE_API virtual void GetStaticParameterSet(EShaderPlatform Platform, FStaticParameterSet& OutSet) const;
 	virtual EMaterialDomain GetMaterialDomain() const = 0; // See EMaterialDomain.
 	virtual bool IsTwoSided() const = 0;
 	virtual bool IsDitheredLODTransition() const = 0;
@@ -1454,6 +1462,8 @@ public:
 	virtual bool IsUsedWithAPEXCloth() const { return false; }
 	virtual bool IsUsedWithUI() const { return false; }
 	virtual bool IsUsedWithGeometryCache() const { return false; }
+	virtual bool IsUsedWithWater() const { return false; }
+	virtual bool IsUsedWithHairStrands() const { return false; }
 	ENGINE_API virtual enum EMaterialTessellationMode GetTessellationMode() const;
 	virtual bool IsCrackFreeDisplacementEnabled() const { return false; }
 	virtual bool IsAdaptiveTessellationEnabled() const { return false; }
@@ -1490,6 +1500,7 @@ public:
 	virtual float GetMaxDisplacement() const { return 0.0f; }
 	virtual bool ShouldApplyFogging() const { return false; }
 	virtual bool ComputeFogPerPixel() const { return false; }
+	virtual bool IsSky() const { return false; }
 	virtual FString GetFriendlyName() const = 0;
 	virtual bool HasVertexPositionOffsetConnected() const { return false; }
 	virtual bool HasPixelDepthOffsetConnected() const { return false; }
@@ -1549,10 +1560,10 @@ public:
 	/** Returns whether this material should be considered for casting dynamic shadows. */
 	inline bool ShouldCastDynamicShadows() const
 	{
-		return GetShadingModels().IsLit() &&
-			(GetBlendMode() == BLEND_Opaque ||
-			 GetBlendMode() == BLEND_Masked ||
-			(GetBlendMode() == BLEND_Translucent && GetCastDynamicShadowAsMasked()));
+		return !GetShadingModels().HasOnlyShadingModel(MSM_SingleLayerWater) &&
+				(GetBlendMode() == BLEND_Opaque
+ 				 || GetBlendMode() == BLEND_Masked
+  				 || (GetBlendMode() == BLEND_Translucent && GetCastDynamicShadowAsMasked()));
 	}
 
 
@@ -1564,6 +1575,7 @@ public:
 	// Accessors.
 	ENGINE_API const TArray<TRefCountPtr<FMaterialUniformExpressionTexture> >& GetUniform2DTextureExpressions() const;
 	ENGINE_API const TArray<TRefCountPtr<FMaterialUniformExpressionTexture> >& GetUniformCubeTextureExpressions() const;
+	ENGINE_API const TArray<TRefCountPtr<FMaterialUniformExpressionTexture> >& GetUniform2DArrayTextureExpressions() const;
 	ENGINE_API const TArray<TRefCountPtr<FMaterialUniformExpressionTexture> >& GetUniformVolumeTextureExpressions() const;
 	ENGINE_API const TArray<TRefCountPtr<FMaterialUniformExpressionTexture> >& GetUniformVirtualTextureExpressions() const;
 	ENGINE_API const TArray<TRefCountPtr<FMaterialUniformExpression> >& GetUniformVectorParameterExpressions() const;
@@ -1606,6 +1618,9 @@ public:
 
 	/** Does the material have a runtime virtual texture output node. */
 	ENGINE_API bool HasRuntimeVirtualTextureOutput_RenderThread() const;
+
+	/** Does the material use CustomDepth or CustomStencil lookup */
+	ENGINE_API bool UsesCustomDepthStencil_GameThread() const;
 
 	/** Note: This function is only intended for use in deciding whether or not shader permutations are required before material translation occurs. */
 	ENGINE_API bool MaterialMayModifyMeshPosition() const;
@@ -1847,6 +1862,7 @@ private:
 	*/
 	bool BeginCompileShaderMap(
 		const FMaterialShaderMapId& ShaderMapId,
+		const FStaticParameterSet &StaticParameterSet,
 		EShaderPlatform Platform, 
 		TRefCountPtr<class FMaterialShaderMap>& OutShaderMap, 
 		const ITargetPlatform* TargetPlatform = nullptr);
@@ -1971,9 +1987,12 @@ public:
 	/** Returns the FMaterial, without using a fallback if the FMaterial doesn't have a valid shader map. Can return NULL. */
 	virtual FMaterial* GetMaterialNoFallback(ERHIFeatureLevel::Type InFeatureLevel) const { return NULL; }
 	virtual UMaterialInterface* GetMaterialInterface() const { return NULL; }
+
 	virtual bool GetVectorValue(const FMaterialParameterInfo& ParameterInfo, FLinearColor* OutValue, const FMaterialRenderContext& Context) const = 0;
 	virtual bool GetScalarValue(const FMaterialParameterInfo& ParameterInfo, float* OutValue, const FMaterialRenderContext& Context) const = 0;
 	virtual bool GetTextureValue(const FMaterialParameterInfo& ParameterInfo,const UTexture** OutValue, const FMaterialRenderContext& Context) const = 0;
+	virtual bool GetTextureValue(const FMaterialParameterInfo& ParameterInfo, const URuntimeVirtualTexture** OutValue, const FMaterialRenderContext& Context) const = 0;
+
 	bool IsDeleted() const
 	{
 		return DeletedFlag != 0;
@@ -2010,12 +2029,16 @@ public:
 		return DeferredUniformExpressionCacheRequests.Num() > 0;
 	}
 
+	int32 GetExpressionCacheSerialNumber() const { return UniformExpressionCacheSerialNumber; }
 private:
 	IAllocatedVirtualTexture* GetPreallocatedVTStack(const FMaterialRenderContext& Context, const FUniformExpressionSet& UniformExpressionSet, const FMaterialVirtualTextureStack& VTStack) const;
 	IAllocatedVirtualTexture* AllocateVTStack(const FMaterialRenderContext& Context, const FUniformExpressionSet& UniformExpressionSet, const FMaterialVirtualTextureStack& VTStack) const;
 
 	/** 0 if not set, game thread pointer, do not dereference, only for comparison */
 	const USubsurfaceProfile* SubsurfaceProfileRT;
+
+	/** Incremented each time UniformExpressionCache is modified */
+	mutable int32 UniformExpressionCacheSerialNumber = 0;
 
 	/** For tracking down a bug accessing a deleted proxy. */
 	mutable int8 MarkedForGarbageCollection : 1;
@@ -2056,6 +2079,7 @@ public:
 	ENGINE_API virtual bool GetVectorValue(const FMaterialParameterInfo& ParameterInfo, FLinearColor* OutValue, const FMaterialRenderContext& Context) const;
 	ENGINE_API virtual bool GetScalarValue(const FMaterialParameterInfo& ParameterInfo, float* OutValue, const FMaterialRenderContext& Context) const;
 	ENGINE_API virtual bool GetTextureValue(const FMaterialParameterInfo& ParameterInfo,const UTexture** OutValue, const FMaterialRenderContext& Context) const;
+	ENGINE_API virtual bool GetTextureValue(const FMaterialParameterInfo& ParameterInfo, const URuntimeVirtualTexture** OutValue, const FMaterialRenderContext& Context) const;
 };
 
 
@@ -2093,7 +2117,7 @@ public:
 	/** Initialization constructor. */
 	FOverrideSelectionColorMaterialRenderProxy(const FMaterialRenderProxy* InParent, const FLinearColor& InSelectionColor) :
 		Parent(InParent),
-		SelectionColor(InSelectionColor)
+		SelectionColor(FLinearColor(InSelectionColor.R, InSelectionColor.G, InSelectionColor.B, 1))
 	{
 	}
 
@@ -2102,6 +2126,7 @@ public:
 	ENGINE_API virtual bool GetVectorValue(const FMaterialParameterInfo& ParameterInfo, FLinearColor* OutValue, const FMaterialRenderContext& Context) const;
 	ENGINE_API virtual bool GetScalarValue(const FMaterialParameterInfo& ParameterInfo, float* OutValue, const FMaterialRenderContext& Context) const;
 	ENGINE_API virtual bool GetTextureValue(const FMaterialParameterInfo& ParameterInfo, const UTexture** OutValue, const FMaterialRenderContext& Context) const;
+	ENGINE_API virtual bool GetTextureValue(const FMaterialParameterInfo& ParameterInfo, const URuntimeVirtualTexture** OutValue, const FMaterialRenderContext& Context) const;
 };
 
 
@@ -2134,7 +2159,7 @@ inline bool IsTranslucentBlendMode(enum EBlendMode BlendMode)
 /**
  * Implementation of the FMaterial interface for a UMaterial or UMaterialInstance.
  */
-class FMaterialResource : public FMaterial
+class ENGINE_VTABLE FMaterialResource : public FMaterial
 {
 public:
 
@@ -2164,6 +2189,7 @@ public:
 
 	// FMaterial interface.
 	ENGINE_API virtual void GetShaderMapId(EShaderPlatform Platform, FMaterialShaderMapId& OutId) const override;
+	ENGINE_API virtual void GetStaticParameterSet(EShaderPlatform Platform, FStaticParameterSet& OutSet) const override;
 	ENGINE_API virtual EMaterialDomain GetMaterialDomain() const override;
 	ENGINE_API virtual bool IsTwoSided() const override;
 	ENGINE_API virtual bool IsDitheredLODTransition() const override;
@@ -2201,6 +2227,8 @@ public:
 	ENGINE_API virtual bool IsUsedWithGeometryCollections() const override;
 	ENGINE_API virtual bool IsUsedWithAPEXCloth() const override;
 	ENGINE_API virtual bool IsUsedWithGeometryCache() const override;
+	ENGINE_API virtual bool IsUsedWithWater() const override;
+	ENGINE_API virtual bool IsUsedWithHairStrands() const override;
 	ENGINE_API virtual enum EMaterialTessellationMode GetTessellationMode() const override;
 	ENGINE_API virtual bool IsCrackFreeDisplacementEnabled() const override;
 	ENGINE_API virtual bool IsAdaptiveTessellationEnabled() const override;
@@ -2249,10 +2277,11 @@ public:
 	ENGINE_API virtual float GetRefractionDepthBiasValue() const override;
 	ENGINE_API virtual float GetMaxDisplacement() const override;
 	ENGINE_API virtual bool ShouldApplyFogging() const override;
+	ENGINE_API virtual bool IsSky() const override;
 	ENGINE_API virtual bool ComputeFogPerPixel() const override;
 	ENGINE_API virtual bool HasRuntimeVirtualTextureOutput() const override;
 	ENGINE_API virtual bool CastsRayTracedShadows() const override;
-	ENGINE_API virtual UMaterialInterface* GetMaterialInterface() const override;
+	ENGINE_API  virtual UMaterialInterface* GetMaterialInterface() const override;
 	/**
 	 * Should shaders compiled for this material be saved to disk?
 	 */
@@ -2717,3 +2746,10 @@ bool ReloadMaterialResource(
 	ERHIFeatureLevel::Type FeatureLevel,
 	EMaterialQualityLevel::Type QualityLevel);
 #endif
+
+inline bool ShouldIncludeMaterialInDefaultOpaquePass(const FMaterial& Material)
+{
+	return !Material.IsSky()
+		&& !Material.GetShadingModels().HasShadingModel(MSM_SingleLayerWater);
+}
+

@@ -8,8 +8,7 @@
 #include "RHIStaticStates.h"
 #include "HAL/ThreadSafeBool.h"
 #include "HAL/ThreadSafeCounter.h"
-#include "HAL/Runnable.h"
-#include "HAL/RunnableThread.h"
+#include "HAL/Thread.h"
 #include "HAL/Event.h"
 #include "Misc/ScopeExit.h"
 #include "ShaderCore.h"
@@ -207,7 +206,7 @@ public:
 		}
 
 		if (!SUCCEEDED(HRes) ||
-			!SUCCEEDED(HRes = InfoQueue->QueryInterface(__uuidof(ID3D11InfoQueue), reinterpret_cast<void**>(Debug.GetInitReference()))))
+			!SUCCEEDED(HRes = Debug->QueryInterface(__uuidof(ID3D11InfoQueue), reinterpret_cast<void**>(InfoQueue.GetInitReference()))))
 		{
 			UE_LOG(GameplayMediaEncoder, VeryVerbose, TEXT("Failed to get ID3D11InfoQueue: 0x%X - %s"), HRes, *GetComErrorDescription(HRes));
 			return;
@@ -244,38 +243,6 @@ ID3D12Device* GetUE4DxDevice();
 
 #endif
 
-class FThread final : public FRunnable
-{
-public:
-	using FCallback = TFunction<void()>;
-
-	explicit FThread(TCHAR const* ThreadName, const FCallback& Callback) :
-		Callback(Callback)
-	{
-		Thread.Reset(FRunnableThread::Create(this, ThreadName, TPri_BelowNormal));
-	}
-
-	void Join()
-	{
-		Thread->WaitForCompletion();
-	}
-
-	virtual uint32 Run() override
-	{
-		Callback();
-		return 0;
-	}
-
-private:
-	FCallback Callback;
-	TUniquePtr<FRunnableThread> Thread;
-
-private:
-	FThread(const FThread&) = delete;
-	FThread& operator=(const FThread&) = delete;
-};
-
-
 template<typename F>
 inline void ExecuteRHICommand(F&& Functor)
 {
@@ -286,7 +253,7 @@ inline void ExecuteRHICommand(F&& Functor)
 	}
 	else
 	{
-		struct FLocalRHICommand final : public FRHICommand<FLocalRHICommand>
+		FRHICOMMAND_MACRO(FLocalRHICommand)
 		{
 			F Functor;
 

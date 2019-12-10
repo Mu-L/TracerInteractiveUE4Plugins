@@ -176,11 +176,21 @@ public:
 	virtual FText GetDisplayNameToolTipText() const;
 
 	/**
+	 * Return whether the new display name is valid for this node.
+	 */
+	virtual bool ValidateDisplayName(const FText& NewDisplayName, FText& OutErrorMessage) const;
+
+	/**
 	 * Set the node's display name.
 	 *
 	 * @param NewDisplayName the display name to set.
 	 */
 	virtual void SetDisplayName(const FText& NewDisplayName) = 0;
+
+	/**
+	 * @return Whether this track should be drawn as dim 
+	 */
+	virtual bool IsDimmed() const;
 
 	/**
 	 * @return Whether this node handles resize events
@@ -236,6 +246,13 @@ public:
 	 * @return Content to display on the outliner node
 	 */
 	virtual TSharedRef<SWidget> GetCustomOutlinerContent();
+
+	/**
+	 * Creates an additional label widget to appear immediately beside this node's label on the tree
+	 * 
+	 * @return Content to display on the outliner node
+	 */
+	virtual TSharedPtr<SWidget> GetAdditionalOutlinerLabel() { return nullptr; }
 
 	/**
 	 * Generates a widget for display in the section area portion of the track area
@@ -412,6 +429,11 @@ public:
 	virtual void GetChildKeyAreaNodesRecursively(TArray<TSharedRef<class FSequencerSectionKeyAreaNode>>& OutNodes) const;
 
 	/**
+	 * @return The base node this node belongs to, for collections of tracks that are part of an object
+	 */
+	FSequencerDisplayNode* GetBaseNode() const;
+
+	/**
 	 * Set whether this node is expanded or not
 	 */
 	void SetExpansionState(bool bInExpanded);
@@ -420,6 +442,26 @@ public:
 	 * @return Whether or not this node is expanded
 	 */
 	bool IsExpanded() const;
+
+	/**
+	 * Called by FSequencer to update the cached pinned state
+	 */
+	void UpdateCachedPinnedState(bool bParentIsPinned = false);
+
+	/**
+	 * @return Whether or not this node is pinned
+	 */
+	bool IsPinned() const;
+
+	/**
+	 * Toggle whether or not this node is pinned
+	 */
+	void TogglePinned();
+
+	/**
+	 * If this node is pinned, unpin it.
+	 */
+	void Unpin();
 
 	/**
 	 * @return Whether this node is explicitly hidden from the view or not
@@ -532,6 +574,12 @@ protected:
 
 	/** Whether or not the node is expanded */
 	bool bExpanded;
+
+	/** Whether or not the node is pinned */
+	bool bPinned;
+
+	/** Cached value of whether this node or one of it's parents is pinned */
+	bool bInPinnedBranch;
 
 	/** Event that is triggered when rename is requested */
 	FRequestRenameEvent RenameRequestedEvent;

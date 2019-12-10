@@ -142,7 +142,7 @@ void ANavigationTestingActor::PostEditChangeProperty(FPropertyChangedEvent& Prop
 		}
 		else if (ChangedPropName == NAME_ShouldBeVisibleInGame)
 		{
-			bHidden = !bShouldBeVisibleInGame;
+			SetHidden(!bShouldBeVisibleInGame);
 		}
 		else if (ChangedCategory == TEXT("Debug"))
 		{
@@ -250,7 +250,7 @@ void ANavigationTestingActor::PostLoad()
 	}
 #endif
 
-	bHidden = !bShouldBeVisibleInGame;
+	SetHidden(!bShouldBeVisibleInGame);
 }
 
 void ANavigationTestingActor::TickMe()
@@ -286,7 +286,7 @@ void ANavigationTestingActor::UpdateNavData()
 		UNavigationSystemV1* NavSys = FNavigationSystem::GetCurrent<UNavigationSystemV1>(GetWorld());
 		if (NavSys)
 		{
-			MyNavData = NavSys->GetNavDataForProps(NavAgentProps);
+			MyNavData = NavSys->GetNavDataForProps(NavAgentProps, GetActorLocation());
 		}
 	}
 }

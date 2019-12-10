@@ -14,7 +14,7 @@ class FVulkanGenericPlatform
 {
 public:
 	static bool IsSupported() { return true; }
-	static void CheckDeviceDriver(uint32 DeviceIndex, const VkPhysicalDeviceProperties& Props) {}
+	static void CheckDeviceDriver(uint32 DeviceIndex, EGpuVendorId VendorId, const VkPhysicalDeviceProperties& Props) {}
 
 	static bool LoadVulkanLibrary() { return true; }
 	static bool LoadVulkanInstanceFunctions(VkInstance inInstance) { return true; }
@@ -26,7 +26,7 @@ public:
 
 	// Array of required extensions for the platform (Required!)
 	static void GetInstanceExtensions(TArray<const ANSICHAR*>& OutExtensions);
-	static void GetDeviceExtensions(TArray<const ANSICHAR*>& OutExtensions);
+	static void GetDeviceExtensions(EGpuVendorId VendorId, TArray<const ANSICHAR*>& OutExtensions);
 
 	// create the platform-specific surface object - required
 	static void CreateSurface(VkSurfaceKHR* OutSurface);
@@ -47,7 +47,6 @@ public:
 		return PF_Unknown;
 	}
 
-	static bool SupportsDepthFetchDuringDepthTest() { return true; }
 	static bool SupportsTimestampRenderQueries() { return true; }
 
 	static bool RequiresMobileRenderer() { return false; }
@@ -60,7 +59,7 @@ public:
 
 	static bool ForceEnableDebugMarkers() { return false; }
 
-	static bool SupportsDeviceLocalHostVisibleWithNoPenalty() { return false; }
+	static bool SupportsDeviceLocalHostVisibleWithNoPenalty(EGpuVendorId VendorId) { return false; }
 
 	static bool HasUnifiedMemory() { return false; }
 
@@ -103,9 +102,6 @@ public:
 	// Ensure the last frame completed on the GPU
 	static bool RequiresWaitingForFrameCompletionEvent() { return true; }
 
-	// Blocks until hardware window is available
-	static void BlockUntilWindowIsAvailable() {}
-
 	// Does the platform allow a nullptr Pixelshader on the pipeline
 	static bool SupportsNullPixelShader() { return true; }
 
@@ -120,4 +116,7 @@ public:
 
 	// Gathers a list of pso cache filenames to attempt to load
 	static TArray<FString> GetPSOCacheFilenames();
+
+	// Return VK_FALSE if platform wants to suppress the given debug report from the validation layers, VK_TRUE to print it.
+	static VkBool32 DebugReportFunction(VkDebugReportFlagsEXT MsgFlags, VkDebugReportObjectTypeEXT ObjType, uint64_t SrcObject, size_t Location, int32 MsgCode, const ANSICHAR* LayerPrefix, const ANSICHAR* Msg, void* UserData) { return VK_TRUE; }
 };

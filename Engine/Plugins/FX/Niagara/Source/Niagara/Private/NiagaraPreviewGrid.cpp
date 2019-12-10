@@ -80,7 +80,7 @@ ANiagaraPreviewGrid::ANiagaraPreviewGrid(const FObjectInitializer& ObjectInitial
 		if (SpriteComponent)
 		{
 			SpriteComponent->Sprite = ConstructorStatics.SpriteTextureObject.Get();
-			SpriteComponent->RelativeScale3D = FVector(0.5f, 0.5f, 0.5f);
+			SpriteComponent->SetRelativeScale3D_Direct(FVector(0.5f, 0.5f, 0.5f));
 			SpriteComponent->bHiddenInGame = false;
 			SpriteComponent->bIsScreenSizeScaled = true;
 			SpriteComponent->SpriteInfo.Category = ConstructorStatics.ID_Effects;
@@ -100,7 +100,7 @@ ANiagaraPreviewGrid::ANiagaraPreviewGrid(const FObjectInitializer& ObjectInitial
 			ArrowComponent->SpriteInfo.Category = ConstructorStatics.ID_Effects;
 			ArrowComponent->SpriteInfo.DisplayName = ConstructorStatics.NAME_Effects;
 			ArrowComponent->SetupAttachment(RootComponent);
-			ArrowComponent->bAbsoluteScale = true;
+			ArrowComponent->SetUsingAbsoluteScale(true);
 		}
 	}
 #endif // WITH_EDITORONLY_DATA
@@ -324,8 +324,8 @@ void UNiagaraPreviewAxis_InterpParamInt32::ApplyToPreview_Implementation(UNiagar
 	check(PreviewComponent);
 	float Interp = Count > 1 ? (float)PreviewIndex / (Count - 1) : 1.0f;
 	int32 Val = FMath::Lerp(Min, Max, Interp);
-	PreviewComponent->SetNiagaraVariableFloat(Param, Val);
-	OutLabelText = FString::Printf(TEXT("%s = %d"), *Param, Val);
+	PreviewComponent->SetVariableFloat(Param, Val);
+	OutLabelText = FString::Printf(TEXT("%s = %d"), *Param.ToString(), Val);
 }
 void UNiagaraPreviewAxis_InterpParamFloat::ApplyToPreview_Implementation(UNiagaraComponent* PreviewComponent, int32 PreviewIndex, bool bIsXAxis, FString& OutLabelText)
 {
@@ -333,8 +333,8 @@ void UNiagaraPreviewAxis_InterpParamFloat::ApplyToPreview_Implementation(UNiagar
 	check(PreviewComponent);
 	float Interp = Count > 1 ? (float)PreviewIndex / (Count - 1) : 1.0f;
 	float Val = FMath::Lerp(Min, Max, Interp);
-	PreviewComponent->SetNiagaraVariableFloat(Param, Val);
-	OutLabelText = FString::Printf(TEXT("%s = %g"), *Param, Val);
+	PreviewComponent->SetVariableFloat(Param, Val);
+	OutLabelText = FString::Printf(TEXT("%s = %g"), *Param.ToString(), Val);
 }
 void UNiagaraPreviewAxis_InterpParamVector2D::ApplyToPreview_Implementation(UNiagaraComponent* PreviewComponent, int32 PreviewIndex, bool bIsXAxis, FString& OutLabelText)
 {
@@ -342,8 +342,8 @@ void UNiagaraPreviewAxis_InterpParamVector2D::ApplyToPreview_Implementation(UNia
 	check(PreviewComponent);
 	float Interp = Count > 1 ? (float)PreviewIndex / (Count - 1) : 1.0f;
 	FVector2D Val = FMath::Lerp(Min, Max, Interp);
-	PreviewComponent->SetNiagaraVariableVec2(Param, Val);
-	OutLabelText = FString::Printf(TEXT("%s = {%g, %g}"), *Param, Val.X, Val.Y);
+	PreviewComponent->SetVariableVec2(Param, Val);
+	OutLabelText = FString::Printf(TEXT("%s = {%g, %g}"), *Param.ToString(), Val.X, Val.Y);
 }
 void UNiagaraPreviewAxis_InterpParamVector::ApplyToPreview_Implementation(UNiagaraComponent* PreviewComponent, int32 PreviewIndex, bool bIsXAxis, FString& OutLabelText)
 {
@@ -351,8 +351,8 @@ void UNiagaraPreviewAxis_InterpParamVector::ApplyToPreview_Implementation(UNiaga
 	check(PreviewComponent);
 	float Interp = Count > 1 ? (float)PreviewIndex / (Count - 1) : 1.0f;
 	FVector Val = FMath::Lerp(Min, Max, Interp);
-	PreviewComponent->SetNiagaraVariableVec3(Param, Val);
-	OutLabelText = FString::Printf(TEXT("%s = {%g, %g, %g}"), *Param, Val.X, Val.Y, Val.Z);
+	PreviewComponent->SetVariableVec3(Param, Val);
+	OutLabelText = FString::Printf(TEXT("%s = {%g, %g, %g}"), *Param.ToString(), Val.X, Val.Y, Val.Z);
 }
 void UNiagaraPreviewAxis_InterpParamVector4::ApplyToPreview_Implementation(UNiagaraComponent* PreviewComponent, int32 PreviewIndex, bool bIsXAxis, FString& OutLabelText)
 {
@@ -360,8 +360,8 @@ void UNiagaraPreviewAxis_InterpParamVector4::ApplyToPreview_Implementation(UNiag
 	check(PreviewComponent);
 	float Interp = Count > 1 ? (float)PreviewIndex / (Count - 1) : 1.0f;
 	FVector4 Val = FMath::Lerp(Min, Max, Interp);
-	PreviewComponent->SetNiagaraVariableVec4(Param, Val);
-	OutLabelText = FString::Printf(TEXT("%s = {%g, %g, %g, %g}"), *Param, Val.X, Val.Y, Val.Z, Val.W);
+	PreviewComponent->SetVariableVec4(Param, Val);
+	OutLabelText = FString::Printf(TEXT("%s = {%g, %g, %g, %g}"), *Param.ToString(), Val.X, Val.Y, Val.Z, Val.W);
 }
 void UNiagaraPreviewAxis_InterpParamLinearColor::ApplyToPreview_Implementation(UNiagaraComponent* PreviewComponent, int32 PreviewIndex, bool bIsXAxis, FString& OutLabelText)
 {
@@ -369,6 +369,6 @@ void UNiagaraPreviewAxis_InterpParamLinearColor::ApplyToPreview_Implementation(U
 	check(PreviewComponent);
 	float Interp = Count > 1 ? (float)PreviewIndex / (Count - 1) : 1.0f;
 	FLinearColor Val = FMath::Lerp(Min, Max, Interp);
-	PreviewComponent->SetNiagaraVariableLinearColor(Param, Val);
-	OutLabelText = FString::Printf(TEXT("%s = {%g, %g, %g, %g}"), *Param, Val.R, Val.G, Val.B, Val.A);
+	PreviewComponent->SetVariableLinearColor(Param, Val);
+	OutLabelText = FString::Printf(TEXT("%s = {%g, %g, %g, %g}"), *Param.ToString(), Val.R, Val.G, Val.B, Val.A);
 }

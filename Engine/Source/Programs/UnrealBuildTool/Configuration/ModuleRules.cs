@@ -11,6 +11,27 @@ using Tools.DotNETCommon;
 namespace UnrealBuildTool
 {
 	/// <summary>
+	/// Controls how a particular warning is treated
+	/// </summary>
+	public enum WarningLevel
+	{
+		/// <summary>
+		/// Do not display diagnostics
+		/// </summary>
+		Off,
+
+		/// <summary>
+		/// Output warnings normally
+		/// </summary>
+		Warning,
+
+		/// <summary>
+		/// Output warnings as errors
+		/// </summary>
+		Error,
+	}
+
+	/// <summary>
 	/// ModuleRules is a data structure that contains the rules for defining a module
 	/// </summary>
 	public class ModuleRules
@@ -139,7 +160,6 @@ namespace UnrealBuildTool
 			/// </summary>
 			VisibileForDll,
 		}
-
 
 		/// <summary>
 		/// Information about a file which is required by the target at runtime, and must be moved around with it.
@@ -409,7 +429,7 @@ namespace UnrealBuildTool
 		internal DirectoryReference Directory;
 
 		/// <summary>
-		/// Additional directories that contribute to this module (likely in UnrealBuildTool.PlatformExtensionsDirectory). 
+		/// Additional directories that contribute to this module (likely in UnrealBuildTool.EnginePlatformExtensionsDirectory). 
 		/// The dictionary tracks module subclasses 
 		/// </summary>
 		internal Dictionary<Type, DirectoryReference> DirectoriesForModuleSubClasses;
@@ -440,10 +460,31 @@ namespace UnrealBuildTool
 		/// </summary>
 		public string BinariesSubFolder = "";
 
+		private CodeOptimization? OptimizeCodeOverride;
+
 		/// <summary>
 		/// When this module's code should be optimized.
 		/// </summary>
-		public CodeOptimization OptimizeCode = CodeOptimization.Default;
+		public CodeOptimization OptimizeCode
+		{
+			get
+			{
+				if (OptimizeCodeOverride.HasValue)
+					return OptimizeCodeOverride.Value;
+
+				bool? ShouldOptimizeCode = null;
+				if (Target.EnableOptimizeCodeForModules?.Contains(Name) ?? false)
+					ShouldOptimizeCode = true;
+				if (Target.DisableOptimizeCodeForModules?.Contains(Name) ?? false)
+					ShouldOptimizeCode = false;
+
+				if (!ShouldOptimizeCode.HasValue)
+					return CodeOptimization.Default;
+
+				return ShouldOptimizeCode.Value ? CodeOptimization.Always : CodeOptimization.Never;
+			}
+			set { OptimizeCodeOverride = value; }
+		}
 
 		/// <summary>
 		/// Explicit private PCH for this module. Implies that this module will not use a shared PCH.
@@ -464,7 +505,34 @@ namespace UnrealBuildTool
 		/// <summary>
 		/// Precompiled header usage for this module
 		/// </summary>
-		public PCHUsageMode PCHUsage = PCHUsageMode.Default;
+		public PCHUsageMode PCHUsage
+		{
+			get
+			{
+				if (PCHUsagePrivate.HasValue)
+				{
+					// Use the override
+					return PCHUsagePrivate.Value;
+				}
+				else if(Target.bIWYU || DefaultBuildSettings >= BuildSettingsVersion.V2)
+				{
+					// Use shared or explicit PCHs, and enable IWYU
+					return PCHUsageMode.UseExplicitOrSharedPCHs;
+				}
+				else if(Plugin != null)
+				{
+					// Older plugins use shared PCHs by default, since they aren't typically large enough to warrant their own PCH.
+					return PCHUsageMode.UseSharedPCHs;
+				}
+				else
+				{
+					// Older game modules do not enable shared PCHs by default, because games usually have a large precompiled header of their own.
+					return PCHUsageMode.NoSharedPCHs;
+				}
+			}
+			set { PCHUsagePrivate = value; }
+		}
+		private PCHUsageMode? PCHUsagePrivate;
 
 		/// <summary>
 		/// Whether this module should be treated as an engine module (eg. using engine definitions, PCHs, compiled with optimizations enabled in DebugGame configurations, etc...).
@@ -473,10 +541,25 @@ namespace UnrealBuildTool
 		public bool bTreatAsEngineModule;
 
 		/// <summary>
+		/// Which engine version's build settings to use by default. 
+		/// </summary>
+		public BuildSettingsVersion DefaultBuildSettings
+		{
+			get { return DefaultBuildSettingsPrivate ?? Target.DefaultBuildSettings; }
+			set { DefaultBuildSettingsPrivate = value; }
+		}
+		private BuildSettingsVersion? DefaultBuildSettingsPrivate;
+
+		/// <summary>
 		/// Whether to use backwards compatible defaults for this module. By default, engine modules always use the latest default settings, while project modules do not (to support
 		/// an easier migration path).
 		/// </summary>
-		public bool bUseBackwardsCompatibleDefaults;
+		[Obsolete("Set DefaultBuildSettings to the appropriate engine version instead")]
+		public bool bUseBackwardsCompatibleDefaults
+		{
+			get { return DefaultBuildSettings != BuildSettingsVersion.Latest; }
+			set { DefaultBuildSettings = bUseBackwardsCompatibleDefaults? BuildSettingsVersion.V1 : BuildSettingsVersion.Latest; }
+		}
 
 		/// <summary>
 		/// Use run time type information
@@ -504,9 +587,24 @@ namespace UnrealBuildTool
 		public bool bEnableObjCExceptions = false;
 
 		/// <summary>
+		/// How to treat shadow variable warnings
+		/// </summary>
+		public WarningLevel ShadowVariableWarningLevel
+		{
+			get { return ShadowVariableWarningLevelPrivate ?? ((DefaultBuildSettings >= BuildSettingsVersion.V2) ? WarningLevel.Error : Target.ShadowVariableWarningLevel); }
+			set { ShadowVariableWarningLevelPrivate = value; }
+		}
+		private WarningLevel? ShadowVariableWarningLevelPrivate;
+
+		/// <summary>
 		/// Enable warnings for shadowed variables
 		/// </summary>
-		public bool bEnableShadowVariableWarnings = true;
+		[Obsolete("The bEnableShadowVariableWarnings setting is deprecated in UE 4.24. Please use ShadowVariableWarningLevel = WarningLevel.Warning/Off; instead.")]
+		public bool bEnableShadowVariableWarnings
+		{
+			get { return ShadowVariableWarningLevel >= WarningLevel.Warning; }
+			set { ShadowVariableWarningLevel = (value ? WarningLevel.Warning : WarningLevel.Off); }
+		}
 
 		/// <summary>
 		/// Enable warnings for using undefined identifiers in #if expressions
@@ -516,7 +614,29 @@ namespace UnrealBuildTool
 		/// <summary>
 		/// If true and unity builds are enabled, this module will build without unity.
 		/// </summary>
-		public bool bFasterWithoutUnity = false;
+		[Obsolete("bFasterWithoutUnity has been deprecated in favor of setting 'bUseUnity' on a per module basis in BuildConfiguration")]
+		public bool bFasterWithoutUnity
+		{
+			set { bUseUnity = value; }
+		}
+
+		private bool? bUseUnityOverride;
+		/// <summary>
+		/// If unity builds are enabled this can be used to override if this specific module will build using Unity.
+		/// This is set using the per module configurations in BuildConfiguration.
+		/// </summary>
+		public bool bUseUnity
+		{
+			set { bUseUnityOverride = value; }
+			get
+			{
+				bool UseUnity = true;
+				if (Target.DisableUnityBuildForModules?.Contains(Name) ?? false)
+					UseUnity = false;
+				return bUseUnityOverride ?? UseUnity;
+			}
+		}
+
 
 		/// <summary>
 		/// The number of source files in this module before unity build will be activated for that module.  If set to
@@ -544,7 +664,17 @@ namespace UnrealBuildTool
 		/// dependencies on modules that are not (i.e. CarefullyRedist, NotForLicensees, NoRedist).
 		/// This should be used when you plan to release binaries but not source.
 		/// </summary>
-		public bool bOutputPubliclyDistributable = false;
+		public bool bLegalToDistributeObjectCode = false;
+
+		/// <summary>
+		/// Obsolete. Use bLegalToDistributeObjectCode instead.
+		/// </summary>
+		[Obsolete("bOutputPubliclyDistributable has been deprecated in 4.24. Use bLegalToDistributeObjectCode instead.")]
+		public bool bOutputPubliclyDistributable
+		{
+			get { return bLegalToDistributeObjectCode; }
+			set { bLegalToDistributeObjectCode = value; }
+		}
 
 		/// <summary>
 		/// List of folders which are whitelisted to be referenced when compiling this binary, without propagating restricted folder names
@@ -629,7 +759,14 @@ namespace UnrealBuildTool
 		/// <summary>
 		/// List of system/library paths (directory of .lib files) - typically used for External (third party) modules
 		/// </summary>
-		public List<string> PublicLibraryPaths = new List<string>();
+		[Obsolete(
+			"For external libraries use the full path in PublicAdditionalLibraries, if its a system library then use PublicSystemLibraries/PublicSystemLibraryPaths")]
+		public List<string> PublicLibraryPaths => PublicSystemLibraryPaths;
+
+		/// <summary>
+		/// List of system library paths (directory of .lib files) - for External (third party) modules please use the PublicAdditionalLibaries instead
+		/// </summary>
+		public List<string> PublicSystemLibraryPaths = new List<string>();
 
 		/// <summary>
 		/// List of search paths for libraries at runtime (eg. .so files)
@@ -645,6 +782,11 @@ namespace UnrealBuildTool
 		/// List of additional libraries (names of the .lib files including extension) - typically used for External (third party) modules
 		/// </summary>
 		public List<string> PublicAdditionalLibraries = new List<string>();
+
+		/// <summary>
+		/// List of system libraries to use - these are typically referenced via name and then found via the system paths. If you need to reference a .lib file use the PublicAdditionalLibraries instead
+		/// </summary>
+		public List<string> PublicSystemLibraries = new List<string>();
 
 		/// <summary>
 		/// List of XCode frameworks (iOS and MacOS)
@@ -754,6 +896,11 @@ namespace UnrealBuildTool
 		public List<string> ExternalDependencies = new List<string>();
 
 		/// <summary>
+		/// Subclass rules files which invalidate the makefile if modified.
+		/// </summary>
+		public List<string> SubclassRules;
+
+		/// <summary>
 		/// Whether this module requires the IMPLEMENT_MODULE macro to be implemented. Most UE4 modules require this, since we use the IMPLEMENT_MODULE macro
 		/// to do other global overloads (eg. operator new/delete forwarding to GMalloc).
 		/// </summary>
@@ -763,7 +910,12 @@ namespace UnrealBuildTool
 		/// Whether this module qualifies included headers from other modules relative to the root of their 'Public' folder. This reduces the number
 		/// of search paths that have to be passed to the compiler, improving performance and reducing the length of the compiler command line.
 		/// </summary>
-		public bool? bLegacyPublicIncludePaths;
+		public bool bLegacyPublicIncludePaths
+		{
+			set { bLegacyPublicIncludePathsPrivate = value; }
+			get { return bLegacyPublicIncludePathsPrivate ?? ((DefaultBuildSettings < BuildSettingsVersion.V2)? Target.bLegacyPublicIncludePaths : false); }
+		}
+		private bool? bLegacyPublicIncludePathsPrivate;
 
 		/// <summary>
 		/// Which stanard to use for compiling this module
@@ -881,24 +1033,24 @@ namespace UnrealBuildTool
 			PublicIncludePathModuleNames.Add("PhysicsCore");
 			PublicDependencyModuleNames.Add("PhysicsCore");
 
-			bool bUseNonPhysXInterface = Target.bUseChaos == true || Target.bCompileImmediatePhysics == true;
+			bool bUseNonPhysXInterface = Target.bUseChaos == true;
+            PublicIncludePathModuleNames.AddRange(
+                new string[] {
+                    "Chaos",
+					"FieldSystemCore"
+                }
+            );
+            PublicDependencyModuleNames.AddRange(
+				new string[] {
+					"Chaos",
+					"FieldSystemCore"
+                }
+            );
 
             // 
             if (Target.bCompileChaos == true || Target.bUseChaos == true)
             {
                 PublicDefinitions.Add("INCLUDE_CHAOS=1");
-                PublicIncludePathModuleNames.AddRange(
-                    new string[] {
-                        "Chaos",
-						"FieldSystemCore"
-                    }
-                );
-                PublicDependencyModuleNames.AddRange(
-                  new string[] {
-                        "Chaos",
-						"FieldSystemCore"
-                  }
-                );
             }
             else
             {
@@ -921,6 +1073,7 @@ namespace UnrealBuildTool
 			{
 				// Disable non-physx interfaces
 				PublicDefinitions.Add("WITH_CHAOS=0");
+				PublicDefinitions.Add("WITH_CHAOS_CLOTHING=0");
 
 				// 
 				// WITH_CHAOS_NEEDS_TO_BE_FIXED
@@ -934,8 +1087,6 @@ namespace UnrealBuildTool
 				// have been fixed across the different builds. 
 				//
 				PublicDefinitions.Add("WITH_CHAOS_NEEDS_TO_BE_FIXED=0");
-
-				PublicDefinitions.Add("PHYSICS_INTERFACE_LLIMMEDIATE=0");
 
 				if (Target.bCompilePhysX)
 				{
@@ -1001,7 +1152,6 @@ namespace UnrealBuildTool
 				PublicDefinitions.Add("PHYSICS_INTERFACE_PHYSX=0");
 				PublicDefinitions.Add("WITH_APEX=0");
 				PublicDefinitions.Add("WITH_APEX_CLOTHING=0");
-				PublicDefinitions.Add("WITH_CLOTH_COLLISION_DETECTION=0");
 				PublicDefinitions.Add(string.Format("WITH_PHYSX_COOKING={0}", Target.bBuildEditor && Target.bCompilePhysX ? 1 : 0));  // without APEX, we only need cooking in editor builds
 				PublicDefinitions.Add("WITH_NVCLOTH=0");
 
@@ -1010,6 +1160,8 @@ namespace UnrealBuildTool
 					PublicDefinitions.Add("WITH_CHAOS=1");
 					PublicDefinitions.Add("WITH_CHAOS_NEEDS_TO_BE_FIXED=1");
 					PublicDefinitions.Add("COMPILE_ID_TYPES_AS_INTS=0");
+					PublicDefinitions.Add("WITH_CHAOS_CLOTHING=1");
+					PublicDefinitions.Add("WITH_CLOTH_COLLISION_DETECTION=1");
 					
 					PublicIncludePathModuleNames.AddRange(
 						new string[] {
@@ -1027,16 +1179,8 @@ namespace UnrealBuildTool
 				{
 					PublicDefinitions.Add("WITH_CHAOS=0");
 					PublicDefinitions.Add("WITH_CHAOS_NEEDS_TO_BE_FIXED=0");
-				}
-
-				if(Target.bCompileImmediatePhysics)
-				{
-					PublicDefinitions.Add("PHYSICS_INTERFACE_LLIMMEDIATE=1");
-					PublicDependencyModuleNames.Add("PhysX");
-				}
-				else
-				{
-					PublicDefinitions.Add("PHYSICS_INTERFACE_LLIMMEDIATE=0");
+					PublicDefinitions.Add("WITH_CHAOS_CLOTHING=0");
+					PublicDefinitions.Add("WITH_CLOTH_COLLISION_DETECTION=0");
 				}
 			}
 
@@ -1067,7 +1211,7 @@ namespace UnrealBuildTool
 					case ModuleRules.PrecompileTargetsType.None:
 						return false;
 					case ModuleRules.PrecompileTargetsType.Default:
-						return (Target.Type == TargetType.Editor || !RulesFile.IsUnderDirectory(UnrealBuildTool.EngineSourceDeveloperDirectory) || Plugin != null);
+						return (Target.Type == TargetType.Editor || !UnrealBuildTool.GetAllEngineDirectories("Source/Developer").Any(Dir => RulesFile.IsUnderDirectory(Dir)) || Plugin != null);
 					case ModuleRules.PrecompileTargetsType.Game:
 						return (Target.Type == TargetType.Client || Target.Type == TargetType.Server || Target.Type == TargetType.Game);
 					case ModuleRules.PrecompileTargetsType.Editor:

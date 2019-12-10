@@ -23,10 +23,12 @@ public:
 	FD3D12VertexElements VertexElements;
 
 	uint16 StreamStrides[MaxVertexElementCount];
+	uint32 Hash;
 
 	/** Initialization constructor. */
-	explicit FD3D12VertexDeclaration(const FD3D12VertexElements& InElements, const uint16* InStrides)
+	explicit FD3D12VertexDeclaration(const FD3D12VertexElements& InElements, const uint16* InStrides, const uint32 InHash)
 		: VertexElements(InElements)
+		, Hash(InHash)
 	{
 		FMemory::Memcpy(StreamStrides, InStrides, sizeof(StreamStrides));
 	}
@@ -34,8 +36,13 @@ public:
 	virtual bool GetInitializer(FVertexDeclarationElementList& Init) final override;
 };
 
+struct FD3D12ShaderData
+{
+	TArray<FShaderCodeVendorExtension> VendorExtensions;
+};
+
 /** This represents a vertex shader that hasn't been combined with a specific declaration to create a bound shader. */
-class FD3D12VertexShader : public FRHIVertexShader
+class FD3D12VertexShader : public FRHIVertexShader, public FD3D12ShaderData
 {
 public:
 	enum { StaticFrequency = SF_Vertex };
@@ -54,7 +61,7 @@ public:
 	FShaderCodePackedResourceCounts ResourceCounts;
 };
 
-class FD3D12GeometryShader : public FRHIGeometryShader
+class FD3D12GeometryShader : public FRHIGeometryShader, public FD3D12ShaderData
 {
 public:
 	enum { StaticFrequency = SF_Geometry };
@@ -67,40 +74,10 @@ public:
 	/** The shader's bytecode, with custom data in the last byte. */
 	TArray<uint8> Code;
 
-	/** The shader's stream output description. */
-	D3D12_STREAM_OUTPUT_DESC StreamOutput;
-	D3D12_SO_DECLARATION_ENTRY* pStreamOutEntries;
-	uint32* pStreamOutStrides;
-
-	bool bShaderNeedsStreamOutput;
-
 	FShaderCodePackedResourceCounts ResourceCounts;
-
-	FD3D12GeometryShader()
-		: pStreamOutEntries(nullptr)
-		, pStreamOutStrides(nullptr)
-		, bShaderNeedsStreamOutput(false)
-	{
-		FMemory::Memzero(&StreamOutput, sizeof(StreamOutput));
-	}
-
-	virtual ~FD3D12GeometryShader()
-	{
-		if (pStreamOutEntries)
-		{
-			delete[] pStreamOutEntries;
-			pStreamOutEntries = nullptr;
-		}
-
-		if (pStreamOutStrides)
-		{
-			delete[] pStreamOutStrides;
-			pStreamOutStrides = nullptr;
-		}
-	}
 };
 
-class FD3D12HullShader : public FRHIHullShader
+class FD3D12HullShader : public FRHIHullShader, public FD3D12ShaderData
 {
 public:
 	enum { StaticFrequency = SF_Hull };
@@ -116,7 +93,7 @@ public:
 	FShaderCodePackedResourceCounts ResourceCounts;
 };
 
-class FD3D12DomainShader : public FRHIDomainShader
+class FD3D12DomainShader : public FRHIDomainShader, public FD3D12ShaderData
 {
 public:
 	enum { StaticFrequency = SF_Domain };
@@ -132,7 +109,7 @@ public:
 	FShaderCodePackedResourceCounts ResourceCounts;
 };
 
-class FD3D12PixelShader : public FRHIPixelShader
+class FD3D12PixelShader : public FRHIPixelShader, public FD3D12ShaderData
 {
 public:
 	enum { StaticFrequency = SF_Pixel };
@@ -148,7 +125,7 @@ public:
 	FShaderCodePackedResourceCounts ResourceCounts;
 };
 
-class FD3D12ComputeShader : public FRHIComputeShader
+class FD3D12ComputeShader : public FRHIComputeShader, public FD3D12ShaderData
 {
 public:
 	enum { StaticFrequency = SF_Compute };
@@ -207,7 +184,7 @@ public:
 
 #if D3D12_RHI_RAYTRACING
 
-class FD3D12RayTracingShader : public FRHIRayTracingShader
+class FD3D12RayTracingShader : public FRHIRayTracingShader, public FD3D12ShaderData
 {
 public:
 	/** The shader's bytecode. */

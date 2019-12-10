@@ -33,12 +33,14 @@
 #include "Widgets/Text/SInlineEditableTextBlock.h"
 #include "Materials/MaterialFunctionInstance.h"
 #include "Framework/Application/SlateApplication.h"
-#include "Toolkits/AssetEditorManager.h"
+
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Curves/CurveLinearColor.h"
 #include "Curves/CurveLinearColorAtlas.h"
 #include "Widgets/Views/SExpanderArrow.h"
 #include "Widgets/Layout/SWidgetSwitcher.h"
+#include "MaterialEditor/DEditorRuntimeVirtualTextureParameterValue.h"
+
 
 
 #define LOCTEXT_NAMESPACE "MaterialLayerCustomization"
@@ -99,6 +101,7 @@ void SMaterialParametersOverviewTreeItem::Construct(const FArguments& InArgs, co
 		UDEditorStaticComponentMaskParameterValue* CompMaskParam = Cast<UDEditorStaticComponentMaskParameterValue>(StackParameterData->Parameter);
 		UDEditorVectorParameterValue* VectorParam = Cast<UDEditorVectorParameterValue>(StackParameterData->Parameter);
 		UDEditorScalarParameterValue* ScalarParam = Cast<UDEditorScalarParameterValue>(StackParameterData->Parameter);
+		UDEditorTextureParameterValue* TextureParam = Cast<UDEditorTextureParameterValue>(StackParameterData->Parameter);
 
 		TAttribute<bool> IsParamEnabled = TAttribute<bool>::Create(TAttribute<bool>::FGetter::CreateStatic(&FMaterialPropertyHelpers::IsOverriddenExpression, StackParameterData->Parameter));
 		NameOverride = FText::FromName(StackParameterData->Parameter->ParameterInfo.Name);
@@ -165,11 +168,167 @@ void SMaterialParametersOverviewTreeItem::Construct(const FArguments& InArgs, co
 					.NewAssetFactories(TArray<UFactory*>())
 					.DisplayThumbnail(true)
 					.ThumbnailPool(Tree.Pin()->GetTreeThumbnailPool())
+					.OnShouldFilterAsset(FOnShouldFilterAsset::CreateStatic(&FMaterialPropertyHelpers::OnShouldFilterCurveAsset, ScalarParam->AtlasData.Atlas))
 					.OnShouldSetAsset(FOnShouldSetAsset::CreateStatic(&FMaterialPropertyHelpers::OnShouldSetCurveAsset, ScalarParam->AtlasData.Atlas))
 					.OnObjectChanged(FOnSetObject::CreateStatic(&FMaterialPropertyHelpers::SetPositionFromCurveAsset, ScalarParam->AtlasData.Atlas, ScalarParam, StackParameterData->ParameterHandle, (UObject*)MaterialEditorInstance))
 					.DisplayCompactSize(true)
 				];
 			
+		}
+		else if (TextureParam)
+		{
+			UMaterial *Material = MaterialEditorInstance->PreviewMaterial;
+			if (Material != nullptr)
+			{
+				UMaterialExpressionTextureSampleParameter* Expression = Material->FindExpressionByGUID<UMaterialExpressionTextureSampleParameter>(TextureParam->ExpressionId);
+				if (Expression != nullptr)
+				{
+					TWeakObjectPtr<UMaterialExpressionTextureSampleParameter> SamplerExpression = Expression;
+					TSharedPtr<SWidget> NameWidget;
+					TSharedPtr<SWidget> ValueWidget;
+					FDetailWidgetRow DefaultRow;
+					Row.GetDefaultWidgets(NameWidget, ValueWidget, DefaultRow);
+
+					FDetailWidgetRow &DetailWidgetRow = Row.CustomWidget();
+					TSharedPtr<SVerticalBox> NameVerticalBox;
+					DetailWidgetRow.NameContent()
+						[
+							SAssignNew(NameVerticalBox, SVerticalBox)
+							+ SVerticalBox::Slot()
+							.AutoHeight()
+							[
+								SNew(STextBlock)
+								.Text(FText::FromName(StackParameterData->Parameter->ParameterInfo.Name))
+								.Font(FEditorStyle::GetFontStyle(TEXT("PropertyWindow.NormalFont")))
+							]
+						];
+
+					DetailWidgetRow.ValueContent()
+						.MinDesiredWidth(DefaultRow.ValueWidget.MinWidth)
+						.MaxDesiredWidth(DefaultRow.ValueWidget.MaxWidth)
+						[
+							SNew(SObjectPropertyEntryBox)
+							.PropertyHandle(StackParameterData->ParameterNode->CreatePropertyHandle())
+							.AllowedClass(UTexture::StaticClass())
+							.ThumbnailPool(Tree.Pin()->GetTreeThumbnailPool())
+							.OnShouldFilterAsset_Lambda([SamplerExpression](const FAssetData& AssetData)
+							{
+								if (SamplerExpression.Get())
+								{
+									bool VirtualTextured = false;
+									AssetData.GetTagValue<bool>("VirtualTextureStreaming", VirtualTextured);
+
+									bool ExpressionIsVirtualTextured = IsVirtualSamplerType(SamplerExpression->SamplerType);
+
+									return VirtualTextured != ExpressionIsVirtualTextured;
+								}
+								else
+								{
+									return false;
+								}
+							})
+						];
+
+					static const FName Red("R");
+					static const FName Green("G");
+					static const FName Blue("B");
+					static const FName Alpha("A");
+
+					if (!TextureParam->ChannelNames.R.IsEmpty())
+					{
+						NameVerticalBox->AddSlot()
+							[
+								SNew(SHorizontalBox)
+								+ SHorizontalBox::Slot()
+							.AutoWidth()
+							.Padding(20.0, 2.0, 4.0, 2.0)
+							[
+								SNew(STextBlock)
+								.Text(FText::FromName(Red))
+							.Font(FEditorStyle::GetFontStyle(TEXT("PropertyWindow.BoldFont")))
+							]
+						+ SHorizontalBox::Slot()
+							.HAlign(HAlign_Left)
+							.Padding(4.0, 2.0)
+							[
+								SNew(STextBlock)
+								.Text(TextureParam->ChannelNames.R)
+							.Font(FEditorStyle::GetFontStyle(TEXT("PropertyWindow.NormalFont")))
+							]
+							];
+					}
+					if (!TextureParam->ChannelNames.G.IsEmpty())
+					{
+						NameVerticalBox->AddSlot()
+							[
+								SNew(SHorizontalBox)
+								+ SHorizontalBox::Slot()
+								.Padding(20.0, 2.0, 4.0, 2.0)
+								.AutoWidth()
+								[
+									SNew(STextBlock)
+									.Text(FText::FromName(Green))
+									.Font(FEditorStyle::GetFontStyle(TEXT("PropertyWindow.BoldFont")))
+								]
+								+ SHorizontalBox::Slot()
+								.HAlign(HAlign_Left)
+								.Padding(4.0, 2.0)
+								[
+									SNew(STextBlock)
+									.Text(TextureParam->ChannelNames.G)
+									.Font(FEditorStyle::GetFontStyle(TEXT("PropertyWindow.NormalFont")))
+								]
+							];
+					}
+					if (!TextureParam->ChannelNames.B.IsEmpty())
+					{
+						NameVerticalBox->AddSlot()
+							[
+								SNew(SHorizontalBox)
+								+ SHorizontalBox::Slot()
+								.Padding(20.0, 2.0, 4.0, 2.0)
+								.AutoWidth()
+								[
+									SNew(STextBlock)
+									.Text(FText::FromName(Blue))
+									.Font(FEditorStyle::GetFontStyle(TEXT("PropertyWindow.BoldFont")))
+								]
+								+ SHorizontalBox::Slot()
+								.HAlign(HAlign_Left)
+								.Padding(4.0, 2.0)
+								[
+									SNew(STextBlock)
+									.Text(TextureParam->ChannelNames.B)
+									.Font(FEditorStyle::GetFontStyle(TEXT("PropertyWindow.NormalFont")))
+								]
+							];
+					}
+					if (!TextureParam->ChannelNames.A.IsEmpty())
+					{
+						NameVerticalBox->AddSlot()
+							[
+								SNew(SHorizontalBox)
+								+ SHorizontalBox::Slot()
+								.Padding(20.0, 2.0, 4.0, 2.0)
+								.AutoWidth()
+								[
+									SNew(STextBlock)
+									.Text(FText::FromName(Alpha))
+									.Font(FEditorStyle::GetFontStyle(TEXT("PropertyWindow.BoldFont")))
+								]
+								+ SHorizontalBox::Slot()
+								.HAlign(HAlign_Left)
+								.Padding(4.0, 2.0)
+								[
+									SNew(STextBlock)
+									.Text(TextureParam->ChannelNames.A)
+									.Font(FEditorStyle::GetFontStyle(TEXT("PropertyWindow.NormalFont")))
+								]
+							];
+					}
+
+				}
+			}
 		}
 		else if (!CompMaskParam)
 		{
@@ -501,11 +660,36 @@ void SMaterialParametersOverviewTree::CreateGroupsWidget()
 			{
 				FUnsortedParamData NonLayerProperty;
 				UDEditorScalarParameterValue* ScalarParam = Cast<UDEditorScalarParameterValue>(Parameter);
+				UDEditorVectorParameterValue* VectorParam = Cast<UDEditorVectorParameterValue>(Parameter);
 
 				if (ScalarParam && ScalarParam->SliderMax > ScalarParam->SliderMin)
 				{
 					ParameterValueProperty->SetInstanceMetaData("UIMin", FString::Printf(TEXT("%f"), ScalarParam->SliderMin));
 					ParameterValueProperty->SetInstanceMetaData("UIMax", FString::Printf(TEXT("%f"), ScalarParam->SliderMax));
+				}
+
+				if (VectorParam)
+				{
+					static const FName Red("R");
+					static const FName Green("G");
+					static const FName Blue("B");
+					static const FName Alpha("A");
+					if (!VectorParam->ChannelNames.R.IsEmpty())
+					{
+						ParameterProperty->GetChildHandle(Red)->SetPropertyDisplayName(VectorParam->ChannelNames.R);
+					}
+					if (!VectorParam->ChannelNames.G.IsEmpty())
+					{
+						ParameterProperty->GetChildHandle(Green)->SetPropertyDisplayName(VectorParam->ChannelNames.G);
+					}
+					if (!VectorParam->ChannelNames.B.IsEmpty())
+					{
+						ParameterProperty->GetChildHandle(Blue)->SetPropertyDisplayName(VectorParam->ChannelNames.B);
+					}
+					if (!VectorParam->ChannelNames.A.IsEmpty())
+					{
+						ParameterProperty->GetChildHandle(Alpha)->SetPropertyDisplayName(VectorParam->ChannelNames.A);
+					}
 				}
 
 				NonLayerProperty.Parameter = Parameter;
@@ -562,6 +746,7 @@ void SMaterialParametersOverviewTree::ShowSubParameters()
 
 
 			UDEditorStaticComponentMaskParameterValue* CompMaskParam = Cast<UDEditorStaticComponentMaskParameterValue>(Parameter);
+			// No children for masks
 			if (!CompMaskParam)
 			{
 				TArray<TSharedRef<IDetailTreeNode>> ParamChildren;
@@ -578,16 +763,21 @@ void SMaterialParametersOverviewTree::ShowSubParameters()
 					ChildProperty->Children.Add(ParamChildProperty);
 				}
 			}
-			for (TSharedPtr<struct FSortedParamData> GroupChild : SortedParameters)
+
+			UDEditorRuntimeVirtualTextureParameterValue* VTParameter = Cast<UDEditorRuntimeVirtualTextureParameterValue>(Parameter);
+			//Don't show VT samples here
+			if (!VTParameter)
 			{
-				if (GroupChild->Group.GroupName == Property.ParameterGroup.GroupName
-					&& GroupChild->ParameterInfo.Association == ChildProperty->ParameterInfo.Association
-					&&  GroupChild->ParameterInfo.Index == ChildProperty->ParameterInfo.Index)
+				for (TSharedPtr<struct FSortedParamData> GroupChild : SortedParameters)
 				{
-					GroupChild->Children.Add(ChildProperty);
+					if (GroupChild->Group.GroupName == Property.ParameterGroup.GroupName
+						&& GroupChild->ParameterInfo.Association == ChildProperty->ParameterInfo.Association
+						&&  GroupChild->ParameterInfo.Index == ChildProperty->ParameterInfo.Index)
+					{
+						GroupChild->Children.Add(ChildProperty);
+					}
 				}
 			}
-
 		}
 	}
 }
@@ -617,69 +807,70 @@ void SMaterialParametersOverviewPanel::Refresh()
 		OnChildButtonClicked = FOnClicked::CreateStatic(&FMaterialPropertyHelpers::OnClickedSaveNewMaterialInstance, ImplicitConv<UMaterialInterface*>(MaterialEditorInstance->OriginalMaterial), ImplicitConv<UObject*>(MaterialEditorInstance));
 	}
 
+	if (NestedTree->HasAnyParameters())
 	{
 		this->ChildSlot
 			[
 				SNew(SVerticalBox)
-				+SVerticalBox::Slot()
-				[
-					SNew(SBorder)
-					.BorderImage(this, &SMaterialParametersOverviewPanel::GetBackgroundImage)
-					.Padding(FMargin(4.0f))
-					[
-						SNew(SVerticalBox)
-						+ SVerticalBox::Slot()
-						.AutoHeight()
-						[
-							SAssignNew(HeaderBox, SHorizontalBox)
-							+ SHorizontalBox::Slot()
-							.Padding(FMargin(3.0f, 1.0f))
-							.HAlign(HAlign_Left)
-							.AutoWidth()
-							.VAlign(VAlign_Center)
-							[
-								SNew(STextBlock)
-								.Text(LOCTEXT("ParameterDefaults", "Parameter Defaults"))
-								.Font(FEditorStyle::GetFontStyle("DetailsView.CategoryFontStyle"))
-								.ShadowOffset(FVector2D(1.0f, 1.0f))
-							]
-						]
-						+ SVerticalBox::Slot()
-						.Padding(FMargin(3.0f, 2.0f, 3.0f, 3.0f))
-						[
-							SNew(SBorder)
-							.BorderImage(FEditorStyle::GetBrush("DetailsView.CategoryTop"))
-							[
-								SNew(SHorizontalBox)
-								+ SHorizontalBox::Slot()
-								.HAlign(HAlign_Fill)
-								[
-									SNew(SWidgetSwitcher)
-									.WidgetIndex(this, &SMaterialParametersOverviewPanel::GetPanelIndex)
-									+SWidgetSwitcher::Slot()
-									[
-										SNew(STextBlock)
-										.Text(LOCTEXT("AddParams", "Add parameters to see them here."))
-									]
-									+SWidgetSwitcher::Slot()
-									[
-										NestedTree.ToSharedRef()
-									]	
-								]
-								+ SHorizontalBox::Slot()
-								.HAlign(HAlign_Right)
-								.AutoWidth()
-								[
-									SNew(SBox)
-									.WidthOverride(16.0f)
-									[
-										ExternalScrollbar.ToSharedRef()
-									]
-								]
-							]
-						]
-					]
-				]
+				+ SVerticalBox::Slot()
+			[
+				SNew(SBorder)
+				.BorderImage(this, &SMaterialParametersOverviewPanel::GetBackgroundImage)
+			.Padding(FMargin(4.0f))
+			[
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot()
+			.AutoHeight()
+			[
+				SAssignNew(HeaderBox, SHorizontalBox)
+				+ SHorizontalBox::Slot()
+			.Padding(FMargin(3.0f, 1.0f))
+			.HAlign(HAlign_Left)
+			.AutoWidth()
+			.VAlign(VAlign_Center)
+			[
+				SNew(STextBlock)
+				.Text(LOCTEXT("ParameterDefaults", "Parameter Defaults"))
+			.Font(FEditorStyle::GetFontStyle("DetailsView.CategoryFontStyle"))
+			.ShadowOffset(FVector2D(1.0f, 1.0f))
+			]
+			]
+		+ SVerticalBox::Slot()
+			.Padding(FMargin(3.0f, 2.0f, 3.0f, 3.0f))
+			[
+				SNew(SBorder)
+				.BorderImage(FEditorStyle::GetBrush("DetailsView.CategoryTop"))
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot()
+			.HAlign(HAlign_Fill)
+			[
+				SNew(SWidgetSwitcher)
+				.WidgetIndex(this, &SMaterialParametersOverviewPanel::GetPanelIndex)
+			+ SWidgetSwitcher::Slot()
+			[
+				SNew(STextBlock)
+				.Text(LOCTEXT("AddParams", "Add parameters to see them here."))
+			]
+		+ SWidgetSwitcher::Slot()
+			[
+				NestedTree.ToSharedRef()
+			]
+			]
+		+ SHorizontalBox::Slot()
+			.HAlign(HAlign_Right)
+			.AutoWidth()
+			[
+				SNew(SBox)
+				.WidthOverride(16.0f)
+			[
+				ExternalScrollbar.ToSharedRef()
+			]
+			]
+			]
+			]
+			]
+			]
 			];
 
 		HeaderBox->AddSlot()
@@ -687,7 +878,7 @@ void SMaterialParametersOverviewPanel::Refresh()
 			[
 				SNullWidget::NullWidget
 			];
-		
+
 		if (NestedTree->HasAnyParameters())
 		{
 			HeaderBox->AddSlot()
@@ -696,31 +887,45 @@ void SMaterialParametersOverviewPanel::Refresh()
 				[
 					SNew(SButton)
 					.ButtonStyle(FEditorStyle::Get(), "FlatButton.DarkGrey")
-					.HAlign(HAlign_Center)
-					.OnClicked(OnChildButtonClicked)
-					.ToolTipText(LOCTEXT("SaveToChildInstance", "Save To Child Instance"))
-					.Content()
-					[
-						SNew(SHorizontalBox)
-						+ SHorizontalBox::Slot()
-						.AutoWidth()
-						[
-							SNew(STextBlock)
-							.Font(FEditorStyle::Get().GetFontStyle("FontAwesome.10"))
-							.TextStyle(FEditorStyle::Get(), "NormalText.Important")
-							.Text(FText::FromString(FString(TEXT("\xf0c7 \xf149"))) /*fa-filter*/)
-						]
-						+ SHorizontalBox::Slot()
-						.AutoWidth()
-						[
-							SNew(STextBlock)
-							.TextStyle(FEditorStyle::Get(), "NormalText.Important")
-							.Text(FText::FromString(FString(TEXT(" Save Child"))) /*fa-filter*/)
-						]
-					]
+				.HAlign(HAlign_Center)
+				.OnClicked(OnChildButtonClicked)
+				.ToolTipText(LOCTEXT("SaveToChildInstance", "Save To Child Instance"))
+				.Content()
+				[
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot()
+				.AutoWidth()
+				[
+					SNew(STextBlock)
+					.Font(FEditorStyle::Get().GetFontStyle("FontAwesome.10"))
+				.TextStyle(FEditorStyle::Get(), "NormalText.Important")
+				.Text(FText::FromString(FString(TEXT("\xf0c7 \xf149"))) /*fa-filter*/)
+				]
+			+ SHorizontalBox::Slot()
+				.AutoWidth()
+				[
+					SNew(STextBlock)
+					.TextStyle(FEditorStyle::Get(), "NormalText.Important")
+				.Text(FText::FromString(FString(TEXT(" Save Child"))) /*fa-filter*/)
+				]
+				]
 				];
 		}
 	}
+	else
+	{
+		this->ChildSlot
+			[
+				SNew(SBorder)
+				.BorderImage(FEditorStyle::GetBrush("MaterialInstanceEditor.StackBody"))
+				.Padding(FMargin(4.0f))
+				[
+					SNew(STextBlock)
+					.Text(LOCTEXT("ConnectMaterialParametersToFillList", "Connect a parameter to see it here."))
+				]
+			];
+	}
+
 	
 }
 
@@ -735,7 +940,7 @@ void SMaterialParametersOverviewPanel::Construct(const FArguments& InArgs)
 		.InScrollbar(ExternalScrollbar);
 
 	MaterialEditorInstance = InArgs._InMaterialEditorInstance;
-	FEditorSupportDelegates::UpdateUI.AddSP(this, &SMaterialParametersOverviewPanel::Refresh);
+	Refresh();
 }
 
 void SMaterialParametersOverviewPanel::UpdateEditorInstance(UMaterialEditorPreviewParameters* InMaterialEditorInstance)

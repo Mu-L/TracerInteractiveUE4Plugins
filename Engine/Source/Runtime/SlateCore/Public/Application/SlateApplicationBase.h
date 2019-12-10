@@ -9,8 +9,10 @@
 #include "Layout/SlateRect.h"
 #include "Rendering/SlateRenderer.h"
 #include "Misc/CoreDelegates.h"
+#include "Async/TaskGraphInterfaces.h"
 
 DECLARE_MULTICAST_DELEGATE_TwoParams(FOnDebugSafeZoneChanged, const FMargin&, bool);
+
 
 class FActiveTimerHandle;
 #if WITH_ACCESSIBILITY
@@ -21,6 +23,8 @@ class FWidgetPath;
 class IToolTip;
 class SWidget;
 class SWindow;
+class SImage;
+enum class EInvalidateWidgetReason : uint8;
 
 template< typename ObjectType > class TAttribute;
 
@@ -30,7 +34,6 @@ template< typename ObjectType > class TAttribute;
 class IWindowTitleBar
 {
 public:
-
 	virtual void Flash( ) = 0;
 };
 
@@ -128,6 +131,14 @@ public:
 	 * @return	True if the widget path was found
 	 */
 	virtual bool FindPathToWidget( TSharedRef<const SWidget> InWidget, FWidgetPath& OutWidgetPath, EVisibility VisibilityFilter = EVisibility::Visible ) = 0;
+
+	/**
+	 * Returns the window the provided widget is contained in 
+
+	 * @param  InWidget       Widget to find the window for
+	 * @return	returns the window the provided widget is contained in or nullptr if it's not currently in a window
+	 */
+	virtual TSharedPtr<SWindow> FindWidgetWindow(TSharedRef<const SWidget> InWidget) const = 0;
 
 	/**
 	 * Gets the active top-level window.
@@ -234,6 +245,7 @@ public:
 
 	virtual EUINavigation GetNavigationDirectionFromKey( const FKeyEvent& InKeyEvent ) const = 0;
 	virtual EUINavigation GetNavigationDirectionFromAnalog(const FAnalogInputEvent& InAnalogEvent) = 0;
+	virtual EUINavigationAction GetNavigationActionFromKey(const FKeyEvent& InKeyEvent) const = 0;
 	virtual EUINavigationAction GetNavigationActionForKey(const FKey& InKey) const = 0;
 
 	/** @return	Returns true if there are any pop-up menus summoned */
@@ -327,6 +339,15 @@ public:
 	 */
 	virtual FWidgetPath LocateWindowUnderMouse( FVector2D ScreenspaceMouseCoordinate, const TArray< TSharedRef<SWindow > >& Windows, bool bIgnoreEnabledStatus = false ) = 0;
 
+	/**
+	 * Calculates the tooltip window position.
+	 *
+	 * @param InAnchorRect The current(suggested) window position and size of an area which may not be covered by the popup.
+	 * @param InSize The size of the tooltip window.
+	 * @return The suggested position.
+	 */
+	virtual FVector2D CalculateTooltipWindowPosition(const FSlateRect& InAnchorRect, const FVector2D& InSize, bool bAutoAdjustForDPIScale) const = 0;
+
 	/** @return true if 'WindowToTest' is being used to display the current tooltip and the tooltip is interactive. */
 	virtual bool IsWindowHousingInteractiveTooltip(const TSharedRef<const SWindow>& WindowToTest) const = 0;
 
@@ -335,7 +356,7 @@ public:
 	 *
 	 * @return The new image widget.
 	 */
-	virtual TSharedRef<SWidget> MakeImage( const TAttribute<const FSlateBrush*>& Image, const TAttribute<FSlateColor>& Color, const TAttribute<EVisibility>& Visibility ) const = 0;
+	virtual TSharedRef<SImage> MakeImage( const TAttribute<const FSlateBrush*>& Image, const TAttribute<FSlateColor>& Color, const TAttribute<EVisibility>& Visibility ) const = 0;
 
 	/**
 	 * Creates a tool tip with the specified text.
@@ -417,14 +438,19 @@ public:
 	/**
 	 * Gets a delegate that is invoked when a global invalidate of all widgets should occur
 	 */
-	DECLARE_EVENT(FSlateApplicationBase, FOnGlobalInvalidate);
-	FOnGlobalInvalidate& OnGlobalInvalidate()  { return OnGlobalInvalidateEvent; }
+	DECLARE_EVENT_OneParam(FSlateApplicationBase, FOnInvalidateAllWidgets, bool);
+	FOnInvalidateAllWidgets& OnInvalidateAllWidgets() { return OnInvalidateAllWidgetsEvent; }
+
+	DECLARE_EVENT_OneParam(FSlateApplicationBase, FOnGlobalInvalidationToggled, bool);
+	FOnGlobalInvalidationToggled& OnGlobalInvalidationToggled() { return OnGlobalInvalidationToggledEvent; }
+
+	void ToggleGlobalInvalidation(bool bIsGlobalInvalidationEnabled);
 
 	/**
 	 * Notifies all invalidation panels that they should invalidate their contents
 	 * Note: this is a very expensive call and should only be done in non-performance critical situations
 	 */
-	void InvalidateAllWidgets() const;
+	void InvalidateAllWidgets(bool bClearResourcesImmediately) const;
 private:
 	/**
 	 * Implementation for active timer registration. See SWidget::RegisterActiveTimer.
@@ -532,14 +558,10 @@ protected:
 	}
 	void SwapSafeZoneTypes()
 	{
-		if (FDisplayMetrics::GetDebugTitleSafeZoneRatio() != CachedDebugTitleSafeRatio)
-		{
-			FDisplayMetrics DisplayMetrics;
-			GetDisplayMetrics(DisplayMetrics);
-			CustomSafeZoneRatio = FMargin();
-			OnDebugSafeZoneChanged.Broadcast(FMargin(), false);
-		}
-
+		FDisplayMetrics DisplayMetrics;
+		GetDisplayMetrics(DisplayMetrics);
+		CustomSafeZoneRatio = FMargin();
+		OnDebugSafeZoneChanged.Broadcast(FMargin(), false);
 	}
 #endif
 
@@ -598,7 +620,8 @@ protected:
 #endif
 
 	/** multicast delegate to broadcast when a global invalidate is requested */
-	FOnGlobalInvalidate OnGlobalInvalidateEvent;
+	FOnInvalidateAllWidgets OnInvalidateAllWidgetsEvent;
+	FOnGlobalInvalidationToggled OnGlobalInvalidationToggledEvent;
 
 	/** Critical section for active timer registration as it can be called from the movie thread and the game thread */
 	FCriticalSection ActiveTimerCS;

@@ -3,18 +3,28 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Stats/Stats.h"
 #include "Layout/SlateRect.h"
 #include "Layout/SlateRotatedRect.h"
 #include "Input/CursorReply.h"
 #include "Input/Reply.h"
 #include "Input/NavigationReply.h"
 #include "Input/PopupMethodReply.h"
+#include "SlateGlobals.h"
 #include "RenderingCommon.generated.h"
 
 class FSlateInstanceBufferUpdate;
 class FWidgetStyle;
 class SWidget;
-struct Rect;
+
+
+DECLARE_MEMORY_STAT_EXTERN(TEXT("Vertex/Index Buffer Pool Memory (CPU)"), STAT_SlateBufferPoolMemory, STATGROUP_SlateMemory, SLATECORE_API);
+DECLARE_MEMORY_STAT_EXTERN(TEXT("Cached Draw Element Memory (CPU)"), STAT_SlateCachedDrawElementMemory, STATGROUP_SlateMemory, SLATECORE_API);
+
+DECLARE_DWORD_COUNTER_STAT_EXTERN(TEXT("Num Cached Element Lists"), STAT_SlateNumCachedElementLists, STATGROUP_Slate, SLATECORE_API);
+DECLARE_DWORD_COUNTER_STAT_EXTERN(TEXT("Num Cached Elements"), STAT_SlateNumCachedElements, STATGROUP_Slate, SLATECORE_API);
+
+DECLARE_CYCLE_STAT_EXTERN(TEXT("PreFill Buffers RT"), STAT_SlatePreFullBufferRTTime, STATGROUP_Slate, SLATECORE_API);
 
 #define SLATE_USE_32BIT_INDICES !PLATFORM_USES_ES2
 
@@ -27,33 +37,33 @@ typedef uint16 SlateIndex;
 /**
  * Draw primitive types                   
  */
-namespace ESlateDrawPrimitive
+enum class ESlateDrawPrimitive : uint8
 {
-	typedef uint8 Type;
-
-	const Type LineList = 0;
-	const Type TriangleList = 1;
+	None,
+	LineList,
+	TriangleList,
 };
-
+ 
 /**
  * Shader types. NOTE: mirrored in the shader file   
  * If you add a type here you must also implement the proper shader type (TSlateElementPS).  See SlateShaders.h
  */
-namespace ESlateShader
+enum class ESlateShader : uint8
 {
-	typedef uint8 Type;
 	/** The default shader type.  Simple texture lookup */
-	const Type Default = 0;
+	Default = 0,
 	/** Border shader */
-	const Type Border = 1;
-	/** Font shader, same as default except uses an alpha only texture */
-	const Type Font = 2;
+	Border = 1,
+	/** Grayscale font shader. Uses an alpha only texture */
+	GrayscaleFont = 2,
+	/** Grayscale font shader. Uses an color texture */
+	ColorFont = 3,
 	/** Line segment shader. For drawing anti-aliased lines */
-	const Type LineSegment = 3;
+	LineSegment = 4,
 	/** For completely customized materials.  Makes no assumptions on use*/
-	const Type Custom = 4;
+	Custom = 5,
 	/** For post processing passes */
-	const Type PostProcess = 5;
+	PostProcess = 6,
 };
 
 /**
@@ -145,6 +155,38 @@ enum class ESlateVertexRounding : uint8
 	Enabled
 };
 
+class FSlateRenderBatch;
+
+
+/**
+* Shader parameters for slate
+*/
+struct FShaderParams
+{
+	/** Pixel shader parameters */
+	FVector4 PixelParams;
+	FVector4 PixelParams2;
+
+	FShaderParams()
+		: PixelParams(0, 0, 0, 0)
+		, PixelParams2(0, 0, 0, 0)
+	{}
+
+	FShaderParams(const FVector4& InPixelParams, const FVector4& InPixelParams2 = FVector4(0))
+		: PixelParams(InPixelParams)
+		, PixelParams2(InPixelParams2)
+	{}
+
+	bool operator==(const FShaderParams& Other) const
+	{
+		return PixelParams == Other.PixelParams && PixelParams2 == Other.PixelParams2;
+	}
+
+	static FShaderParams MakePixelShaderParams(const FVector4& PixelShaderParams, const FVector4& InPixelShaderParams2 = FVector4(0))
+	{
+		return FShaderParams(PixelShaderParams, InPixelShaderParams2);
+	}
+};
 
 
 /** 
@@ -254,6 +296,7 @@ private:
 };
 
 template<> struct TIsPODType<FSlateVertex> { enum { Value = true }; };
+static_assert(TIsTriviallyDestructible<FSlateVertex>::Value == true, "FSlateVertex should be trivially destructible");
 
 /** Stores an aligned rect as shorts. */
 struct FShortRect
@@ -310,6 +353,110 @@ struct FShortRect
 	uint16 Right;
 	uint16 Bottom;
 };
+
+#if STATS
+
+struct FRenderingBufferStatTracker
+{
+	static void MemoryAllocated(int32 SizeBytes)
+	{
+		INC_DWORD_STAT_BY(STAT_SlateBufferPoolMemory, SizeBytes);
+	}
+
+	static void MemoryFreed(int32 SizeBytes)
+	{
+		DEC_DWORD_STAT_BY(STAT_SlateBufferPoolMemory, SizeBytes);
+	}
+};
+
+struct FDrawElementStatTracker
+{
+	static void MemoryAllocated(int32 SizeBytes)
+	{
+		INC_DWORD_STAT_BY(STAT_SlateCachedDrawElementMemory, SizeBytes);
+	}
+
+	static void MemoryFreed(int32 SizeBytes)
+	{
+		DEC_DWORD_STAT_BY(STAT_SlateCachedDrawElementMemory, SizeBytes);
+	}
+};
+template<typename StatTracker>
+class FSlateStatTrackingMemoryAllocator : public FDefaultAllocator
+{
+public:
+	typedef FDefaultAllocator Super;
+
+	class ForAnyElementType : public FDefaultAllocator::ForAnyElementType
+	{
+	public:
+		typedef FDefaultAllocator::ForAnyElementType Super;
+
+		ForAnyElementType()
+			: AllocatedSize(0)
+		{
+
+		}
+
+		/**
+		* Moves the state of another allocator into this one.
+		* Assumes that the allocator is currently empty, i.e. memory may be allocated but any existing elements have already been destructed (if necessary).
+		* @param Other - The allocator to move the state from.  This allocator should be left in a valid empty state.
+		*/
+		FORCEINLINE void MoveToEmpty(ForAnyElementType& Other)
+		{
+			Super::MoveToEmpty(Other);
+
+			AllocatedSize = Other.AllocatedSize;
+			Other.AllocatedSize = 0;
+		}
+
+		/** Destructor. */
+		~ForAnyElementType()
+		{
+			if (AllocatedSize)
+			{
+				StatTracker::MemoryFreed(AllocatedSize);
+
+			}
+		}
+
+		void ResizeAllocation(int32 PreviousNumElements, int32 NumElements, int32 NumBytesPerElement)
+		{
+			const int32 NewSize = NumElements * NumBytesPerElement;
+			StatTracker::MemoryAllocated(NewSize - AllocatedSize);
+
+			AllocatedSize = NewSize;
+
+			Super::ResizeAllocation(PreviousNumElements, NumElements, NumBytesPerElement);
+		}
+
+	private:
+		ForAnyElementType(const ForAnyElementType&);
+		ForAnyElementType& operator=(const ForAnyElementType&);
+	private:
+		int32 AllocatedSize;
+	};
+};
+
+template <typename T>
+struct TAllocatorTraits<FSlateStatTrackingMemoryAllocator<T>> : TAllocatorTraitsBase<FSlateStatTrackingMemoryAllocator<T>>
+{
+	enum { SupportsMove = TAllocatorTraits<FDefaultAllocator>::SupportsMove };
+	enum { IsZeroConstruct = TAllocatorTraits<FDefaultAllocator>::IsZeroConstruct };
+};
+
+typedef TArray<FSlateVertex, FSlateStatTrackingMemoryAllocator<FRenderingBufferStatTracker>> FSlateVertexArray;
+typedef TArray<SlateIndex, FSlateStatTrackingMemoryAllocator<FRenderingBufferStatTracker>> FSlateIndexArray;
+typedef TArray<FSlateDrawElement, FSlateStatTrackingMemoryAllocator<FDrawElementStatTracker>> FSlateDrawElementArray;
+
+#else
+
+typedef TArray<FSlateVertex> FSlateVertexArray;
+typedef TArray<SlateIndex> FSlateIndexArray;
+typedef TArray<FSlateDrawElement> FSlateDrawElementArray;
+
+#endif
 
 static FVector2D RoundToInt(const FVector2D& Vec)
 {
@@ -737,79 +884,35 @@ public:
 	virtual void DrawRenderThread(class FRHICommandListImmediate& RHICmdList, const void* RenderTarget) = 0;
 };
 
+/*
+ * A proxy object used to access a slate per-instance data buffer on the render thread.
+ */
+class ISlateUpdatableInstanceBufferRenderProxy
+{
+protected:
+	virtual ~ISlateUpdatableInstanceBufferRenderProxy() {};
+
+public:
+	virtual void BindStreamSource(class FRHICommandList& RHICmdList, int32 StreamIndex, uint32 InstanceOffset) = 0;
+};
+
+typedef TArray<FVector4> FSlateInstanceBufferData;
+
 /**
  * Represents a per instance data buffer for a custom Slate mesh element.
- * Use FSlateInstanceBufferUpdate to update the per-instance data.
- *  e.g.
- *    TSharedRef<FSlateInstanceBufferUpdate> NewUpdate = InstanceBuffer.BeginUpdate();
- *     NewUpdate.GetData().Add( FVector4(1,1,1,1) )
- *     FSlateInstanceBufferUpdate::CommitUpdate(NewUpdate);
  */
 class ISlateUpdatableInstanceBuffer
 {
 public:
-	virtual ~ISlateUpdatableInstanceBuffer(){};
+	virtual ~ISlateUpdatableInstanceBuffer() {};
 	friend class FSlateInstanceBufferUpdate;
-
-   /**
-	* Use this method to begin a new update to this instance of the buffer:
-	*/
-	virtual TSharedPtr<class FSlateInstanceBufferUpdate> BeginUpdate() = 0;
 
 	/** How many instances should we draw? */
 	virtual uint32 GetNumInstances() const = 0;
 
-private:
-	friend class FSlateInstanceBufferUpdate;
+	/** Returns the pointer to the render proxy, to be forwarded to the render thread. */
+	virtual ISlateUpdatableInstanceBufferRenderProxy* GetRenderProxy() const = 0;
 
-	/** Updates rendering data for the GPU */
-	virtual void UpdateRenderingData(int32 NumInstancesToUse) = 0;
-
-	/** @return an array of instance data that is safe to populate (e.g not in use by the renderer) */
-	virtual TArray<FVector4>& GetBufferData() = 0;
-};
-
-/** Represents an update to the per-instance buffer. */
-class FSlateInstanceBufferUpdate
-{
-public:
-	/** Access the per-instance data for modiciation */
-	FORCEINLINE TArray<FVector4>& GetData(){ return Data; }
-	
-	/** Send an update to the render thread */
-	static void CommitUpdate(TSharedPtr<FSlateInstanceBufferUpdate>& UpdateToCommit)
-	{
-		ensure(UpdateToCommit.GetSharedReferenceCount() == 1);
-		UpdateToCommit->CommitUpdate_Internal();
-		UpdateToCommit.Reset();
-	}
-
-	~FSlateInstanceBufferUpdate()
-	{
-		if (!bWasCommitted)
-		{
-			CommitUpdate_Internal();
-		}
-	}
-
-private:
-	friend class FSlateUpdatableInstanceBuffer;
-	FSlateInstanceBufferUpdate(ISlateUpdatableInstanceBuffer& InBuffer)
-		: Buffer(InBuffer)
-		, Data(InBuffer.GetBufferData())
-		, InstanceCount(0)
-		, bWasCommitted(false)
-	{
-	}
-
-	void CommitUpdate_Internal()
-	{
-		Buffer.UpdateRenderingData(Data.Num());
-		bWasCommitted = true;
-	}
-
-	ISlateUpdatableInstanceBuffer& Buffer;
-	TArray<FVector4>& Data;
-	uint32 InstanceCount;
-	bool bWasCommitted;
+	/** Updates the buffer with the provided data. */
+	virtual void Update(FSlateInstanceBufferData& Data) = 0;
 };

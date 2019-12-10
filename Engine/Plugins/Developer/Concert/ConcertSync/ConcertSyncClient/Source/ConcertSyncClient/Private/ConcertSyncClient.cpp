@@ -94,12 +94,22 @@ FOnConcertClientWorkspaceStartupOrShutdown& FConcertSyncClient::OnWorkspaceShutd
 	return OnWorkspaceShutdownDelegate;
 }
 
+FOnConcertClientSyncSessionStartupOrShutdown& FConcertSyncClient::OnSyncSessionStartup()
+{
+	return OnSyncSessionStartupDelegate;
+}
+
+FOnConcertClientSyncSessionStartupOrShutdown& FConcertSyncClient::OnSyncSessionShutdown()
+{
+	return OnSyncSessionShutdownDelegate;
+}
+
 void FConcertSyncClient::PersistAllSessionChanges()
 {
 #if WITH_EDITOR
 	if (Workspace)
 	{
-		TArray<FString> SessionChanges = Workspace->GatherSessionChanges();
+		TArray<FName> SessionChanges = Workspace->GatherSessionChanges();
 		Workspace->PersistSessionChanges(SessionChanges, SourceControlProxy.Get());
 	}
 #endif
@@ -147,6 +157,7 @@ void FConcertSyncClient::RegisterConcertSyncHandlers(TSharedRef<IConcertClientSe
 	LiveSession = MakeShared<FConcertSyncClientLiveSession>(InSession, SessionFlags);
 	if (LiveSession->IsValidSession())
 	{
+		OnSyncSessionStartupDelegate.Broadcast(this);
 		CreateWorkspace(LiveSession.ToSharedRef());
 #if WITH_EDITOR
 		PresenceManager.Reset();
@@ -173,6 +184,7 @@ void FConcertSyncClient::UnregisterConcertSyncHandlers(TSharedRef<IConcertClient
 	PresenceManager.Reset();
 #endif
 	DestroyWorkspace();
+	OnSyncSessionShutdownDelegate.Broadcast(this);
 	LiveSession.Reset();
 }
 

@@ -1,9 +1,11 @@
 // Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
 
 #include "ChaosBlueprint.h"
-#include "PBDRigidsSolver.h"
+#include "PhysicsSolver.h"
 #include "Async/Async.h"
-#include "SolverObjects/GeometryCollectionPhysicsObject.h"
+#include "PhysicsProxy/GeometryCollectionPhysicsProxy.h"
+
+#define DISPATCH_BLUEPRINTS_IMMEDIATE 1
 
 UChaosDestructionListener::UChaosDestructionListener(FObjectInitializer const& ObjectInitializer)
 	: Super(ObjectInitializer), LastCollisionDataTimeStamp(-1.f), LastBreakingDataTimeStamp(-1.f), LastTrailingDataTimeStamp(-1.f)
@@ -12,51 +14,76 @@ UChaosDestructionListener::UChaosDestructionListener(FObjectInitializer const& O
 	bAutoActivate = true;	
 	bNeverNeedsRenderUpdate = true;
 
+#ifdef DISPATCH_BLUEPRINTS_IMMEDIATE
+	PrimaryComponentTick.bCanEverTick = false;
+#else
 	PrimaryComponentTick.bCanEverTick = true;
+#endif
 
-#if INCLUDE_CHAOS
 	SetCollisionFilter(MakeShareable(new FChaosCollisionEventFilter(&CollisionEventRequestSettings)));
 	SetBreakingFilter(MakeShareable(new FChaosBreakingEventFilter(&BreakingEventRequestSettings)));
 	SetTrailingFilter(MakeShareable(new FChaosTrailingEventFilter(&TrailingEventRequestSettings)));
+}
+
+void UChaosDestructionListener::ClearEvents()
+{
+#if 0 // solver actors no longer functional, using GetWorld()->GetPhysicsScene() instead
+	for (AChaosSolverActor* ChaosSolverActorObject : ChaosSolverActors)
+	{
+		UnregisterChaosEvents(ChaosSolverActorObject->GetPhysicsScene());
+	}
+#else
+	UnregisterChaosEvents(GetWorld()->GetPhysicsScene());
 #endif
 }
 
-void UChaosDestructionListener::UpdateSolvers()
+void UChaosDestructionListener::UpdateEvents()
 {
-#if INCLUDE_CHAOS
-	// Reset the solvers
-	Solvers.Reset();
-
-	if (!ChaosSolverActors.Num())
+	if (!ChaosSolverActors.Num() && !GeometryCollectionActors.Num())
 	{
-		if (TSharedPtr<FPhysScene_Chaos> WorldSolver = GetWorld()->PhysicsScene_Chaos)
+		if (FPhysScene* PhysScene = GetWorld()->GetPhysicsScene())
 		{
-			if (Chaos::FPBDRigidsSolver* Solver = WorldSolver->GetSolver())
-			{
-				Solvers.Add(Solver);
-			}
+			RegisterChaosEvents(PhysScene);
 		}
 	}
 	else
 	{
+
+#if 0 // solver actors no longer functional, using GetWorld()->GetPhysicsScene() instead
 		for (AChaosSolverActor* ChaosSolverActorObject : ChaosSolverActors)
 		{
 			if (ChaosSolverActorObject)
 			{
-				if (Chaos::FPBDRigidsSolver* Solver = ChaosSolverActorObject->GetSolver())
+				RegisterChaosEvents(ChaosSolverActorObject->GetPhysicsScene());
+			}
+		}
+#else
+		if (FPhysScene* PhysScene = GetWorld()->GetPhysicsScene())
+		{
+			RegisterChaosEvents(PhysScene);
+		}
+#endif
+
+		for (AGeometryCollectionActor* GeometryCollectionActor : GeometryCollectionActors)
+		{
+			if (GeometryCollectionActor)
+			{
+				if (const UGeometryCollectionComponent* GeometryCollectionComponent = GeometryCollectionActor->GetGeometryCollectionComponent())
 				{
-					Solvers.Add(Solver);
+					if (const FGeometryCollectionPhysicsProxy* GeometryCollectionPhysicsObject = GeometryCollectionComponent->GetPhysicsProxy())
+					{
+						RegisterChaosEvents(GeometryCollectionComponent->GetWorld()->GetPhysicsScene());
+					}
 				}
 			}
 		}
 	}
-#endif
 }
 
-void UChaosDestructionListener::UpdateGeometryCollectionPhysicsObjects()
+#if 0 // #todo: No longer required?
+void UChaosDestructionListener::UpdateGeometryCollectionPhysicsProxies()
 {
-#if INCLUDE_CHAOS
-	GeometryCollectionPhysicsObjects.Reset();
+	GeometryCollectionPhysicsProxies.Reset();
 
 	if (GeometryCollectionActors.Num() > 0)
 	{
@@ -67,14 +94,14 @@ void UChaosDestructionListener::UpdateGeometryCollectionPhysicsObjects()
 				// Get GeometryCollectionComponent
 				if (const UGeometryCollectionComponent* GeometryCollectionComponent = GeometryCollectionActorObject->GetGeometryCollectionComponent())
 				{
-					// Get GeometryCollectionPhysicsObject
-					if (const FGeometryCollectionPhysicsObject* GeometryCollectionPhysicsObject = GeometryCollectionComponent->GetPhysicsObject())
+					// Get GeometryCollectionPhysicsProxies
+					if (const FGeometryCollectionPhysicsProxy* GeometryCollectionPhysicsProxy = GeometryCollectionComponent->GetPhysicsProxy())
 					{
-						if (Chaos::FPBDRigidsSolver* Solver = GeometryCollectionPhysicsObject->GetSolver())
+						if (Chaos::FPhysicsSolver* Solver = GeometryCollectionPhysicsProxy->GetSolver())
 						{
 							if (!Solvers.Contains(Solver))
 							{
-								GeometryCollectionPhysicsObjects.Add(GeometryCollectionPhysicsObject);
+								GeometryCollectionPhysicsProxies.Add(GeometryCollectionPhysicsProxy);
 							}
 						}
 					}
@@ -82,451 +109,8 @@ void UChaosDestructionListener::UpdateGeometryCollectionPhysicsObjects()
 			}
 		}
 	}
-#endif
 }
-
-void UChaosDestructionListener::GetDataFromSolvers()
-{
-#if INCLUDE_CHAOS
-	// Loop through each solver and build up the array of data before passing off to the task to sort and analyze
-	// Note: we currently need to do this on the GT since the Solver getter itself is not thread safe so can't be retrieved on the task itself.
-	for (Chaos::FPBDRigidsSolver* Solver : Solvers)
-	{
-		if (Solver)
-		{
-			Chaos::FPBDRigidsSolver::FScopedGetEventsData ScopedAccess = Solver->ScopedGetEventsData();
-
-			if (bIsCollisionEventListeningEnabled)
-			{
-				if (Solver->GetGenerateCollisionData() && Solver->GetSolverTime() > 0.f)
-				{
-					// ----------------------------------------------------------------------------------------------------------
-					// GETTING DATA FROM PBDRIGIDSOLVER
-					// ----------------------------------------------------------------------------------------------------------
-					const Chaos::FPBDRigidsSolver::FAllCollisionDataMaps& AllCollisionData_Maps = ScopedAccess.GetAllCollisions_Maps();
-					Chaos::FPBDRigidsSolver::FAllCollisionData AllCollisions;
-					Chaos::FPBDRigidsSolver::FSolverObjectReverseMapping SolverObjectReverseMapping;
-					Chaos::FPBDRigidsSolver::FParticleIndexReverseMapping ParticleIndexReverseMapping;
-					Chaos::FPBDRigidsSolver::FAllCollisionsIndicesBySolverObject AllCollisionsIndicesBySolverObject;
-					if (AllCollisionData_Maps.IsValid())
-					{
-						const float DataTimeStamp = AllCollisionData_Maps.AllCollisionData->TimeCreated;
-						if (DataTimeStamp > LastCollisionDataTimeStamp)
-						{
-							LastCollisionDataTimeStamp = DataTimeStamp;
-
-							if (AllCollisionData_Maps.AllCollisionData)
-							{
-								AllCollisions = *AllCollisionData_Maps.AllCollisionData;
-							}
-							else
-							{
-								return;
-							}
-							if (AllCollisionData_Maps.SolverObjectReverseMapping)
-							{
-								SolverObjectReverseMapping = *AllCollisionData_Maps.SolverObjectReverseMapping;
-							}
-							else
-							{
-								return;
-							}
-							if (AllCollisionData_Maps.ParticleIndexReverseMapping)
-							{
-								ParticleIndexReverseMapping = *AllCollisionData_Maps.ParticleIndexReverseMapping;
-							}
-							else
-							{
-								return;
-							}
-							if (AllCollisionData_Maps.AllCollisionsIndicesBySolverObject)
-							{
-								AllCollisionsIndicesBySolverObject = *AllCollisionData_Maps.AllCollisionsIndicesBySolverObject;
-							}
-							else
-							{
-								return;
-							}
-
-							// ----------------------------------------------------------------------------------------------------------
-							// END OF GETTING DATA FROM PBDRIGIDSOLVER
-							// ----------------------------------------------------------------------------------------------------------
-
-							int32 NumCollisions = AllCollisions.AllCollisionsArray.Num();
-							if (NumCollisions > 0)
-							{
-								RawCollisionDataArray.Append(AllCollisions.AllCollisionsArray.GetData(), NumCollisions);
-							}
-						}
-					}
-				}
-			}
-
-			if (bIsBreakingEventListeningEnabled)
-			{
-				if (Solver->GetGenerateBreakingData() && Solver->GetSolverTime() > 0.f)
-				{
-					// ----------------------------------------------------------------------------------------------------------
-					// GETTING DATA FROM PBDRIGIDSOLVER
-					// ----------------------------------------------------------------------------------------------------------
-					const Chaos::FPBDRigidsSolver::FAllBreakingDataMaps& AllBreakingData_Maps = ScopedAccess.GetAllBreakings_Maps();
-					Chaos::FPBDRigidsSolver::FAllBreakingData AllBreakings;
-					Chaos::FPBDRigidsSolver::FSolverObjectReverseMapping SolverObjectReverseMapping;
-					Chaos::FPBDRigidsSolver::FParticleIndexReverseMapping ParticleIndexReverseMapping;
-					Chaos::FPBDRigidsSolver::FAllBreakingsIndicesBySolverObject AllBreakingsIndicesBySolverObject;
-					if (AllBreakingData_Maps.IsValid())
-					{
-						const float DataTimeStamp = AllBreakingData_Maps.AllBreakingData->TimeCreated;
-						if (DataTimeStamp > LastBreakingDataTimeStamp)
-						{
-							LastBreakingDataTimeStamp = DataTimeStamp;
-
-							if (AllBreakingData_Maps.AllBreakingData)
-							{
-								AllBreakings = *AllBreakingData_Maps.AllBreakingData;
-							}
-							else
-							{
-								return;
-							}
-							if (AllBreakingData_Maps.SolverObjectReverseMapping)
-							{
-								SolverObjectReverseMapping = *AllBreakingData_Maps.SolverObjectReverseMapping;
-							}
-							else
-							{
-								return;
-							}
-							if (AllBreakingData_Maps.ParticleIndexReverseMapping)
-							{
-								ParticleIndexReverseMapping = *AllBreakingData_Maps.ParticleIndexReverseMapping;
-							}
-							else
-							{
-								return;
-							}
-							if (AllBreakingData_Maps.AllBreakingsIndicesBySolverObject)
-							{
-								AllBreakingsIndicesBySolverObject = *AllBreakingData_Maps.AllBreakingsIndicesBySolverObject;
-							}
-							else
-							{
-								return;
-							}
-
-							// ----------------------------------------------------------------------------------------------------------
-							// END OF GETTING DATA FROM PBDRIGIDSOLVER
-							// ----------------------------------------------------------------------------------------------------------
-
-							int32 NumBreakings = AllBreakings.AllBreakingsArray.Num();
-							if (NumBreakings > 0)
-							{
-								RawBreakingDataArray.Append(AllBreakings.AllBreakingsArray.GetData(), NumBreakings);
-							}
-						}
-					}
-				}
-			}
-
-			if (bIsTrailingEventListeningEnabled)
-			{
-				if (Solver->GetGenerateTrailingData() && Solver->GetSolverTime() > 0.f)
-				{
-					// ----------------------------------------------------------------------------------------------------------
-					// GETTING DATA FROM PBDRIGIDSOLVER
-					// ----------------------------------------------------------------------------------------------------------
-					const Chaos::FPBDRigidsSolver::FAllTrailingDataMaps& AllTrailingData_Maps = ScopedAccess.GetAllTrailings_Maps();
-					Chaos::FPBDRigidsSolver::FAllTrailingData AllTrailings;
-					Chaos::FPBDRigidsSolver::FSolverObjectReverseMapping SolverObjectReverseMapping;
-					Chaos::FPBDRigidsSolver::FParticleIndexReverseMapping ParticleIndexReverseMapping;
-					Chaos::FPBDRigidsSolver::FAllTrailingsIndicesBySolverObject AllTrailingsIndicesBySolverObject;
-					if (AllTrailingData_Maps.IsValid())
-					{
-						const float DataTimeStamp = AllTrailingData_Maps.AllTrailingData->TimeCreated;
-						if (DataTimeStamp > LastTrailingDataTimeStamp)
-						{
-							LastTrailingDataTimeStamp = DataTimeStamp;
-
-							if (AllTrailingData_Maps.AllTrailingData)
-							{
-								AllTrailings = *AllTrailingData_Maps.AllTrailingData;
-							}
-							else
-							{
-								return;
-							}
-							if (AllTrailingData_Maps.SolverObjectReverseMapping)
-							{
-								SolverObjectReverseMapping = *AllTrailingData_Maps.SolverObjectReverseMapping;
-							}
-							else
-							{
-								return;
-							}
-							if (AllTrailingData_Maps.ParticleIndexReverseMapping)
-							{
-								ParticleIndexReverseMapping = *AllTrailingData_Maps.ParticleIndexReverseMapping;
-							}
-							else
-							{
-								return;
-							}
-							if (AllTrailingData_Maps.AllTrailingsIndicesBySolverObject)
-							{
-								AllTrailingsIndicesBySolverObject = *AllTrailingData_Maps.AllTrailingsIndicesBySolverObject;
-							}
-							else
-							{
-								return;
-							}
-
-							// ----------------------------------------------------------------------------------------------------------
-							// END OF GETTING DATA FROM PBDRIGIDSOLVER
-							// ----------------------------------------------------------------------------------------------------------
-
-							int32 NumTrailings = AllTrailings.AllTrailingsArray.Num();
-							if (NumTrailings > 0)
-							{
-								RawTrailingDataArray.Append(AllTrailings.AllTrailingsArray.GetData(), NumTrailings);
-							}
-						}
-					}
-				}
-			}
-		}
-	}
 #endif
-}
-
-void UChaosDestructionListener::GetDataFromGeometryCollectionPhysicsObjects()
-{
-#if INCLUDE_CHAOS
-	for (const FGeometryCollectionPhysicsObject* GeometryCollectionPhysicsObject : GeometryCollectionPhysicsObjects)
-	{
-		if (GeometryCollectionPhysicsObject)
-		{
-			if (bIsCollisionEventListeningEnabled)
-			{
-				if (Chaos::FPBDRigidsSolver* Solver = GeometryCollectionPhysicsObject->GetSolver())
-				{
-					if (Solver->GetGenerateCollisionData() && Solver->GetSolverTime() > 0.f)
-					{
-						Chaos::FPBDRigidsSolver::FScopedGetEventsData SopedAccess = Solver->ScopedGetEventsData();
-
-						// ----------------------------------------------------------------------------------------------------------
-						// GETTING DATA FROM PBDRIGIDSOLVER
-						// ----------------------------------------------------------------------------------------------------------
-						const Chaos::FPBDRigidsSolver::FAllCollisionDataMaps& AllCollisionData_Maps = SopedAccess.GetAllCollisions_Maps();
-						Chaos::FPBDRigidsSolver::FAllCollisionData AllCollisions;
-						Chaos::FPBDRigidsSolver::FSolverObjectReverseMapping SolverObjectReverseMapping;
-						Chaos::FPBDRigidsSolver::FParticleIndexReverseMapping ParticleIndexReverseMapping;
-						Chaos::FPBDRigidsSolver::FAllCollisionsIndicesBySolverObject AllCollisionsIndicesBySolverObject;
-						if (AllCollisionData_Maps.IsValid())
-						{
-							if (AllCollisionData_Maps.AllCollisionData)
-							{
-								AllCollisions = *AllCollisionData_Maps.AllCollisionData;
-							}
-							else
-							{
-								return;
-							}
-							if (AllCollisionData_Maps.SolverObjectReverseMapping)
-							{
-								SolverObjectReverseMapping = *AllCollisionData_Maps.SolverObjectReverseMapping;
-							}
-							else
-							{
-								return;
-							}
-							if (AllCollisionData_Maps.ParticleIndexReverseMapping)
-							{
-								ParticleIndexReverseMapping = *AllCollisionData_Maps.ParticleIndexReverseMapping;
-							}
-							else
-							{
-								return;
-							}
-							if (AllCollisionData_Maps.AllCollisionsIndicesBySolverObject)
-							{
-								AllCollisionsIndicesBySolverObject = *AllCollisionData_Maps.AllCollisionsIndicesBySolverObject;
-							}
-							else
-							{
-								return;
-							}
-
-							// ----------------------------------------------------------------------------------------------------------
-							// END OF GETTING DATA FROM PBDRIGIDSOLVER
-							// ----------------------------------------------------------------------------------------------------------
-
-							int32 NumCollisions = AllCollisions.AllCollisionsArray.Num();
-							if (NumCollisions > 0)
-							{
-								// Get collisions for this GeometryCollectionPhysicsObject from AllCollisions.AllCollisions[]
-								if (AllCollisionsIndicesBySolverObject.AllCollisionsIndicesBySolverObjectMap.Contains(GeometryCollectionPhysicsObject))
-								{
-									TArray<int32> CollisionIndices = AllCollisionsIndicesBySolverObject.AllCollisionsIndicesBySolverObjectMap[GeometryCollectionPhysicsObject];
-									for (int32 Idx = 0; Idx < CollisionIndices.Num(); ++Idx)
-									{
-										RawCollisionDataArray.Add(AllCollisions.AllCollisionsArray[CollisionIndices[Idx]]);
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-
-			if (bIsBreakingEventListeningEnabled)
-			{
-				if (Chaos::FPBDRigidsSolver* Solver = GeometryCollectionPhysicsObject->GetSolver())
-				{
-					Chaos::FPBDRigidsSolver::FScopedGetEventsData SopedAccess = Solver->ScopedGetEventsData();
-
-					if (Solver->GetGenerateBreakingData() && Solver->GetSolverTime() > 0.f)
-					{
-						// ----------------------------------------------------------------------------------------------------------
-						// GETTING DATA FROM PBDRIGIDSOLVER
-						// ----------------------------------------------------------------------------------------------------------
-						const Chaos::FPBDRigidsSolver::FAllBreakingDataMaps& AllBreakingData_Maps = SopedAccess.GetAllBreakings_Maps();
-						Chaos::FPBDRigidsSolver::FAllBreakingData AllBreakings;
-						Chaos::FPBDRigidsSolver::FSolverObjectReverseMapping SolverObjectReverseMapping;
-						Chaos::FPBDRigidsSolver::FParticleIndexReverseMapping ParticleIndexReverseMapping;
-						Chaos::FPBDRigidsSolver::FAllBreakingsIndicesBySolverObject AllBreakingsIndicesBySolverObject;
-						if (AllBreakingData_Maps.IsValid())
-						{
-							if (AllBreakingData_Maps.AllBreakingData)
-							{
-								AllBreakings = *AllBreakingData_Maps.AllBreakingData;
-							}
-							else
-							{
-								return;
-							}
-							if (AllBreakingData_Maps.SolverObjectReverseMapping)
-							{
-								SolverObjectReverseMapping = *AllBreakingData_Maps.SolverObjectReverseMapping;
-							}
-							else
-							{
-								return;
-							}
-							if (AllBreakingData_Maps.ParticleIndexReverseMapping)
-							{
-								ParticleIndexReverseMapping = *AllBreakingData_Maps.ParticleIndexReverseMapping;
-							}
-							else
-							{
-								return;
-							}
-							if (AllBreakingData_Maps.AllBreakingsIndicesBySolverObject)
-							{
-								AllBreakingsIndicesBySolverObject = *AllBreakingData_Maps.AllBreakingsIndicesBySolverObject;
-							}
-							else
-							{
-								return;
-							}
-
-							// ----------------------------------------------------------------------------------------------------------
-							// END OF GETTING DATA FROM PBDRIGIDSOLVER
-							// ----------------------------------------------------------------------------------------------------------
-
-							int32 NumBreakings = AllBreakings.AllBreakingsArray.Num();
-							if (NumBreakings > 0)
-							{
-								// Get breakings for this GeometryCollectionPhysicsObject from AllBreakings.AllBreakings[]
-								if (AllBreakingsIndicesBySolverObject.AllBreakingsIndicesBySolverObjectMap.Contains(GeometryCollectionPhysicsObject))
-								{
-									TArray<int32> BreakingIndices = AllBreakingsIndicesBySolverObject.AllBreakingsIndicesBySolverObjectMap[GeometryCollectionPhysicsObject];
-									for (int32 Idx = 0; Idx < BreakingIndices.Num(); ++Idx)
-									{
-										RawBreakingDataArray.Add(AllBreakings.AllBreakingsArray[BreakingIndices[Idx]]);
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-
-			if (bIsTrailingEventListeningEnabled)
-			{
-				if (Chaos::FPBDRigidsSolver* Solver = GeometryCollectionPhysicsObject->GetSolver())
-				{
-					Chaos::FPBDRigidsSolver::FScopedGetEventsData ScopedAccess = Solver->ScopedGetEventsData();
-
-					if (Solver->GetGenerateTrailingData() && Solver->GetSolverTime() > 0.f)
-					{
-						// ----------------------------------------------------------------------------------------------------------
-						// GETTING DATA FROM PBDRIGIDSOLVER
-						// ----------------------------------------------------------------------------------------------------------
-						const Chaos::FPBDRigidsSolver::FAllTrailingDataMaps& AllTrailingData_Maps = ScopedAccess.GetAllTrailings_Maps();
-						Chaos::FPBDRigidsSolver::FAllTrailingData AllTrailings;
-						Chaos::FPBDRigidsSolver::FSolverObjectReverseMapping SolverObjectReverseMapping;
-						Chaos::FPBDRigidsSolver::FParticleIndexReverseMapping ParticleIndexReverseMapping;
-						Chaos::FPBDRigidsSolver::FAllTrailingsIndicesBySolverObject AllTrailingsIndicesBySolverObject;
-						if (AllTrailingData_Maps.IsValid())
-						{
-							if (AllTrailingData_Maps.AllTrailingData)
-							{
-								AllTrailings = *AllTrailingData_Maps.AllTrailingData;
-							}
-							else
-							{
-								return;
-							}
-							if (AllTrailingData_Maps.SolverObjectReverseMapping)
-							{
-								SolverObjectReverseMapping = *AllTrailingData_Maps.SolverObjectReverseMapping;
-							}
-							else
-							{
-								return;
-							}
-							if (AllTrailingData_Maps.ParticleIndexReverseMapping)
-							{
-								ParticleIndexReverseMapping = *AllTrailingData_Maps.ParticleIndexReverseMapping;
-							}
-							else
-							{
-								return;
-							}
-							if (AllTrailingData_Maps.AllTrailingsIndicesBySolverObject)
-							{
-								AllTrailingsIndicesBySolverObject = *AllTrailingData_Maps.AllTrailingsIndicesBySolverObject;
-							}
-							else
-							{
-								return;
-							}
-
-							// ----------------------------------------------------------------------------------------------------------
-							// END OF GETTING DATA FROM PBDRIGIDSOLVER
-							// ----------------------------------------------------------------------------------------------------------
-
-							int32 NumTrailings = AllTrailings.AllTrailingsArray.Num();
-							if (NumTrailings > 0)
-							{
-								// Get trailings for this GeometryCollectionPhysicsObject from AllTrailings.AllTrailings[]
-								if (AllTrailingsIndicesBySolverObject.AllTrailingsIndicesBySolverObjectMap.Contains(GeometryCollectionPhysicsObject))
-								{
-									TArray<int32> TrailingIndices = AllTrailingsIndicesBySolverObject.AllTrailingsIndicesBySolverObjectMap[GeometryCollectionPhysicsObject];
-									for (int32 Idx = 0; Idx < TrailingIndices.Num(); ++Idx)
-									{
-										RawTrailingDataArray.Add(AllTrailings.AllTrailingsArray[TrailingIndices[Idx]]);
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-#endif
-}
 
 #if WITH_EDITOR
 void UChaosDestructionListener::PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent)
@@ -559,8 +143,21 @@ void UChaosDestructionListener::UpdateTransformSettings()
 	bChanged = true;
 }
 
+void UChaosDestructionListener::BeginPlay()
+{
+	Super::BeginPlay();
+	UpdateEvents();
+}
+
+void UChaosDestructionListener::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	ClearEvents();
+	Super::EndPlay(EndPlayReason);
+}
+
 void UChaosDestructionListener::TickComponent(float DeltaTime, enum ELevelTick TickType, FActorComponentTickFunction *ThisTickFunction)
 {
+#if 0
 	bool bIsListening = IsEventListening();
 
 	// if owning actor is disabled, don't listen
@@ -583,7 +180,6 @@ void UChaosDestructionListener::TickComponent(float DeltaTime, enum ELevelTick T
 		// If the data was changed during the task, then bChanged will be true and we will avoid broadcasting this frame since it won't be valid.
 		if (bIsListening && !bChanged)
 		{
-#if INCLUDE_CHAOS
 			if (ChaosCollisionFilter.IsValid())
 			{
 				if (bIsCollisionEventListeningEnabled && ChaosCollisionFilter->GetNumEvents() > 0 && OnCollisionEvents.IsBound())
@@ -607,7 +203,6 @@ void UChaosDestructionListener::TickComponent(float DeltaTime, enum ELevelTick T
 					OnTrailingEvents.Broadcast(ChaosTrailingFilter->GetFilteredResults());
 				}
 			}
-#endif
 		}
 		else
 		{
@@ -624,29 +219,27 @@ void UChaosDestructionListener::TickComponent(float DeltaTime, enum ELevelTick T
 		return;
 	}
 
-#if INCLUDE_CHAOS
 	// If we don't have solvers, call update to make sure we have built our solver array
 	if (!Solvers.Num())
 	{
 		UpdateSolvers();
 	}
 
-	if (!GeometryCollectionPhysicsObjects.Num())
+	if (!GeometryCollectionPhysicsProxies.Num())
 	{
-		UpdateGeometryCollectionPhysicsObjects();
+		UpdateGeometryCollectionPhysicsProxies();
 	}
 
 	// Reset our cached data arrays for various destruction types
 	RawCollisionDataArray.Reset();
 	RawBreakingDataArray.Reset();
 	RawTrailingDataArray.Reset();
-#endif
 
 	// Retrieve the raw data arrays from the solvers
 	GetDataFromSolvers();
 
-	// Retrieve the raw data arrays from the GeometryCollectionPhysicsObjects
-	GetDataFromGeometryCollectionPhysicsObjects();
+	// Retrieve the raw data arrays from the GeometryCollectionPhysicsProxy
+	GetDataFromGeometryCollectionPhysicsProxies();
 
 	TaskState.Set((int32)ETaskState::Processing);
 
@@ -657,7 +250,6 @@ void UChaosDestructionListener::TickComponent(float DeltaTime, enum ELevelTick T
 
 		[this]()
 		{
-#if INCLUDE_CHAOS
 			if (bIsCollisionEventListeningEnabled)
 			{
 				if (ChaosCollisionFilter.IsValid())
@@ -681,35 +273,46 @@ void UChaosDestructionListener::TickComponent(float DeltaTime, enum ELevelTick T
 					ChaosTrailingFilter->FilterEvents(ChaosComponentTransform, RawTrailingDataArray);
 				}
 			}
-#endif
 			TaskState.Set((int32)ETaskState::Finished);
 		});
+#endif // if 0
 }
 
 void UChaosDestructionListener::AddChaosSolverActor(AChaosSolverActor* ChaosSolverActor)
 {
-	if (ChaosSolverActor)
+#if 0 // solver actors no longer functional, using GetWorld()->GetPhysicsScene() instead
+	if (ChaosSolverActor && !ChaosSolverActors.Contains(ChaosSolverActor))
 	{
 		ChaosSolverActors.Add(ChaosSolverActor);
-		UpdateSolvers();
+		RegisterChaosEvents(ChaosSolverActor->GetPhysicsScene());
 	}
+#endif
 }
 
 void UChaosDestructionListener::RemoveChaosSolverActor(AChaosSolverActor* ChaosSolverActor)
 {
+#if 0 // solver actors no longer functional, using GetWorld()->GetPhysicsScene() instead
 	if (ChaosSolverActor)
 	{
+		ClearEvents();
 		ChaosSolverActors.Remove(ChaosSolverActor);
-		UpdateSolvers();
+		UpdateEvents();
 	}
+#endif
 }
 
 void UChaosDestructionListener::AddGeometryCollectionActor(AGeometryCollectionActor* GeometryCollectionActor)
 {
-	if (GeometryCollectionActor)
+	if (GeometryCollectionActor && !GeometryCollectionActors.Contains(GeometryCollectionActor))
 	{
 		GeometryCollectionActors.Add(GeometryCollectionActor);
-		UpdateGeometryCollectionPhysicsObjects();
+		if (const UGeometryCollectionComponent* GeometryCollectionComponent = GeometryCollectionActor->GetGeometryCollectionComponent())
+		{
+			if (const FGeometryCollectionPhysicsProxy* GeometryCollectionPhysicsObject = GeometryCollectionComponent->GetPhysicsProxy())
+			{
+				RegisterChaosEvents(GeometryCollectionComponent->GetWorld()->GetPhysicsScene());
+			}
+		}
 	}
 }
 
@@ -717,8 +320,9 @@ void UChaosDestructionListener::RemoveGeometryCollectionActor(AGeometryCollectio
 {
 	if (GeometryCollectionActor)
 	{
+		ClearEvents();
 		GeometryCollectionActors.Remove(GeometryCollectionActor);
-		UpdateGeometryCollectionPhysicsObjects();
+		UpdateEvents();
 	}
 }
 
@@ -760,30 +364,136 @@ void UChaosDestructionListener::SetTrailingEventEnabled(bool bIsEnabled)
 
 void UChaosDestructionListener::SortCollisionEvents(TArray<FChaosCollisionEventData>& CollisionEvents, EChaosCollisionSortMethod SortMethod)
 {
-#if INCLUDE_CHAOS
 	if (ChaosCollisionFilter.IsValid())
 	{
 		ChaosCollisionFilter->SortEvents(CollisionEvents, SortMethod, GetComponentTransform());
 	}
-#endif
 }
 
 void UChaosDestructionListener::SortBreakingEvents(TArray<FChaosBreakingEventData>& BreakingEvents, EChaosBreakingSortMethod SortMethod)
 {
-#if INCLUDE_CHAOS
 	if (ChaosBreakingFilter.IsValid())
 	{
 		ChaosBreakingFilter->SortEvents(BreakingEvents, SortMethod, GetComponentTransform());
 	}
-#endif
 }
 
 void UChaosDestructionListener::SortTrailingEvents(TArray<FChaosTrailingEventData>& TrailingEvents, EChaosTrailingSortMethod SortMethod)
 {
-#if INCLUDE_CHAOS
 	if (ChaosTrailingFilter.IsValid())
 	{
 		ChaosTrailingFilter->SortEvents(TrailingEvents, SortMethod, GetComponentTransform());
 	}
+}
+
+void UChaosDestructionListener::RegisterChaosEvents(FPhysScene* Scene)
+{
+#if WITH_CHAOS
+	Chaos::FPhysicsSolver* Solver = Scene->GetScene().GetSolver();
+	Chaos::FEventManager* EventManager = Solver->GetEventManager();
+	EventManager->RegisterHandler<Chaos::FCollisionEventData>(Chaos::EEventType::Collision, this, &UChaosDestructionListener::HandleCollisionEvents);
+	EventManager->RegisterHandler<Chaos::FBreakingEventData>(Chaos::EEventType::Breaking, this, &UChaosDestructionListener::HandleBreakingEvents);
+	EventManager->RegisterHandler<Chaos::FTrailingEventData>(Chaos::EEventType::Trailing, this, &UChaosDestructionListener::HandleTrailingEvents);
 #endif
+}
+
+void UChaosDestructionListener::UnregisterChaosEvents(FPhysScene* Scene)
+{
+#if WITH_CHAOS
+	Chaos::FPhysicsSolver* Solver = Scene->GetScene().GetSolver();
+	Chaos::FEventManager* EventManager = Solver->GetEventManager();
+	EventManager->UnregisterHandler(Chaos::EEventType::Collision, this);
+	EventManager->UnregisterHandler(Chaos::EEventType::Breaking, this);
+	EventManager->UnregisterHandler(Chaos::EEventType::Trailing, this);
+#endif
+}
+
+void UChaosDestructionListener::RegisterChaosEvents(TSharedPtr<FPhysScene_Chaos> Scene)
+{
+#if WITH_CHAOS
+	Chaos::FPhysicsSolver* Solver = Scene->GetSolver();
+	Chaos::FEventManager* EventManager = Solver->GetEventManager();
+	EventManager->RegisterHandler<Chaos::FCollisionEventData>(Chaos::EEventType::Collision, this, &UChaosDestructionListener::HandleCollisionEvents);
+	EventManager->RegisterHandler<Chaos::FBreakingEventData>(Chaos::EEventType::Breaking, this, &UChaosDestructionListener::HandleBreakingEvents);
+	EventManager->RegisterHandler<Chaos::FTrailingEventData>(Chaos::EEventType::Trailing, this, &UChaosDestructionListener::HandleTrailingEvents);
+#endif
+}
+
+void UChaosDestructionListener::UnregisterChaosEvents(TSharedPtr<FPhysScene_Chaos> Scene)
+{
+#if WITH_CHAOS
+	Chaos::FPhysicsSolver* Solver = Scene->GetSolver();
+	Chaos::FEventManager* EventManager = Solver->GetEventManager();
+	EventManager->UnregisterHandler(Chaos::EEventType::Collision, this);
+	EventManager->UnregisterHandler(Chaos::EEventType::Breaking, this);
+	EventManager->UnregisterHandler(Chaos::EEventType::Trailing, this);
+#endif
+}
+
+
+void UChaosDestructionListener::HandleCollisionEvents(const Chaos::FCollisionEventData& Event)
+{
+	if (bIsCollisionEventListeningEnabled)
+	{
+		int NumCollisions = Event.CollisionData.AllCollisionsArray.Num();
+
+		RawCollisionDataArray.Append(Event.CollisionData.AllCollisionsArray.GetData(), NumCollisions);
+
+#if DISPATCH_BLUEPRINTS_IMMEDIATE
+		if (ChaosCollisionFilter.IsValid())
+		{
+			ChaosCollisionFilter->FilterEvents(ChaosComponentTransform, RawCollisionDataArray);
+
+			if (ChaosCollisionFilter->GetNumEvents() > 0 && OnCollisionEvents.IsBound())
+			{
+				OnCollisionEvents.Broadcast(ChaosCollisionFilter->GetFilteredResults());
+			}
+		}
+		RawCollisionDataArray.Reset();
+#endif
+	}
+}
+
+void UChaosDestructionListener::HandleBreakingEvents(const Chaos::FBreakingEventData& Event)
+{
+	if (bIsBreakingEventListeningEnabled)
+	{
+		int NumBreakings = Event.BreakingData.AllBreakingsArray.Num();
+		RawBreakingDataArray.Append(Event.BreakingData.AllBreakingsArray.GetData(), NumBreakings);
+
+#if DISPATCH_BLUEPRINTS_IMMEDIATE
+		if (ChaosBreakingFilter.IsValid())
+		{
+			ChaosBreakingFilter->FilterEvents(ChaosComponentTransform, RawBreakingDataArray);
+
+			if (ChaosBreakingFilter->GetNumEvents() > 0 && OnBreakingEvents.IsBound())
+			{
+				OnBreakingEvents.Broadcast(ChaosBreakingFilter->GetFilteredResults());
+			}
+		}
+		RawBreakingDataArray.Reset();
+#endif
+	}
+}
+
+void UChaosDestructionListener::HandleTrailingEvents(const Chaos::FTrailingEventData& Event)
+{
+	if (bIsTrailingEventListeningEnabled)
+	{
+		int NumTrailings = Event.TrailingData.AllTrailingsArray.Num();
+		RawTrailingDataArray.Append(Event.TrailingData.AllTrailingsArray.GetData(), NumTrailings);
+
+#if DISPATCH_BLUEPRINTS_IMMEDIATE
+		if (ChaosTrailingFilter.IsValid())
+		{
+			ChaosTrailingFilter->FilterEvents(ChaosComponentTransform, RawTrailingDataArray);
+
+			if (ChaosTrailingFilter->GetNumEvents() > 0 && OnTrailingEvents.IsBound())
+			{
+				OnTrailingEvents.Broadcast(ChaosTrailingFilter->GetFilteredResults());
+			}
+		}
+		RawTrailingDataArray.Reset();
+#endif
+	}
 }

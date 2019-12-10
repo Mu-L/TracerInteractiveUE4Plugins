@@ -491,12 +491,13 @@ namespace Lightmass
 
 			for (int32 BrickIndex = 0; BrickIndex < NumBricks; BrickIndex++)
 			{
+				Swarm->Write(&TaskData.BrickData[BrickIndex].IntersectingLevelGuid, sizeof(TaskData.BrickData[BrickIndex].IntersectingLevelGuid));
 				Swarm->Write(&TaskData.BrickData[BrickIndex].IndirectionTexturePosition, sizeof(TaskData.BrickData[BrickIndex].IndirectionTexturePosition));
 				Swarm->Write(&TaskData.BrickData[BrickIndex].TreeDepth, sizeof(TaskData.BrickData[BrickIndex].TreeDepth));
 				Swarm->Write(&TaskData.BrickData[BrickIndex].AverageClosestGeometryDistance, sizeof(TaskData.BrickData[BrickIndex].AverageClosestGeometryDistance));
 				WriteArray(TaskData.BrickData[BrickIndex].AmbientVector);
 
-				for (int32 i = 0; i < ARRAY_COUNT(TaskData.BrickData[BrickIndex].SHCoefficients); i++)
+				for (int32 i = 0; i < UE_ARRAY_COUNT(TaskData.BrickData[BrickIndex].SHCoefficients); i++)
 				{
 					WriteArray(TaskData.BrickData[BrickIndex].SHCoefficients[i]);
 				}

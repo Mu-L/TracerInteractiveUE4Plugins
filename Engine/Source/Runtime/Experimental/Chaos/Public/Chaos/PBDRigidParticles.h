@@ -10,9 +10,6 @@ namespace Chaos
 template<class T, int d>
 class TPBDRigidsEvolution;
 
-template <typename T, int d>
-class TPBDRigidParticleHandle;
-
 template<class T, int d>
 class TPBDRigidParticles : public TRigidParticles<T, d>
 {
@@ -21,24 +18,33 @@ class TPBDRigidParticles : public TRigidParticles<T, d>
   public:
     using TRigidParticles<T, d>::Sleeping;
 
-	TPBDRigidParticles()
+	CHAOS_API TPBDRigidParticles()
 	    : TRigidParticles<T, d>()
 	{
+		this->MParticleType = EParticleType::Dynamic;
 		TArrayCollection::AddArray(&MP);
 		TArrayCollection::AddArray(&MQ);
 		TArrayCollection::AddArray(&MPreV);
 		TArrayCollection::AddArray(&MPreW);
 	}
 	TPBDRigidParticles(const TPBDRigidParticles<T, d>& Other) = delete;
-	TPBDRigidParticles(TPBDRigidParticles<T, d>&& Other)
-	    : TRigidParticles<T, d>(MoveTemp(Other)), MP(MoveTemp(Other.MP)), MQ(MoveTemp(Other.MQ))
+	CHAOS_API TPBDRigidParticles(TPBDRigidParticles<T, d>&& Other)
+	    : TRigidParticles<T, d>(MoveTemp(Other))
+		, MP(MoveTemp(Other.MP))
+		, MQ(MoveTemp(Other.MQ))
+		, MPreV(MoveTemp(Other.MPreV))
+		, MPreW(MoveTemp(Other.MPreW))
 	{
+		this->MParticleType = EParticleType::Dynamic;
 		TArrayCollection::AddArray(&MP);
 		TArrayCollection::AddArray(&MQ);
 		TArrayCollection::AddArray(&MPreV);
 		TArrayCollection::AddArray(&MPreW);
 	}
-	~TPBDRigidParticles() {}
+
+	CHAOS_API virtual ~TPBDRigidParticles()
+	{}
+
 
 	const TVector<T, d>& P(const int32 index) const { return MP[index]; }
 	TVector<T, d>& P(const int32 index) { return MP[index]; }
@@ -64,6 +70,12 @@ class TPBDRigidParticles : public TRigidParticles<T, d>
 		{
 			PreV(Index) = this->V(Index);
 			PreW(Index) = this->W(Index);
+		}
+
+		if (Sleeping(Index) != bSleeping)
+		{
+			TGeometryParticleHandle<T, d>* Particle = this->Handle(Index);
+			this->AddSleepData(Particle);
 		}
 
 		if (this->ObjectState(Index) == EObjectStateType::Dynamic || this->ObjectState(Index) == EObjectStateType::Sleeping)
@@ -113,6 +125,14 @@ class TPBDRigidParticles : public TRigidParticles<T, d>
 			SetSleeping(Index, true);
 			return;
 		}
+		
+		const bool bCurrentSleeping = this->ObjectState(Index) == EObjectStateType::Sleeping;
+		const bool bNewSleeping = InObjectState == EObjectStateType::Sleeping;
+		if(bCurrentSleeping != bNewSleeping)
+		{
+			TGeometryParticleHandle<T, d>* Particle = this->Handle(Index);
+			this->AddSleepData(Particle);
+		}
 
 		this->ObjectState(Index) = InObjectState;
 	}
@@ -123,7 +143,7 @@ class TPBDRigidParticles : public TRigidParticles<T, d>
 		return FString::Printf(TEXT("%s, MP:%s, MQ:%s, MPreV:%s, MPreW:%s"), *BaseString, *P(index).ToString(), *Q(index).ToString(), *PreV(index).ToString(), *PreW(index).ToString());
 	}
 
-	void Serialize(FChaosArchive& Ar)
+	CHAOS_API virtual void Serialize(FChaosArchive& Ar) override
 	{
 		TRigidParticles<T, d>::Serialize(Ar);
 		Ar << MP << MQ << MPreV << MPreW;

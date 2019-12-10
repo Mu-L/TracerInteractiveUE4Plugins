@@ -61,6 +61,16 @@ namespace AssetSelectionUtils
 			&& Class->IsChildOf( AActor::StaticClass() );
 		return bIsAddable;
 	}
+
+	// Blueprints handle their own Abstract flag, but we should check for deprecation and NotPlaceable here
+	bool IsChildBlueprintPlaceable(const UClass* Class)
+	{
+		const bool bIsAddable =
+			Class
+			&& !(Class->HasAnyClassFlags(CLASS_NotPlaceable | CLASS_Deprecated))
+			&& Class->IsChildOf(AActor::StaticClass());
+		return bIsAddable;
+	}
 	
 	void GetSelectedAssets( TArray<FAssetData>& OutSelectedAssets )
 	{
@@ -230,7 +240,8 @@ namespace AssetSelectionUtils
 
 							// Check for experimental/early-access classes in the component hierarchy
 							bool bIsExperimental, bIsEarlyAccess;
-							FObjectEditorUtils::GetClassDevelopmentStatus(Component->GetClass(), bIsExperimental, bIsEarlyAccess);
+							FString MostDerivedDevelopmentClassName;
+							FObjectEditorUtils::GetClassDevelopmentStatus(Component->GetClass(), bIsExperimental, bIsEarlyAccess, MostDerivedDevelopmentClassName);
 
 							ActorInfo.bHaveExperimentalClass |= bIsExperimental;
 							ActorInfo.bHaveEarlyAccessClass |= bIsEarlyAccess;
@@ -240,7 +251,8 @@ namespace AssetSelectionUtils
 					// Check for experimental/early-access classes in the actor hierarchy
 					{
 						bool bIsExperimental, bIsEarlyAccess;
-						FObjectEditorUtils::GetClassDevelopmentStatus(CurrentClass, bIsExperimental, bIsEarlyAccess);
+						FString MostDerivedDevelopmentClassName;
+						FObjectEditorUtils::GetClassDevelopmentStatus(CurrentClass, bIsExperimental, bIsEarlyAccess, MostDerivedDevelopmentClassName);
 
 						ActorInfo.bHaveExperimentalClass |= bIsExperimental;
 						ActorInfo.bHaveEarlyAccessClass |= bIsEarlyAccess;

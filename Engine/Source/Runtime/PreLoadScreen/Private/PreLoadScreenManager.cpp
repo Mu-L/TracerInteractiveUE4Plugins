@@ -32,6 +32,8 @@ TSharedPtr<FPreLoadScreenManager> FPreLoadScreenManager::Instance;
 FCriticalSection FPreLoadScreenManager::RenderingEnabledCriticalSection;
 bool FPreLoadScreenManager::bRenderingEnabled = true;
 
+FIsPreloadScreenResponsibleForRenderingMultiDelegate FPreLoadScreenManager::IsResponsibleForRenderingDelegate;
+
 void FPreLoadScreenManager::Initialize(FSlateRenderer& InSlateRenderer)
 {
     if (bInitialized || !ArePreLoadScreensEnabled())       
@@ -110,6 +112,10 @@ void FPreLoadScreenManager::PlayPreLoadScreenAtIndex(int Index)
             {
                 HandleEngineLoadingPlay();
             }
+			else if (ActiveScreen->GetPreLoadScreenType() == EPreLoadScreenTypes::CustomSplashScreen)
+			{
+				HandleCustomSplashScreenPlay();
+			}
             else
             {
                 UE_LOG(LogPreLoadScreenManager, Fatal, TEXT("Attempting to play an Active PreLoadScreen type that hasn't been implemented inside of PreLoadScreenmanager!"));
@@ -153,16 +159,13 @@ void FPreLoadScreenManager::HandleEarlyStartupPlay()
 				bDidDisableScreensaver = FPlatformApplicationMisc::ControlScreensaver(FGenericPlatformApplicationMisc::EScreenSaverAction::Disable);
 			}
 
+			FPlatformMisc::HidePlatformStartupScreen();
+
 			{
 				SCOPED_BOOT_TIMING("FPreLoadScreenManager::EarlyPlayFrameTick()");
 
 				//We run this PreLoadScreen until its finished or we lose the MainWindow as EarlyPreLoadPlay is synchronous
-#if BUILD_EMBEDDED_APP && FAST_BOOT_HACKS
-				FString ObjName(TEXT("LoggedInObject"));
-				while (FEmbeddedDelegates::GetNamedObject(ObjName) == nullptr || !PreLoadScreen->IsDone())
-#else
 				while (!PreLoadScreen->IsDone())
-#endif
 				{
 					EarlyPlayFrameTick();
 				}
@@ -205,6 +208,45 @@ void FPreLoadScreenManager::HandleEngineLoadingPlay()
     }
 }
 
+void FPreLoadScreenManager::HandleCustomSplashScreenPlay()
+{
+	if (ensureAlwaysMsgf(HasActivePreLoadScreenType(EPreLoadScreenTypes::CustomSplashScreen), TEXT("Invalid Active PreLoadScreen!")))
+	{
+		IPreLoadScreen* PreLoadScreen = GetActivePreLoadScreen();
+		if (PreLoadScreen && MainWindow.IsValid())
+		{
+			SCOPED_BOOT_TIMING("FPreLoadScreenManager::HandleCustomSplashScreenPlay()");
+
+			PreLoadScreen->OnPlay(MainWindow.Pin());
+
+			if (PreLoadScreen->GetWidget().IsValid())
+			{
+				MainWindow.Pin()->SetContent(PreLoadScreen->GetWidget().ToSharedRef());
+			}
+			
+			bool bDidDisableScreensaver = false;
+			if (FPlatformApplicationMisc::IsScreensaverEnabled())
+			{
+				bDidDisableScreensaver = FPlatformApplicationMisc::ControlScreensaver(FGenericPlatformApplicationMisc::EScreenSaverAction::Disable);
+			}
+
+			FPlatformMisc::HidePlatformStartupScreen();
+			FPlatformMisc::PlatformHandleSplashScreen(false);
+
+			while (!PreLoadScreen->IsDone())
+			{
+				EarlyPlayFrameTick();
+			}
+
+			if (bDidDisableScreensaver)
+			{
+				FPlatformApplicationMisc::ControlScreensaver(FGenericPlatformApplicationMisc::EScreenSaverAction::Enable);
+			}
+
+			StopPreLoadScreen();
+		}
+	}
+}
 
 void FPreLoadScreenManager::RenderTick()
 {
@@ -268,7 +310,7 @@ const IPreLoadScreen* FPreLoadScreenManager::GetActivePreLoadScreen() const
 
 void FPreLoadScreenManager::EarlyPlayFrameTick()
 {
-    if (ensureAlwaysMsgf(HasActivePreLoadScreenType(EPreLoadScreenTypes::EarlyStartupScreen), TEXT("EarlyPlayFrameTick called without a valid EarlyPreLoadScreen!")))
+    if (ensureAlwaysMsgf(HasActivePreLoadScreenType(EPreLoadScreenTypes::EarlyStartupScreen) || HasActivePreLoadScreenType(EPreLoadScreenTypes::CustomSplashScreen), TEXT("EarlyPlayFrameTick called without a valid EarlyPreLoadScreen!")))
     {
         GameLogicFrameTick();
         EarlyPlayRenderFrameTick();
@@ -343,48 +385,65 @@ void FPreLoadScreenManager::EnableRendering(bool bEnabled)
 
 void FPreLoadScreenManager::EarlyPlayRenderFrameTick()
 {
-    if (!ShouldRender())
-    {
-        return;
-    }
+	bool bIsResponsibleForRendering_Local = true;
 
-    IPreLoadScreen* ActivePreLoadScreen = PreLoadScreens[ActivePreLoadScreenIndex].Get();
-    if (ensureAlwaysMsgf(ActivePreLoadScreen, TEXT("Invalid Active PreLoadScreen during EarlyPlayRenderFrameTick!")))
-    {
-        FSlateApplication& SlateApp = FSlateApplication::Get();
-        float SlateDeltaTime = SlateApp.GetDeltaTime();
+	if (!ShouldRender())
+	{
+		// In this case FPreLoadScreenManager is responsible for rendering but choosing not to, probably because the
+		// app is not in the fourground.
+		return;
+	}
 
-        //Setup Slate Render Command
-        ENQUEUE_RENDER_COMMAND(BeginPreLoadScreenFrame)(
-			[ActivePreLoadScreen, SlateDeltaTime](FRHICommandListImmediate& RHICmdList)
-            {
-                if (FPreLoadScreenManager::ShouldRender())
-                {
-                    GFrameNumberRenderThread++;
-                    GRHICommandList.GetImmediateCommandList().BeginFrame();
+	IPreLoadScreen* ActivePreLoadScreen = PreLoadScreens[ActivePreLoadScreenIndex].Get();
+	if (ensureAlwaysMsgf(ActivePreLoadScreen, TEXT("Invalid Active PreLoadScreen during EarlyPlayRenderFrameTick!")))
+	{
+		if (!ActivePreLoadScreen->ShouldRender())
+		{
+			bIsResponsibleForRendering_Local = false;
+		}
 
-                    ActivePreLoadScreen->RenderTick(SlateDeltaTime);
-                }
-            }
-        );
+		if (bIsResponsibleForRendering_Local != bIsResponsibleForRendering)
+		{
+			bIsResponsibleForRendering = bIsResponsibleForRendering_Local;
+			IsResponsibleForRenderingDelegate.Broadcast(bIsResponsibleForRendering);
+		}
 
-        SlateApp.Tick();
+		if (bIsResponsibleForRendering_Local)
+		{
+			FSlateApplication& SlateApp = FSlateApplication::Get();
+			float SlateDeltaTime = SlateApp.GetDeltaTime();
 
-        // Synchronize the game thread and the render thread so that the render thread doesn't get too far behind.
-        SlateApp.GetRenderer()->Sync();
+			//Setup Slate Render Command
+			ENQUEUE_RENDER_COMMAND(BeginPreLoadScreenFrame)(
+				[ActivePreLoadScreen, SlateDeltaTime](FRHICommandListImmediate& RHICmdList)
+				{
+					if (FPreLoadScreenManager::ShouldRender())
+					{
+						GFrameNumberRenderThread++;
+						GRHICommandList.GetImmediateCommandList().BeginFrame();
 
-        ENQUEUE_RENDER_COMMAND(FinishPreLoadScreenFrame)(
-            [](FRHICommandListImmediate& RHICmdList)
-        {
-            if (FPreLoadScreenManager::ShouldRender())
-            {
-                GRHICommandList.GetImmediateCommandList().EndFrame();
-                GRHICommandList.GetImmediateCommandList().ImmediateFlush(EImmediateFlushType::FlushRHIThreadFlushResources);
-            }
-        });
+						ActivePreLoadScreen->RenderTick(SlateDeltaTime);
+					}
+				});
 
-        FlushRenderingCommands();
-    }
+			SlateApp.Tick();
+
+			// Synchronize the game thread and the render thread so that the render thread doesn't get too far behind.
+			SlateApp.GetRenderer()->Sync();
+
+			ENQUEUE_RENDER_COMMAND(FinishPreLoadScreenFrame)(
+				[](FRHICommandListImmediate& RHICmdList)
+				{
+					if (FPreLoadScreenManager::ShouldRender())
+					{
+						GRHICommandList.GetImmediateCommandList().EndFrame();
+						GRHICommandList.GetImmediateCommandList().ImmediateFlush(EImmediateFlushType::FlushRHIThreadFlushResources);
+					}
+				});
+
+			//FlushRenderingCommands();
+		}
+	}
 }
 
 void FPreLoadScreenManager::StopPreLoadScreen()

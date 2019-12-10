@@ -76,6 +76,9 @@ public:
 	/** Override default smoothing function */
 	TFunction<FVector3d(const FDynamicMesh3&, int, double)> CustomSmoothF;
 
+	/** Override constant SmoothSpeedT with function */
+	TFunction<double(const FDynamicMesh3&, int)> CustomSmoothSpeedF;
+
 
 
 	/** enable parallel projection. Only applied in AfterRefinement mode */
@@ -145,6 +148,13 @@ public:
 	{
 		// this is for subclasses...
 	}
+
+	/** Callback for subclasses to override to implement custom behavior */
+	virtual void OnEdgeFlip(int EdgeID, const FDynamicMesh3::FEdgeFlipInfo& FlipInfo)
+	{
+		// this is for subclasses...
+	}
+
 
 	/**
 	 * Number of edges that were modified in previous Remesh pass.
@@ -227,15 +237,18 @@ protected:
 
 
 
-
+	// applies a smoothing pass to the mesh, storing intermediate positions in a buffer and then writing them at the end (so, no order effect)
 	virtual void FullSmoothPass_Buffer(bool bParallel);
 
-	/** computes smoothed vertex position w/ proper constraints/etc. Does not modify mesh. */
+	// computes smoothed vertex position w/ proper constraints/etc. Does not modify mesh. 
 	virtual FVector3d ComputeSmoothedVertexPos(int VertexID,
 		TFunction<FVector3d(const FDynamicMesh3 &, int, double)> SmoothFunc, bool& bModified);
 
+	// FullSmoothPass_Buffer this to calls VertexSmoothFunc for each vertex of the mesh
 	virtual void ApplyToSmoothVertices(const TFunction<void(int)>& VertexSmoothFunc);
 
+	// returns the function we want to use to compute a smoothed vertex position - will be CustomSmoothF if set, otherwise one of cotan/meanvalue/uniform
+	virtual TFunction<FVector3d(const FDynamicMesh3&, int, double)> GetSmoothFunction();
 
 
 

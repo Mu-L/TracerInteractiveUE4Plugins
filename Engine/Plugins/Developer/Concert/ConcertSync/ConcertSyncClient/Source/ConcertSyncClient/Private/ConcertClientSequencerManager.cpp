@@ -18,7 +18,8 @@
 #if WITH_EDITOR
 	#include "ISequencerModule.h"
 	#include "ISequencer.h"
-	#include "Toolkits/AssetEditorManager.h"
+	#include "Subsystems/AssetEditorSubsystem.h"
+	#include "Editor.h"
 #endif
 
 DEFINE_LOG_CATEGORY_STATIC(LogConcertSequencerSync, Warning, Log)
@@ -33,6 +34,9 @@ static TAutoConsoleVariable<int32> CVarEnableSequencePlayer(TEXT("Concert.Enable
 
 // Enable opening Sequencer on remote machine whenever a sequencer is opened, if both instance have this option on.
 static TAutoConsoleVariable<int32> CVarEnableRemoteSequencerOpen(TEXT("Concert.EnableOpenRemoteSequencer"), 0, TEXT("Enable Concert remote Sequencer opening."));
+
+// Enable opening Sequencer on remote machine whenever a sequencer is opened, if both instance have this option on.
+static TAutoConsoleVariable<int32> CVarEnableUnrelatedTimelineSync(TEXT("Concert.EnableUnrelatedTimelineSync"), 0, TEXT("Enable syncing unrelated sequencer timeline."));
 
 
 FConcertClientSequencerManager::FConcertClientSequencerManager(IConcertSyncClient* InOwnerSyncClient)
@@ -105,7 +109,7 @@ void FConcertClientSequencerManager::OnSequencerCreated(TSharedRef<ISequencer> I
 	}
 }
 
-TArray<FConcertClientSequencerManager::FOpenSequencerData*, TInlineAllocator<1>> FConcertClientSequencerManager::GatherRootSequencersByAssetPath(const FString& InSequenceObjectPath)
+TArray<FConcertClientSequencerManager::FOpenSequencerData*, TInlineAllocator<1>> FConcertClientSequencerManager::GatherRootSequencersByState(const FConcertSequencerState& InSequenceState)
 {
 	TArray<FOpenSequencerData*, TInlineAllocator<1>> OutSequencers;
 	for (FOpenSequencerData& Entry : OpenSequencers)
@@ -113,7 +117,7 @@ TArray<FConcertClientSequencerManager::FOpenSequencerData*, TInlineAllocator<1>>
 		TSharedPtr<ISequencer> Sequencer = Entry.WeakSequencer.Pin();
 		UMovieSceneSequence*   Sequence = Sequencer.IsValid() ? Sequencer->GetRootMovieSceneSequence() : nullptr;
 
-		if (Sequence && Sequence->GetPathName() == InSequenceObjectPath)
+		if (Sequence && (Sequence->GetPathName() == InSequenceState.SequenceObjectPath || CVarEnableUnrelatedTimelineSync.GetValueOnAnyThread() > 0))
 		{
 			OutSequencers.Add(&Entry);
 		}
@@ -163,6 +167,16 @@ bool FConcertClientSequencerManager::IsSequencerPlaybackSyncEnabled() const
 void FConcertClientSequencerManager::SetSequencerPlaybackSync(bool bEnable)
 {
 	CVarEnablePlaybackSync->AsVariable()->Set(bEnable ? 1 : 0);
+}
+
+bool FConcertClientSequencerManager::IsUnrelatedSequencerTimelineSyncEnabled() const
+{
+	return CVarEnableUnrelatedTimelineSync.GetValueOnAnyThread() > 0;
+}
+
+void FConcertClientSequencerManager::SetUnrelatedSequencerTimelineSync(bool bEnable)
+{
+	CVarEnableUnrelatedTimelineSync->AsVariable()->Set(bEnable ? 1 : 0);
 }
 
 bool FConcertClientSequencerManager::IsSequencerRemoteOpenEnabled() const
@@ -218,7 +232,7 @@ void FConcertClientSequencerManager::OnSyncEvent(const FConcertSessionContext& I
 	{
 		FConcertSequencerState& SequencerState = SequencerStates.FindOrAdd(*State.SequenceObjectPath);
 		SequencerState = State;
-		for (FOpenSequencerData* OpenSequencer : GatherRootSequencersByAssetPath(State.SequenceObjectPath))
+		for (FOpenSequencerData* OpenSequencer : GatherRootSequencersByState(SequencerState))
 		{
 			TSharedPtr<ISequencer> Sequencer = OpenSequencer->WeakSequencer.Pin();
 			if (Sequencer.IsValid() && IsSequencerPlaybackSyncEnabled())
@@ -288,7 +302,7 @@ void FConcertClientSequencerManager::OnCloseEvent(const FConcertSessionContext&,
 		if (InEvent.bMasterClose)
 		{
 			SequencerState->PlayerStatus = EConcertMovieScenePlayerStatus::Stopped;
-			for (FOpenSequencerData* OpenSequencer : GatherRootSequencersByAssetPath(InEvent.SequenceObjectPath))
+			for (FOpenSequencerData* OpenSequencer : GatherRootSequencersByState(*SequencerState))
 			{
 				OpenSequencer->PlaybackMode = EPlaybackMode::Undefined;
 				OpenSequencer->WeakSequencer.Pin()->SetPlaybackStatus(EMovieScenePlayerStatus::Stopped);
@@ -313,10 +327,12 @@ void FConcertClientSequencerManager::OnOpenEvent(const FConcertSessionContext&, 
 void FConcertClientSequencerManager::ApplyTransportOpenEvent(const FString& SequenceObjectPath)
 {
 	TGuardValue<bool> ReentrancyGuard(bRespondingToTransportEvent, true);
-	if (IsSequencerRemoteOpenEnabled())
+#if WITH_EDITOR
+	if (IsSequencerRemoteOpenEnabled() && GIsEditor)
 	{
-		FAssetEditorManager::Get().OpenEditorForAsset(SequenceObjectPath);
+		GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(SequenceObjectPath);
 	}
+#endif
 }
 
 void FConcertClientSequencerManager::ApplyCloseToPlayers(const FConcertSequencerCloseEvent& InEvent)
@@ -373,7 +389,7 @@ void FConcertClientSequencerManager::ApplyEventToSequencers(const FConcertSequen
 	float LatencyCompensationMs = GetLatencyCompensationMs();
 
 	// Update all opened sequencer with this root sequence
-	for (FOpenSequencerData* OpenSequencer : GatherRootSequencersByAssetPath(EventState.SequenceObjectPath))
+	for (FOpenSequencerData* OpenSequencer : GatherRootSequencersByState(EventState))
 	{	
 		ISequencer* Sequencer = OpenSequencer->WeakSequencer.Pin().Get();
 		// If the entry is driving playback (PlaybackMode == Master) then we never respond to external transport events
@@ -469,7 +485,7 @@ void FConcertClientSequencerManager::ApplyEventToPlayers(const FConcertSequencer
 		if (Sequence && CurrentWorld)
 		{
 			Player = NewObject<ULevelSequencePlayer>((UObject*)GetTransientPackage(), FName("ConcertSequencePlayer"));
-			Player->Initialize(Sequence, CurrentWorld->PersistentLevel, FMovieSceneSequencePlaybackSettings());
+			Player->Initialize(Sequence, CurrentWorld->PersistentLevel, FMovieSceneSequencePlaybackSettings(), FLevelSequenceCameraSettings());
 		}
 		SequencePlayers.Add(*EventState.SequenceObjectPath, Player);
 	}

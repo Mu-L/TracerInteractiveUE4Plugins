@@ -19,6 +19,7 @@
 #include "BehaviorTreeGraphNode_Service.h"
 #include "BehaviorTreeGraphNode_Task.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
+#include "ToolMenus.h"
 #include "BehaviorTreeEditorModule.h"
 #include "IBehaviorTreeEditor.h"
 #include "BehaviorTreeDebugger.h"
@@ -47,38 +48,6 @@ UEdGraphNode* FBehaviorTreeSchemaAction_AutoArrange::PerformAction(class UEdGrap
 	}
 
 	return NULL;
-}
-
-//----------------------------------------------------------------------//
-// 
-//----------------------------------------------------------------------//
-UEdGraphNode* FBehaviorTreeSchemaAction_AddComment::PerformAction(class UEdGraph* ParentGraph, UEdGraphPin* FromPin, const FVector2D Location, bool bSelectNewNode)
-{
-	UEdGraphNode_Comment* const CommentTemplate = NewObject<UEdGraphNode_Comment>();
-
-	FVector2D SpawnLocation = Location;
-
-	TSharedPtr<IBehaviorTreeEditor> BTEditor;
-	if (UBehaviorTree* const BTAsset = Cast<UBehaviorTree>(ParentGraph->GetOuter()))
-	{
-		TSharedPtr<IToolkit> BTAssetEditor = FToolkitManager::Get().FindEditorForAsset(BTAsset);
-		if (BTAssetEditor.IsValid())
-		{
-			BTEditor = StaticCastSharedPtr<IBehaviorTreeEditor>(BTAssetEditor);
-		}
-	}
-
-	FSlateRect Bounds;
-	if (BTEditor.IsValid() && BTEditor->GetBoundsForSelectedNodes(Bounds, 50.0f))
-	{
-		CommentTemplate->SetBounds(Bounds);
-		SpawnLocation.X = CommentTemplate->NodePosX;
-		SpawnLocation.Y = CommentTemplate->NodePosY;
-	}
-
-	UEdGraphNode* const NewNode = FEdGraphSchemaAction_NewNode::SpawnNodeFromTemplate<UEdGraphNode_Comment>(ParentGraph, CommentTemplate, SpawnLocation, bSelectNewNode);
-
-	return NewNode;
 }
 
 //----------------------------------------------------------------------//
@@ -209,26 +178,25 @@ void UEdGraphSchema_BehaviorTree::GetGraphContextActions(FGraphContextMenuBuilde
 	}
 }
 
-void UEdGraphSchema_BehaviorTree::GetContextMenuActions(const UEdGraph* CurrentGraph, const UEdGraphNode* InGraphNode, const UEdGraphPin* InGraphPin, class FMenuBuilder* MenuBuilder, bool bIsDebugging) const
+void UEdGraphSchema_BehaviorTree::GetContextMenuActions(UToolMenu* Menu, UGraphNodeContextMenuContext* Context) const
 {
-	if (InGraphNode && !InGraphPin)
+	if (Context->Node && !Context->Pin)
 	{
-		const UBehaviorTreeGraphNode* BTGraphNode = Cast<const UBehaviorTreeGraphNode>(InGraphNode);
+		const UBehaviorTreeGraphNode* BTGraphNode = Cast<const UBehaviorTreeGraphNode>(Context->Node);
 		if (BTGraphNode && BTGraphNode->CanPlaceBreakpoints())
 		{
-			MenuBuilder->BeginSection("EdGraphSchemaBreakpoints", LOCTEXT("BreakpointsHeader", "Breakpoints"));
+			FToolMenuSection& Section = Menu->AddSection("EdGraphSchemaBreakpoints", LOCTEXT("BreakpointsHeader", "Breakpoints"));
 			{
-				MenuBuilder->AddMenuEntry(FGraphEditorCommands::Get().ToggleBreakpoint);
-				MenuBuilder->AddMenuEntry(FGraphEditorCommands::Get().AddBreakpoint);
-				MenuBuilder->AddMenuEntry(FGraphEditorCommands::Get().RemoveBreakpoint);
-				MenuBuilder->AddMenuEntry(FGraphEditorCommands::Get().EnableBreakpoint);
-				MenuBuilder->AddMenuEntry(FGraphEditorCommands::Get().DisableBreakpoint);
+				Section.AddMenuEntry(FGraphEditorCommands::Get().ToggleBreakpoint);
+				Section.AddMenuEntry(FGraphEditorCommands::Get().AddBreakpoint);
+				Section.AddMenuEntry(FGraphEditorCommands::Get().RemoveBreakpoint);
+				Section.AddMenuEntry(FGraphEditorCommands::Get().EnableBreakpoint);
+				Section.AddMenuEntry(FGraphEditorCommands::Get().DisableBreakpoint);
 			}
-			MenuBuilder->EndSection();
 		}
 	}
 
-	Super::GetContextMenuActions(CurrentGraph, InGraphNode, InGraphPin, MenuBuilder, bIsDebugging);
+	Super::GetContextMenuActions(Menu, Context);
 }
 
 const FPinConnectionResponse UEdGraphSchema_BehaviorTree::CanCreateConnection(const UEdGraphPin* PinA, const UEdGraphPin* PinB) const
@@ -450,28 +418,6 @@ class FConnectionDrawingPolicy* UEdGraphSchema_BehaviorTree::CreateConnectionDra
 	return new FBehaviorTreeConnectionDrawingPolicy(InBackLayerID, InFrontLayerID, InZoomFactor, InClippingRect, InDrawElements, InGraphObj);
 }
 
-int32 UEdGraphSchema_BehaviorTree::GetNodeSelectionCount(const UEdGraph* Graph) const
-{
-	if (Graph)
-	{
-		TSharedPtr<IBehaviorTreeEditor> BTEditor;
-		if (UBehaviorTree* BTAsset = Cast<UBehaviorTree>(Graph->GetOuter()))
-		{
-			TSharedPtr< IToolkit > BTAssetEditor = FToolkitManager::Get().FindEditorForAsset(BTAsset);
-			if (BTAssetEditor.IsValid())
-			{
-				BTEditor = StaticCastSharedPtr<IBehaviorTreeEditor>(BTAssetEditor);
-			}
-		}
-		if(BTEditor.IsValid())
-		{
-			return BTEditor->GetSelectedNodesCount();
-		}
-	}
-
-	return 0;
-}
-
 bool UEdGraphSchema_BehaviorTree::IsCacheVisualizationOutOfDate(int32 InVisualizationCacheID) const
 {
 	return CurrentCacheRefreshID != InVisualizationCacheID;
@@ -485,11 +431,6 @@ int32 UEdGraphSchema_BehaviorTree::GetCurrentVisualizationCacheID() const
 void UEdGraphSchema_BehaviorTree::ForceVisualizationCacheClear() const
 {
 	++CurrentCacheRefreshID;
-}
-
-TSharedPtr<FEdGraphSchemaAction> UEdGraphSchema_BehaviorTree::GetCreateCommentAction() const
-{
-	return TSharedPtr<FEdGraphSchemaAction>(static_cast<FEdGraphSchemaAction*>(new FBehaviorTreeSchemaAction_AddComment));
 }
 
 #undef LOCTEXT_NAMESPACE

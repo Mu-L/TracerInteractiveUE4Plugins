@@ -91,6 +91,7 @@ public:
 	/** IAnimationBlueprintEditor interface */
 	virtual const FEdGraphPinType& GetLastGraphPinTypeUsed() const override { return LastGraphPinType; }
 	virtual void SetLastGraphPinTypeUsed(const FEdGraphPinType& InType) override { LastGraphPinType = InType; }
+	virtual IAnimationSequenceBrowser* GetAssetBrowser() const override;
 
 	/** IHasPersonaToolkit interface */
 	virtual TSharedRef<class IPersonaToolkit> GetPersonaToolkit() const { return PersonaToolkit.ToSharedRef(); }
@@ -274,6 +275,9 @@ private:
 	/** Handle the viewport being created */
 	void HandleViewportCreated(const TSharedRef<IPersonaViewport>& InPersonaViewport);
 
+	/** Handle the preview anim blueprint being compiled */
+	void HandlePreviewAnimBlueprintCompiled(UBlueprint* InBlueprint);
+
     /**
 	 * Load editor settings from disk (docking state, window pos/size, option state, etc).
 	 */
@@ -283,6 +287,8 @@ private:
 	 * Saves editor settings to disk (docking state, window pos/size, option state, etc).
 	 */
 	virtual void SaveEditorSettings();
+
+	void HandleAnimationSequenceBrowserCreated(const TSharedRef<IAnimationSequenceBrowser>& InSequenceBrowser);
 
 	/** The extender to pass to the level editor to extend it's window menu */
 	TSharedPtr<FExtender> MenuExtender;
@@ -301,6 +307,9 @@ private:
 
 	// selected anim graph node 
 	TWeakObjectPtr<class UAnimGraphNode_Base> SelectedAnimGraphNode;
+
+	/** Sequence Browser **/
+	TWeakPtr<class IAnimationSequenceBrowser> SequenceBrowser;
 
 	/** Delegate handle registered for when pin default values change */
 	FDelegateHandle OnPinDefaultValueChangedHandle;

@@ -160,6 +160,7 @@ public:
 	static void ShareURL(const FString& URL, const FText& Description, int32 LocationHintX, int32 LocationHintY);
 
 	static FString LoadTextFileFromPlatformPackage(const FString& RelativePath);
+	static bool FileExistsInPlatformPackage(const FString& RelativePath);
 
 	// ANDROID ONLY:
 	static void SetVersionInfo(FString AndroidVersion, FString DeviceMake, FString DeviceModel, FString DeviceBuildNumber, FString OSLanguage);
@@ -202,6 +203,9 @@ public:
 	typedef TFunction<void(void* NewNativeHandle)> ReInitWindowCallbackType;
 	static ReInitWindowCallbackType GetOnReInitWindowCallback();
 	static void SetOnReInitWindowCallback(ReInitWindowCallbackType InOnReInitWindowCallback);
+	typedef TFunction<void()> ReleaseWindowCallbackType;
+	static ReleaseWindowCallbackType GetOnReleaseWindowCallback();
+	static void SetOnReleaseWindowCallback(ReleaseWindowCallbackType InOnReleaseWindowCallback);
 	static FString GetOSVersion();
 	static bool GetOverrideResolution(int32 &ResX, int32& ResY) { return false; }
 	typedef TFunction<void()> OnPauseCallBackType;
@@ -258,7 +262,10 @@ public:
 	static uint32 GetCoreFrequency(int32 CoreIndex, ECoreFrequencyProperty CoreFrequencyProperty);
     
     static void SetDeviceOrientation(EDeviceScreenOrientation NewDeviceOrentation) { DeviceOrientation = NewDeviceOrentation; }
-    
+
+	// Window access is locked by the game thread before preinit and unlocked here after RHIInit (PlatformCreateDynamicRHI). 
+	static void UnlockAndroidWindow();
+
 private:
     static EDeviceScreenOrientation DeviceOrientation;
 };

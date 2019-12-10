@@ -58,19 +58,19 @@ namespace UnrealBuildTool
 		protected VCProjectFileFormat ProjectFileFormat = VCProjectFileFormat.Default;
 
 		/// <summary>
-		/// Whether to write a solution option (suo) file for the sln
+		/// Whether to write a solution option (suo) file for the sln.
 		/// </summary>
 		[XmlConfigFile(Category = "BuildConfiguration")]
 		protected bool bWriteSolutionOptionFile = true;
 
 		/// <summary>
-		/// Whether to add the -FastPDB option to build command lines by default
+		/// Whether to add the -FastPDB option to build command lines by default.
 		/// </summary>
 		[XmlConfigFile(Category = "BuildConfiguration")]
 		bool bAddFastPDBToProjects = false;
 
 		/// <summary>
-		/// Whether to generate per-file intellisense data
+		/// Whether to generate per-file intellisense data.
 		/// </summary>
 		[XmlConfigFile(Category = "BuildConfiguration")]
 		bool bUsePerFileIntellisense = false;
@@ -486,6 +486,8 @@ namespace UnrealBuildTool
 						};
 					GatherFoldersFunction(RootFolder.SubFolders);
 
+					AllSolutionFolders.Sort((Lhs, Rhs) => Lhs.FolderName.CompareTo(Rhs.FolderName));
+
 					foreach (VisualStudioSolutionFolder CurFolder in AllSolutionFolders)
 					{
 						string FolderGUIDString = CurFolder.FolderGUID.ToString("B").ToUpperInvariant();
@@ -509,6 +511,7 @@ namespace UnrealBuildTool
 
 
 				// Project files
+				List<MSBuildProjectFile> AllProjectFilesSorted = AllProjectFiles.OrderBy((ProjFile) => ProjFile.ProjectFilePath.GetFileNameWithoutExtension()).Cast<MSBuildProjectFile>().ToList();
 				foreach (MSBuildProjectFile CurProject in AllProjectFiles)
 				{
 					// Visual Studio uses different GUID types depending on the project type

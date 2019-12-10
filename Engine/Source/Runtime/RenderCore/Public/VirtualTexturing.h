@@ -10,6 +10,7 @@
 class FRHICommandListImmediate;
 class FRHIShaderResourceView;
 class FRHITexture;
+class FRHIUnorderedAccessView;
 
 union FVirtualTextureProducerHandle
 {
@@ -42,27 +43,35 @@ inline bool operator!=(const FVirtualTextureProducerHandle& Lhs, const FVirtualT
  */
 struct FAllocatedVTDescription
 {
-	FVirtualTextureProducerHandle ProducerHandle[VIRTUALTEXTURE_SPACE_MAXLAYERS];
 	uint32 TileSize = 0u;
 	uint32 TileBorderSize = 0u;
 	uint8 Dimensions = 0u;
-	uint8 NumLayers = 0u;
+	uint8 NumTextureLayers = 0u;
+	
+	/** Producer for each texture layer. */
+	FVirtualTextureProducerHandle ProducerHandle[VIRTUALTEXTURE_SPACE_MAXLAYERS];
+	/** Local layer inside producer for each texture layer. */
+	uint8 ProducerLayerIndex[VIRTUALTEXTURE_SPACE_MAXLAYERS] = { 0u };
+
 	union
 	{
 		uint8 PackedFlags = 0u;
 		struct
 		{
 			/**
-			 * Should the AllocatedVT create its own dedicated page table allocation?  The system only supports a limited number of unique page tables, so this must be used carefully
+			 * Should the AllocatedVT create its own dedicated page table allocation? Can be useful to control total allocation.
+			 * The system only supports a limited number of unique page tables, so this must be used carefully
 			 */
 			uint8 bPrivateSpace : 1;
+
+			/**
+			 * If the AllocatedVT has the same producer mapped to multiple layers, should those be merged into a single page table layer?
+			 * This can make for more efficient page tables when enabled, but certain code may make assumption that number of layers
+			 * specified when allocating VT exactly matches the resulting page page
+			 */
+			uint8 bShareDuplicateLayers : 1;
 		};
 	};
-	
-	/**
-	 * This allows arbitrary layers of each IVirtualTexture producer to map to each layer of the allocated VT
-	 */
-	uint8 LocalLayerToProduce[VIRTUALTEXTURE_SPACE_MAXLAYERS] = { 0u };
 };
 
 inline bool operator==(const FAllocatedVTDescription& Lhs, const FAllocatedVTDescription& Rhs)
@@ -70,15 +79,15 @@ inline bool operator==(const FAllocatedVTDescription& Lhs, const FAllocatedVTDes
 	if (Lhs.TileSize != Rhs.TileSize ||
 		Lhs.TileBorderSize != Rhs.TileBorderSize ||
 		Lhs.Dimensions != Rhs.Dimensions ||
-		Lhs.NumLayers != Rhs.NumLayers ||
+		Lhs.NumTextureLayers != Rhs.NumTextureLayers ||
 		Lhs.PackedFlags != Rhs.PackedFlags)
 	{
 		return false;
 	}
-	for (uint32 LayerIndex = 0u; LayerIndex < Lhs.NumLayers; ++LayerIndex)
+	for (uint32 LayerIndex = 0u; LayerIndex < Lhs.NumTextureLayers; ++LayerIndex)
 	{
 		if (Lhs.ProducerHandle[LayerIndex] != Rhs.ProducerHandle[LayerIndex] ||
-			Lhs.LocalLayerToProduce[LayerIndex] != Rhs.LocalLayerToProduce[LayerIndex])
+			Lhs.ProducerLayerIndex[LayerIndex] != Rhs.ProducerLayerIndex[LayerIndex])
 		{
 			return false;
 		}
@@ -93,9 +102,10 @@ inline bool operator!=(const FAllocatedVTDescription& Lhs, const FAllocatedVTDes
 struct FVTProducerDescription
 {
 	FName Name; /** Will be name of UTexture for streaming VTs, mostly here for debugging */
+	
 	bool bPersistentHighestMip = true;
 	bool bContinuousUpdate = false;
-	bool bCreateRenderTarget = false;
+	
 	uint32 TileSize = 0u;
 	uint32 TileBorderSize = 0u;
 
@@ -111,9 +121,19 @@ struct FVTProducerDescription
 	uint16 WidthInBlocks = 1u;
 	uint16 HeightInBlocks = 1u;
 	uint8 Dimensions = 0u;
-	uint8 NumLayers = 0u;
 	uint8 MaxLevel = 0u;
+
+	/**
+	 * Producers will fill a number of texture layers.
+	 * These texture layers can be distributed across one or more physical groups.
+	 * Each physical group can contain one or more of the texture layers. 
+	 * Within a physical group the texture layers share the same UV allocation/mapping and can be referenced by a single page table lookup.
+	 */
+	uint8 NumTextureLayers = 0u;
 	TEnumAsByte<EPixelFormat> LayerFormat[VIRTUALTEXTURE_SPACE_MAXLAYERS] = { PF_Unknown };
+	
+	uint8 NumPhysicalGroups = 0u;
+	uint8 PhysicalGroupIndex[VIRTUALTEXTURE_SPACE_MAXLAYERS] = { 0 };
 };
 
 typedef void (FVTProducerDestroyedFunction)(const FVirtualTextureProducerHandle& InHandle, void* Baton);
@@ -175,10 +195,10 @@ struct FVTRequestPageResult
 /** Describes a location to write a single layer of a VT tile */
 struct FVTProduceTargetLayer
 {
-	/** The texture to write to */
+	/** The texture to write to. */
 	FRHITexture* TextureRHI = nullptr;
-
-	TRefCountPtr<struct IPooledRenderTarget> PooledRenderTarget;
+	/** The UAV to write to. This may be nullptr if no suitable UAV can be created for the texture format.  */
+	FRHIUnorderedAccessView* UnorderedAccessViewRHI = nullptr;
 
 	/** Location within the texture to write */
 	FIntVector pPageLocation;
@@ -285,8 +305,9 @@ public:
 
 	virtual FRHITexture* GetPageTableTexture(uint32 InPageTableIndex) const = 0;
 	virtual FRHITexture* GetPhysicalTexture(uint32 InLayerIndex) const = 0;
-	virtual FRHIShaderResourceView* GetPhysicalTextureView(uint32 InLayerIndex, bool bSRGB) const = 0;
+	virtual FRHIShaderResourceView* GetPhysicalTextureSRV(uint32 InLayerIndex, bool bSRGB) const = 0;
 	virtual uint32 GetPhysicalTextureSize(uint32 InLayerIndex) const = 0;
+	virtual uint32 GetNumPageTableTextures() const = 0;
 
 	/** Writes 2x FUintVector4 */
 	virtual void GetPackedPageTableUniform(FUintVector4* OutUniform, bool bApplyBlockScale) const = 0;
@@ -297,13 +318,12 @@ public:
 	virtual void DumpToConsole(bool bVerbose) const {}
 
 	inline const FAllocatedVTDescription& GetDescription() const { return Description; }
-	inline const FVirtualTextureProducerHandle& GetProducerHandle(uint32 InLayerIndex) const { check(InLayerIndex < Description.NumLayers); return Description.ProducerHandle[InLayerIndex]; }
-	inline uint32 GetLocalLayerToProduce(uint32 InLayerIndex) const { check(InLayerIndex < Description.NumLayers); return Description.LocalLayerToProduce[InLayerIndex]; }
+	inline const FVirtualTextureProducerHandle& GetProducerHandle(uint32 InLayerIndex) const { check(InLayerIndex < Description.NumTextureLayers); return Description.ProducerHandle[InLayerIndex]; }
 	
 	inline uint32 GetVirtualTileSize() const { return Description.TileSize; }
 	inline uint32 GetTileBorderSize() const { return Description.TileBorderSize; }
 	inline uint32 GetPhysicalTileSize() const { return Description.TileSize + Description.TileBorderSize * 2u; }
-	inline uint32 GetNumLayers() const { return Description.NumLayers; }
+	inline uint32 GetNumTextureLayers() const { return Description.NumTextureLayers; }
 	inline uint8 GetDimensions() const { return Description.Dimensions; }
 	inline uint32 GetWidthInBlocks() const { return WidthInBlocks; }
 	inline uint32 GetHeightInBlocks() const { return HeightInBlocks; }
@@ -313,7 +333,6 @@ public:
 	inline uint32 GetWidthInPixels() const { return GetWidthInTiles() * Description.TileSize; }
 	inline uint32 GetHeightInPixels() const { return GetHeightInTiles() * Description.TileSize; }
 	inline uint32 GetDepthInPixels() const { return DepthInTiles * Description.TileSize; }
-	inline uint32 GetNumPageTableTextures() const { return (Description.NumLayers + LayersPerPageTableTexture - 1u) / LayersPerPageTableTexture; }
 	inline uint32 GetSpaceID() const { return SpaceID; }
 	inline uint32 GetVirtualAddress() const { return VirtualAddress; }
 	inline uint32 GetMaxLevel() const { return MaxLevel; }

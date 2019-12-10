@@ -65,7 +65,36 @@ public:
 		FTriangle3d Triangle;
 		Mesh.GetTriVertices(TriIdx, Triangle.V[0], Triangle.V[1], Triangle.V[2]);
 		Centroid = Triangle.Centroid();
-		Normal = VectorUtil::FastNormalArea(Triangle.V[0], Triangle.V[1], Triangle.V[2], Area);
+		Normal = VectorUtil::NormalArea(Triangle.V[0], Triangle.V[1], Triangle.V[2], Area);
+	}
+
+	static FVector2d GetVolumeArea(const TriangleMeshType& Mesh)
+	{
+		double Volume = 0.0;
+		double Area = 0;
+		for (int TriIdx = 0; TriIdx < Mesh.MaxTriangleID(); TriIdx++)
+		{
+			if (!Mesh.IsTriangle(TriIdx))
+			{
+				continue;
+			}
+
+			FVector3d V0, V1, V2;
+			Mesh.GetTriVertices(TriIdx, V0, V1, V2);
+
+			// Get cross product of edges and (un-normalized) normal vector.
+			FVector3d V1mV0 = V1 - V0;
+			FVector3d V2mV0 = V2 - V0;
+			FVector3d N = V2mV0.Cross(V1mV0);
+
+			Area += N.Length();
+
+			double tmp0 = V0.X + V1.X;
+			double f1x = tmp0 + V2.X;
+			Volume += N.X * f1x;
+		}
+
+		return FVector2d(Volume * (1.0/6.0), Area * .5f);
 	}
 
 	static FAxisAlignedBox3d GetTriBounds(const TriangleMeshType& Mesh, int TID)
@@ -122,8 +151,12 @@ public:
 		double fNearestT = TNumericLimits<double>::Max();
 		FTriangle3d Triangle;
 
-		for (int TriIdx : Mesh.TriangleIndicesItr())
+		for (int TriIdx = 0; TriIdx < Mesh.MaxTriangleID(); TriIdx++)
 		{
+			if (!Mesh.IsTriangle(TriIdx))
+			{
+				continue;
+			}
 			Mesh.GetTriVertices(TriIdx, Triangle.V[0], Triangle.V[1], Triangle.V[2]);
 			FIntrRay3Triangle3d Query(Ray, Triangle);
 			if (Query.Find())
@@ -137,6 +170,28 @@ public:
 		}
 
 		return tNearestID;
+	}
+
+	// brute force search for all triangle intersections, sorted
+	static void FindHitTriangles_LinearSearch(const TriangleMeshType& Mesh, const FRay3d& Ray, TArray<TPair<float, int>>& SortedHitTriangles)
+	{
+		FTriangle3d Triangle;
+		SortedHitTriangles.Empty();
+
+		for (int TriIdx : Mesh.TriangleIndicesItr())
+		{
+			Mesh.GetTriVertices(TriIdx, Triangle.V[0], Triangle.V[1], Triangle.V[2]);
+			FIntrRay3Triangle3d Query(Ray, Triangle);
+			if (Query.Find())
+			{
+				SortedHitTriangles.Emplace(Query.RayParameter, TriIdx);
+			}
+		}
+
+		SortedHitTriangles.Sort([](const TPair<float, int>& A, const TPair<float, int>& B)
+		{
+			return A.Key < B.Key;
+		});
 	}
 
 	/**

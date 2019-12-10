@@ -102,6 +102,62 @@ public:
 	/** Set the triangle to the given Element index tuple, and increment element reference counts */
 	EMeshResult SetTriangle(int TriangleID, const FIndex3i& TriElements);
 
+	/** @return true if this triangle was set */
+	bool IsSetTriangle(int TID) const { return ElementTriangles[3 * TID] >= 0; }
+
+
+	/**
+	 * Build overlay topology from a predicate function, e.g. to build topology for sharp normals
+	 * 
+	 * @param TrisCanShareVertexPredicate Indicator function returns true if the given vertex can be shared for the given pair of triangles
+	 *									  Note if a vertex can be shared between tris A and B, and B and C, it will be shared between all three
+	 * @param InitElementValue Initial element value, copied into all created elements
+	 */
+	void CreateFromPredicate(TFunctionRef<bool(int ParentVertexIdx, int TriIDA, int TriIDB)> TrisCanShareVertexPredicate, RealType InitElementValue);
+
+	/**
+	 * Refine an existing overlay topology.  For any element on a given triangle, if the predicate returns true, it gets topologically split out so it isn't shared by any other triangle.
+	 * Used for creating sharp vertices in the normals overlay.
+	 *
+	 * @param ShouldSplitOutVertex predicate returns true of the element should be split out and not shared w/ any other triangle
+	 * @param GetNewElementValue function to assign a new value to any element that is split out
+	 */
+	void SplitVerticesWithPredicate(TFunctionRef<bool(int ElementIdx, int TriID)> ShouldSplitOutVertex, TFunctionRef<void(int ElementIdx, int TriID, RealType* FillVect)> GetNewElementValue);
+
+
+	//
+	// Support for inserting element at specific ID. This is a bit tricky
+	// because we likely will need to update the free list in the RefCountVector, which
+	// can be expensive. If you are going to do many inserts (eg inside a loop), wrap in
+	// BeginUnsafe / EndUnsafe calls, and pass bUnsafe = true to the InsertElement() calls,
+	// to the defer free list rebuild until you are done.
+	//
+
+	/** Call this before a set of unsafe InsertVertex() calls */
+	void BeginUnsafeElementsInsert()
+	{
+		// do nothing...
+	}
+
+	/** Call after a set of unsafe InsertVertex() calls to rebuild free list */
+	void EndUnsafeElementsInsert()
+	{
+		ElementsRefCounts.RebuildFreeList();
+	}
+
+	/**
+	 * Insert element at given index, assuming it is unused.
+	 * If bUnsafe, we use fast id allocation that does not update free list.
+	 * You should only be using this between BeginUnsafeElementsInsert() / EndUnsafeElementsInsert() calls
+	 */
+	EMeshResult InsertElement(int ElementID, const RealType* Value, int ParentVertex, bool bUnsafe = false);
+
+
+	//
+	// Accessors/Queries
+	//  
+
+
 	/** Get the element at a given index */
 	inline void GetElement(int ElementID, RealType* Data) const
 	{
@@ -160,17 +216,29 @@ public:
 		}
 	}
 
+	/** @return true if triangle contains element */
+	inline bool TriangleHasElement(int TriangleID, int ElementID) const
+	{
+		int i = 3 * TriangleID;
+		return (ElementTriangles[i] == ElementID || ElementTriangles[i+1] == ElementID || ElementTriangles[i+2] == ElementID);
+	}
 
 
 	/** Returns true if the parent-mesh edge is a "Seam" in this overlay */
 	bool IsSeamEdge(int EdgeID) const;
 	/** Returns true if the parent-mesh vertex is connected to any seam edges */
-	bool IsSeamVertex(int VertexID) const;
+	bool IsSeamVertex(int VertexID, bool bBoundaryIsSeam = true) const;
 
 	/** find the elements associated with a given parent-mesh vertex */
 	void GetVertexElements(int VertexID, TArray<int>& OutElements) const;
 	/** Count the number of unique elements for a given parent-mesh vertex */
 	int CountVertexElements(int VertexID, bool bBruteForce = false) const;
+
+	/** find the triangles connected to an element */
+	void GetElementTriangles(int ElementID, TArray<int>& OutTriangles) const;
+
+	/** Currently an iteration every time */
+	bool HasInteriorSeamEdges() const;
 
 	/**
 	 * Checks that the overlay mesh is well-formed, ie all internal data structures are consistent
@@ -182,7 +250,7 @@ public:
 	/** Set a triangle's element indices to InvalidID */
 	void InitializeNewTriangle(int TriangleID);
 	/** Remove a triangle from the overlay */
-	void OnRemoveTriangle(int TriangleID, bool bRemoveIsolatedVertices);
+	void OnRemoveTriangle(int TriangleID);
 	/** Reverse the orientation of a triangle's elements */
 	void OnReverseTriOrientation(int TriangleID);
 	/** Update the overlay to reflect an edge split in the parent mesh */

@@ -11,6 +11,7 @@ public class TargetPlatform : ModuleRules
 		PrivateDependencyModuleNames.Add("SlateCore");
 		PrivateDependencyModuleNames.Add("Slate");
 		PrivateDependencyModuleNames.Add("EditorStyle");
+		PrivateDependencyModuleNames.Add("Projects");
 		PublicDependencyModuleNames.Add("AudioPlatformConfiguration");
 		PublicDependencyModuleNames.Add("DesktopPlatform");
 		PublicDependencyModuleNames.Add("LauncherPlatform");
@@ -57,7 +58,6 @@ public class TargetPlatform : ModuleRules
 					DynamicallyLoadedModuleNames.Add("AndroidTargetPlatform");
 					DynamicallyLoadedModuleNames.Add("IOSTargetPlatform");
 					DynamicallyLoadedModuleNames.Add("TVOSTargetPlatform");
-					DynamicallyLoadedModuleNames.Add("HTML5TargetPlatform");
 					DynamicallyLoadedModuleNames.Add("MacTargetPlatform");
 					DynamicallyLoadedModuleNames.Add("MacNoEditorTargetPlatform");
 					DynamicallyLoadedModuleNames.Add("MacServerTargetPlatform");
@@ -84,10 +84,9 @@ public class TargetPlatform : ModuleRules
 					DynamicallyLoadedModuleNames.Add("AndroidTargetPlatform");
 					DynamicallyLoadedModuleNames.Add("IOSTargetPlatform");
 					DynamicallyLoadedModuleNames.Add("TVOSTargetPlatform");
-					DynamicallyLoadedModuleNames.Add("HTML5TargetPlatform");
 				}
 			}
-			else if (Target.Platform == UnrealTargetPlatform.Linux)
+			else if (Target.IsInPlatformGroup(UnrealPlatformGroup.Linux))
 			{
 				DynamicallyLoadedModuleNames.Add("TextureFormatDXT");
 				DynamicallyLoadedModuleNames.Add("TextureFormatPVR");
@@ -105,7 +104,6 @@ public class TargetPlatform : ModuleRules
 				if (Target.Type == TargetType.Editor || Target.Type == TargetType.Program)
 				{
 					DynamicallyLoadedModuleNames.Add("AndroidTargetPlatform");
-					DynamicallyLoadedModuleNames.Add("HTML5TargetPlatform");
 				}
 			}
 		}

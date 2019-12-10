@@ -38,7 +38,7 @@ FIOSAudioSoundBuffer::FIOSAudioSoundBuffer(FIOSAudioDevice* InAudioDevice, USoun
 			return;
 		}
 
-		SoundFormat = static_cast<ESoundFormat>(*DecompressionState->WaveInfo.pFormatTag);
+		SoundFormat = static_cast<ESoundFormat>(DecompressionState->GetFormatTag());
 	}
     else
     {
@@ -195,3 +195,14 @@ FIOSAudioSoundBuffer* FIOSAudioSoundBuffer::Init(FIOSAudioDevice* IOSAudioDevice
 	return Buffer;
 }
 
+bool FIOSAudioSoundBuffer::ReleaseCurrentChunk()
+{
+	if (DecompressionState && bStreaming)
+	{
+		return DecompressionState->ReleaseStreamChunk(true);
+	}
+	else
+	{
+		return true;
+	}
+}

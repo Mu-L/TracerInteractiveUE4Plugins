@@ -90,7 +90,7 @@ public:
 	//~ End K2Node Interface
 
 	/** Set up this variable node from the supplied UProperty */
-	void SetFromProperty(const UProperty* Property, bool bSelfContext);
+	void SetFromProperty(const UProperty* Property, bool bSelfContext, UClass* OwnerClass);
 
 	/** Util to get variable name as a string */
 	FString GetVarNameString() const
@@ -145,6 +145,9 @@ public:
 	static bool DoesRenamedVariableMatch(FName OldVariableName, FName NewVariableName, UStruct* StructType);
 
 private:
+	/** 
+	 * Gets the property for the variable on the owning class or on the owning class's sparse class data structure.
+	 */
 	UProperty* GetPropertyForVariable_Internal(UClass* OwningClass) const;
 
 public:
