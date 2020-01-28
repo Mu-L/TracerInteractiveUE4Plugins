@@ -366,6 +366,12 @@ void UDatasmithImportFactory::CleanUp()
 bool UDatasmithImportFactory::IsExtensionSupported(const FString& Filename)
 {
 	FString Extension = FPaths::GetExtension(Filename);
+	if (FCString::IsNumeric(*Extension))
+	{
+		FString BaseFilename = FPaths::GetBaseFilename(Filename);
+		Extension = FPaths::GetExtension(BaseFilename);
+	}
+
 	auto ExtensionMatch = [&Extension](const FString& Format) { return Format.StartsWith(Extension); };
 	return !Extension.IsEmpty() && Algo::FindByPredicate(Formats, ExtensionMatch) != nullptr;
 }

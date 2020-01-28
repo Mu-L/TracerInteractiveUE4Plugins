@@ -150,6 +150,15 @@ static TAutoConsoleVariable<int32> CVarForceAllRayTracingEffects(
 	TEXT(" 1: All ray tracing effects enabled"),
 	ECVF_RenderThreadSafe);
 
+static int32 GRayTracingSceneCaptures = 1;
+static FAutoConsoleVariableRef CVarRayTracingSceneCaptures(
+	TEXT("r.RayTracing.SceneCaptures"),
+	GRayTracingSceneCaptures,
+	TEXT("Enable ray tracing in scene captures.\n")
+	TEXT(" 0: off \n")
+	TEXT(" 1: on (default)"),
+	ECVF_RenderThreadSafe);
+
 static int32 GRayTracingExcludeDecals = 0;
 static FAutoConsoleVariableRef CRayTracingExcludeDecals(
 	TEXT("r.RayTracing.ExcludeDecals"),
@@ -599,7 +608,13 @@ bool FDeferredShadingSceneRenderer::GatherRayTracingWorldInstances(FRHICommandLi
 		return false;
 	}
 
-	if (!AnyRayTracingPassEnabled(Views[0]))
+	bool bAnyRayTracingPassEnabled = false;
+	for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ViewIndex++)
+	{
+		bAnyRayTracingPassEnabled |= AnyRayTracingPassEnabled(Scene, Views[ViewIndex]);
+	}
+
+	if (!bAnyRayTracingPassEnabled)
 	{
 		return false;
 	}
@@ -689,7 +704,7 @@ bool FDeferredShadingSceneRenderer::GatherRayTracingWorldInstances(FRHICommandLi
 				}
 
 				if ((View.bIsReflectionCapture && !SceneInfo->bIsVisibleInReflectionCaptures)
-					|| View.bIsSceneCapture)
+					|| (View.bIsSceneCapture && GRayTracingSceneCaptures == 0))
 				{
 					continue;
 				}
@@ -859,7 +874,13 @@ bool FDeferredShadingSceneRenderer::DispatchRayTracingWorldUpdates(FRHICommandLi
 		return false;
 	}
 
-	if (!AnyRayTracingPassEnabled(Views[0]))
+	bool bAnyRayTracingPassEnabled = false;
+	for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ViewIndex++)
+	{
+		bAnyRayTracingPassEnabled |= AnyRayTracingPassEnabled(Scene, Views[ViewIndex]);
+	}
+
+	if (!bAnyRayTracingPassEnabled)
 	{
 		return false;
 	}
@@ -1840,7 +1861,7 @@ void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 	TRefCountPtr<IPooledRenderTarget> SkyLightHitDistanceRT;
 
 	const bool bRayTracingEnabled = IsRayTracingEnabled();
-	if (bRayTracingEnabled && bCanOverlayRayTracingOutput)
+	if (bRayTracingEnabled && bCanOverlayRayTracingOutput && !IsForwardShadingEnabled(ShaderPlatform))
 	{		
 		RenderRayTracingSkyLight(RHICmdList, SkyLightRT, SkyLightHitDistanceRT);
 	}
@@ -2762,13 +2783,12 @@ void FDeferredShadingSceneRenderer::CopyStencilToLightingChannelTexture(FRHIComm
 
 #if RHI_RAYTRACING
 
-bool AnyRayTracingPassEnabled(const FViewInfo& View)
+bool AnyRayTracingPassEnabled(const FScene* Scene, const FViewInfo& View)
 {
 	static auto CVarRayTracingSkyLight = IConsoleManager::Get().FindConsoleVariable(TEXT("r.RayTracing.SkyLight"));
 	static auto CVarRayTracingShadows = IConsoleManager::Get().FindConsoleVariable(TEXT("r.RayTracing.Shadows"));
 	static auto CVarStochasticRectLight = IConsoleManager::Get().FindConsoleVariable(TEXT("r.RayTracing.StochasticRectLight"));
 
-	const bool bRayTracingSkyLight = CVarRayTracingSkyLight != nullptr && CVarRayTracingSkyLight->GetInt() > 0;
 	const bool bRayTracingShadows = CVarRayTracingShadows != nullptr && CVarRayTracingShadows->GetInt() > 0;
 	const bool bRayTracingStochasticRectLight = CVarStochasticRectLight != nullptr && CVarStochasticRectLight->GetInt() > 0;
 
@@ -2777,7 +2797,7 @@ bool AnyRayTracingPassEnabled(const FViewInfo& View)
 		|| ShouldRenderRayTracingReflections(View)
 		|| ShouldRenderRayTracingGlobalIllumination(View)
 		|| ShouldRenderRayTracingTranslucency(View)
-		|| bRayTracingSkyLight
+		|| ShouldRenderRayTracingSkyLight(Scene? Scene->SkyLight : nullptr)
 		|| bRayTracingShadows
 		|| bRayTracingStochasticRectLight
 		|| View.RayTracingRenderMode == ERayTracingRenderMode::PathTracing

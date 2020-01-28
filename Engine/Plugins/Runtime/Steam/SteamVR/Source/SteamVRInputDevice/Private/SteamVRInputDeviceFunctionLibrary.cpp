@@ -34,6 +34,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "openvr.h"
 #include "GameFramework/WorldSettings.h"
 #include "HAL/FileManagerGeneric.h"
+#include "SteamVRInputDevice.h"
 using namespace vr;
 //#endif // STEAMVRCONTROLLER_SUPPORTED_PLATFORMS
 
@@ -760,14 +761,6 @@ void USteamVRInputDeviceFunctionLibrary::GetFingerCurlsAndSplays(EHand Hand, FSt
 			k_ulInvalidActionSetHandle
 		};
 
-		EVRInputError UpdateActionStateError = VRInput()->UpdateActionState(&ActiveActionSet, sizeof(VRActiveActionSet_t), 1);
-		if (UpdateActionStateError != VRInputError_None)
-		{
-			FingerCurls = {};
-			FingerSplays = {};
-			return;
-		}
-
 		// Setup which hand data we will get from SteamVR
 		VRActionHandle_t ActiveSkeletalHand = k_ulInvalidActionHandle;
 
@@ -852,7 +845,14 @@ FSteamVRInputDevice* USteamVRInputDeviceFunctionLibrary::GetSteamVRInputDevice()
 		FSteamVRInputDevice* TestSteamVRDevice = static_cast<FSteamVRInputDevice*>(MotionController);
 		if (TestSteamVRDevice != nullptr && !FGenericPlatformMath::IsNaN(TestSteamVRDevice->DeviceSignature) && TestSteamVRDevice->DeviceSignature == 2019)
 		{
-			return TestSteamVRDevice;
+			if (TestSteamVRDevice->SteamVRHMDModule && TestSteamVRDevice->SteamVRHMDModule->GetVRSystem())
+			{
+				return TestSteamVRDevice;
+			}
+			else
+			{
+				return nullptr;
+			}
 		}
 	}
 	return nullptr;

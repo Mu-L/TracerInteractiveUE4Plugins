@@ -80,7 +80,7 @@ AActor* FFoliageActor::Spawn(AInstancedFoliageActor* IFA, const FFoliageInstance
 	{
 		return nullptr;
 	}
-
+	FEditorScriptExecutionGuard ScriptGuard;
 	FActorSpawnParameters SpawnParameters;
 	SpawnParameters.ObjectFlags = RF_Transactional;
 	SpawnParameters.bHideFromSceneOutliner = true;
@@ -136,7 +136,25 @@ void FFoliageActor::RemoveInstance(int32 InstanceIndex)
 	if (Actor && Actor->GetWorld())
 	{
 		Actor->GetWorld()->DestroyActor(Actor, true);
+		bActorsDestroyed = true;
 	}
+}
+
+void FFoliageActor::BeginUpdate()
+{
+	bActorsDestroyed = false;
+}
+
+void FFoliageActor::EndUpdate()
+{
+	if (bActorsDestroyed)
+	{
+		// This is to null out refs to components that have been created through ConstructionScript (same as it is done in edactDeleteSelected).
+		// Because components that return true for IsCreatedByConstructionScript forward their Modify calls to their owning Actor so they are not part of the transaction.
+		// Undoing the DestroyActor will re-run the construction script and those components will be recreated.
+		CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+	}
+	bActorsDestroyed = false;
 }
 
 void FFoliageActor::SetInstanceWorldTransform(int32 InstanceIndex, const FTransform& Transform, bool bTeleport)

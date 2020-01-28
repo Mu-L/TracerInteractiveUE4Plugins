@@ -2655,7 +2655,7 @@ namespace AutomationTool
 		/// <summary>
 		/// Whether to look in the machine store for signing certificates, rather than the user store.
 		/// </summary>
-		static bool bUseMachineStoreForCertificates = false;
+		static bool bUseMachineStoreForCertificates = true;
 
 		public enum SignatureType
 		{
@@ -2748,6 +2748,16 @@ namespace AutomationTool
 		/// <returns>Path to signtool.exe</returns>
 		static string GetSignToolPath()
 		{
+			List<KeyValuePair<string, DirectoryReference>> WindowsSdkDirs = WindowsExports.GetWindowsSdkDirs();
+			foreach (KeyValuePair<string, DirectoryReference> Pair in WindowsSdkDirs)
+			{
+				FileReference SignToolFile = FileReference.Combine(Pair.Value, "bin", Pair.Key, "x64", "SignTool.exe");
+				if (FileReference.Exists(SignToolFile))
+				{
+					return SignToolFile.FullName;
+				}
+			}
+
 			string[] PossibleSignToolNames =
 			{
 				"C:/Program Files (x86)/Windows Kits/8.1/bin/x86/SignTool.exe",

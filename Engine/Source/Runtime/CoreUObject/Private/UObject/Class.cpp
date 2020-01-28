@@ -1112,10 +1112,11 @@ void UStruct::SerializeTaggedProperties(FStructuredArchive::FSlot Slot, uint8* D
 				if (BreakRecursionIfFullyLoad && BreakRecursionIfFullyLoad->HasAllFlags(RF_LoadCompleted))
 				{
 				}
+				else
 #endif // WITH_EDITOR
 				// editoronly properties should be skipped if we are NOT the editor, or we are 
 				// the editor but are cooking for console (editoronly implies notforconsole)
-				else if ((Property->PropertyFlags & CPF_EditorOnly) && !FPlatformProperties::HasEditorOnlyData() && !GForceLoadEditorOnly)
+				if ((Property->PropertyFlags & CPF_EditorOnly) && !FPlatformProperties::HasEditorOnlyData() && !GForceLoadEditorOnly)
 				{
 				}
 				// check for valid array index

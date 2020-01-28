@@ -1679,24 +1679,21 @@ void UMaterialEditorInstanceConstant::CopyBasePropertiesFromParent()
 #if WITH_EDITOR
 void UMaterialEditorInstanceConstant::PostEditUndo()
 {
-	if (bIsFunctionPreviewMaterial)
+	Super::PostEditUndo();
+
+	if (bIsFunctionPreviewMaterial && SourceFunction)
 	{
 		bIsFunctionInstanceDirty = true;
 		ApplySourceFunctionChanges();
 	}
-	else
+	else if (SourceInstance)
 	{
 		FMaterialUpdateContext Context;
 
 		UpdateSourceInstanceParent();
 
 		Context.AddMaterialInstance(SourceInstance);
-
-		// Fully update static parameters before recreating render state for all components
-		SetSourceInstance(SourceInstance);
 	}
-
-	Super::PostEditUndo();
 }
 #endif
 
