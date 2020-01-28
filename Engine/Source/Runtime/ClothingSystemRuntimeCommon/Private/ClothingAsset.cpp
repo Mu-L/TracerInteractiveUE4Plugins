@@ -444,6 +444,12 @@ void UClothingAssetCommon::UnbindFromSkeletalMesh(
 			{
 				InSkelMesh->PreEditChange(nullptr);
 				ClothingAssetUtils::ClearSectionClothingData(Section);
+				if (FSkelMeshSourceSectionUserData* UserSectionData = LodModel.UserSectionsData.Find(Section.OriginalDataSectionIndex))
+				{
+					UserSectionData->CorrespondClothAssetIndex = INDEX_NONE;
+					UserSectionData->ClothingData.AssetLodIndex = INDEX_NONE;
+					UserSectionData->ClothingData.AssetGuid = FGuid();
+				}
 				bChangedMesh = true;
 			}
 		}

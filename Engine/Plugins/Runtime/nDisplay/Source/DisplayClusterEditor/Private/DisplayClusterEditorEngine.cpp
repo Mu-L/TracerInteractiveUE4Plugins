@@ -112,12 +112,24 @@ void UDisplayClusterEditorEngine::PlayInEditor(UWorld* InWorld, bool bInSimulate
 				RequestEndPlayMap();
 				return;
 			}
-
-			DisplayClusterModule->StartScene(InWorld);
 		}
 	}
 
+	// Start PIE
 	Super::PlayInEditor(InWorld, bInSimulateInEditor, Overrides);
+
+	// Pass PIE world to nDisplay
+	if (bIsNDisplayPIE)
+	{
+		for (FWorldContext const& Context : GEngine->GetWorldContexts())
+		{
+			if (Context.WorldType == EWorldType::PIE && Context.World())
+			{
+				DisplayClusterModule->StartScene(Context.World());
+				break;
+			}
+		}
+	}
 }
 
 void UDisplayClusterEditorEngine::Tick(float DeltaSeconds, bool bIdleMode)

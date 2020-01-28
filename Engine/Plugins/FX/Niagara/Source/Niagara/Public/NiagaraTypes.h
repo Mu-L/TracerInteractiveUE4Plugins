@@ -19,7 +19,7 @@ struct FNiagaraFloat
 	GENERATED_USTRUCT_BODY()
 
 	UPROPERTY(EditAnywhere, Category=Parameters)//Parameters? These are used for attrs too.
-	float Value;
+	float Value = 0;
 };
 
 USTRUCT(meta = (DisplayName = "int32"))
@@ -28,7 +28,7 @@ struct FNiagaraInt32
 	GENERATED_USTRUCT_BODY()
 
 	UPROPERTY(EditAnywhere, Category = Parameters)//Parameters? These are used for attrs too.
-	int32 Value;
+	int32 Value = 0;
 };
 
 USTRUCT(meta=(DisplayName="bool"))

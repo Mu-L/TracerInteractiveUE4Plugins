@@ -427,7 +427,7 @@ void FMovieScenePreAnimatedState::OnObjectsReplaced(const TMap<UObject*, UObject
 			{
 				if (Pair.Value.Contains(OldKey))
 				{
-					Pair.Value.Add(NewKey);
+					Pair.Value.AddUnique(NewKey);
 					Pair.Value.Remove(OldKey);
 				}
 			}

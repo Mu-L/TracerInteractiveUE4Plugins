@@ -126,6 +126,8 @@ protected:
 	TMap<CADUUID, CADLibrary::FArchiveColor> ColorNameToColorArchive; 
 	TMap<CADUUID, CADLibrary::FArchiveMaterial> MaterialNameToMaterialArchive; 
 
+	TArray<FString> AncestorMockUps;
+
 	CADLibrary::FArchiveMockUp* CurrentMockUp;
 
 	bool bPreferMaterial;

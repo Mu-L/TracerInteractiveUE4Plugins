@@ -96,6 +96,7 @@ bool FDatasmithSceneGraphBuilder::Build()
 	{
 		return false;
 	}
+	AncestorMockUps.Add(CurrentMockUp->SceneGraphArchive);
 
 	CadId RootId = 1;
 	int32* Index = CurrentMockUp->CADIdToComponentIndex.Find(RootId);
@@ -152,11 +153,16 @@ TSharedPtr< IDatasmithActorElement >  FDatasmithSceneGraphBuilder::BuildInstance
 			CurrentMockUp = CADFileToArchiveMockUp.FindRef(Instance.ExternalRef);
 			if (CurrentMockUp)
 			{
-				CadId RootId = 1;
-				int32* Index = CurrentMockUp->CADIdToComponentIndex.Find(RootId);
-				if (Index)
+				if (AncestorMockUps.Find(CurrentMockUp->SceneGraphArchive) == INDEX_NONE)
 				{
-					Reference = &(CurrentMockUp->ComponentSet[*Index]);
+					AncestorMockUps.Add(CurrentMockUp->SceneGraphArchive);
+
+					CadId RootId = 1;
+					int32* Index = CurrentMockUp->CADIdToComponentIndex.Find(RootId);
+					if (Index)
+					{
+						Reference = &(CurrentMockUp->ComponentSet[*Index]);
+					}
 				}
 			}
 		}
@@ -204,7 +210,11 @@ TSharedPtr< IDatasmithActorElement >  FDatasmithSceneGraphBuilder::BuildInstance
 
 	AddTransformToActor(Instance, Actor, ImportParameters);
 
-	CurrentMockUp = InstanceMockUp;
+	if (CurrentMockUp != InstanceMockUp)
+	{
+		CurrentMockUp = InstanceMockUp;
+		AncestorMockUps.Pop();
+	}
 	return Actor;
 }
 

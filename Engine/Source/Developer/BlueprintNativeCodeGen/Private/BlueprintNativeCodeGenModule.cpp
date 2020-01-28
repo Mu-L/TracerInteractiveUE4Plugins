@@ -116,7 +116,7 @@ private:
 
 const FCompilerNativizationOptions& FBlueprintNativeCodeGenModule::GetNativizationOptionsForPlatform(const ITargetPlatform* Platform) const
 {
-	const FName PlatformName = ensure(Platform) ? Platform->GetPlatformInfo().PlatformInfoName : NAME_None;
+	const FName PlatformName = ensure(Platform) ? FName(*Platform->PlatformName()) : NAME_None;
 
 	const TUniquePtr<FBlueprintNativeCodeGenManifest>* Result = Manifests.Find(PlatformName);
 	if (ensure(Result && Result->IsValid()))
@@ -1239,9 +1239,8 @@ bool FBlueprintNativeCodeGenModule::HasCircularReferenceWithAnyConvertedAsset(co
 void FBlueprintNativeCodeGenModule::FillPlatformNativizationDetails(const ITargetPlatform* Platform, FPlatformNativizationDetails& Details)
 {
 	check(Platform);
-	const PlatformInfo::FPlatformInfo& PlatformInfo = Platform->GetPlatformInfo();
 
-	Details.PlatformName = PlatformInfo.TargetPlatformName;
+	Details.PlatformName = FName(*Platform->PlatformName());
 	Details.CompilerNativizationOptions.PlatformName = Details.PlatformName;
 	Details.CompilerNativizationOptions.ClientOnlyPlatform = Platform->IsClientOnly();
 	Details.CompilerNativizationOptions.ServerOnlyPlatform = Platform->IsServerOnly();

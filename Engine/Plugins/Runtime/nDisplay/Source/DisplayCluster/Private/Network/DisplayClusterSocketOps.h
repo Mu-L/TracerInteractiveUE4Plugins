@@ -5,8 +5,7 @@
 #include "CoreMinimal.h"
 #include "Sockets.h"
 
-#include "Network/DisplayClusterMessage.h"
-
+class FDisplayClusterMessage;
 class FJsonObject;
 
 
@@ -47,7 +46,7 @@ protected:
 private:
 	struct FDisplayClusterMessageHeader
 	{
-		uint16 Length;
+		uint32 Length;
 
 		FString ToString()
 		{

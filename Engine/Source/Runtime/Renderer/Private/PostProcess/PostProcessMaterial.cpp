@@ -406,7 +406,7 @@ FScreenPassTexture AddPostProcessMaterialPass(
 		if (bPrimeOutputColor || bForceIntermediateRT)
 		{
 			// Copy existing contents to new output and use load-action to preserve untouched pixels.
-			AddDrawTexturePass(GraphBuilder, View, SceneColor.Texture, Output.Texture);
+			AddDrawTexturePass(GraphBuilder, View, SceneColor, Output);
 			Output.LoadAction = ERenderTargetLoadAction::ELoad;
 		}
 	}
@@ -418,7 +418,7 @@ FScreenPassTexture AddPostProcessMaterialPass(
 
 	FPostProcessMaterialParameters* PostProcessMaterialParameters = GraphBuilder.AllocParameters<FPostProcessMaterialParameters>();
 
-	PostProcessMaterialParameters->PostProcessOutput = GetScreenPassTextureViewportParameters(SceneColorViewport);
+	PostProcessMaterialParameters->PostProcessOutput = GetScreenPassTextureViewportParameters(OutputViewport);
 	PostProcessMaterialParameters->CustomDepth = DepthStencilTexture;
 	PostProcessMaterialParameters->RenderTargets[0] = Output.GetRenderTargetBinding();
 
@@ -766,9 +766,11 @@ FScreenPassTexture AddHighResolutionScreenshotMaskPass(
 
 	static_assert(UE_ARRAY_COUNT(PassNames) == static_cast<uint32>(EPass::MAX), "Pass names array doesn't match pass enum");
 
+	const bool bHighResScreenshotMask = View.Family->EngineShowFlags.HighResScreenshotMask != 0;
+
 	TOverridePassSequence<EPass> PassSequence(Inputs.OverrideOutput);
-	PassSequence.SetEnabled(EPass::Material, Inputs.Material != nullptr);
-	PassSequence.SetEnabled(EPass::MaskMaterial, Inputs.MaskMaterial != nullptr && GIsHighResScreenshot);
+	PassSequence.SetEnabled(EPass::Material, bHighResScreenshotMask && Inputs.Material != nullptr);
+	PassSequence.SetEnabled(EPass::MaskMaterial, bHighResScreenshotMask && Inputs.MaskMaterial != nullptr && GIsHighResScreenshot);
 	PassSequence.SetEnabled(EPass::CaptureRegionMaterial, Inputs.CaptureRegionMaterial != nullptr);
 	PassSequence.Finalize();
 

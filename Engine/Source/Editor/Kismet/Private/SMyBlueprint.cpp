@@ -1721,7 +1721,7 @@ FReply SMyBlueprint::OnActionDragged( const TArray< TSharedPtr<FEdGraphSchemaAct
 
 				TSharedRef< FKismetFunctionDragDropAction> DragOperation =
 					FKismetFunctionDragDropAction::New(
-						InAction, Function->GetFName(),
+						InAction, (Function ? Function->GetFName() : Event->GetFName()),
 						GetBlueprintObj()->SkeletonGeneratedClass,
 						FMemberReference(),
 						AnalyticsDelegate,

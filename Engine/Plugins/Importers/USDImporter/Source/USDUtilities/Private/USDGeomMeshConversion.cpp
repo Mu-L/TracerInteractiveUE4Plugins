@@ -28,6 +28,28 @@
 
 #include "USDIncludesEnd.h"
 
+namespace UsdToUnrealImpl
+{
+	int32 GetPrimValueIndex( const pxr::TfToken& InterpType, const int32 VertexIndex, const int32 VertexInstanceIndex, const int32 PolygonIndex )
+	{
+		if ( InterpType == pxr::UsdGeomTokens->vertex )
+		{
+			return VertexIndex;
+		}
+		else if ( InterpType == pxr::UsdGeomTokens->faceVarying )
+		{
+			return VertexInstanceIndex;
+		}
+		else if ( InterpType == pxr::UsdGeomTokens->uniform )
+		{
+			return PolygonIndex;
+		}
+		else /* if ( InterpType == pxr::UsdGeomTokens->constant ) */
+		{
+			return 0; // return index 0 for constant or any other unsupported cases
+		}
+	}
+}
 
 bool UsdToUnreal::ConvertGeomMesh( const pxr::UsdGeomMesh& UsdMesh, FMeshDescription& MeshDescription, const pxr::UsdTimeCode TimeCode )
 {
@@ -112,6 +134,8 @@ bool UsdToUnreal::ConvertGeomMesh( const pxr::UsdGeomMesh& UsdMesh, FMeshDescrip
 		{
 			NormalsAttribute.Get( &Normals, TimeCodeValue );
 		}
+
+		pxr::TfToken NormalsInterpType = UsdMesh.GetNormalsInterpolation();
 
 		// UVs
 		TVertexInstanceAttributesRef< FVector2D > MeshDescriptionUVs = StaticMeshAttributes.GetVertexInstanceUVs();
@@ -230,13 +254,15 @@ bool UsdToUnreal::ConvertGeomMesh( const pxr::UsdGeomMesh& UsdMesh, FMeshDescrip
 
 				if ( Normals.size() > 0 )
 				{
-					const int32 NormalIndex = Normals.size() != FaceIndices.size() ? FaceIndices[CurrentVertexInstanceIndex] : CurrentVertexInstanceIndex;
-					check(NormalIndex < Normals.size());
-					const GfVec3f& Normal = Normals[NormalIndex];
-					FVector TransformedNormal = UsdToUnreal::ConvertVector( Stage, Normal );
+					const int32 NormalIndex = UsdToUnrealImpl::GetPrimValueIndex( NormalsInterpType, ControlPointIndex, CurrentVertexInstanceIndex, PolygonIndex );
 
-					ensure( !TransformedNormal.IsNearlyZero() );
-					MeshDescriptionNormals[AddedVertexInstanceId] = TransformedNormal.GetSafeNormal();
+					if ( NormalIndex < Normals.size() )
+					{
+						const GfVec3f& Normal = Normals[NormalIndex];
+						FVector TransformedNormal = UsdToUnreal::ConvertVector( Stage, Normal );
+
+						MeshDescriptionNormals[AddedVertexInstanceId] = TransformedNormal.GetSafeNormal();
+					}
 				}
 
 				int32 UVLayerIndex = 0;

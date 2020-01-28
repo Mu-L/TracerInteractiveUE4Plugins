@@ -1047,8 +1047,6 @@ namespace Audio
 
 	void FMixerSource::UpdateChannelMaps()
 	{
-		SetStereoBleed();
-
 		SetLFEBleed();
 
 		int32 NumOutputDeviceChannels = MixerDevice->GetNumDeviceChannels();

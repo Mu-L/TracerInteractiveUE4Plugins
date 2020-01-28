@@ -729,7 +729,7 @@ int32 FAndroidMisc::NumberOfCores()
 #endif 
 #endif
 
-	char cpuset[CPU_SETSIZE / 8];
+	char cpuset[CPU_SETSIZE / 8] = { 0 };
 
 	if (CalculatedNumberOfCores == 0)
 	{
@@ -737,7 +737,7 @@ int32 FAndroidMisc::NumberOfCores()
 		syscall(__NR_sched_getaffinity, ThreadId, sizeof(cpuset), &cpuset);
 
 		char *coreptr = cpuset;
-		int32 CoreSets = CPU_SETSIZE / 8;;
+		int32 CoreSets = CPU_SETSIZE / 8;
 		while (CoreSets--)
 		{
 			char coremask = *coreptr++;
