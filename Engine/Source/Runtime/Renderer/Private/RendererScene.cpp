@@ -3235,6 +3235,7 @@ void FScene::ApplyWorldOffset(FVector InOffset)
 	ENQUEUE_RENDER_COMMAND(FApplyWorldOffset)(
 		[Scene, InOffset](FRHICommandListImmediate& RHICmdList)
 		{
+			Scene->UpdateAllPrimitiveSceneInfos(RHICmdList);
 			Scene->ApplyWorldOffset_RenderThread(InOffset);
 		});
 }
@@ -3246,11 +3247,12 @@ void FScene::ApplyWorldOffset_RenderThread(const FVector& InOffset)
 	GPUScene.bUpdateAllPrimitives = true;
 
 	// Primitives
+	checkf(AddedPrimitiveSceneInfos.Num() == 0, TEXT("All primitives found in AddedPrimitiveSceneInfos must have been added to the scene before the world offset is applied"));
 	for (int32 Idx = 0; Idx < Primitives.Num(); ++Idx)
 	{
 		Primitives[Idx]->ApplyWorldOffset(InOffset);
 	}
-	
+
 	// Primitive transforms
 	for (int32 Idx = 0; Idx < PrimitiveTransforms.Num(); ++Idx)
 	{

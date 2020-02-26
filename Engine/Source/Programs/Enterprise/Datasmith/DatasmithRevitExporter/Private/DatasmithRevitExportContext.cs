@@ -1353,7 +1353,7 @@ namespace DatasmithRevitExporter
 			SiteLocation InSiteLocation
 		)
 		{
-			if (!InSiteLocation.IsValidObject)
+			if (InSiteLocation == null || !InSiteLocation.IsValidObject)
 			{
 				return;
 			}
@@ -1402,6 +1402,14 @@ namespace DatasmithRevitExporter
 
 				if (BasePointLocation != null)
 				{
+					// Since BasePoint.Location is not a location point we cannot get a position from it; so we use a bounding box approach.
+					// Note that, as of Revit 2020, BasePoint has 2 new properties: Position for base point and SharedPosition for survey point.
+					BoundingBoxXYZ BasePointBoundingBox = BasePointLocation.get_BoundingBox(CurrentDocument.ActiveView);
+					if (BasePointBoundingBox == null)
+					{
+						continue;
+					}
+
 					// Create a new Datasmith placeholder actor for the base point.
 					string ActorName  = BasePointLocation.IsShared ? "SurveyPoint"  : "BasePoint";
 					string ActorLabel = BasePointLocation.IsShared ? "Survey Point" : "Base Point";
@@ -1414,9 +1422,8 @@ namespace DatasmithRevitExporter
 					BasePointActor.KeepActor();
 
 					// Set the world transform of the Datasmith placeholder actor.
-					// Since BasePoint.Location is not a location point we cannot get a position from it; so we use a bounding box approach.
-					// Note that, as of Revit 2020, BasePoint has 2 new properties: Position for base point and SharedPosition for survey point.
-					XYZ BasePointPosition = BasePointLocation.get_BoundingBox(CurrentDocument.ActiveView).Min;
+					XYZ BasePointPosition = BasePointBoundingBox.Min;
+
 					Transform TranslationMatrix = Transform.CreateTranslation(BasePointPosition);
 					FDocumentData.SetActorTransform(TranslationMatrix.Multiply(InWorldTransform), BasePointActor);
 

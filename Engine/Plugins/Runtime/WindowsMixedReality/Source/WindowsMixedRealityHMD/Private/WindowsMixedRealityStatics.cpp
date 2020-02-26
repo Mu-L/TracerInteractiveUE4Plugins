@@ -149,6 +149,17 @@ namespace WindowsMixedReality
 		{
 			hmd->ConnectToRemoteHoloLens(*remoteIP, bitrate, isHoloLens1);
 		}
+		else
+		{
+			if (!GEngine->XRSystem.IsValid())
+			{
+				UE_LOG(LogWmrHmd, Warning, TEXT("ConnectToRemoteHoloLens XRSystem is not valid. Perhaps it failed to start up?  Cannot Connect."));
+			}
+			else if (GEngine->XRSystem->GetSystemName() != FName("WindowsMixedRealityHMD"))
+			{
+				UE_LOG(LogWmrHmd, Warning, TEXT("ConnectToRemoteHoloLens XRSystem SystemName is %s, not WindowsMixedRealityHMD.  Cannot Connect.  Perhaps you want to disable other XR plugins, adjust the priorities of XR plugins, deactivate other XR hardware, or run with -hmd=WindowsMixedRealityHMD in your editor commandline?"), *GEngine->XRSystem->GetSystemName().ToString());
+			}
+		}
 #endif
 	}
 

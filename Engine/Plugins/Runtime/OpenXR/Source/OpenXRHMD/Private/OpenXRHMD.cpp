@@ -1099,6 +1099,9 @@ void FOpenXRHMD::CloseSession()
 {
 	if (Session != XR_NULL_HANDLE)
 	{
+		Swapchain.Reset();
+		DepthSwapchain.Reset();
+
 		// Clear up device spaces
 		for (auto& DeviceSpace : DeviceSpaces)
 		{
@@ -1124,6 +1127,7 @@ void FOpenXRHMD::CloseSession()
 		bIsReady = false;
 		bIsRunning = false;
 		bRunRequested = false;
+		bNeedReAllocatedDepth = true;
 	}
 }
 

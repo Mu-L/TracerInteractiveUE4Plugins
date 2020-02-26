@@ -2108,7 +2108,7 @@ public:
 		: LODModel(InLODModel)
 		, RefSkeleton(InRefSkeleton)
 		, BaseImportData(InBaseImportData)
-		, MorphLODPoints(InMorphLODPoints)
+		, CompressMorphLODPoints(InMorphLODPoints)
 		, MorphTargetDeltas(InMorphDeltas)
 		, BaseIndexData(InBaseIndexData)
 		, BaseWedgePointIndices(InBaseWedgePointIndices)
@@ -2124,6 +2124,21 @@ public:
 		, bUseMikkTSpace(InbUseMikkTSpace)
 	{
 		MeshUtilities = &FModuleManager::Get().LoadModuleChecked<IMeshUtilities>("MeshUtilities");
+	}
+
+	//Decompress the shape points data
+	void DecompressData()
+	{
+		const TArray<FVector>& BaseMeshPoints = BaseImportData.Points;
+		MorphLODPoints = BaseMeshPoints;
+		int32 ModifiedPointIndex = 0;
+		for (uint32 PointIndex : ModifiedPoints)
+		{
+			MorphLODPoints[PointIndex] = CompressMorphLODPoints[ModifiedPointIndex];
+			ModifiedPointIndex++;
+		}
+
+		check(MorphLODPoints.Num() == MeshDataBundle.Vertices.Num());
 	}
 
 	void PrepareTangents()
@@ -2276,6 +2291,7 @@ public:
 
 	void DoWork()
 	{
+		DecompressData();
 		PrepareTangents();
 		ComputeTangents();
 		ComputeMorphDeltas();
@@ -2307,7 +2323,8 @@ private:
 	// @todo not thread safe
 	const FReferenceSkeleton& RefSkeleton;
 	const FSkeletalMeshImportData& BaseImportData;
-	const TArray<FVector> MorphLODPoints;
+	const TArray<FVector> CompressMorphLODPoints;
+	TArray<FVector> MorphLODPoints;
 
 	IMeshUtilities* MeshUtilities;
 

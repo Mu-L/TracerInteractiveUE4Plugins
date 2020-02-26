@@ -205,6 +205,9 @@ void FD3D12StateCacheBase::DirtyStateForNewCommandList()
 	PipelineState.Graphics.bNeedSetRootSignature = true;
 	bNeedSetPrimitiveTopology = true;
 
+	PipelineState.Graphics.NumLines = 0;
+	PipelineState.Graphics.NumTriangles = 0;
+
 	if (PipelineState.Graphics.VBCache.BoundVBMask) { bNeedSetVB = true; }
 	if (PipelineState.Graphics.IBCache.CurrentIndexBufferLocation) { bNeedSetIB = true; }
 	if (PipelineState.Graphics.CurrentNumberOfStreamOutTargets) { bNeedSetSOs = true; }

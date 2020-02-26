@@ -7,6 +7,7 @@
 #include "Interfaces/IAnalyticsProvider.h"
 #include "EditorAnalyticsSession.h"
 #include "HAL/PlatformProcess.h"
+#include "IAnalyticsProviderET.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogEditorSessionSummary, Verbose, All);
 
@@ -24,6 +25,31 @@ namespace EditorSessionSenderDefs
 	static const FString TerminatedSessionToken(TEXT("Terminated"));
 	static const FString DebuggerSessionToken(TEXT("Debugger"));
 	static const FString AbnormalSessionToken(TEXT("AbnormalShutdown"));
+}
+
+namespace EditorSessionSenderUtil_4_24_3
+{
+	static const FString StoreId(TEXT("Epic Games"));
+	static const FString SessionSummarySection(TEXT("Unreal Engine/Session Summary/1_0"));
+
+	static const FString AppIdStoreKey( TEXT("AppId"));
+	static const FString AppVersionStoreKey(TEXT("AppVersion"));
+	static const FString UserIdStoreKey(TEXT("UserId"));
+
+	void DeleteExtraSessionKeys(const FString& SessionId)
+	{
+		const FString SectionName = SessionSummarySection + TEXT("/") + SessionId;
+		FPlatformMisc::DeleteStoredValue(StoreId, SectionName, AppIdStoreKey);
+		FPlatformMisc::DeleteStoredValue(StoreId, SectionName, AppVersionStoreKey);
+		FPlatformMisc::DeleteStoredValue(StoreId, SectionName, UserIdStoreKey);
+	}
+
+	void ReadAndDeleteExtraSessionKey(const FString& SessionId, const FString& InKey, FString& OutValue)
+	{
+		const FString SectionName = SessionSummarySection + TEXT("/") + SessionId;
+		FPlatformMisc::GetStoredValue(StoreId, SectionName, InKey, OutValue);
+		FPlatformMisc::DeleteStoredValue(StoreId, SectionName, InKey);
+	}
 }
 
 FEditorSessionSummarySender::FEditorSessionSummarySender(IAnalyticsProvider& InAnalyticsProvider, const FString& InSenderName, const int32 InCurrentSessionProcessId)
@@ -122,6 +148,12 @@ void FEditorSessionSummarySender::SendStoredSessions(const bool bForceSendCurren
 			{
 				SessionsToReport.Add(Session);
 			}
+			else // Session is expired (and will not be sent)
+			{
+				// Hack 4.24.3: Normally, the extra keys are deleted once the summary event is sent, but this session summary will not be sent. Delete the extra keys now to avoid accumulating.
+				EditorSessionSenderUtil_4_24_3::DeleteExtraSessionKeys(Session.SessionId);
+			}
+			
 			SessionsToDelete.Add(Session);
 		}
 
@@ -217,8 +249,50 @@ void FEditorSessionSummarySender::SendSessionSummaryEvent(const FEditorAnalytics
 		AnalyticsAttributes.Emplace(TEXT("ExitCode"), CurrentSessionExitCode.GetValue());
 	}
 
-	// Send the event.
-	AnalyticsProvider.RecordEvent(TEXT("SessionSummary"), AnalyticsAttributes);
+	// Hack for 4.24.3: Downcast to IAnalyticsProviderET. In 4.24, FEditorSessionSummarySender is only instantiated by the Editor or CrashReportClientEditor and in this context, the Provider is an IAnalyticsProviderET.
+	IAnalyticsProviderET& ProviderET = static_cast<IAnalyticsProviderET&>(AnalyticsProvider);
+	if (ProviderET.GetAppID().StartsWith(TEXT("CrashReporter"))) // Detect if this is called within the crash report client vs Editor. CrashReporter AppID is set in CrashReportAnalyticsConfiguration.cpp as CrashReporter.Release or CrashReporter.Dev
+	{
+		// Extract the information from the session -> Kept the public header files untouched for 4.24.3 (The member were added to FEditorAnalyticsSession in 4.25)
+		FString AppId;
+		FString AppVersion;
+		FString UserId;
+		FEditorAnalyticsSession::Lock();
+		EditorSessionSenderUtil_4_24_3::ReadAndDeleteExtraSessionKey(Session.SessionId, EditorSessionSenderUtil_4_24_3::AppIdStoreKey, AppId);
+		EditorSessionSenderUtil_4_24_3::ReadAndDeleteExtraSessionKey(Session.SessionId, EditorSessionSenderUtil_4_24_3::AppVersionStoreKey, AppVersion);
+		EditorSessionSenderUtil_4_24_3::ReadAndDeleteExtraSessionKey(Session.SessionId, EditorSessionSenderUtil_4_24_3::UserIdStoreKey, UserId);
+		FEditorAnalyticsSession::Unlock();
+
+		FString OldSessionId = ProviderET.GetSessionID();
+		FString OldAppId = ProviderET.GetAppID();
+		FString OldAppVersion = ProviderET.GetAppVersion();
+		FString OldUserId = ProviderET.GetUserID();
+
+		// Impersonate the Editor sending the summary. Since it in CrashReporter, its unlikely that another thread is going to send telemetry event(s) at the same time to interfere.
+		ProviderET.SetSessionID(CopyTemp(SessionIdString)); // This also flushes the current events.
+		ProviderET.SetAppID(CopyTemp(AppId));
+		ProviderET.SetAppVersion(CopyTemp(AppVersion));
+		ProviderET.SetUserID(CopyTemp(UserId));
+
+		// Send the event.
+		ProviderET.RecordEvent(TEXT("SessionSummary"), AnalyticsAttributes);
+
+		// Restore the provider to its original config. (This also flushes the events as side effects)
+		ProviderET.SetSessionID(MoveTemp(OldSessionId));
+		ProviderET.SetAppID(MoveTemp(OldAppId));
+		ProviderET.SetAppVersion(MoveTemp(OldAppVersion));
+		ProviderET.SetUserID(MoveTemp(OldUserId));
+	}
+	else
+	{
+		// Send the event.
+		AnalyticsProvider.RecordEvent(TEXT("SessionSummary"), AnalyticsAttributes);
+
+		// Just in case the extra keys were added.
+		FEditorAnalyticsSession::Lock();
+		EditorSessionSenderUtil_4_24_3::DeleteExtraSessionKeys(Session.SessionId);
+		FEditorAnalyticsSession::Unlock();
+	}
 
 	UE_LOG(LogEditorSessionSummary, Log, TEXT("EditorSessionSummary sent report. Type=%s, SessionId=%s"), *ShutdownTypeString, *SessionIdString);
 }
