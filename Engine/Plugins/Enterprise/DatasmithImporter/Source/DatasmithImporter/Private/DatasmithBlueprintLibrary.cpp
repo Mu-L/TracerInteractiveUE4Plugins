@@ -150,12 +150,6 @@ UDatasmithSceneElement* UDatasmithSceneElement::ConstructDatasmithSceneFromFile(
 	bool bLoadConfig = false; //!IsAutomatedImport();
 	DatasmithScene->ImportContextPtr.Reset(new FDatasmithImportContext(Source.GetSourceFile(), bLoadConfig, GetLoggerName(), GetDisplayName(), TranslatableSource.GetTranslator()));
 
-	if (!TranslatableSource.Translate(Scene))
-	{
-		UE_LOG(LogDatasmithImport, Error, TEXT("Datasmith import error: Scene translation failure. Abort import."));
-		return nullptr;
-	}
-
 	return DatasmithScene;
 }
 
@@ -184,6 +178,13 @@ FDatasmithImportFactoryCreateFileResult UDatasmithSceneElement::ImportScene(cons
 	bool bIsSilent = true;
 	if ( !ImportContext.Init( Scene, DestinationPackage->GetName(), NewObjectFlags, GWarn, ImportSettingsJson, bIsSilent ) )
 	{
+		return Result;
+	}
+
+	FDatasmithTranslatableSceneSource& TranslatableSource = *SourcePtr;
+	if (!TranslatableSource.Translate(Scene))
+	{
+		UE_LOG(LogDatasmithImport, Error, TEXT("Datasmith import error: Scene translation failure. Abort import."));
 		return Result;
 	}
 

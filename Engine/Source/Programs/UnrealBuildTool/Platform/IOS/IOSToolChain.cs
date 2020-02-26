@@ -1895,7 +1895,7 @@ namespace UnrealBuildTool
 						MobileProvisionFile = ProvisioningData.MobileProvisionFile;
 						MobileProvisionUUID = ProvisioningData.MobileProvisionUUID;
 						TeamUUID = ProvisioningData.TeamUUID;
-						if (!ProvisioningData.BundleIdentifier.Contains("*"))
+						if (ProvisioningData.BundleIdentifier == null || !ProvisioningData.BundleIdentifier.Contains("*"))
 						{
 							// If the BundleIndentifer contains a wild card it will not be valid to use in the plist.
 							BundleID = ProvisioningData.BundleIdentifier;

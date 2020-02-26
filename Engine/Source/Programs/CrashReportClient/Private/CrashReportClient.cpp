@@ -29,6 +29,8 @@ struct FCrashReportUtil
 #include "PlatformHttp.h"
 #include "Framework/Application/SlateApplication.h"
 
+FDelegateHandle CrashReportClientTickHandle;
+
 FCrashReportClient::FCrashReportClient(const FPlatformErrorReport& InErrorReport)
 	: DiagnosticText( LOCTEXT("ProcessingReport", "Processing crash report ...") )
 	, DiagnoseReportTask(nullptr)
@@ -40,6 +42,8 @@ FCrashReportClient::FCrashReportClient(const FPlatformErrorReport& InErrorReport
 	, bIsSuccesfullRestart(false)
 	, bIsUploadComplete(false)
 {
+	checkf(!CrashReportClientTickHandle.IsValid(), TEXT("FCrashReportClient assumes a single instance at a time"));
+
 	if (FPrimaryCrashProperties::Get()->IsValid())
 	{
 		bool bUsePrimaryData = false;
@@ -53,6 +57,7 @@ FCrashReportClient::FCrashReportClient(const FPlatformErrorReport& InErrorReport
 			{
 				DiagnoseReportTask = new FAsyncTask<FDiagnoseReportWorker>( this );
 				DiagnoseReportTask->StartBackgroundTask();
+				StartTicker();
 			}
 			else
 			{
@@ -74,6 +79,11 @@ FCrashReportClient::FCrashReportClient(const FPlatformErrorReport& InErrorReport
 
 FCrashReportClient::~FCrashReportClient()
 {
+	if (CrashReportClientTickHandle.IsValid())
+	{
+		FTicker::GetCoreTicker().RemoveTicker(CrashReportClientTickHandle);
+		CrashReportClientTickHandle.Reset();
+	}
 	StopBackgroundThread();
 }
 
@@ -89,7 +99,9 @@ void FCrashReportClient::StopBackgroundThread()
 
 FReply FCrashReportClient::CloseWithoutSending()
 {
-	RequestEngineExit(TEXT("FCrashReportClient::CloseWithoutSending()"));
+	bSendData = false;
+	bShouldWindowBeHidden = true;
+	StartTicker();
 	return FReply::Handled();
 }
 
@@ -220,7 +232,10 @@ void FCrashReportClient::SendLogFile_OnCheckStateChanged( ECheckBoxState NewRadi
 
 void FCrashReportClient::StartTicker()
 {
-	FTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateSP(this, &FCrashReportClient::Tick), 1.f);
+	if (!CrashReportClientTickHandle.IsValid())
+	{
+		CrashReportClientTickHandle = FTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateRaw(this, &FCrashReportClient::Tick), 1.f);
+	}
 }
 
 void FCrashReportClient::StoreCommentAndUpload()
@@ -239,7 +254,21 @@ bool FCrashReportClient::Tick(float UnusedDeltaTime)
 	{
 		return true;
 	}
-	
+
+	if (DiagnoseReportTask)
+	{
+		check(DiagnoseReportTask->IsWorkDone()); // Expected when IsProcessingCallstack() returns false.
+		StopBackgroundThread(); // Free the DiagnoseReportTask to avoid reentering this condition.
+		FinalizeDiagnoseReportWorker(); // Update the Text displaying call stack information (on game thread as they are visualized in UI)
+		check(DiagnoseReportTask == nullptr); // Expected after StopBackgroundThread() call.
+	}
+
+	// Before going further, wait for the an action, either Submit(), CloseWithoutSending() or RequestCloseWindow().
+	if (!bShouldWindowBeHidden)
+	{
+		return true;
+	}
+
 	if( bSendData )
 	{
 		if (!FCrashUploadBase::IsInitialized())
@@ -315,7 +344,6 @@ void FCrashReportClient::FinalizeDiagnoseReportWorker()
 	FormattedDiagnosticText = FCrashReportUtil::FormatDiagnosticText( DiagnosticText );
 }
 
-
 bool FCrashReportClient::IsProcessingCallstack() const
 {
 	return DiagnoseReportTask && !DiagnoseReportTask->IsWorkDone();
@@ -328,13 +356,6 @@ FDiagnoseReportWorker::FDiagnoseReportWorker( FCrashReportClient* InCrashReportC
 void FDiagnoseReportWorker::DoWork()
 {
 	CrashReportClient->ErrorReport.DiagnoseReport();
-
-	// Inform the game thread that we are done.
-	FSimpleDelegateGraphTask::CreateAndDispatchWhenReady
-	(
-		FSimpleDelegateGraphTask::FDelegate::CreateRaw( CrashReportClient, &FCrashReportClient::FinalizeDiagnoseReportWorker ),
-		TStatId(), nullptr, ENamedThreads::GameThread
-	);
 }
 
 #endif // !CRASH_REPORT_UNATTENDED_ONLY

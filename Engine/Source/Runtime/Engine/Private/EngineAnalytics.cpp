@@ -116,7 +116,6 @@ void FEngineAnalytics::Initialize()
 			Config.AppVersionET = FEngineVersion::Current().ToString();
 		}
 
-
 		// Connect the engine analytics provider (if there is a configuration delegate installed)
 		Analytics = FAnalyticsET::Get().CreateAnalyticsProvider(Config);
 
@@ -169,6 +168,33 @@ void FEngineAnalytics::Initialize()
 		{
 			SessionSummaryWriter = MakeShareable(new FEditorSessionSummaryWriter());
 			SessionSummaryWriter->Initialize();
+
+			// This scope is a hack for 4.24.3: It adds 3 extra keys to the session summary to let CrashReportClientEditor
+			// impersonate the Editor when sending the summary report (See EditorSessionSummarySender.cpp).
+			{
+				FGuid SessionId;
+				FString SessionIdStr = Analytics->GetSessionID();
+				if (FGuid::Parse(SessionIdStr, SessionId))
+				{
+					// Convert session GUID to one without braces or other chars that might not be suitable for storage
+					SessionIdStr = SessionId.ToString(EGuidFormats::DigitsWithHyphens);
+				}
+
+				// Add extra fields to the session here for 4.24.3. Done here to keep the FEditorAnalyticsSession public header untouched and avoiding undesired dependencies,
+				// but the member were added to FEditorAnalyticsSession in 4.25.
+				const FString StoreId(TEXT("Epic Games"));
+				const FString SessionSummarySection(TEXT("Unreal Engine/Session Summary/1_0"));
+				const FString StorageLocation = SessionSummarySection + TEXT("/") + SessionIdStr;
+				const FString AppIdStoreKey(TEXT("AppId"));
+				const FString AppVersionStoreKey(TEXT("AppVersion"));
+				const FString UserIdStoreKey(TEXT("UserId"));
+
+				FEditorAnalyticsSession::Lock();
+				FPlatformMisc::SetStoredValue(StoreId, StorageLocation, AppIdStoreKey, Analytics->GetAppID());
+				FPlatformMisc::SetStoredValue(StoreId, StorageLocation, AppVersionStoreKey, Analytics->GetAppVersion());
+				FPlatformMisc::SetStoredValue(StoreId, StorageLocation, UserIdStoreKey, Analytics->GetUserID());
+				FEditorAnalyticsSession::Unlock();
+			}
 		}
 
 		if (!SessionSummarySender.IsValid())

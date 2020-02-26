@@ -1517,6 +1517,9 @@ bool UnFbx::FFbxImporter::FillSkeletalMeshImportPoints(FSkeletalMeshImportData* 
 
 bool UnFbx::FFbxImporter::GatherPointsForMorphTarget(FSkeletalMeshImportData* OutData, TArray<FbxNode*>& NodeArray, TArray< FbxShape* >* FbxShapeArray, TSet<uint32>& ModifiedPoints)
 {
+	check(OutData);
+	TArray<FVector> CompressPoints;
+	CompressPoints.Reserve(OutData->Points.Num());
 	FSkeletalMeshImportData NewImportData = *OutData;
 	NewImportData.Points.Empty();
 
@@ -1545,15 +1548,14 @@ bool UnFbx::FFbxImporter::GatherPointsForMorphTarget(FSkeletalMeshImportData* Ou
 	for ( int32 PointIdx = 0; PointIdx < OutData->Points.Num(); ++PointIdx )
 	{
 		int32 OriginalPointIdx = OutData->PointToRawMap[ PointIdx ];
-
+		//Rebuild the data with only the modified point
 		if ( ( NewImportData.Points[ OriginalPointIdx ] - OutData->Points[ PointIdx ] ).SizeSquared() > FMath::Square( THRESH_VECTORS_ARE_NEAR ) ) // THRESH_POINTS_ARE_NEAR is too big, we might not be recomputing some normals that can have changed significantly
 		{
 			ModifiedPoints.Add( PointIdx );
+			CompressPoints.Add(NewImportData.Points[OriginalPointIdx]);
 		}
-
-		OutData->Points[ PointIdx ] = NewImportData.Points[ OriginalPointIdx ];
 	}
-
+	OutData->Points = CompressPoints;
 	return true;
 }
 

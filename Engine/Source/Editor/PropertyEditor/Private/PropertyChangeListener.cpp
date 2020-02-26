@@ -233,6 +233,8 @@ bool FPropertyChangeListener::ScanForChanges( bool bRecacheNewValues )
 			TArray<UObject*> ObjectsThatChanged;
 			if (ObjectNode)
 			{
+				ObjectNode->PurgeKilledObjects();
+
 				for (auto It = ObjectNode->ObjectConstIterator(); It; ++It)
 				{
 					UObject* Obj = It->Get();
@@ -272,6 +274,8 @@ void FPropertyChangeListener::TriggerAllPropertiesChangedDelegate()
 		TArray<UObject*> ObjectsThatChanged;
 		if (ObjectNode)
 		{
+			ObjectNode->PurgeKilledObjects();
+
 			for (auto It = ObjectNode->ObjectConstIterator(); It; ++It)
 			{
 				UObject* Obj = It->Get();
